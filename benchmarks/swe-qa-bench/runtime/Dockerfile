@@ -6,6 +6,7 @@ WORKDIR /opt/qa
 COPY runtime/package.json runtime/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY scripts/readonly-search.mjs ./readonly-search.mjs
+COPY scripts/prepare-index.mjs ./prepare-index.mjs
 ENV PATH="/opt/qa/node_modules/.bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 ENV OPENCODE_DISABLE_LSP_DOWNLOAD=true

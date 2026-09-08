@@ -56,7 +56,8 @@ class ReadonlyRunTest(unittest.TestCase):
                                   image="pinned:test", model="custom-openai/glm-5.2", timeout=1)
 
     def run_mocked(self, args, *, process_factory=None, convert=None, retrieval_timeout=False,
-                   on_launch=None, on_retrieval=None, on_verify=None):
+                   on_launch=None, on_retrieval=None, on_verify=None, on_build=None,
+                   operation_events=None, on_cleanup=None):
         checked = []
         commands = []
         processes = []
@@ -64,6 +65,8 @@ class ReadonlyRunTest(unittest.TestCase):
 
         def checked_command(command, **kwargs):
             checked.append(command)
+            if operation_events is not None:
+                operation_events.append(("checked", command))
             if command[:2] == ["git", "init"]:
                 source = Path(command[2])
                 source.mkdir(parents=True)
@@ -73,6 +76,12 @@ class ReadonlyRunTest(unittest.TestCase):
                 return "frozen"
             if command[:3] == ["docker", "image", "inspect"]:
                 return json.dumps([{"Id": "sha256:fixed", "RepoDigests": []}])
+            if runner.PREPARE_INDEX in command:
+                target = self.mount_source(command, "/app/.zvec-grep")
+                (target / "index.bin").write_bytes(b"freshly built index")
+                if on_build:
+                    on_build(command, kwargs)
+                return '{"status":"completed","indexed_files":1}'
             if "preflight" in command:
                 output = args.output / "preparation" / "runtime"
                 output.mkdir(parents=True, exist_ok=True)
@@ -83,6 +92,10 @@ class ReadonlyRunTest(unittest.TestCase):
 
         def run(command, **kwargs):
             commands.append(command)
+            if operation_events is not None:
+                operation_events.append(("run", command))
+            if command[:3] == ["docker", "rm", "--force"] and on_cleanup:
+                on_cleanup(command)
             if retrieval_timeout and "retrieve" in command and "fts" in command:
                 raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
             if "retrieve" in command and on_retrieval:
@@ -92,6 +105,8 @@ class ReadonlyRunTest(unittest.TestCase):
         def popen(command, **kwargs):
             nonlocal launch_count
             commands.append(command)
+            if operation_events is not None:
+                operation_events.append(("popen", command))
             index = launch_count
             launch_count += 1
             if on_launch:
@@ -159,6 +174,138 @@ class ReadonlyRunTest(unittest.TestCase):
                     runner.execute_experiment(args)
                 execute.assert_not_called()
             self.assertEqual(len(json.loads((args.output / "plan.json").read_text())["trials"]), 10)
+
+    def test_default_without_seed_builds_once_before_all_measured_work_and_freezes_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+            events = []
+            built_indexes_seen_by_queries = []
+
+            def observe_query(command):
+                copied = self.mount_source(command, "/app/.zvec-grep")
+                self.assertEqual((copied / "index.bin").read_bytes(), b"freshly built index")
+                built_indexes_seen_by_queries.append(copied)
+
+            code, checked, commands = self.run_mocked(args, operation_events=events,
+                on_retrieval=observe_query,
+                on_launch=lambda command, index: observe_query(command) if self.mount_source(command, "/app/.zvec-grep") else None)
+            self.assertEqual(code, 0)
+            build_positions = [i for i, (_, command) in enumerate(events) if runner.PREPARE_INDEX in command]
+            self.assertEqual(len(build_positions), 1)
+            build_position = build_positions[0]
+            measured_positions = [i for i, (kind, command) in enumerate(events)
+                                  if "preflight" in command or "retrieve" in command or kind == "popen"]
+            self.assertTrue(all(build_position < i for i in measured_positions))
+            build = events[build_position][1]
+            source_mount = next(build[i + 1] for i, value in enumerate(build)
+                                if value == "--mount" and "target=/app," in build[i + 1])
+            self.assertTrue(source_mount.endswith(",readonly"))
+            original = (args.output / "preparation" / "index").resolve()
+            self.assertEqual(self.mount_source(build, "/app/.zvec-grep"), original)
+            for _, command in events[build_position + 1:]:
+                self.assertNotEqual(self.mount_source(command, "/app/.zvec-grep"), original)
+            self.assertNotIn("GLM_API_KEY", " ".join(build))
+            self.assertNotIn("OPENAI_API_KEY", " ".join(build))
+            self.assertNotIn("mock-secret", " ".join(build))
+            self.assertNotIn("--env-file", build)
+            self.assertNotIn("HOST_ONLY_GOLD", " ".join(build))
+            self.assertNotIn("Question without hints", " ".join(build))
+            self.assertEqual(len(set(built_indexes_seen_by_queries)), 8)
+            self.assertEqual((original / "index.bin").read_bytes(), b"freshly built index")
+            preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+            self.assertEqual(preparation["mode"], "build_once")
+            self.assertEqual(preparation["status"], "completed")
+            self.assertFalse(preparation["included_in_qa_tokens_or_toolcalls"])
+            self.assertGreaterEqual(preparation["wall_seconds"], 0)
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(manifest["index_files"]["index.bin"], hashlib.sha256(b"freshly built index").hexdigest())
+            self.assertEqual(manifest["seed_identity"]["origin"], "built_once_in_this_experiment")
+            self.assertEqual(manifest["index_build_scope"], "preparation_only")
+            self.assertTrue(all(json.loads(p.read_text())["original_seed_unchanged"] for p in args.output.glob("reflex-6-*/result.json")))
+
+    def test_build_failure_records_preparation_failure_and_retains_all_unrun_trials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+            events = []
+
+            def fail_build(command, kwargs):
+                self.assertEqual(kwargs["diagnostic_path"].name, "index-build-failure.json")
+                raise RuntimeError("index preparation failed")
+
+            with self.assertRaisesRegex(RuntimeError, "index preparation failed"):
+                self.run_mocked(args, on_build=fail_build, operation_events=events)
+            self.assertEqual(sum(runner.PREPARE_INDEX in command for _, command in events), 1)
+            self.assertFalse(any(kind == "popen" or "retrieve" in command or "preflight" in command for kind, command in events))
+            self.assertTrue(any(command[:3] == ["docker", "rm", "--force"] for _, command in events))
+            plan = json.loads((args.output / "plan.json").read_text())
+            self.assertEqual(len(plan["trials"]), 10)
+            self.assertTrue(all(trial["status"] == "planned" for trial in plan["trials"]))
+            preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+            self.assertEqual(preparation["status"], "failed")
+            self.assertFalse(preparation["included_in_qa_tokens_or_toolcalls"])
+            self.assertGreaterEqual(preparation["wall_seconds"], 0)
+            self.assertEqual(list(args.output.glob("reflex-6-*/result.json")), [])
+
+    def test_source_mutation_during_build_is_not_frozen_as_the_new_corpus(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+            events = []
+
+            def mutate_source(command, kwargs):
+                source = self.mount_source(command, "/app")
+                (source / "core.py").write_text("changed during setup\n")
+
+            with self.assertRaisesRegex(RuntimeError, "Source changed"):
+                self.run_mocked(args, on_build=mutate_source, operation_events=events)
+            self.assertFalse(any(kind == "popen" or "retrieve" in command or "preflight" in command for kind, command in events))
+            preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+            self.assertEqual(preparation["status"], "integrity_failure")
+            plan = json.loads((args.output / "plan.json").read_text())
+            self.assertTrue(all(trial["status"] == "planned" for trial in plan["trials"]))
+
+    def test_build_cleanup_timeout_preserves_original_error_and_failed_preparation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+            original_error = RuntimeError("original index preparation failure")
+
+            def fail_build(command, kwargs):
+                raise original_error
+
+            def timeout_cleanup(command):
+                preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+                self.assertEqual(preparation["status"], "failed")
+                raise subprocess.TimeoutExpired(command, 30)
+
+            with self.assertRaises(RuntimeError) as raised:
+                self.run_mocked(args, on_build=fail_build, on_cleanup=timeout_cleanup)
+            self.assertIs(raised.exception, original_error)
+            preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+            self.assertEqual(preparation["status"], "failed")
+            self.assertEqual(preparation["cleanup_error"], "TimeoutExpired")
+            plan = json.loads((args.output / "plan.json").read_text())
+            self.assertEqual(len(plan["trials"]), 10)
+            self.assertTrue(all(trial["status"] == "planned" for trial in plan["trials"]))
+            self.assertEqual(list(args.output.glob("reflex-6-*/result.json")), [])
+
+    def test_newly_built_original_index_remains_frozen_after_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+
+            def corrupt_frozen_original(command, index):
+                (args.output / "preparation" / "index" / "index.bin").write_bytes(b"unexpected incremental write")
+
+            with self.assertRaisesRegex(RuntimeError, "integrity"):
+                self.run_mocked(args, on_launch=corrupt_frozen_original)
+            plan = json.loads((args.output / "plan.json").read_text())
+            first = json.loads((args.output / plan["trials"][0]["trial_id"] / "result.json").read_text())
+            self.assertEqual(first["status"], "integrity_failure")
+            self.assertFalse(first["original_seed_unchanged"])
+            self.assertTrue(all(trial["status"] == "planned" for trial in plan["trials"][1:]))
 
     def test_source_is_readonly_and_only_working_index_mount_is_writable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -239,8 +386,8 @@ class ReadonlyRunTest(unittest.TestCase):
             self.assertEqual(len(set(trial_indexes)), 5)
             self.assertTrue(set(mounted_indexes).isdisjoint(trial_indexes))
             all_index_mounts = [self.mount_source(command, "/app/.zvec-grep") for command in checked + commands]
-            self.assertNotIn(seed / "workspace", all_index_mounts)
-            self.assertNotIn(args.output / "preparation" / "index", all_index_mounts)
+            self.assertNotIn((seed / "workspace").resolve(), all_index_mounts)
+            self.assertNotIn((args.output / "preparation" / "index").resolve(), all_index_mounts)
             self.assertEqual((seed / "workspace" / "index.bin").read_bytes(), b"frozen index")
             self.assertEqual((args.output / "preparation" / "index" / "index.bin").read_bytes(), b"frozen index")
             verification = [command for command in checked if "verify" in command]
@@ -348,6 +495,10 @@ class ReadonlyRunTest(unittest.TestCase):
                 self.assertTrue(result["source_unchanged"])
                 self.assertTrue(result["index_unchanged"])
             self.assertFalse(any("index" in command for command in checked + commands))
+            self.assertFalse(any(runner.PREPARE_INDEX in command for command in checked + commands))
+            preparation = json.loads((args.output / "preparation" / "runtime" / "preparation.json").read_text())
+            self.assertEqual(preparation["mode"], "existing_seed")
+            self.assertFalse(preparation["included_in_qa_tokens_or_toolcalls"])
             self.assertNotIn("mock-secret", (args.output / "manifest.json").read_text())
             self.assertNotIn("HOST_ONLY_GOLD", (args.output / "instruction.json").read_text())
 

@@ -2,7 +2,8 @@
 
 The Docker image contains released zg 0.2.2. No gold or benchmark repository is
 mounted in the agent. The corpus is read-only; each query process gets an isolated
-copy of the existing index, checked against all stored documents and vectors.
+copy of the prepared index, checked against all stored documents and vectors.
+By default each experiment builds its index once before measured queries begin.
 The original index seed is never mounted in a container. The existing Harbor
 OpenCode converter is reused only to preserve the established ATIF usage format.
 """
@@ -26,6 +27,7 @@ PACKAGE = "@zvec/zvec-grep@0.2.2"
 EMBEDDING = "local/potion-code-16m-v2"
 PACKAGE_DIR = "/opt/qa/node_modules/@zvec/zvec-grep"
 BRIDGE = "/opt/qa/readonly-search.mjs"
+PREPARE_INDEX = "/opt/qa/prepare-index.mjs"
 PROFILES = ("baseline", "zvec-grep")
 
 
@@ -129,7 +131,7 @@ def choose_seed(seed_dir: Path, commit: str) -> tuple[Path, dict[str, Any]]:
                 continue
             candidates.append((workspace, identity))
     if not candidates:
-        raise RuntimeError("No matching EXISTING index seed; this protocol never builds an index")
+        raise RuntimeError("No matching EXISTING index seed for --seed-dir; omit it to prepare a new index")
     return candidates[0]
 
 
@@ -221,7 +223,8 @@ def execute_experiment(args: argparse.Namespace) -> int:
         return 0
     if not os.environ.get("GLM_API_KEY"):
         raise RuntimeError("GLM_API_KEY is required (never pass credentials as command arguments)")
-    seed, seed_identity = choose_seed(args.seed_dir.resolve(), case["repo"]["commit"])
+    seed_option = getattr(args, "seed_dir", None)
+    seed, seed_identity = choose_seed(seed_option.resolve(), case["repo"]["commit"]) if seed_option else (None, None)
     prepared = output / "preparation"
     prepared.mkdir()
     source = prepared / "source"
@@ -232,14 +235,53 @@ def execute_experiment(args: argparse.Namespace) -> int:
         raise RuntimeError("Checked out commit does not match case")
     (source / ".zvec-grep").mkdir(exist_ok=True)
     index = prepared / "index"
-    shutil.copytree(seed, index, symlinks=True)
     source_before = directory_identity(source, skip_git=True)
+    model_cache = prepared / "model-cache"
+    preparation_logs = prepared / "runtime"
+    preparation = {"mode": "existing_seed" if seed else "build_once", "started_at": datetime.now(UTC).isoformat(),
+                   "included_in_qa_tokens_or_toolcalls": False, "cross_ci_cache": False, "status": "running"}
+    write_json(preparation_logs / "preparation.json", preparation)
+    preparation_start = time.monotonic()
+    if seed:
+        shutil.copytree(seed, index, symlinks=True)
+    else:
+        index.mkdir()
+        (index / "locks").mkdir()
+        build = docker_command(args.image, source, preparation_logs, model_cache, index=index)
+        build_name = "zgqa-prepare-" + hashlib.sha256(str(output).encode()).hexdigest()[:12]
+        build += ["--name", build_name, args.image, "node", PREPARE_INDEX,
+                  "--root", "/app", "--package-dir", PACKAGE_DIR,
+                  "--embedding-model", EMBEDDING, "--model-cache-dir", "/models",
+                  "--log", "/logs/index-build.json"]
+        print(json.dumps({"phase": "index_preparation", "status": "running", "package": PACKAGE}), flush=True)
+        try:
+            build_stdout = run_checked(build, timeout=1800, diagnostic_path=preparation_logs / "index-build-failure.json")
+            (preparation_logs / "index-build.stdout.txt").write_text(redact(build_stdout))
+        except RuntimeError:
+            preparation.update(status="failed", wall_seconds=round(time.monotonic() - preparation_start, 3))
+            write_json(preparation_logs / "preparation.json", preparation)
+            try:
+                subprocess.run(["docker", "rm", "--force", build_name], capture_output=True, timeout=30)
+            except (subprocess.SubprocessError, OSError) as cleanup_error:
+                preparation["cleanup_error"] = type(cleanup_error).__name__
+                write_json(preparation_logs / "preparation.json", preparation)
+            raise
+        if directory_identity(source, skip_git=True) != source_before:
+            preparation.update(status="integrity_failure", wall_seconds=round(time.monotonic() - preparation_start, 3))
+            write_json(preparation_logs / "preparation.json", preparation)
+            raise RuntimeError("Source changed during index preparation")
+        seed = index
+        seed_identity = {"format_version": 1, "repo_commit": case["repo"]["commit"],
+                         "embedding_model": EMBEDDING, "workdir": "/app", "zvec_grep_package": PACKAGE,
+                         "origin": "built_once_in_this_experiment"}
+    preparation.update(status="completed", wall_seconds=round(time.monotonic() - preparation_start, 3),
+                       finished_at=datetime.now(UTC).isoformat())
+    write_json(preparation_logs / "preparation.json", preparation)
+    print(json.dumps({"phase": "index_preparation", **preparation}), flush=True)
     index_before = directory_identity(index)
     seed_before = directory_identity(seed)
     working_root = prepared / "working-indexes"
     snapshot = prepared / "snapshot.json"
-    model_cache = prepared / "model-cache"
-    preparation_logs = prepared / "runtime"
     preflight_index = working_index(index, working_root / "preflight")
     base = docker_command(args.image, source, preparation_logs, model_cache, index=preflight_index)
     query_flags = ["--root", "/app", "--package-dir", PACKAGE_DIR, "--embedding-model", EMBEDDING,
@@ -249,12 +291,13 @@ def execute_experiment(args: argparse.Namespace) -> int:
                 diagnostic_path=preparation_logs / "preflight-failure.json")
     shutil.copyfile(preparation_logs / "snapshot.json", snapshot)
     image_identity = json.loads(run_checked(["docker", "image", "inspect", args.image]))[0]
-    manifest = {"protocol": "readonly-qa-v1", "created_at": datetime.now(UTC).isoformat(),
+    manifest = {"protocol": "readonly-qa-v2", "created_at": datetime.now(UTC).isoformat(),
                 "case_sha256": sha256(args.case), "case_id": case["case_id"], "repo": case["repo"],
                 "package": PACKAGE, "embedding_model": EMBEDDING, "agent": "opencode", "agent_version": "1.18.4",
                 "model": args.model, "provider_url": OPENCODE_CUSTOM_BASE_URL,
                 "image_id": image_identity["Id"], "image_repo_digests": image_identity.get("RepoDigests", []),
                 "seed_identity": seed_identity, "source_files": source_before, "index_files": index_before,
+                "index_preparation": preparation, "index_build_scope": "preparation_only",
                 "repetitions_per_profile": 5, "order_seed": args.order_seed,
                 "corpus_readonly_mount": True, "index_readonly_mount": False, "index_build_allowed": False,
                 "index_policy": "immutable original seed; isolated writable copy per mode/trial; verify every stored document and vector",
@@ -368,7 +411,7 @@ def execute_experiment(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=Path, required=True)
-    parser.add_argument("--seed-dir", type=Path, required=True)
+    parser.add_argument("--seed-dir", type=Path, help="Optional existing seed; omitted by CI to prepare a new index once per experiment")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--model", choices=["custom-openai/glm-5.2", "custom-openai/qwen3.8-max"], default="custom-openai/glm-5.2")

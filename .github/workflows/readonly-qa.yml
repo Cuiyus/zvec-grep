@@ -37,30 +37,18 @@ jobs:
       - name: Test analysis, runner, judge and source annotations
         run: |
           uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
-          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs
-      - name: Restore existing frozen repository index
-        id: index
-        uses: actions/cache/restore@v5
-        with:
-          # Cache version includes the path: retain the original matrix's path
-          # so a matching restore-key can reuse its existing archive.
-          path: ${{ runner.temp }}/swe-qa-index-seed
-          key: readonly-qa-index-${{ runner.os }}-${{ runner.arch }}-0.2.2-reflex-6-v1
-          restore-keys: |
-            swe-qa-zvec-index-seed-v1-${{ runner.os }}-${{ runner.arch }}-opencode-glm-5.2-reflex-6-
-          fail-on-cache-miss: true
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs
       - name: Build pinned zg 0.2.2 and OpenCode runtime
         run: >-
           docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
           -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
-      - name: Run retrieval-only and five independent trials per QA profile
+      - name: Prepare one index then run retrieval and five QA trials per profile
         id: benchmark
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.readonly_run
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
-          --seed-dir "$RUNNER_TEMP/swe-qa-index-seed"
           --output "$RUNNER_TEMP/readonly-qa"
           --image zg-readonly-qa:0.2.2 --model custom-openai/glm-5.2
           --repetitions "$TRIALS_PER_PROFILE" --order-seed 1729
@@ -132,9 +120,3 @@ jobs:
             ${{ runner.temp }}/readonly-qa/preparation/runtime/
           if-no-files-found: warn
           retention-days: 90
-      - name: Save validated seed for repeated runs
-        if: success() && steps.index.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ runner.temp }}/swe-qa-index-seed
-          key: readonly-qa-index-${{ runner.os }}-${{ runner.arch }}-0.2.2-reflex-6-v1
