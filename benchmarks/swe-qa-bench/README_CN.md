@@ -55,6 +55,14 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 - 展示的效率变化是任务级变化的等权平均值，而不是聚合总和的比值。
 - 结果为 `N/A` 的任务只会从受影响的 Aggregate 指标中排除。
 
+## GitHub Actions
+
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在此 fork 的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行 5 题 smoke benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。通过 `workflow_dispatch` 可选择 `smoke`（5 题）或 `all-full`（20 题）。
+
+CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 3 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。上文的 Claude Code 配置对应已发布的本地测试协议。
+
+每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。完整运行还会生成聚合报告，报告摘要展示在 Actions Job Summary 中。
+
 ## 本地配置
 
 Harbor 使用 Docker 运行锁定的任务环境。为了得到可比较的结果，请保持主机平台、Claude Code 版本和模型服务配置一致。
