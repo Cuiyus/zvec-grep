@@ -1,0 +1,734 @@
+{
+  "schema_version": 1,
+  "run_id": "34255587426",
+  "case_id": "reflex-6",
+  "group": "opencode-glm52",
+  "created_at_utc": "2026-09-08T17:37:49.340382+00:00",
+  "reviewer": {
+    "kind": "Codex agent",
+    "role": "independent source review",
+    "human_review": false
+  },
+  "scope": "Independent content review of all ten final answers and 45 retrieval outputs against fixed source. Profile labels retained for traceability; model costs were not used to judge content. Not a new model vote, human adjudication, or an overwrite of automated scores.",
+  "source_repository": {
+    "url": "https://github.com/reflex-dev/reflex.git",
+    "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78"
+  },
+  "source_root": "/Users/cc/workspace/zvec-grep/benchmarks/swe-qa-bench/runs/readonly-selection/reflex-source",
+  "input_sha256": {
+    "benchmarks/swe-qa-bench/runs/readonly-ci/34255587426/opencode-glm52/quality-review.json": "2da1d9ef9e642848261403259147310ce8b6e17f01ee151327a077a354ea1ac9",
+    "benchmarks/swe-qa-bench/runs/readonly-ci/34255587426/opencode-glm52/entry-report.json": "e4d275b08f74f0a910333a0cf91e09b61915e1f012c70eb6e69987e89a503b32",
+    "benchmarks/swe-qa-bench/runs/readonly-ci/34255587426/opencode-glm52/entries.json": "e7c44b993aaadc2d13b04db7dceb7bf5161c2840320d60451fc6ccfa8e4e0773",
+    "benchmarks/swe-qa-bench/runs/readonly-ci/34255587426/opencode-glm52/retrieval/events.jsonl": "9c11f003482c21b2625b7460142f0af0b9490211cd544ec83bf0e027c5d34cc7",
+    "benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json": "37007ae97267c88420484511a30afe705c95236edce73979612212460eb5a9bb",
+    "benchmarks/swe-qa-bench/cases/reflex-6.json": "7bd11e3bccd1b28085aead62ce59b617bded5c769c41b9cfa9961a71a9e576d1"
+  },
+  "verification": {
+    "source_git_head": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+    "original_question_unchanged": true,
+    "original_nine_evidence_and_sufficient_sets_unchanged": true,
+    "judge_case_hash_matches_report": true,
+    "entries_hash_matches_report": true,
+    "all_15_source_excerpts_verified": [
+      "getter_accessor",
+      "getter_dependency_input",
+      "bytecode_attribute_dispatch",
+      "record_state_variable",
+      "register_reverse_dependencies",
+      "lookup_dependents",
+      "invalidate_dependent_values",
+      "remove_cached_value",
+      "evaluate_or_reuse_value",
+      "interval_refresh_is_separate",
+      "static_and_automatic_dependencies",
+      "potentially_dirty_state_names",
+      "expired_and_uncached_dirty_paths",
+      "cached_only_dependency_registration",
+      "attribute_kind_filter"
+    ],
+    "all_three_entry_source_file_hashes_match": true,
+    "all_ten_answer_and_trajectory_hashes_match": true
+  },
+  "automated_judgment_protocol": {
+    "calibration_models": {
+      "openai/glm-5.2": {
+        "status": "passed",
+        "matched": 4,
+        "planned": 4
+      },
+      "openai/qwen3.8-max": {
+        "status": "passed",
+        "matched": 4,
+        "planned": 4
+      }
+    },
+    "calibration_judgments": 8,
+    "candidate_judgments": 20,
+    "total_valid_automated_judgments": 28,
+    "all_exactly_one_attempt": true,
+    "all_response_model_aliases_verified": true,
+    "distinct_response_ids": 28,
+    "candidate_trials_original_consensus_pass": 10,
+    "original_quality_gate": {
+      "both_judges_calibrated": true,
+      "all_planned_answers_pass": true,
+      "not_a_noninferiority_test": true
+    },
+    "interpretation": "All 28 judgments executed the declared protocol, and 8 calibration judgments matched expected labels. This does not validate each candidate score: this review found missed material claims and a uniform completeness issue."
+  },
+  "source_evidence": {
+    "static_merge": {
+      "path": "reflex/vars/base.py",
+      "start_line": 2433,
+      "end_line": 2453,
+      "text": "        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n",
+      "sha256": "4df605a5dc6e8e9604a1138afe59eb23cb9deb7a0475f16a5710b43122e0cbca"
+    },
+    "reverse_registration": {
+      "path": "reflex/state.py",
+      "start_line": 779,
+      "end_line": 800,
+      "text": "        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n",
+      "sha256": "8fae6d616f878862a835185d3f1b33c8faeb0a841bfde11a6df2d9d28dcd4f8c"
+    },
+    "dependent_invalidation": {
+      "path": "reflex/state.py",
+      "start_line": 1954,
+      "end_line": 1967,
+      "text": "        dirty_vars = self.dirty_vars\n        while dirty_vars:\n            calc_vars, dirty_vars = dirty_vars, set()\n            for state_name, cvar in self._dirty_computed_vars(from_vars=calc_vars):\n                if state_name == self.get_full_name():\n                    defining_state = self\n                else:\n                    defining_state = self._get_root_state().get_substate(\n                        tuple(state_name.split(\".\"))\n                    )\n                defining_state.dirty_vars.add(cvar)\n                actual_var = defining_state.computed_vars.get(cvar)\n                if actual_var is not None:\n                    actual_var.mark_dirty(instance=defining_state)\n",
+      "sha256": "3e0ac1d734cbfb4b9db28c54b67fa798df82b7be12c40065c1c3d8de8345ea32"
+    },
+    "reverse_lookup": {
+      "path": "reflex/state.py",
+      "start_line": 1998,
+      "end_line": 2003,
+      "text": "        return {\n            (state_name, cvar)\n            for dirty_var in from_vars or self.dirty_vars\n            for state_name, cvar in self._var_dependencies.get(dirty_var, set())\n            if include_backend or not self.computed_vars[cvar]._backend\n        }\n",
+      "sha256": "a2b6100b1c641582d229c26d9cc4a1aea05de55f448b12aeaca4e3e7ac4d7a88"
+    },
+    "delete_cache": {
+      "path": "reflex/vars/base.py",
+      "start_line": 2462,
+      "end_line": 2469,
+      "text": "    def mark_dirty(self, instance: BaseState) -> None:\n        \"\"\"Mark this ComputedVar as dirty.\n\n        Args:\n            instance: the state instance that needs to recompute the value.\n        \"\"\"\n        with contextlib.suppress(AttributeError):\n            delattr(instance, self._cache_attr)\n",
+      "sha256": "e869987cf8e0e218fbea72f189d433135ab782afc4df70855ffd263347df5c52"
+    },
+    "evaluate_or_reuse": {
+      "path": "reflex/vars/base.py",
+      "start_line": 2387,
+      "end_line": 2398,
+      "text": "        if not self._cache:\n            value = self.fget(instance)\n        else:\n            # handle caching\n            if not hasattr(instance, self._cache_attr) or self.needs_update(instance):\n                # Set cache attr on state instance.\n                setattr(instance, self._cache_attr, self.fget(instance))\n                # Ensure the computed var gets serialized to redis.\n                instance._was_touched = True\n                # Set the last updated timestamp on the state instance.\n                setattr(instance, self._last_updated_attr, datetime.datetime.now())\n            value = getattr(instance, self._cache_attr)\n",
+      "sha256": "f52284f6b899d0056d98f94b1ad28a5071335be3514307285f78f46aa8e3259e"
+    },
+    "analysis_fallback": {
+      "path": "reflex/vars/base.py",
+      "start_line": 2451,
+      "end_line": 2460,
+      "text": "            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n        except Exception as e:\n            console.warn(\n                \"Failed to automatically determine dependencies for computed var \"\n                f\"{objclass.__name__}.{self._name}: {e}. \"\n                \"Provide static_deps and set auto_deps=False to suppress this warning.\"\n            )\n            return d\n",
+      "sha256": "3502d17ee2d970c2eeb5df479eaf03fef20d3542c12cb853beefbe1fe98af966"
+    },
+    "tracker_shared_dictionary": {
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 49,
+      "end_line": 82,
+      "text": "@dataclasses.dataclass\nclass DependencyTracker:\n    \"\"\"State machine for identifying state attributes that are accessed by a function.\"\"\"\n\n    func: FunctionType | CodeType = dataclasses.field()\n    state_cls: type[BaseState] = dataclasses.field()\n\n    dependencies: dict[str, set[str]] = dataclasses.field(default_factory=dict)\n\n    scan_status: ScanStatus = dataclasses.field(default=ScanStatus.SCANNING)\n    top_of_stack: str | None = dataclasses.field(default=None)\n\n    tracked_locals: dict[str, type[BaseState]] = dataclasses.field(default_factory=dict)\n\n    _getting_state_class: type[BaseState] | None = dataclasses.field(default=None)\n    _get_var_value_positions: dis.Positions | None = dataclasses.field(default=None)\n\n    INVALID_NAMES: ClassVar[list[str]] = [\"parent_state\", \"substates\", \"get_substate\"]\n\n    def __post_init__(self):\n        \"\"\"After initializing, populate the dependencies dict.\"\"\"\n        with contextlib.suppress(AttributeError):\n            # unbox functools.partial\n            self.func = cast(FunctionType, self.func.func)  # pyright: ignore[reportAttributeAccessIssue]\n        with contextlib.suppress(AttributeError):\n            # unbox EventHandler\n            self.func = cast(FunctionType, self.func.fn)  # pyright: ignore[reportAttributeAccessIssue,reportFunctionMemberAccess]\n\n        if isinstance(self.func, FunctionType):\n            with contextlib.suppress(AttributeError, IndexError):\n                # the first argument to the function is the name of \"self\" arg\n                self.tracked_locals[self.func.__code__.co_varnames[0]] = self.state_cls\n\n        self._populate_dependencies()\n",
+      "sha256": "1027fa23d332f668a4903b3aff29652e30cd6b788ba5b153e8fddcec997520ca"
+    },
+    "tracker_may_raise": {
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 93,
+      "end_line": 109,
+      "text": "    def load_attr_or_method(self, instruction: dis.Instruction) -> None:\n        \"\"\"Handle loading an attribute or method from the object on top of the stack.\n\n        This method directly tracks attributes and recursively merges\n        dependencies from analyzing the dependencies of any methods called.\n\n        Args:\n            instruction: The dis instruction to process.\n\n        Raises:\n            VarValueError: if the attribute is an disallowed name.\n        \"\"\"\n        from .base import ComputedVar\n\n        if instruction.argval in self.INVALID_NAMES:\n            msg = f\"Cached var {self!s} cannot access arbitrary state via `{instruction.argval}`.\"\n            raise VarValueError(msg)\n",
+      "sha256": "bee778b46085fb373425a80e5afa6517455effe973b7a3eb4cbac152f6b45484"
+    },
+    "tracker_records_in_place": {
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 140,
+      "end_line": 147,
+      "text": "        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n",
+      "sha256": "6e52a620d2b3f8e5d40782a671f4834e4adfe6c8a23cad4d14c931a9e69faa63"
+    },
+    "getter_accessor": {
+      "path": "reflex/vars/base.py",
+      "start_line": 2524,
+      "end_line": 2531,
+      "text": "    @property\n    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "cae1b1800fa57c96a5aa0f55a1d5a7230d8cd99eadf66b2aa3963491bd45eec8"
+    },
+    "bytecode_scan": {
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 296,
+      "end_line": 321,
+      "text": "    def _populate_dependencies(self) -> None:\n        \"\"\"Update self.dependencies based on the disassembly of self.func.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n        \"\"\"\n        for instruction in dis.get_instructions(self.func):\n            if self.scan_status == ScanStatus.GETTING_STATE:\n                self.handle_getting_state(instruction)\n            elif self.scan_status == ScanStatus.GETTING_VAR:\n                self.handle_getting_var(instruction)\n            elif (\n                instruction.opname in (\"LOAD_FAST\", \"LOAD_DEREF\", \"LOAD_FAST_BORROW\")\n                and instruction.argval in self.tracked_locals\n            ):\n                # bytecode loaded the class instance to the top of stack, next load instruction\n                # is referencing an attribute on self\n                self.top_of_stack = instruction.argval\n                self.scan_status = ScanStatus.GETTING_ATTR\n            elif self.scan_status == ScanStatus.GETTING_ATTR and instruction.opname in (\n                \"LOAD_ATTR\",\n                \"LOAD_METHOD\",\n            ):\n                self.load_attr_or_method(instruction)\n",
+      "sha256": "c437d03ba6543872a30886d1c77336b699bf4a378ab7cbe4ac257bf225b17343"
+    }
+  },
+  "reviews": [
+    {
+      "trial_id": "reflex-6-r01-baseline",
+      "profile": "baseline",
+      "answer_sha256": "5ee50ddc06e3d3ae613f5372f8f7e318135efc58078561ce18fba8fdac382d2f",
+      "trajectory_sha256": "00be2e29155a1e6c4a80345c6054780c72066aca78f9ad2d1c094c0455ef78a6",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r02-baseline",
+      "profile": "baseline",
+      "answer_sha256": "60ed9e2fc6ac16dc4c94a4f92ff7c41dc988ecf7c0a0b894087dfcb263b0c5ce",
+      "trajectory_sha256": "47656cc7513ff406c4a9b084dda608bf1ae3e4630849d489d4eb87f32ed8f376",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r03-baseline",
+      "profile": "baseline",
+      "answer_sha256": "d2c9dd4530f6cd48c7e9ad22a3b0f1a3b0db93f4674f5c3687606e594ca5a76c",
+      "trajectory_sha256": "ab4155134a94b63e48ff4e886d7f850b5618d0f140ff8dc21f85440133947271",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r04-baseline",
+      "profile": "baseline",
+      "answer_sha256": "837d2558088e79a50d4310389c18bd4c2a50ee014d8bb2006568ad0d465f1dbc",
+      "trajectory_sha256": "a2c812a3eff4d9282a5ee1e8641f18f6052d77e6db30d3ecaa3eb100d61e5b81",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r05-baseline",
+      "profile": "baseline",
+      "answer_sha256": "c837b9b14ccd5db365f3ee233a0dc470bebbec1cad7fb97ec737cfebaf5ce391",
+      "trajectory_sha256": "897eef427a391e74d938e519fe70526fe9a8e30a229b1a96cf8c1670ae570328",
+      "classification": "incorrect",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 0,
+      "proposed_evidence_support": 0,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [
+        {
+          "quote": "This map is built entirely from the dependencies extracted by disassembling each computed var's `fget`.",
+          "classification": "incorrect",
+          "score": 0,
+          "severity": "material ancillary overstatement",
+          "explanation": "The preceding paragraph defines the entire _var_dependencies map, without limiting this sentence to auto-discovered edges or to empty static deps. _deps copies static deps into d and the same returned map is registered. Entirely from disassembly is contradicted; the main chain remains correct.",
+          "source_ids": [
+            "static_merge",
+            "reverse_registration"
+          ],
+          "quote_char_start": 2316,
+          "quote_char_end_exclusive": 2419,
+          "context": "\n# /app/reflex/state.py:779-797\nfor cvar_name, cvar in cls.computed_vars.items():\n    if not cvar._cache:\n        continue\n    for state_name, dvar_set in cvar._deps(objclass=cls).items():\n        ...\n        defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n            cls.get_full_name(),\n            cvar_name,\n        ))\n```\n\n`_var_dependencies` (`/app/reflex/state.py:340`) is thus a **reverse map**: var name → set of `(state_full_name, computed_var_name)` that depend on it. This map is built entirely from the dependencies extracted by disassembling each computed var's `fget`.\n\n### 3. At runtime that map drives which computed vars get marked dirty and recomputed\n\nWhen state vars change, `_mark_dirty_computed_vars()` (`/app/reflex/state.py:1947`) consults `_dirty_computed_v",
+          "core_dependency_chain_error": false
+        }
+      ],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r01-zvec-grep",
+      "profile": "zvec-grep",
+      "answer_sha256": "89cfe920f2f9b708615f912eed6fa19ea45f1bcabe3cd85193c03880218f22a5",
+      "trajectory_sha256": "e76f281d13f088124a6b8b85bb47cf7ec3c0427e1acbe921b04aeefdb49babe8",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r02-zvec-grep",
+      "profile": "zvec-grep",
+      "answer_sha256": "9b5f4771fac7c1f1118ca35d18d95643de1fd930c7118b66732aad6dfb78c10a",
+      "trajectory_sha256": "f6506658d4cb05e21e6c7461660c8274b43923cc3d46a6e0e7bb8d55f0b5b693",
+      "classification": "incorrect",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 0,
+      "proposed_evidence_support": 0,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [
+        {
+          "quote": "If `fget` were absent (or `auto_deps=False`), only the explicit `_static_deps` would be used (`reflex/vars/base.py:2434-2441`), and automatic recomputation-on-dependency-change would not occur.",
+          "classification": "incorrect",
+          "score": 0,
+          "severity": "material ancillary overstatement",
+          "explanation": "auto_deps=False is a concrete counterexample to the final clause: explicit deps are returned, registered in the same reverse map, and still cause dependency-change invalidation and subsequent getter execution. The answer conflates automatic discovery and automatic recomputation. Its preceding main automatic-discovery chain remains correct.",
+          "source_ids": [
+            "static_merge",
+            "reverse_registration",
+            "dependent_invalidation",
+            "reverse_lookup",
+            "delete_cache",
+            "evaluate_or_reuse"
+          ],
+          "quote_char_start": 2426,
+          "quote_char_end_exclusive": 2619,
+          "context": " looks up `_var_dependencies` to find which computed vars depend on it (`reflex/state.py:1998-2003`), so those computed vars are marked dirty and recomputed in the delta (`reflex/state.py:2005-2024`).\n\nSo the computation function returned by `fget` is the **input to static bytecode analysis**: the framework disassembles it to automatically determine which state vars the derived var reads, and uses that mapping to trigger recomputation of the derived var whenever any of those source vars change. If `fget` were absent (or `auto_deps=False`), only the explicit `_static_deps` would be used (`reflex/vars/base.py:2434-2441`), and automatic recomputation-on-dependency-change would not occur.",
+          "core_dependency_chain_error": false
+        }
+      ],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r03-zvec-grep",
+      "profile": "zvec-grep",
+      "answer_sha256": "b55cc8515dba6927d2d2a916644c201509da87309d91033a90fa2ea1a0716c71",
+      "trajectory_sha256": "97f17422cb6fcc9f6f78dad505144f3dbdb3ef8d88cc92765072a08117b559b5",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r04-zvec-grep",
+      "profile": "zvec-grep",
+      "answer_sha256": "1e1985723273fae09f4410ba9ca47d1ad19086767b15e0f48417d1a43b6330b3",
+      "trajectory_sha256": "4d981a692a22c30105150ba05b52135c510ac8a5c98ed98fe112e5b892a5c501",
+      "classification": "uncertain",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": "?",
+      "proposed_evidence_support": "?",
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [
+        {
+          "quote": "If `_auto_deps` is `False` (`reflex/vars/base.py:2440-2441`) or the function can't be analyzed (`reflex/vars/base.py:2454-2460`), this auto-discovery is skipped and only explicit `_static_deps` are used.",
+          "classification": "uncertain",
+          "score": "?",
+          "severity": "ancillary exceptional-path overstatement",
+          "explanation": "The auto_deps=False branch is correct. The broader failure-path claim needs qualification: _deps passes mutable d itself into DependencyTracker, which can add dependencies before a later exception; except returns that same d. Only static deps is not guaranteed on every analysis failure. This is a source-level exceptional-path inference, not an executed counterexample, and is kept uncertain rather than conflated with the two clear normal-configuration errors.",
+          "source_ids": [
+            "analysis_fallback",
+            "tracker_shared_dictionary",
+            "tracker_may_raise",
+            "tracker_records_in_place"
+          ],
+          "quote_char_start": 2862,
+          "quote_char_end_exclusive": 3065,
+          "context": ":1967`). `mark_dirty` deletes the cached value (`reflex/vars/base.py:2462-2469`), so the next `__get__` re-invokes `self.fget(instance)` (`reflex/vars/base.py:2388,2393`) to recompute.\n\nIn short: the computation function returned by the `fget` accessor is **the code that `DependencyTracker` disassembles to automatically determine which state vars the `ComputedVar` reads**; those vars are then registered as the triggers that, when changed, mark the computed var dirty and force its recomputation. If `_auto_deps` is `False` (`reflex/vars/base.py:2440-2441`) or the function can't be analyzed (`reflex/vars/base.py:2454-2460`), this auto-discovery is skipped and only explicit `_static_deps` are used.",
+          "core_dependency_chain_error": false
+        }
+      ],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    },
+    {
+      "trial_id": "reflex-6-r05-zvec-grep",
+      "profile": "zvec-grep",
+      "answer_sha256": "1083b61b03063194810018ef751568844a835278196b7c8bcd9155e1b4f72e2d",
+      "trajectory_sha256": "1a84031430ff8f1c1bf0a2d6420ec2309b75144c83d288aa145ad523451a9947",
+      "classification": "correct",
+      "classification_scope": "Material factual claims only; correct means no material contradiction found in this bounded review, not an overall QA pass.",
+      "main_dependency_chain_correct": true,
+      "core_question_completeness": 1,
+      "proposed_factual_correctness": 1,
+      "proposed_evidence_support": 1,
+      "necessary_completeness_under_literal_frozen_required_facts": 0,
+      "uncached_direct_invocation_explicitly_explained": false,
+      "potentially_dirty_states_claim_present": false,
+      "findings": [],
+      "original_automated_quality": "pass",
+      "original_model_scores": {
+        "openai/glm-5.2": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        },
+        "openai/qwen3.8-max": {
+          "factual_correctness": 1,
+          "necessary_completeness": 1,
+          "evidence_support": 1
+        }
+      }
+    }
+  ],
+  "manual_review_summary": {
+    "descriptive_factual_categories": {
+      "correct": 7,
+      "incorrect": 2,
+      "uncertain": 1
+    },
+    "no_detected_core_chain_errors": true,
+    "two_clear_material_ancillary_errors": [
+      "reflex-6-r05-baseline",
+      "reflex-6-r02-zvec-grep"
+    ],
+    "additional_exception_path_uncertainty": [
+      "reflex-6-r04-zvec-grep"
+    ],
+    "uniform_required_fact_omission": "All ten cover the question core, but none explicitly explains cache=False direct getter invocation. required_facts[2] explicitly includes this clause, and the rubric says all required facts must be answered. Strict literal necessary_completeness is therefore 0 for every answer; if the clause is intended optional, revise the future rubric uniformly. Citing a line or mentioning cache=False registration is not an explanation of direct invocation. Some judge reasons incorrectly assert the answer stated it.",
+    "no_potentially_dirty_states_container_claims_in_answers": true,
+    "overall_quality_not_replaced": true
+  },
+  "retrieval_review": {
+    "independent_scan": "A separate public-text scanner agrees with all 45 runs x 3 native/4096/8192 function first-hit ranks and item-ending byte prefixes. It only matches full numbered definitions or exact own-entry outlines and preserves duplicate slots. No hidden result.items or bare parent ranges count.",
+    "queries": [
+      {
+        "query_id": "original",
+        "mode": "fts",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 5924,
+        "native_function_first_rank": null,
+        "native_bytes_through_first_function_hit": null,
+        "hit_at_10_by_budget": {
+          "native": false,
+          "bytes_4096": false,
+          "bytes_8192": false
+        },
+        "latency_ms_by_repetition": [
+          213.07987600000024,
+          199.57273799999984,
+          218.01620400000002,
+          218.84324100000003,
+          218.7760619999999
+        ]
+      },
+      {
+        "query_id": "original",
+        "mode": "vector",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 6002,
+        "native_function_first_rank": 6,
+        "native_bytes_through_first_function_hit": 3270,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": true,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          333.5502140000003,
+          223.33975200000032,
+          222.50445200000013,
+          219.13654399999996,
+          204.79733799999985
+        ]
+      },
+      {
+        "query_id": "original",
+        "mode": "hybrid",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 6967,
+        "native_function_first_rank": 6,
+        "native_bytes_through_first_function_hit": 4513,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": false,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          343.1745719999999,
+          207.2336760000003,
+          204.91378299999997,
+          223.02567799999997,
+          227.6720660000001
+        ]
+      },
+      {
+        "query_id": "dependency-discovery",
+        "mode": "fts",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 7211,
+        "native_function_first_rank": null,
+        "native_bytes_through_first_function_hit": null,
+        "hit_at_10_by_budget": {
+          "native": false,
+          "bytes_4096": false,
+          "bytes_8192": false
+        },
+        "latency_ms_by_repetition": [
+          206.656156,
+          199.56541600000037,
+          230.4743239999998,
+          226.3429610000003,
+          198.0136620000003
+        ]
+      },
+      {
+        "query_id": "dependency-discovery",
+        "mode": "vector",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 6175,
+        "native_function_first_rank": 3,
+        "native_bytes_through_first_function_hit": 1810,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": true,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          345.6258889999999,
+          221.31502499999988,
+          225.91089899999997,
+          202.8477310000003,
+          196.45214600000008
+        ]
+      },
+      {
+        "query_id": "dependency-discovery",
+        "mode": "hybrid",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 7026,
+        "native_function_first_rank": 3,
+        "native_bytes_through_first_function_hit": 1910,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": true,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          350.1646820000001,
+          225.2998319999997,
+          225.1405179999997,
+          204.41707700000006,
+          229.8419389999999
+        ]
+      },
+      {
+        "query_id": "selective-refresh",
+        "mode": "fts",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 7373,
+        "native_function_first_rank": null,
+        "native_bytes_through_first_function_hit": null,
+        "hit_at_10_by_budget": {
+          "native": false,
+          "bytes_4096": false,
+          "bytes_8192": false
+        },
+        "latency_ms_by_repetition": [
+          217.81904799999984,
+          221.38624000000027,
+          225.3032079999998,
+          222.61213499999985,
+          229.23361400000022
+        ]
+      },
+      {
+        "query_id": "selective-refresh",
+        "mode": "vector",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 6282,
+        "native_function_first_rank": 5,
+        "native_bytes_through_first_function_hit": 3144,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": true,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          341.07552699999997,
+          223.97050900000022,
+          223.68573000000015,
+          199.59156500000017,
+          220.99922399999969
+        ]
+      },
+      {
+        "query_id": "selective-refresh",
+        "mode": "hybrid",
+        "successful_repeats": 5,
+        "distinct_public_text_hashes": 1,
+        "native_public_bytes": 7145,
+        "native_function_first_rank": 7,
+        "native_bytes_through_first_function_hit": 5386,
+        "hit_at_10_by_budget": {
+          "native": true,
+          "bytes_4096": false,
+          "bytes_8192": true
+        },
+        "latency_ms_by_repetition": [
+          336.43690300000026,
+          227.62216200000012,
+          226.19102699999985,
+          225.34922800000004,
+          225.80041200000005
+        ]
+      }
+    ],
+    "important_spotcheck": "dependency-discovery vector/hybrid rank 3 is a broad BaseState item, but its PUBLIC source explicitly includes line 770: def _init_var_dependency_dicts(cls):. It is a valid function entry; rank-4 duplicate remains present.",
+    "limitations": [
+      "Original question: FTS no primary function@10; vector and hybrid first function rank6, with 3270 vs4513 bytes through that hit item.",
+      "The offline4096-byte cap retains original vector and loses original hybrid. These are offline UTF8-prefix analyses, not E2E truncation claims.",
+      "All nine query/mode groups had five identical public-text results. This supports repeat stability on this exact frozen setup, not general stability or statistical significance.",
+      "Three related formulations remain one QA intent; five repeats do not multiply independent quality sample size.",
+      "FTS still has file/class hits; absent frozen primary function hits does not imply no useful FTS information or no alternative valid entry.",
+      "Vector is no worse than hybrid on original/selective-refresh first-function rank and through-hit bytes here; no universal mode superiority follows.",
+      "Entry localization is distinct from answer correctness and sufficient evidence. No rg retrieval baseline is present."
+    ]
+  },
+  "original_artifacts_modified": false
+}
