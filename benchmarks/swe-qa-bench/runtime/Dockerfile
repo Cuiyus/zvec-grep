@@ -11,4 +11,9 @@ ENV PATH="/opt/qa/node_modules/.bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 ENV OPENCODE_DISABLE_LSP_DOWNLOAD=true
 ENV OPENCODE_DISABLE_EXTERNAL_SKILLS=true
+ARG QA_UID=1001
+ARG QA_GID=1001
+RUN if ! getent group "${QA_GID}" >/dev/null; then groupadd --gid "${QA_GID}" qa; fi \
+    && if ! getent passwd "${QA_UID}" >/dev/null; then useradd --uid "${QA_UID}" --gid "${QA_GID}" --create-home qa; fi
+USER ${QA_UID}:${QA_GID}
 WORKDIR /app

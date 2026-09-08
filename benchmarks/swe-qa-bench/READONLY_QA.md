@@ -30,6 +30,8 @@
 
 运行容器设置 `git config --system --add safe.directory /app`，让容器用户可以读取宿主挂载仓库的 Git 身份；该设置写入镜像的系统配置，不修改仓库。
 
+构建镜像时使用 runner 的 UID/GID 创建或选用容器用户，并保留该用户正常的 home。这样日志、模型权重和索引挂载可由同一用户写入，源码挂载仍只读；容器保持 `--cap-drop ALL`，不依赖 root 绕过宿主文件权限。手动构建应同样传入 `--build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"`。
+
 ## 两类测量分别解释
 
 ### 固定 query：15 次正常检索
