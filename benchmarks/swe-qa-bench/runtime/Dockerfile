@@ -1,0 +1,13 @@
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git ripgrep python3 libgomp1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git config --system --add safe.directory /app
+WORKDIR /opt/qa
+COPY runtime/package.json runtime/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY scripts/readonly-search.mjs ./readonly-search.mjs
+ENV PATH="/opt/qa/node_modules/.bin:${PATH}"
+ENV OPENCODE_DISABLE_AUTOUPDATE=true
+ENV OPENCODE_DISABLE_LSP_DOWNLOAD=true
+ENV OPENCODE_DISABLE_EXTERNAL_SKILLS=true
+WORKDIR /app

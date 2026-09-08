@@ -1,0 +1,69 @@
+# 固定索引的只读 QA 验证
+
+本协议先验证一个问题：在同一冻结仓库、同一 Agent / Model 和既有索引条件下，zg 能否在回答质量可接受时减少 QA 的输入 Token 与工具调用。当前是单 case 流程验证；五次重复衡量同题运行波动，不能视为五道独立题，也不据此声明总体收益或统计非劣。
+
+## 固定内容与实验分母
+
+- Case：`reflex-6`，沿用原问题；选择依据和历史 baseline 见 [cases/SELECTION.md](cases/SELECTION.md)。历史筛选运行不进入新实验的成本分母。
+- 仓库：`reflex-dev/reflex`，commit `fe0f946dc0c240c6c1e513318c21db407e191c78`。
+- 被测包：**`@zvec/zvec-grep@0.2.2`**；Agent：**OpenCode 1.18.4**；模型：`custom-openai/glm-5.2`。npm 依赖由 `runtime/package-lock.json` 固定，运行记录镜像 ID 和实际包身份。
+- 文档与查询 embedding：`local/potion-code-16m-v2`，必须与恢复的既有索引匹配。索引不存在或身份不匹配时停止准备，禁止自动构建或增量更新。
+- 固定 query 测试：FTS / vector / hybrid 各 **5 次**，共 **15 个计划槽位**。
+- Agent QA：baseline **5 次**、zg **5 次**，共 **10 个计划槽位**。按重复块随机 AB/BA，顺序种子为 `1729`；每次使用新容器和新 Agent 会话。
+
+冻结的 `plan.json` 先于执行写出。失败、超时、缺失轨迹、无最终答案、judge 未完成都保留；缺失成本不是零。只对已成功调用的行计算均值时，报告必须同时展示已知数与缺失数，不能缩小计划分母。输出目录必须新建或为空，不覆盖历史产物。
+
+## 源码、索引与工作副本的边界
+
+源码 `/app` 始终只读，不运行修改、构建、安装或验证测试的 Agent 工具。baseline 使用 OpenCode 的只读搜索和阅读能力，zg 组在相同约束下增加查询 MCP 桥接。桥接固定正常查询配置、拒绝建索引/更新操作并保存旁路 trace；此实验不覆盖完整原生 daemon 的生命周期行为。
+
+原始 seed 与可执行索引副本的约束不同：
+
+1. **原始 seed 物理不可变。** 从旧缓存恢复后保留物理文件哈希，查询进程不直接使用它，不向它写入锁、日志或存储状态。
+2. **每次独立运行从 seed 复制新的工作副本。** 每个 QA trial 各自一份；固定 query 测试的每个模式也从同一 seed 开始。工作副本可写，以容纳 native 存储打开/关闭时产生的字节变化。
+3. **逻辑索引仍须完全不变。** 查询前后校验源文件、索引 manifest、索引身份与 embedding 配置；遍历 native collection 的所有文档、所有字段及全部向量，比较文档与向量哈希。向量维度、数量和完整投影也必须可验证。
+4. **物理漂移单独披露。** 工作副本的 native 存储文件发生字节变化时记录具体文件和哈希差异，不将所有变化推断为“无害元数据”。只有逻辑文档与向量等不变量仍通过，才可继续解释查询结果。原 seed 的物理变化或任何逻辑内容变化均是完整性失败。
+
+这不等于声称工作副本物理只读。设计目的是复用同一份文档和向量，同时适应 native 存储实际的打开行为；不会重新嵌入文档、添加文档、删除文档或增量索引。共享的本地 embedding 权重缓存只用于减少重复下载，不共享 Agent 答案、历史会话或 gold。
+
+运行容器设置 `git config --system --add safe.directory /app`，让容器用户可以读取宿主挂载仓库的 Git 身份；该设置写入镜像的系统配置，不修改仓库。
+
+## 两类测量分别解释
+
+### 固定 query：15 次正常检索
+
+三个模式使用同一个原始自然语言问题，固定生产 `limit=10`。FTS-only、vector-only 和 hybrid 分别构造 route，不让 Agent 或 judge 改写 query。没有 `rg` 的 retrieval-only 对照：不能把原始自然语言整句直接交给 `rg` 后，将失败解释成 zg 的优势。
+
+同一模式的五次查询在**同一进程内顺序运行**。该模式的第一条查询包含首次查询相关的冷加载开销，后四条可能复用已加载模型和进程状态；模式之间独立启动。进程启动与准备时间、首条查询、后续查询应分别解释，不能把五条都称为独立冷启动，或把第一条和后四条混合的均值称作稳定暖态延迟。权重文件可能已共享，OS 文件缓存也不等于冷缓存。
+
+报告保存原生结构化结果、最终展示文本、源码范围、延迟、错误和完整性校验。当前没有固定 tokenizer 的检索返回 Token 计数；字符/字节量不是 Token 数，也不是模型的实际 input tokens。
+
+### Agent QA：10 次完整回答
+
+每个 Agent 从问题开始，自行搜索、阅读、推理并产生最终答案。请求包含相同的只读约束和源码引用要求，不包含目标路径、gold、参考答案、必要事实列表或检索停止提示。源码快照和索引 seed 复用，会话及运行状态不复用。
+
+保存逐调用工具输入/返回、模型 usage、最终答案与完成状态。模型 input tokens 使用实际记录的 usage；缓存输入单列且不能重复相加。外部 toolcall、搜索子操作和模型请求不是同一单位，不能把一次批量搜索等同于一次查询试错。无最终答案的 exit-0 流仍属于协议失败。
+
+## 质量与证据评分
+
+`cases/reflex-6.json` 的 **9 个源码证据片段组成一个完整 AND 证明路径**；结构支持将来加入独立核验的 OR 替代路径。可见证据评分按实际返回的源码内容匹配，不能只根据路径、函数名或底层 entity 范围认定整段已读。
+
+这个完整 AND 是**保守诊断，不是 QA 回答正确的必要条件**。正确答案可能只需概括关键关系，或使用其他有效证据。短预览通常只有约 10 行，可能截断其中一个较长片段；未完整覆盖 9 段，不能直接判为答案错误、仓库无答案或检索完全无用。不要为提高该指标而要求 Agent 无意义地读取所有 gold。
+
+最终答案单独使用纠正后的 source-grounded reference 和三个必要事实评分：事实正确性、必要完整性、源码支持分别为 `0 / 1 / ?`，附解释和源码证据 ID，不让行文风格抵消事实错误。原参考答案关于 `needs_update` 的描述有误；纠正依据及额外的 `judge_only_evidence` 已单列，后者不属于 9 个检索证据单元。
+
+Judge 只看到问题、参考、源证据和单个最终答案，不看到组别、成本、轨迹或隐藏推理。源码支持分数不能证明 Agent 实际读到了证据；实际可见证据仍由 trace 单独计算。GLM 同时是被测模型和 judge，这需要人工校准；`temperature=0` 不保证评分确定。重试只修复传输或格式失败，不是独立 judge 投票。
+
+Judge 失败或 `judged.json` 未产生时，观测报告仍执行，并保留 10 个 QA 和 15 个检索计划槽位。此时质量标为未知/未评分，不把缺失 judge 文件转换为零分，也不因此失去检索报告。
+
+## CI 与旧 seed 恢复
+
+[readonly-qa.yml](../../.github/workflows/readonly-qa.yml) 对目标为 `dev/benchmark-ci`、来源分支以 `dev/benchmark-readonly-qa` 开头的同仓库 PR 执行本实验，也支持明确的 `workflow_dispatch`。现有 `swe-qa-bench.yml` 已对这一来源分支前缀跳过 `run-pair`；其低成本配置验证仍可执行，旧三组合矩阵不会因该 PR 再次付费运行。
+
+缓存首先查找本实验的 `readonly-qa-index-...-0.2.2-reflex-6-v1` key；没有精确命中时，按旧 OpenCode × GLM / reflex-6 key 前缀恢复。restore、save 和 `--seed-dir` 都保留原路径 `$RUNNER_TEMP/swe-qa-index-seed`。Actions 的 cache version 包含 path，改成另一个目标目录会破坏旧 archive 的版本匹配，即使 restore-key 前缀一致也不够。[缓存版本说明](https://github.com/actions/cache#cache-version)
+
+PR 可以访问目标分支缓存，但不能任意读取兄弟分支或其他 PR 的 merge-ref 缓存。因此旧 seed 必须实际存在于该 PR 可访问的作用域内；本工作流使用 `fail-on-cache-miss: true`，缓存被清理或作用域不匹配时明确失败，绝不回退为现场构建。新缓存 key 上的 `0.2.2` 指本次兼容性验证协议，不把旧 seed 的生成版本改写为 `0.2.2`。[缓存访问范围](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)
+
+主实验、QA 评分、QA 观测报告和检索报告是独立步骤。只有 `judged.json` 存在时才向 analyze 传入 `--judged-report`。原始错误和计划状态随产物保留；上传前检查凭据值，发现泄漏则阻止上传。报告可以离线重算；重新执行 Agent 或 judge 则是新的运行，应使用新的输出目录。
+
+本文件描述冻结协议及解释边界，不报告任何新模型运行结果。

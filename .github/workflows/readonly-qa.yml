@@ -1,0 +1,145 @@
+name: Read-only QA evidence benchmark
+
+on:
+  pull_request:
+    branches: [dev/benchmark-ci]
+    paths:
+      - "benchmarks/swe-qa-bench/**"
+      - ".github/workflows/readonly-qa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readonly-qa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.head_ref, 'dev/benchmark-readonly-qa') &&
+       github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CASE_ID: reflex-6
+      ZG_PACKAGE: "@zvec/zvec-grep@0.2.2"
+      TRIALS_PER_PROFILE: "5"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Test analysis, runner, judge and source annotations
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs
+      - name: Restore existing frozen repository index
+        id: index
+        uses: actions/cache/restore@v5
+        with:
+          # Cache version includes the path: retain the original matrix's path
+          # so a matching restore-key can reuse its existing archive.
+          path: ${{ runner.temp }}/swe-qa-index-seed
+          key: readonly-qa-index-${{ runner.os }}-${{ runner.arch }}-0.2.2-reflex-6-v1
+          restore-keys: |
+            swe-qa-zvec-index-seed-v1-${{ runner.os }}-${{ runner.arch }}-opencode-glm-5.2-reflex-6-
+          fail-on-cache-miss: true
+      - name: Build pinned zg 0.2.2 and OpenCode runtime
+        run: >-
+          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
+          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Run retrieval-only and five independent trials per QA profile
+        id: benchmark
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.readonly_run
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --seed-dir "$RUNNER_TEMP/swe-qa-index-seed"
+          --output "$RUNNER_TEMP/readonly-qa"
+          --image zg-readonly-qa:0.2.2 --model custom-openai/glm-5.2
+          --repetitions "$TRIALS_PER_PROFILE" --order-seed 1729
+      - name: Score final QA answers against source-grounded reference
+        if: always() && steps.benchmark.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.readonly_judge
+          --runs-dir "$RUNNER_TEMP/readonly-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --output "$RUNNER_TEMP/readonly-qa/judged.json"
+          --expected-per-profile "$TRIALS_PER_PROFILE"
+      - name: Produce QA report including unscored and missing trials
+        if: always() && steps.benchmark.outcome != 'skipped'
+        run: |
+          mkdir -p "$RUNNER_TEMP/readonly-qa"
+          judge_args=()
+          if [ -f "$RUNNER_TEMP/readonly-qa/judged.json" ]; then
+            judge_args=(--judged-report "$RUNNER_TEMP/readonly-qa/judged.json")
+          fi
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.observability analyze \
+            --runs-dir "$RUNNER_TEMP/readonly-qa" \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --expected-trials "$TRIALS_PER_PROFILE" "${judge_args[@]}" \
+            --output "$RUNNER_TEMP/readonly-qa/report.json"
+          cat "$RUNNER_TEMP/readonly-qa/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Produce retrieval report including all fifteen planned queries
+        if: always() && steps.benchmark.outcome != 'skipped'
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.observability retrieval \
+            --events "$RUNNER_TEMP/readonly-qa/retrieval/events.jsonl" \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --expected-trials "$TRIALS_PER_PROFILE" \
+            --output "$RUNNER_TEMP/readonly-qa/retrieval-report.json"
+          cat "$RUNNER_TEMP/readonly-qa/retrieval-report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check artifacts contain no credential values
+        id: secret-scan
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          secret = os.environ.get('GLM_API_KEY', '').encode()
+          root = Path(os.environ['RUNNER_TEMP']) / 'readonly-qa'
+          if secret and root.exists():
+              for path in root.rglob('*'):
+                  if path.is_file() and not path.is_symlink():
+                      tail = b''
+                      with path.open('rb') as source:
+                          while block := source.read(1024 * 1024):
+                              chunk = tail + block
+                              if secret in chunk:
+                                  raise SystemExit('Credential detected in artifact; upload blocked')
+                              tail = chunk[-max(len(secret)-1, 0):]
+          PY
+      - name: Upload evidence and reproducibility manifest
+        if: always() && steps.secret-scan.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: readonly-qa-0.2.2-reflex-6-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/readonly-qa/*.json
+            ${{ runner.temp }}/readonly-qa/*.md
+            ${{ runner.temp }}/readonly-qa/reflex-6-*/
+            ${{ runner.temp }}/readonly-qa/retrieval/
+            ${{ runner.temp }}/readonly-qa/preparation/runtime/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Save validated seed for repeated runs
+        if: success() && steps.index.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/swe-qa-index-seed
+          key: readonly-qa-index-${{ runner.os }}-${{ runner.arch }}-0.2.2-reflex-6-v1
