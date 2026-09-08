@@ -37,7 +37,7 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def redact(value: str) -> str:
-    for key in ("GLM_API_KEY", "OPENAI_API_KEY"):
+    for key in ("GLM_API_KEY", "OPENAI_API_KEY", "QODER_PERSONAL_ACCESS_TOKEN", "QWEN_API_KEY"):
         secret = os.environ.get(key)
         if secret:
             value = value.replace(secret, "[REDACTED]")
@@ -207,13 +207,60 @@ def convert_trace(agent_dir: Path, model: str, instruction: str) -> dict[str, An
             "final_metrics": trajectory.final_metrics.model_dump(mode="json", exclude_none=True)}
 
 
+def wire_contract(agent_dir: Path, model: str, expected: list[str]) -> dict[str, Any]:
+    """Check effective task request settings, not just the intended config."""
+    path = agent_dir / "wire.jsonl"
+    if not path.is_file():
+        return {"valid": False, "reason": "provider_trace_missing"}
+    events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    requests = [e for e in events if e.get("event") == "request"]
+    responses = {e["request_id"]: e for e in events if e.get("event") == "response"}
+    task_requests = [e for e in requests if e.get("tool_names")]
+    observed_models = sorted({e.get("model") for e in responses.values() if e.get("model")})
+    temperatures = [e.get("temperature") for e in task_requests]
+    catalogs = [sorted(e["tool_names"]) for e in task_requests]
+    identity_ok = bool(requests) and all(
+        responses.get(e["request_id"], {}).get("model", "").lower() == model.lower()
+        and responses.get(e["request_id"], {}).get("status") == 200 for e in requests)
+    catalog_ok = bool(task_requests) and all(set(catalog) == set(expected) for catalog in catalogs)
+    temperature_ok = bool(temperatures) and all(t == 0 for t in temperatures)
+    # A transport interruption is an experimental failure, not evidence that
+    # the whole agent/model combination has a deterministically wrong setup.
+    model_mismatch = any(value.lower() != model.lower() for value in observed_models)
+    configuration_mismatch = (model_mismatch or any(set(c) != set(expected) for c in catalogs)
+                              or any(t != 0 for t in temperatures))
+    return {"valid": identity_ok and catalog_ok and temperature_ok,
+            "configuration_mismatch": configuration_mismatch,
+            "provider_model_valid": identity_ok, "requested_model": model,
+            "observed_models": observed_models, "tool_catalog_valid": catalog_ok,
+            "expected_tools": sorted(expected), "observed_catalogs": catalogs,
+            "temperature_zero_verified": temperature_ok, "observed_task_temperatures": temperatures,
+            "provider_request_count": len(requests), "task_requests_with_tools": len(task_requests),
+            "limitation": "Provider-reported model alias is verified; exact hosted weight revision is not exposed."}
+
+
 def execute_experiment(args: argparse.Namespace) -> int:
     case = json.loads(args.case.read_text())
+    controlled = getattr(args, "controlled", False)
+    agent_name = getattr(args, "agent", "opencode")
+    spec = None
+    limits = {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": args.timeout}
+    if controlled:
+        from .readonly_agents import (agent_spec, agent_environment, build_agent_config,
+            build_agent_command, control_manifest, convert_agent_trace, expected_tools)
+        spec = agent_spec(agent_name, args.model, base_url=OPENCODE_CUSTOM_BASE_URL if agent_name == "opencode" else None)
+    elif agent_name != "opencode":
+        raise ValueError("Qoder requires the controlled protocol")
     output = args.output.resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output must be new/empty; historical results are never overwritten")
     output.mkdir(parents=True, exist_ok=True)
     plan = make_plan(case["case_id"], args.repetitions, args.order_seed)
+    if controlled:
+        plan.update(protocol="readonly-qa-v3", agent=spec.name, model=spec.model, run_limits=limits,
+                    intent="single-case development experiment; no population-level efficacy inference")
+        for trial in plan["trials"]:
+            trial.update(agent=spec.name, model=spec.model, block_id=trial["repetition"])
     write_json(output / "plan.json", plan)
     retrieval_output = output / "retrieval"
     retrieval_output.mkdir()
@@ -221,8 +268,10 @@ def execute_experiment(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(json.dumps(plan, indent=2))
         return 0
-    if not os.environ.get("GLM_API_KEY"):
-        raise RuntimeError("GLM_API_KEY is required (never pass credentials as command arguments)")
+    credential_env = "QODER_PERSONAL_ACCESS_TOKEN" if agent_name == "qodercli" else "GLM_API_KEY"
+    if not os.environ.get(credential_env):
+        write_json(output / "preflight.json", {"status": "blocked", "reason": "credential_unavailable", "required_env": credential_env})
+        raise RuntimeError(f"{credential_env} is required (never pass credentials as command arguments)")
     seed_option = getattr(args, "seed_dir", None)
     seed, seed_identity = choose_seed(seed_option.resolve(), case["repo"]["commit"]) if seed_option else (None, None)
     prepared = output / "preparation"
@@ -233,6 +282,15 @@ def execute_experiment(args: argparse.Namespace) -> int:
     run_checked(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
     if run_checked(["git", "-C", str(source), "rev-parse", "HEAD"]) != case["repo"]["commit"]:
         raise RuntimeError("Checked out commit does not match case")
+    entries_path = getattr(args, "entries", None)
+    entries = None
+    if entries_path:
+        from .retrieval_eval import load_manifest
+        entries = load_manifest(entries_path, source_root=source)
+        if entries["repo"] != case["repo"] or entries["source_case_sha256"] != sha256(args.case):
+            raise ValueError("Entry annotations and QA source identities differ")
+        if next(q["text"] for q in entries["queries"] if q["query_id"] == "original") != case["question"]:
+            raise ValueError("Primary retrieval query differs from the original QA question")
     (source / ".zvec-grep").mkdir(exist_ok=True)
     index = prepared / "index"
     source_before = directory_identity(source, skip_git=True)
@@ -303,26 +361,46 @@ def execute_experiment(args: argparse.Namespace) -> int:
                 "index_policy": "immutable original seed; isolated writable copy per mode/trial; verify every stored document and vector",
                 "gold_visible_to_agent": False, "selection_runs_reused_as_treatment_control": False,
                 "cache_policy": "shared local embedding weights; fresh agent container/session/config per trial"}
+    if controlled:
+        manifest.update(protocol="readonly-qa-v3", agent=spec.name, agent_version=spec.version,
+                        model=spec.model, provider_url=spec.base_url, agent_spec=spec.to_dict(),
+                        run_limits=limits, controls=control_manifest(spec, max_model_turns=limits["model_requests"]),
+                        tool_instruction_policy="Exact registered tool identifiers listed equally for both arms; no forced tool or query strategy.")
+        manifest["ci_identity"] = {key: os.environ.get(key) for key in
+            ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")}
     write_json(output / "manifest.json", manifest)
-    for mode in ("fts", "vector", "hybrid"):
-        retrieval_index = working_index(index, working_root / f"retrieval-{mode}")
+    query_plan = [{"query_id": "original", "text": case["question"]}]
+    if entries_path:
+        query_plan = entries["queries"]
+        manifest["entries_sha256"] = sha256(entries_path)
+        write_json(output / "entries.json", entries)
+        write_json(output / "manifest.json", manifest)
+    retrieval_failures = []
+    for query, mode in [(query, mode) for query in query_plan for mode in ("fts", "vector", "hybrid")]:
+        query_id = query["query_id"]
+        prefix = mode if not entries_path else query_id + "-" + mode
+        retrieval_index = working_index(index, working_root / f"retrieval-{prefix}")
         retrieval_base = docker_command(args.image, source, retrieval_output, model_cache, index=retrieval_index, snapshot=snapshot)
         command = retrieval_base + [args.image, "node", BRIDGE, "retrieve", *query_flags,
                                    "--snapshot", "/run/qa/snapshot.json", "--log", "/logs/events.jsonl",
-                                   "--query", case["question"], "--mode", mode, "--repetitions", "5", "--limit", "10"]
-        retrieve_name = "zgqa-retrieve-" + mode + "-" + hashlib.sha256(str(output).encode()).hexdigest()[:12]
+                                   "--query", query["text"], "--mode", mode, "--repetitions", "5", "--limit", "10"]
+        retrieve_name = "zgqa-retrieve-" + hashlib.sha256((str(output) + prefix).encode()).hexdigest()[:16]
         command[2:2] = ["--name", retrieve_name]
         try:
             result = subprocess.run(command, text=True, capture_output=True, timeout=1200)
-            (retrieval_output / f"{mode}.stdout.jsonl").write_text(result.stdout)
-            (retrieval_output / f"{mode}.stderr.txt").write_text(result.stderr)
-            write_json(retrieval_output / f"{mode}.status.json", {"status": "completed" if result.returncode == 0 else "failed", "returncode": result.returncode})
+            (retrieval_output / f"{prefix}.stdout.jsonl").write_text(redact(result.stdout))
+            (retrieval_output / f"{prefix}.stderr.txt").write_text(redact(result.stderr))
+            write_json(retrieval_output / f"{prefix}.status.json", {"status": "completed" if result.returncode == 0 else "failed", "returncode": result.returncode, "query_id": query_id})
+            if result.returncode:
+                retrieval_failures.append(prefix)
         except subprocess.TimeoutExpired:
             subprocess.run(["docker", "kill", retrieve_name], capture_output=True, timeout=30)
-            write_json(retrieval_output / f"{mode}.status.json", {"status": "timeout"})
+            write_json(retrieval_output / f"{prefix}.status.json", {"status": "timeout", "query_id": query_id})
+            retrieval_failures.append(prefix)
         if directory_identity(source, skip_git=True) != source_before or directory_identity(index) != index_before or directory_identity(seed) != seed_before:
             raise RuntimeError("Corpus/original index integrity failure; remaining planned trials retained")
     manifest["embedding_weight_files_after_retrieval"] = directory_identity(model_cache)
+    manifest["retrieval_failures"] = retrieval_failures
     write_json(output / "manifest.json", manifest)
     # No source hints or human gold are added to the natural QA prompt.
     instruction = (case["question"] + "\n\nAnswer using the repository at /app. This is a read-only QA task. "
@@ -333,26 +411,47 @@ def execute_experiment(args: argparse.Namespace) -> int:
         agent_dir = trial_root / "agent"
         agent_dir.mkdir(parents=True)
         zg = trial["profile"] == "zvec-grep"
-        config = trial_root / "opencode.json"
-        write_json(config, common_config(args.model, zg=zg))
+        trial_instruction = instruction
+        config = trial_root / (spec.config_filename if controlled else "opencode.json")
+        if controlled:
+            mcp_command = ["node", BRIDGE, "serve", *query_flags, "--snapshot", "/run/qa/snapshot.json", "--log", "/logs/zg-trace.jsonl"]
+            write_json(config, build_agent_config(spec, zg=zg, mcp_command=mcp_command if zg else None,
+                       max_model_turns=limits["model_requests"]))
+            trial_instruction += "\n\nTools registered for this session: " + ", ".join(expected_tools(spec, zg=zg)) + ". Use their exact identifiers when making tool calls."
+            write_json(trial_root / "instruction.json", {"text": trial_instruction, "sha256": hashlib.sha256(trial_instruction.encode()).hexdigest()})
+        else:
+            write_json(config, common_config(args.model, zg=zg))
         trial_index = working_index(index, working_root / trial["trial_id"]) if zg else None
         trial_index_before = directory_identity(trial_index) if trial_index else None
         command = docker_command(args.image, source, agent_dir, model_cache,
                                  index=trial_index, snapshot=snapshot if zg else None)
         name = "zgqa-" + hashlib.sha256(str(trial_root).encode()).hexdigest()[:16]
-        command += ["--name", name, "--env", "OPENAI_API_KEY", "--env", "OPENCODE_CONFIG=/run/qa/opencode.json"]
-        command += mount(config, "/run/qa/opencode.json")
-        command += [args.image, "opencode", "--model", args.model, "run", "--format", "json", "--thinking", "--", instruction]
-        env = {**os.environ, "OPENAI_API_KEY": os.environ["GLM_API_KEY"]}
+        if controlled:
+            config_mount = "/run/qa/" + spec.config_filename
+            command += ["--name", name, "--env", spec.credential_env]
+            command += mount(config, config_mount)
+            session_spec = {"command": build_agent_command(spec, trial_instruction, config_path=config_mount, zg=zg,
+                                                            max_model_turns=limits["model_requests"]),
+                            "env": agent_environment(spec, config_path=config_mount), "config_path": config_mount,
+                            "limits": limits, "native_name": spec.stream_filename, "log_dir": "/logs",
+                            "tap_upstream": spec.base_url if spec.name == "opencode" else None}
+            write_json(agent_dir / "session-spec.json", session_spec)
+            command += [args.image, "python3", "/opt/qa/qa-session.py", "--spec", "/logs/session-spec.json"]
+            env = {**os.environ, spec.credential_env: os.environ[credential_env]}
+        else:
+            command += ["--name", name, "--env", "OPENAI_API_KEY", "--env", "OPENCODE_CONFIG=/run/qa/opencode.json"]
+            command += mount(config, "/run/qa/opencode.json")
+            command += [args.image, "opencode", "--model", args.model, "run", "--format", "json", "--thinking", "--", instruction]
+            env = {**os.environ, "OPENAI_API_KEY": os.environ["GLM_API_KEY"]}
         started = time.monotonic()
         trial["status"] = "running"
         write_json(output / "plan.json", plan)
         result_data: dict[str, Any] = {"trial_id": trial["trial_id"], "profile": trial["profile"], "repetition": trial["repetition"],
-            "started_at": datetime.now(UTC).isoformat(), "agent_info": {"name": "opencode", "version": "1.18.4", "model_name": args.model}}
-        with (agent_dir / "opencode.txt").open("w") as stdout, (agent_dir / "stderr.txt").open("w") as stderr:
+            "started_at": datetime.now(UTC).isoformat(), "agent_info": {"name": spec.name if controlled else "opencode", "version": spec.version if controlled else "1.18.4", "model_name": spec.model if controlled else args.model}}
+        with (agent_dir / ("launcher.stdout.txt" if controlled else "opencode.txt")).open("w") as stdout, (agent_dir / ("launcher.stderr.txt" if controlled else "stderr.txt")).open("w") as stderr:
             try:
                 process = subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env)
-                returncode = process.wait(timeout=args.timeout)
+                returncode = process.wait(timeout=args.timeout + 30 if controlled else args.timeout)
                 result_data["returncode"] = returncode
                 trial["status"] = "completed" if returncode == 0 else "failed"
             except subprocess.TimeoutExpired:
@@ -365,12 +464,26 @@ def execute_experiment(args: argparse.Namespace) -> int:
                 trial["status"] = "launch_failure"
                 result_data["error"] = type(error).__name__
         result_data["wall_seconds"] = round(time.monotonic() - started, 3)
+        if controlled and (agent_dir / "session.json").is_file():
+            session_result = json.loads((agent_dir / "session.json").read_text())
+            result_data["session"] = session_result
+            if session_result["status"] != "completed":
+                trial["status"] = session_result["status"]
         try:
-            result_data.update(convert_trace(agent_dir, args.model, instruction))
+            result_data.update(convert_agent_trace(agent_dir, spec, trial_instruction, zg=zg) if controlled else convert_trace(agent_dir, args.model, instruction))
             if result_data["error_event_count"] and trial["status"] == "completed":
                 trial["status"] = "failed"
             if not result_data["has_final_answer"] and trial["status"] == "completed":
                 trial["status"] = "protocol_failure"
+            if controlled and result_data.get("contract_error_count", 0):
+                trial["status"] = "contract_failure"
+            if controlled and spec.name == "opencode":
+                result_data["wire_contract"] = wire_contract(agent_dir, spec.provider_model, expected_tools(spec, zg=zg))
+                if not result_data["wire_contract"]["valid"]:
+                    if result_data["wire_contract"].get("configuration_mismatch"):
+                        trial["status"] = "contract_failure"
+                    elif trial["status"] == "completed":
+                        trial["status"] = "measurement_failure"
         except Exception as error:
             trial["status"] = "failed" if trial["status"] == "completed" else trial["status"]
             result_data["conversion_error"] = str(error)
@@ -400,12 +513,16 @@ def execute_experiment(args: argparse.Namespace) -> int:
         write_json(trial_root / "result.json", result_data)
         write_json(output / "plan.json", plan)
         print(json.dumps({"trial_id": trial["trial_id"], "status": trial["status"], "wall_seconds": result_data["wall_seconds"]}), flush=True)
+        if controlled and trial["status"] in {"contract_failure", "launch_failure"}:
+            write_json(output / "preflight.json", {"status": "failed", "trial_id": trial["trial_id"],
+                       "reason": trial["status"], "remaining_trials": "retained as planned; deterministic contract failure stops this combination"})
+            break
         if not source_ok or not index_ok:
             raise RuntimeError("Corpus/index integrity failure; remaining planned trials retained")
     manifest["embedding_weight_files_after_e2e"] = directory_identity(model_cache)
     manifest["embedding_weights_unchanged_during_e2e"] = manifest["embedding_weight_files_after_retrieval"] == manifest["embedding_weight_files_after_e2e"]
     write_json(output / "manifest.json", manifest)
-    return 0 if all(t["status"] == "completed" for t in plan["trials"]) else 1
+    return 0 if all(t["status"] == "completed" for t in plan["trials"]) and not retrieval_failures else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -415,6 +532,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--model", choices=["custom-openai/glm-5.2", "custom-openai/qwen3.8-max"], default="custom-openai/glm-5.2")
+    parser.add_argument("--agent", choices=["opencode", "qodercli"], default="opencode")
+    parser.add_argument("--controlled", action="store_true", help="Use v3 native contracts, visible tool identifiers, observed budgets and provider tracing")
+    parser.add_argument("--entries", type=Path, help="Frozen entry/query manifest; original question remains the E2E task")
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--order-seed", type=int, default=1729)
     parser.add_argument("--timeout", type=int, default=900)

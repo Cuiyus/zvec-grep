@@ -14,6 +14,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from zg_bench.swe_qa import readonly_run as runner
+from zg_bench.swe_qa import readonly_agents as adapters
 
 
 def seed_fixture(root: Path, name="seed", **overrides):
@@ -57,7 +58,8 @@ class ReadonlyRunTest(unittest.TestCase):
 
     def run_mocked(self, args, *, process_factory=None, convert=None, retrieval_timeout=False,
                    on_launch=None, on_retrieval=None, on_verify=None, on_build=None,
-                   operation_events=None, on_cleanup=None):
+                   operation_events=None, on_cleanup=None, controlled_convert=None,
+                   environment=None, on_launch_kwargs=None):
         checked = []
         commands = []
         processes = []
@@ -111,20 +113,23 @@ class ReadonlyRunTest(unittest.TestCase):
             launch_count += 1
             if on_launch:
                 on_launch(command, index)
+            if on_launch_kwargs:
+                on_launch_kwargs(command, index, kwargs)
             process = process_factory(index) if process_factory else FakeProcess()
             processes.append(process)
             return process
 
-        def convert_default(*args):
+        def convert_default(*args, **kwargs):
             return {"event_count": 1, "error_event_count": 0,
                     "has_final_answer": True,
                     "final_metrics": {"total_prompt_tokens": 50, "total_completion_tokens": 5}}
 
-        with (patch.dict("os.environ", {"GLM_API_KEY": "mock-secret"}, clear=True),
+        with (patch.dict("os.environ", environment or {"GLM_API_KEY": "mock-secret"}, clear=True),
               patch.object(runner, "run_checked", side_effect=checked_command),
               patch.object(runner.subprocess, "run", side_effect=run),
               patch.object(runner.subprocess, "Popen", side_effect=popen),
               patch.object(runner, "convert_trace", side_effect=convert or convert_default),
+              patch.object(adapters, "convert_agent_trace", side_effect=controlled_convert or convert_default),
               redirect_stdout(io.StringIO())):
             code = runner.execute_experiment(args)
         return code, checked, commands
@@ -597,6 +602,207 @@ class ReadonlyRunTest(unittest.TestCase):
             plan = json.loads((args.output / "plan.json").read_text())
             self.assertEqual(plan["trials"][0]["status"], "integrity_failure")
             self.assertTrue(all(t["status"] == "planned" for t in plan["trials"][1:]))
+
+
+class ControlledRunTest(unittest.TestCase):
+    """Exercise the complete v3 orchestration with native execution mocked."""
+
+    run_mocked = ReadonlyRunTest.run_mocked
+    mount_source = staticmethod(ReadonlyRunTest.mount_source)
+
+    def args(self, root, *, agent="opencode"):
+        args = ReadonlyRunTest.args(self, root)
+        args.controlled = True
+        args.agent = agent
+        if agent == "qodercli":
+            args.model = "custom-openai/qwen3.8-max"
+        seed_fixture(args.seed_dir)
+        return args
+
+    def native_artifacts(self, args, command, index):
+        agent_dir = self.mount_source(command, "/logs")
+        session_spec = json.loads((agent_dir / "session-spec.json").read_text())
+        session = {"status": "completed", "observed": {"model_requests": 2, "tool_calls": 1, "input_tokens": 50}}
+        (agent_dir / "session.json").write_text(json.dumps(session))
+        if args.agent == "opencode":
+            spec = adapters.agent_spec(args.agent, args.model, base_url=runner.OPENCODE_CUSTOM_BASE_URL)
+            zg = self.mount_source(command, "/app/.zvec-grep") is not None
+            # Non-task metadata generation is retained; its temperature does
+            # not replace the actual task's sampling-parameter evidence.
+            wire = [
+                {"event": "request", "request_id": "title", "model": spec.provider_model, "temperature": 0.8, "tool_names": []},
+                {"event": "response", "request_id": "title", "model": spec.provider_model, "status": 200},
+                {"event": "request", "request_id": "task", "model": spec.provider_model, "temperature": 0,
+                 "tool_names": adapters.expected_tools(spec, zg=zg)},
+                {"event": "response", "request_id": "task", "model": spec.provider_model, "status": 200},
+            ]
+            (agent_dir / "wire.jsonl").write_text("\n".join(map(json.dumps, wire)) + "\n")
+        return agent_dir, session_spec
+
+    def execute(self, args, *, on_launch=None, controlled_convert=None, **kwargs):
+        def launch(command, index):
+            agent_dir, session = self.native_artifacts(args, command, index)
+            if on_launch:
+                on_launch(command, index, agent_dir, session)
+
+        return self.run_mocked(args, on_launch=launch, controlled_convert=controlled_convert,
+                               environment={"GLM_API_KEY": "mock-secret", "QODER_PERSONAL_ACCESS_TOKEN": "mock-qoder-secret"},
+                               **kwargs)
+
+    def plan(self, args):
+        return json.loads((args.output / "plan.json").read_text())
+
+    def test_five_pairs_keep_exact_tools_budgets_private_env_and_config_mounts(self):
+        for agent in ("opencode", "qodercli"):
+            with self.subTest(agent=agent), tempfile.TemporaryDirectory() as directory:
+                args = self.args(Path(directory), agent=agent)
+                seen = []
+                spec = adapters.agent_spec(agent, args.model, base_url=runner.OPENCODE_CUSTOM_BASE_URL if agent == "opencode" else None)
+
+                def inspect(command, index, agent_dir, session):
+                    zg = self.mount_source(command, "/app/.zvec-grep") is not None
+                    config_path = self.mount_source(command, "/run/qa/" + spec.config_filename)
+                    config = json.loads(config_path.read_text())
+                    config_mount = next(command[i + 1] for i, value in enumerate(command)
+                                        if value == "--mount" and f"target=/run/qa/{spec.config_filename}" in command[i + 1])
+                    self.assertTrue(config_mount.endswith(",readonly"))
+                    self.assertEqual(command[-4:], ["python3", "/opt/qa/qa-session.py", "--spec", "/logs/session-spec.json"])
+                    self.assertIn(spec.credential_env, command)
+                    self.assertEqual(session["limits"], {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": args.timeout})
+                    self.assertEqual(session["native_name"], spec.stream_filename)
+                    prompt = session["command"][-1]
+                    expected = ", ".join(adapters.expected_tools(spec, zg=zg))
+                    self.assertIn("Tools registered for this session: " + expected + ".", prompt)
+                    self.assertTrue(prompt.startswith("Question without hints\n\n"))
+                    self.assertEqual(json.loads((agent_dir.parent / "instruction.json").read_text())["text"], prompt)
+                    for value in (json.dumps(command), json.dumps(session), json.dumps(config)):
+                        self.assertNotIn("mock-secret", value)
+                        self.assertNotIn("mock-qoder-secret", value)
+                        self.assertNotIn("HOST_ONLY_GOLD", value)
+                    if agent == "opencode":
+                        self.assertEqual(config["agent"]["build"], {"temperature": 0, "steps": 30})
+                        self.assertIs(config["provider"]["custom-openai"]["models"][spec.provider_model]["temperature"], True)
+                        self.assertEqual(session["tap_upstream"], spec.base_url)
+                        self.assertEqual("mcp" in config, zg)
+                    else:
+                        self.assertEqual(session["command"][session["command"].index("--max-turns") + 1], "30")
+                        self.assertEqual(session["command"][session["command"].index("--permission-mode") + 1], "dont_ask")
+                        self.assertIsNone(session["tap_upstream"])
+                        self.assertEqual(bool(config["mcpServers"]), zg)
+                    seen.append((zg, prompt))
+
+                def inspect_env(command, index, kwargs):
+                    expected_secret = "mock-secret" if agent == "opencode" else "mock-qoder-secret"
+                    self.assertEqual(kwargs["env"][spec.credential_env], expected_secret)
+                    self.assertNotIn(expected_secret, json.dumps(command))
+
+                code, checked, commands = self.execute(args, on_launch=inspect, on_launch_kwargs=inspect_env)
+                self.assertEqual(code, 0)
+                plan = self.plan(args)
+                self.assertEqual(len(seen), 10)
+                self.assertEqual(sum(zg for zg, _ in seen), 5)
+                self.assertTrue(all(t["status"] == "completed" for t in plan["trials"]))
+                self.assertEqual({t["block_id"] for t in plan["trials"]}, {1, 2, 3, 4, 5})
+                self.assertEqual(len(list(args.output.glob("reflex-6-*/result.json"))), 10)
+                self.assertEqual(sum("verify" in c for c in checked), 5)
+                manifest = json.loads((args.output / "manifest.json").read_text())
+                self.assertEqual(manifest["protocol"], "readonly-qa-v3")
+                self.assertEqual(manifest["agent_spec"]["credential_env"], spec.credential_env)
+                self.assertEqual(manifest["run_limits"], plan["run_limits"])
+                self.assertFalse((args.output / "preflight.json").exists())
+
+    def test_model_catalog_and_temperature_mismatch_stop_after_first_keep_nine_planned(self):
+        for mismatch in ("model", "catalog", "temperature", "missing_temperature"):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as directory:
+                args = self.args(Path(directory))
+
+                def corrupt(command, index, agent_dir, session):
+                    self.assertEqual(index, 0)
+                    path = agent_dir / "wire.jsonl"
+                    wire = [json.loads(line) for line in path.read_text().splitlines()]
+                    if mismatch == "model":
+                        wire[-1]["model"] = "different-model"
+                    elif mismatch == "catalog":
+                        wire[-2]["tool_names"].append("bash")
+                    elif mismatch == "temperature":
+                        wire[-2]["temperature"] = 0.8
+                    else:
+                        wire[-2].pop("temperature")
+                    path.write_text("\n".join(map(json.dumps, wire)) + "\n")
+
+                code, _, _ = self.execute(args, on_launch=corrupt)
+                self.assertEqual(code, 1)
+                plan = self.plan(args)
+                self.assertEqual(plan["trials"][0]["status"], "contract_failure")
+                self.assertEqual([t["status"] for t in plan["trials"][1:]], ["planned"] * 9)
+                self.assertEqual(len(list(args.output.glob("reflex-6-*/result.json"))), 1)
+                result = json.loads((args.output / plan["trials"][0]["trial_id"] / "result.json").read_text())
+                self.assertTrue(result["wire_contract"]["configuration_mismatch"])
+                self.assertEqual(json.loads((args.output / "preflight.json").read_text())["reason"], "contract_failure")
+
+    def test_missing_response_and_budget_stop_fail_one_trial_without_stopping_combination(self):
+        for failure in ("missing_response", "budget_exhausted", "missing_wire", "transport_error"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                args = self.args(Path(directory))
+
+                def interrupt(command, index, agent_dir, session):
+                    if index:
+                        return
+                    wire_path = agent_dir / "wire.jsonl"
+                    if failure == "missing_wire":
+                        wire_path.unlink()
+                    elif failure == "budget_exhausted":
+                        (agent_dir / "session.json").write_text(json.dumps({"status": "budget_exhausted", "limit_reason": "tool_calls"}))
+                    else:
+                        wire = [json.loads(line) for line in wire_path.read_text().splitlines()]
+                        if failure == "missing_response":
+                            wire.pop()
+                        else:
+                            wire[-1] = {"event": "response", "request_id": "task", "status": 502}
+                        wire_path.write_text("\n".join(map(json.dumps, wire)) + "\n")
+
+                code, _, _ = self.execute(args, on_launch=interrupt)
+                self.assertEqual(code, 1)
+                plan = self.plan(args)
+                expected_status = "budget_exhausted" if failure == "budget_exhausted" else "measurement_failure"
+                self.assertEqual(plan["trials"][0]["status"], expected_status)
+                self.assertEqual([t["status"] for t in plan["trials"][1:]], ["completed"] * 9)
+                self.assertEqual(len(list(args.output.glob("reflex-6-*/result.json"))), 10)
+                self.assertFalse((args.output / "preflight.json").exists())
+
+    def test_qoder_converter_contract_error_stops_with_nine_planned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory), agent="qodercli")
+            calls = []
+
+            def converted(agent_dir, spec, instruction, *, zg):
+                calls.append(agent_dir)
+                return {"event_count": 3, "error_event_count": 1, "contract_error_count": 1,
+                        "has_final_answer": True, "final_metrics": {"total_prompt_tokens": 50},
+                        "model_identity": {"valid": False, "observed": ["auto"]}}
+
+            code, _, _ = self.execute(args, controlled_convert=converted)
+            self.assertEqual(code, 1)
+            self.assertEqual(len(calls), 1)
+            plan = self.plan(args)
+            self.assertEqual(plan["trials"][0]["status"], "contract_failure")
+            self.assertEqual([t["status"] for t in plan["trials"][1:]], ["planned"] * 9)
+
+    def test_qoder_tool_errors_without_contract_failure_do_not_abort_remaining_trials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory), agent="qodercli")
+
+            def converted(agent_dir, spec, instruction, *, zg):
+                return {"event_count": 4, "error_event_count": 0, "contract_error_count": 0,
+                        "has_final_answer": True, "final_metrics": {"total_prompt_tokens": 50},
+                        "tool_error_count": 1, "tool_contract": {"valid": True, "unexpected_tool_calls": ["wrong_name"]}}
+
+            code, _, _ = self.execute(args, controlled_convert=converted)
+            self.assertEqual(code, 0)
+            plan = self.plan(args)
+            self.assertEqual([t["status"] for t in plan["trials"]], ["completed"] * 10)
+            for path in args.output.glob("reflex-6-*/result.json"):
+                self.assertEqual(json.loads(path.read_text())["tool_error_count"], 1)
 
 
 if __name__ == "__main__":

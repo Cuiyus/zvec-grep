@@ -17,8 +17,23 @@ concurrency:
 
 jobs:
   evidence:
+    name: ${{ matrix.id }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - id: opencode-glm52
+            agent: opencode
+            model: custom-openai/glm-5.2
+          - id: opencode-qwen38max
+            agent: opencode
+            model: custom-openai/qwen3.8-max
+          - id: qoder-qwen38max
+            agent: qodercli
+            model: custom-openai/qwen3.8-max
     env:
       CASE_ID: reflex-6
       ZG_PACKAGE: "@zvec/zvec-grep@0.2.2"
@@ -38,81 +53,95 @@ jobs:
         run: |
           uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
           node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs
-      - name: Build pinned zg 0.2.2 and OpenCode runtime
+      - name: Build pinned zg 0.2.2, OpenCode and Qoder runtime
         run: >-
           docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
           --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
           -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
-      - name: Prepare one index then run retrieval and five QA trials per profile
+      - name: Verify real OpenCode requests offline before calling a paid model
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,source="$PWD/benchmarks/swe-qa-bench",target=/qa,readonly
+          --env PYTHONPATH=/qa:/qa/tests
+          --env OPENCODE_READONLY_TEST_BINARY=/opt/qa/node_modules/.bin/opencode
+          zg-readonly-qa:0.2.2 python3 -m unittest -v
+          test_readonly_agents.OpenCodeRequestContractTests
+      - name: Fresh index, 45 retrieval probes, five paired baseline and zg sessions
         id: benchmark
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.readonly_run
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
           --output "$RUNNER_TEMP/readonly-qa"
-          --image zg-readonly-qa:0.2.2 --model custom-openai/glm-5.2
+          --image zg-readonly-qa:0.2.2 --model "${{ matrix.model }}"
+          --controlled --agent "${{ matrix.agent }}"
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
           --repetitions "$TRIALS_PER_PROFILE" --order-seed 1729
-      - name: Score final QA answers against source-grounded reference
+      - name: Calibrate two judges and blindly review every available final answer
         if: always() && steps.benchmark.outcome != 'skipped'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         run: >-
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.readonly_judge
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.quality_review
           --runs-dir "$RUNNER_TEMP/readonly-qa"
-          --case benchmarks/swe-qa-bench/cases/reflex-6.json
-          --output "$RUNNER_TEMP/readonly-qa/judged.json"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json
+          --output "$RUNNER_TEMP/readonly-qa/quality-review.json"
           --expected-per-profile "$TRIALS_PER_PROFILE"
-      - name: Produce QA report including unscored and missing trials
+      - name: Attribute QA costs and failures while retaining all ten planned sessions
         if: always() && steps.benchmark.outcome != 'skipped'
         run: |
           mkdir -p "$RUNNER_TEMP/readonly-qa"
-          judge_args=()
-          if [ -f "$RUNNER_TEMP/readonly-qa/judged.json" ]; then
-            judge_args=(--judged-report "$RUNNER_TEMP/readonly-qa/judged.json")
-          fi
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.observability analyze \
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.e2e_analysis analyze \
             --runs-dir "$RUNNER_TEMP/readonly-qa" \
             --case benchmarks/swe-qa-bench/cases/reflex-6.json \
-            --expected-trials "$TRIALS_PER_PROFILE" "${judge_args[@]}" \
-            --output "$RUNNER_TEMP/readonly-qa/report.json"
-          cat "$RUNNER_TEMP/readonly-qa/report.md" >> "$GITHUB_STEP_SUMMARY"
-      - name: Produce retrieval report including all fifteen planned queries
+            --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            --output "$RUNNER_TEMP/readonly-qa/e2e-analysis.json"
+          cat "$RUNNER_TEMP/readonly-qa/e2e-analysis.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/readonly-qa/quality-review.md" ]; then
+            cat "$RUNNER_TEMP/readonly-qa/quality-review.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Score visible retrieval entries, output budgets and repeat stability
         if: always() && steps.benchmark.outcome != 'skipped'
         run: |
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.observability retrieval \
+          source_args=()
+          if [ -d "$RUNNER_TEMP/readonly-qa/preparation/source/reflex" ]; then
+            source_args=(--source-root "$RUNNER_TEMP/readonly-qa/preparation/source")
+          fi
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.retrieval_eval \
             --events "$RUNNER_TEMP/readonly-qa/retrieval/events.jsonl" \
-            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
-            --expected-trials "$TRIALS_PER_PROFILE" \
-            --output "$RUNNER_TEMP/readonly-qa/retrieval-report.json"
-          cat "$RUNNER_TEMP/readonly-qa/retrieval-report.md" >> "$GITHUB_STEP_SUMMARY"
+            --manifest benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            "${source_args[@]}" --output "$RUNNER_TEMP/readonly-qa/entry-report.json"
+          cat "$RUNNER_TEMP/readonly-qa/entry-report.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Check artifacts contain no credential values
         id: secret-scan
         if: always()
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
-          secret = os.environ.get('GLM_API_KEY', '').encode()
+          secrets = [os.environ[k].encode() for k in ('GLM_API_KEY', 'QODER_PERSONAL_ACCESS_TOKEN') if os.environ.get(k)]
           root = Path(os.environ['RUNNER_TEMP']) / 'readonly-qa'
-          if secret and root.exists():
+          if secrets and root.exists():
               for path in root.rglob('*'):
                   if path.is_file() and not path.is_symlink():
                       tail = b''
                       with path.open('rb') as source:
                           while block := source.read(1024 * 1024):
                               chunk = tail + block
-                              if secret in chunk:
+                              if any(secret in chunk for secret in secrets):
                                   raise SystemExit('Credential detected in artifact; upload blocked')
-                              tail = chunk[-max(len(secret)-1, 0):]
+                              tail = chunk[-max(len(secret)-1 for secret in secrets):]
           PY
       - name: Upload evidence and reproducibility manifest
         if: always() && steps.secret-scan.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: readonly-qa-0.2.2-reflex-6-${{ github.run_id }}-${{ github.run_attempt }}
+          name: readonly-qa-v3-0.2.2-reflex-6-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/readonly-qa/*.json
             ${{ runner.temp }}/readonly-qa/*.md

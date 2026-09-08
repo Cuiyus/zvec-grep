@@ -208,7 +208,7 @@ def _assessment_status(assessment: dict[str, Any]) -> str:
 def _markdown(report: dict[str, Any]) -> str:
     lines = [f"# Read-only QA answer assessment: {report['case_id']}", "",
              "Source-grounded model assessment; separate from observed retrieval coverage.",
-             "GLM-5.2 also generates the evaluated answers in this pilot: this is self-judging, not independent human verification.",
+             f"Judge: {report['judge_model']}. Self-judge relative to this pilot's GLM-5.2 candidates: {report['self_judge']}. This is not human verification.",
              "Temperature 0 does not guarantee deterministic judgments. Retries repair failed calls/formatting, not independent judge votes.",
              "This single-case pilot makes no population-level or non-inferiority claim.", "",
              "| Trial | Profile | Status | Correctness | Completeness | Source support | Quality |",
@@ -244,10 +244,13 @@ def _write(report: dict[str, Any], output: Path, api_key: str) -> None:
 
 def judge_runs(*, runs_dir: Path, case_path: Path, output: Path,
                attempts: int = 3, seed: int = 0,
+               judge_model: str = JUDGE_MODEL,
                expected_per_profile: int | None = None,
                completion_fn: Callable[..., Any] | None = None) -> dict[str, Any]:
     if not 1 <= attempts <= 5:
         raise SweQaError("attempts must be between 1 and 5")
+    if not isinstance(judge_model, str) or not judge_model.strip():
+        raise SweQaError("judge_model must be a non-empty model ID")
     case = load_case(case_path)
     planned = _plan(runs_dir, case["case_id"])
     if output.suffix.lower() != ".json":
@@ -264,8 +267,8 @@ def judge_runs(*, runs_dir: Path, case_path: Path, output: Path,
         "schema_version": 1, "case_id": case["case_id"],
         "case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
         "plan_sha256": hashlib.sha256((runs_dir / "plan.json").read_bytes()).hexdigest(),
-        "rubric_version": RUBRIC_VERSION, "judge_model": JUDGE_MODEL,
-        "temperature": 0, "self_judge": True, "order_seed": seed,
+        "rubric_version": RUBRIC_VERSION, "judge_model": judge_model,
+        "temperature": 0, "self_judge": judge_model.rsplit("/", 1)[-1] == "glm-5.2", "order_seed": seed,
         "reference_answer": case["reference_answer"],
         "reference_provenance": case.get("reference_provenance"),
         "planned_trials": len(planned), "trials": [],
@@ -317,11 +320,11 @@ def judge_runs(*, runs_dir: Path, case_path: Path, output: Path,
                 continue
         row["status"] = "judge_failed"
         for number in range(1, attempts + 1):
-            attempt: dict[str, Any] = {"attempt": number, "requested_model": JUDGE_MODEL}
+            attempt: dict[str, Any] = {"attempt": number, "requested_model": judge_model}
             row["attempts"].append(attempt)
             started = time.monotonic()
             try:
-                response = completion_fn(model=JUDGE_MODEL, api_key=api_key,
+                response = completion_fn(model=judge_model, api_key=api_key,
                     api_base=api_base, temperature=0, messages=row["messages"],
                     response_format={"type": "json_object"},
                     extra_body={"enable_thinking": False}, timeout=120, max_tokens=3000)
@@ -362,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="JSON path; a sibling .md is also written")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--judge-model", default=JUDGE_MODEL)
     parser.add_argument("--expected-per-profile", type=int, default=None,
                         help="Assert the explicit plan count; missing files remain unscored")
     args = parser.parse_args(argv)
