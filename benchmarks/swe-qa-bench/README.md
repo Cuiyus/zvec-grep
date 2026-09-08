@@ -75,11 +75,16 @@ In the Aggregate row:
 
 ## GitHub Actions
 
-The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
-five-task smoke benchmark on pushes to this fork's `main` branch and on
-same-repository pull requests targeting `main`, except Dependabot pull
-requests. External-fork and Dependabot pull requests run validation only.
-Use `workflow_dispatch` to select `smoke` (5 tasks) or `all-full` (20 tasks).
+The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) is
+maintained on this fork's `dev/benchmark-ci` branch. It runs the five-task
+smoke benchmark on pushes to `dev/**` branches and on same-repository pull
+requests targeting `dev/**`, except Dependabot pull requests. External-fork
+and Dependabot pull requests run validation only.
+
+Set `env.SWE_QA_SCOPE` in the workflow to `smoke` (5 tasks, the default) or
+`all-full` (20 tasks), then push the change to the dev branch. The workflow
+is kept off `main`, so it uses branch pushes instead of `workflow_dispatch`,
+which requires the workflow file to exist on the default branch.
 
 CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
 `local/potion-code-16m-v2` embedding model, and three trials per task and

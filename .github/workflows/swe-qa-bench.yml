@@ -3,24 +3,16 @@ name: SWE-QA Bench
 on:
   pull_request:
     branches:
-      - main
+      - "dev/**"
   push:
     branches:
-      - main
-  workflow_dispatch:
-    inputs:
-      scope:
-        description: Run the five-task smoke benchmark or the 20-task All-Full benchmark
-        required: true
-        default: smoke
-        type: choice
-        options:
-          - smoke
-          - all-full
+      - "dev/**"
 
 permissions: {}
 
 env:
+  # Set to all-full to run all 20 tasks on the next dev branch push.
+  SWE_QA_SCOPE: smoke
   SWE_QA_TRIALS_PER_PROFILE: "3"
 
 concurrency:
@@ -58,7 +50,7 @@ jobs:
       - name: Build this run's task matrix from the locked selection
         id: task-matrix
         env:
-          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'auto' }}
+          SCOPE: ${{ env.SWE_QA_SCOPE }}
         run: |
           python - <<'PY'
           import json

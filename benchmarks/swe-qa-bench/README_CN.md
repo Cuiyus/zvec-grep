@@ -57,7 +57,9 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 
 ## GitHub Actions
 
-[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在此 fork 的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行 5 题 smoke benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。通过 `workflow_dispatch` 可选择 `smoke`（5 题）或 `all-full`（20 题）。
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 在此 fork 的 `dev/benchmark-ci` 分支维护。向 `dev/**` 分支 push，或从同仓库分支向 `dev/**` 提交 PR 时，自动运行 5 题 smoke benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。
+
+将工作流中的 `env.SWE_QA_SCOPE` 设为 `smoke`（默认，5 题）或 `all-full`（20 题），再推送到 dev 分支即可选择测试范围。工作流仅保存在 dev 分支；由于 `workflow_dispatch` 要求默认分支也存在该文件，这里通过分支 push 触发测试。
 
 CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 3 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。上文的 Claude Code 配置对应已发布的本地测试协议。
 
