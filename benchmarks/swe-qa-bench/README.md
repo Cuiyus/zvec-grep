@@ -81,9 +81,9 @@ five-task smoke benchmark on pushes to `dev/**` branches and on same-repository 
 requests targeting `dev/**`, except Dependabot pull requests. External-fork
 and Dependabot pull requests run validation only.
 
-Set `env.SWE_QA_SCOPE` in the workflow to `smoke` (5 tasks, the default) or
-`all-full` (20 tasks), then push the change to the dev branch. Subsequent
-runs use that scope until it is changed again. The workflow stays on dev
+Set `env.SWE_QA_SCOPE` in the workflow to `probe` (1 task), `smoke` (5 tasks,
+the default), or `all-full` (20 tasks), then push the change to the dev branch.
+Subsequent runs use that scope until it is changed again. The workflow stays on dev
 branches and uses pushes, so testing does not depend on a manual-run entry
 on the default branch.
 
@@ -107,15 +107,13 @@ masked or missing counts, reports show token metrics and their
 comparisons as `N/A`; answer quality, tool calls, and wall time remain available.
 No token savings are inferred from masked zero values.
 
-`env.SWE_QA_GROUPS` selects the groups. The current dev iteration selects only
-`qodercli-qwen3.8-max` with scope `probe` and one trial per profile: the locked
-`reflex:6` task exercises baseline, zvec-grep, judging, and aggregation in two
-agent runs. Probe reports validate the CI path and are not repeated benchmark
-measurements. For the repeated comparison, set scope `smoke`, set
-`SWE_QA_TRIALS_PER_PROFILE` to `3`, and select
-`["opencode-glm-5.2","opencode-qwen3.8-max","qodercli-qwen3.8-max"]`.
-A smoke run of all three groups contains 90 agent trials (360 for `all-full`),
-with at most five task/group pairs running concurrently.
+`env.SWE_QA_GROUPS` selects the groups and defaults to all three. Together with
+scope `smoke` and `SWE_QA_TRIALS_PER_PROFILE=3`, this produces 90 agent trials
+(360 for `all-full`), with at most five task/group pairs running concurrently.
+For a focused CI check, select one group, set scope `probe`, and set the trial
+count to `1`: the locked `reflex:6` task exercises baseline, zvec-grep, judging,
+and aggregation in two agent runs. Probe reports validate the CI path and are
+not repeated benchmark measurements.
 
 Each task/group pair runs Baseline and zvec-grep on the same runner. All
 groups use the same GLM-5.2 judge and rubric. Reports identify both the agent
