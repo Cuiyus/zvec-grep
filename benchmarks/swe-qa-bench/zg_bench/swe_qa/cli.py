@@ -39,6 +39,10 @@ def _parser() -> argparse.ArgumentParser:
     judge.add_argument("--references", type=Path, required=True)
     judge.add_argument("--output-dir", type=Path, required=True)
     judge.add_argument("--expected", nargs="+", action="append", required=True)
+    judge.add_argument(
+        "--agent-model",
+        help="tested model identity, checked against recorded trial models",
+    )
     judge.add_argument("--attempts", type=int, default=3)
 
     aggregate = commands.add_parser(
@@ -85,12 +89,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 references_path=args.references,
                 output_dir=args.output_dir,
                 expected=expected,
+                agent_model=args.agent_model,
                 attempts=args.attempts,
             )
             print(
                 json.dumps(
                     {
                         "gate_passed": report["gate"]["passed"],
+                        "agent_model": report["agent_model"],
                         "report": str(args.output_dir / "report.json"),
                     }
                 )
@@ -110,6 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 json.dumps(
                     {
                         "gate_passed": report["gate"]["passed"],
+                        "agent_model": report["agent_model"],
                         "cases": len(report["cases"]),
                         "report": str(args.output_dir / "report.json"),
                     }

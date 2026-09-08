@@ -87,16 +87,29 @@ runs use that scope until it is changed again. The workflow stays on dev
 branches and uses pushes, so testing does not depend on a manual-run entry
 on the default branch.
 
-CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
-`local/potion-code-16m-v2` embedding model, and three trials per task and
-profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
-execution and judging. The Claude Code configuration above describes the
-published local protocol.
+CI runs two OpenCode `1.18.4` model groups:
 
-Each task runs Baseline and zvec-grep on the same runner, judges the paired
-results, and uploads Harbor evidence and an independent task report as
-artifacts. Complete runs also produce an aggregate report; report summaries
-appear in the Actions Job Summary.
+| Group | Agent model | Profiles |
+| --- | --- | --- |
+| GLM-5.2 | `custom-openai/glm-5.2` | Baseline and zvec-grep |
+| Qwen3.8-Max | `custom-openai/qwen3.8-max` | Baseline and zvec-grep |
+
+Both groups use the same locked tasks, local `local/potion-code-16m-v2`
+embedding model, and three trials per task and profile. They share the
+existing `GLM_API_KEY` Actions secret and custom OpenAI-compatible endpoint
+configured in `zg_bench/settings.py`; no additional secret is needed.
+`env.SWE_QA_MODELS` selects the model groups and defaults to both. A smoke
+run contains 60 agent trials across the two groups (240 for `all-full`),
+with at most five task/model pairs running concurrently.
+
+Each task/model pair runs Baseline and zvec-grep on the same runner. Both
+groups use the same GLM-5.2 judge and rubric. Reports identify the tested
+agent model; only GLM-5.2 candidates are labeled as self-judged. Harbor
+evidence, index caches, task reports, and aggregate artifacts are separated
+by model, and reports from different models cannot be aggregated together.
+A complete group produces its own aggregate report even if the other group
+fails. Report summaries appear in the Actions Job Summary. The Claude Code
+configuration above describes the published local protocol.
 
 ## Local setup
 

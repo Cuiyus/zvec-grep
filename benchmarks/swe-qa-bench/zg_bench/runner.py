@@ -25,9 +25,11 @@ from .settings import (
     OPENCODE_ALIYUN_GLM_MODEL_ID,
     OPENCODE_ALIYUN_QWEN_MODEL,
     OPENCODE_ALIYUN_QWEN_MODEL_ID,
-    OPENCODE_CUSTOM_GLM_BASE_URL,
+    OPENCODE_CUSTOM_BASE_URL,
     OPENCODE_CUSTOM_GLM_MODEL,
     OPENCODE_CUSTOM_GLM_MODEL_ID,
+    OPENCODE_CUSTOM_QWEN_MODEL,
+    OPENCODE_CUSTOM_QWEN_MODEL_ID,
     OPENCODE_DASHSCOPE_BASE_URL,
     OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
     OPENCODE_VERSION,
@@ -67,6 +69,14 @@ _OPENCODE_ALIYUN_API_KEY_ENV_VARS = (
     "DASHSCOPE_API_KEY",
     "OPENAI_API_KEY",
 )
+_OPENCODE_CUSTOM_API_KEY_ENV_VARS = (
+    "GLM_API_KEY",
+    "OPENAI_API_KEY",
+)
+_OPENCODE_CUSTOM_MODEL_NAMES = {
+    OPENCODE_CUSTOM_GLM_MODEL_ID: "GLM 5.2",
+    OPENCODE_CUSTOM_QWEN_MODEL_ID: "Qwen3.8 Max",
+}
 _CLAUDE_CODE_CREDENTIAL_ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -133,12 +143,17 @@ _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT = AgentModelSupport(
     _OPENCODE_AGENT,
     OPENCODE_CUSTOM_GLM_MODEL,
 )
+_OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT = AgentModelSupport(
+    _OPENCODE_AGENT,
+    OPENCODE_CUSTOM_QWEN_MODEL,
+)
 AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
     # Codex owns its model catalog and receives the selected model unchanged.
     _CODEX_MODEL_SUPPORT,
     _CLAUDE_CODE_MODEL_SUPPORT,
     _OPENCODE_GLM_MODEL_SUPPORT,
     _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT,
+    _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT,
     _OPENCODE_QWEN_MODEL_SUPPORT,
 )
 
@@ -310,8 +325,12 @@ def _is_opencode_aliyun_qwen_model(agent: str, model: str) -> bool:
     return _OPENCODE_QWEN_MODEL_SUPPORT.matches(agent, model)
 
 
-def _is_opencode_custom_glm_model(agent: str, model: str) -> bool:
-    return _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT.matches(agent, model)
+def _opencode_custom_model_id(agent: str, model: str) -> str | None:
+    if _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT.matches(agent, model):
+        return OPENCODE_CUSTOM_GLM_MODEL_ID
+    if _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT.matches(agent, model):
+        return OPENCODE_CUSTOM_QWEN_MODEL_ID
+    return None
 
 
 def _opencode_dashscope_model_id(agent: str, model: str) -> str | None:
@@ -353,8 +372,8 @@ def validate_profile_credentials(
                 f"{model} requires a DashScope API key; " f"export one of: {accepted}"
             )
 
-    if _is_opencode_custom_glm_model(agent, model):
-        if _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY")) is None:
+    if _opencode_custom_model_id(agent, model) is not None:
+        if _first_nonempty_env(_OPENCODE_CUSTOM_API_KEY_ENV_VARS) is None:
             raise ValueError(
                 f"{model} requires an API key; export GLM_API_KEY or " "OPENAI_API_KEY"
             )
@@ -431,12 +450,12 @@ def execution_environment(*, agent: str, model: str) -> dict[str, str]:
             _, api_key = credential
             environment["OPENAI_API_KEY"] = api_key
         environment["OPENAI_BASE_URL"] = OPENCODE_DASHSCOPE_BASE_URL
-    if _is_opencode_custom_glm_model(agent, model):
-        credential = _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY"))
+    if _opencode_custom_model_id(agent, model) is not None:
+        credential = _first_nonempty_env(_OPENCODE_CUSTOM_API_KEY_ENV_VARS)
         if credential is not None:
             _, api_key = credential
             environment["OPENAI_API_KEY"] = api_key
-        environment["OPENAI_BASE_URL"] = OPENCODE_CUSTOM_GLM_BASE_URL
+        environment["OPENAI_BASE_URL"] = OPENCODE_CUSTOM_BASE_URL
         # Harbor only needs the normalized OpenAI variable. Avoid forwarding
         # the provider-specific source variable to every subprocess as well.
         environment.pop("GLM_API_KEY", None)
@@ -774,6 +793,7 @@ def build_harbor_command(
         harbor_agent = OPENCODE_IMPORT_PATH
         agent_kwargs.append(f"version={OPENCODE_VERSION}")
         opencode_model_id = _opencode_dashscope_model_id(agent, model)
+        custom_model_id = _opencode_custom_model_id(agent, model)
         if opencode_model_id is not None:
             harbor_model = f"dashscope/{opencode_model_id}"
             opencode_config = {
@@ -808,8 +828,8 @@ def build_harbor_command(
             agent_kwargs.append(
                 "opencode_config=" + json.dumps(opencode_config, separators=(",", ":"))
             )
-        elif _is_opencode_custom_glm_model(agent, model):
-            harbor_model = OPENCODE_CUSTOM_GLM_MODEL
+        elif custom_model_id is not None:
+            harbor_model = f"custom-openai/{custom_model_id}"
             opencode_config = {
                 "$schema": "https://opencode.ai/config.json",
                 "provider": {
@@ -818,16 +838,16 @@ def build_harbor_command(
                         "name": "Custom OpenAI Compatible",
                         "options": {
                             "apiKey": "{env:OPENAI_API_KEY}",
-                            "baseURL": OPENCODE_CUSTOM_GLM_BASE_URL,
+                            "baseURL": OPENCODE_CUSTOM_BASE_URL,
                         },
                         "models": {
-                            OPENCODE_CUSTOM_GLM_MODEL_ID: {
-                                "name": "GLM 5.2",
+                            custom_model_id: {
+                                "name": _OPENCODE_CUSTOM_MODEL_NAMES[custom_model_id],
                             }
                         },
                     }
                 },
-                "model": OPENCODE_CUSTOM_GLM_MODEL,
+                "model": harbor_model,
             }
             if profile == "zvec-grep":
                 opencode_config["mcp"] = {
@@ -910,7 +930,7 @@ def build_harbor_command(
         command.extend(["--agent-kwarg", agent_kwarg])
     if _opencode_dashscope_model_id(
         agent, model
-    ) is not None or _is_opencode_custom_glm_model(agent, model):
+    ) is not None or _opencode_custom_model_id(agent, model) is not None:
         command.extend(["--agent-env", "OPENAI_API_KEY=${OPENAI_API_KEY}"])
     if agent == _CLAUDE_CODE_AGENT:
         credential = _first_nonempty_env(_CLAUDE_CODE_CREDENTIAL_ENV_VARS)

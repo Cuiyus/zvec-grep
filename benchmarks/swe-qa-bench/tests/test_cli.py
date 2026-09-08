@@ -114,6 +114,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("qwen3.7-max", listing)
         self.assertIn("opencode", listing)
         self.assertIn("aliyun-glm-5.2", listing)
+        self.assertIn("custom-openai/glm-5.2", listing)
+        self.assertIn("custom-openai/qwen3.8-max", listing)
         self.assertIn("claude-code", listing)
         self.assertIn("claude-opus-5", listing)
 
@@ -134,7 +136,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(error.exception.code, 2)
         self.assertIn(
-            "supported models: aliyun-glm-5.2, custom-openai/glm-5.2, qwen3.7-max",
+            "supported models: aliyun-glm-5.2, custom-openai/glm-5.2, "
+            "custom-openai/qwen3.8-max, qwen3.7-max",
             stderr.getvalue(),
         )
 
@@ -152,6 +155,25 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(args.agent, "opencode")
         self.assertEqual(args.model, "qwen3.7-max")
+
+    def test_accepts_opencode_custom_qwen_for_run_and_doctor(self) -> None:
+        for command in (["run", self.suite_name], ["doctor"]):
+            with self.subTest(command=command):
+                args = build_parser().parse_args(
+                    [
+                        *command,
+                        "--agent",
+                        "opencode",
+                        "--model",
+                        "custom-openai/qwen3.8-max",
+                        "--profile",
+                        "all",
+                    ]
+                )
+
+                self.assertEqual(args.agent, "opencode")
+                self.assertEqual(args.model, "custom-openai/qwen3.8-max")
+                self.assertEqual(args.profile, "all")
 
     def test_accepts_published_claude_code_configuration(self) -> None:
         args = build_parser().parse_args(

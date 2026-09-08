@@ -61,9 +61,16 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 
 将工作流中的 `env.SWE_QA_SCOPE` 设为 `smoke`（默认，5 题）或 `all-full`（20 题），再推送到 dev 分支即可选择测试范围。后续运行会沿用该范围，直到再次修改。工作流仅保存在 dev 分支，通过 push 触发测试，不依赖默认分支上的手动运行入口。
 
-CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 3 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。上文的 Claude Code 配置对应已发布的本地测试协议。
+CI 使用 OpenCode `1.18.4`，运行以下两个模型组：
 
-每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。完整运行还会生成聚合报告，报告摘要展示在 Actions Job Summary 中。
+| 模型组 | Agent 模型 | Profiles |
+| --- | --- | --- |
+| GLM-5.2 | `custom-openai/glm-5.2` | Baseline 和 zvec-grep |
+| Qwen3.8-Max | `custom-openai/qwen3.8-max` | Baseline 和 zvec-grep |
+
+两组使用相同的锁定任务、本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 3 次。两组共用已有的 `GLM_API_KEY` Actions secret 和 `zg_bench/settings.py` 中的 custom OpenAI-compatible endpoint，无需新增 secret。`env.SWE_QA_MODELS` 默认选择两个模型组；一次 smoke 共运行 60 次 Agent trial，`all-full` 共 240 次，最多并行执行 5 个任务/模型配对。
+
+每个任务/模型配对在同一个 runner 上运行 Baseline 和 zvec-grep。两组统一使用 GLM-5.2 评审器和相同评分规则。报告标明被测模型，仅 GLM-5.2 组标记为同模型自评。Harbor 证据、索引缓存、任务报告和聚合 artifacts 均按模型分开，禁止将不同模型的报告混合聚合。一个模型组完成后可独立生成聚合报告，即使另一组失败；报告摘要展示在 Actions Job Summary 中。上文的 Claude Code 配置对应已发布的本地测试协议。
 
 ## 本地配置
 

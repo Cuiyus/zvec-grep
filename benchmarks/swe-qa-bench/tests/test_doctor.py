@@ -9,6 +9,32 @@ from zg_bench import doctor
 
 
 class RunDoctorTests(unittest.TestCase):
+    def test_custom_models_report_missing_shared_credentials(self) -> None:
+        for model in ("custom-openai/glm-5.2", "custom-openai/qwen3.8-max"):
+            for environment in ({}, {"DASHSCOPE_API_KEY": "unrelated-secret"}):
+                with (
+                    self.subTest(model=model, environment=tuple(environment)),
+                    patch.dict("os.environ", environment, clear=True),
+                ):
+                    checks = doctor._collect_run_checks(
+                        agent="opencode",
+                        model=model,
+                        profiles=("baseline", "zvec-grep"),
+                        zvec_grep_package="@zvec/zvec-grep@0.1.6-alpha.3",
+                        embedding_model="local/potion-code-16m-v2",
+                    )
+
+                credentials = next(
+                    check for check in checks if check.name == "Credentials"
+                )
+                self.assertFalse(credentials.ok)
+                self.assertTrue(credentials.required)
+                self.assertEqual(
+                    credentials.detail,
+                    f"{model} requires an API key; export GLM_API_KEY or OPENAI_API_KEY",
+                )
+                self.assertNotIn("unrelated-secret", str(checks))
+
     def test_base_checks_reject_legacy_docker_compose(self) -> None:
         def fake_which(command: str) -> str | None:
             return f"/usr/bin/{command}"

@@ -8,3 +8,4 @@ class SweQaError(RuntimeError):
 
 
 SELF_JUDGE_LABEL = "glm-5.2-self-judge-v1"
+JUDGE_LABEL = "glm-5.2-judge-v1"

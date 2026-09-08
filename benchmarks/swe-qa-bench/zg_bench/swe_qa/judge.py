@@ -1,4 +1,4 @@
-"""GLM-5.2 self-judge and report generation for SWE-QA pairs."""
+"""GLM-5.2 judging and report generation for SWE-QA pairs."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ..settings import OPENCODE_CUSTOM_GLM_BASE_URL
-from . import SELF_JUDGE_LABEL, SweQaError
+from . import JUDGE_LABEL, SELF_JUDGE_LABEL, SweQaError
 
 SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence")
 JUDGE_MODEL = "openai/glm-5.2"
@@ -28,6 +28,51 @@ MAX_JUDGE_CONCURRENCY = 8
 JUDGE_CONCURRENCY_ENV = "SWE_QA_JUDGE_CONCURRENCY"
 
 Completion = Callable[..., Any]
+
+
+def _agent_model_name(value: Any, *, prefix: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SweQaError(f"{prefix}: agent model must be a non-empty string")
+    name = value.strip()
+    # Harbor may record these OpenCode models with or without their provider.
+    if name in ("glm-5.2", "qwen3.8-max"):
+        return f"custom-openai/{name}"
+    return name
+
+
+def _resolve_agent_model(
+    trials: Sequence[dict[str, Any]],
+    *,
+    declared: Any = None,
+    prefix: str,
+) -> str | None:
+    declared = _agent_model_name(declared, prefix=prefix)
+    observed = [
+        _agent_model_name(trial.get("model"), prefix=prefix) for trial in trials
+    ]
+    models = {model for model in observed if model is not None}
+    if declared is not None:
+        models.add(declared)
+    if len(models) > 1:
+        raise SweQaError(f"{prefix}: agent model mismatch: {sorted(models)}")
+    # A supplied model describes the configured run. Otherwise infer identity
+    # only from complete trial evidence, never from the model used to judge it.
+    if declared is not None:
+        return declared
+    return next(iter(models)) if models and all(observed) else None
+
+
+def _judge_identity(agent_model: str | None) -> dict[str, Any]:
+    self_judge = (
+        None if agent_model is None else agent_model.rsplit("/", 1)[-1] == "glm-5.2"
+    )
+    return {
+        "label": SELF_JUDGE_LABEL if self_judge else JUDGE_LABEL,
+        "model": "glm-5.2",
+        "self_judge": self_judge,
+    }
 
 
 def _judge_concurrency(value: int | None = None) -> int:
@@ -343,6 +388,7 @@ def _judge_candidate(
     reference: str,
     candidate: str,
     attempts: int,
+    judge_identity: dict[str, Any],
 ) -> dict[str, Any]:
     prompt = _judge_prompt(question=question, reference=reference, candidate=candidate)
     last_failure = "unknown"
@@ -367,8 +413,7 @@ def _judge_candidate(
                 last_failure = str(error)
             else:
                 return {
-                    "label": SELF_JUDGE_LABEL,
-                    "model": "glm-5.2",
+                    **judge_identity,
                     "scores": scores,
                     "total": sum(scores.values()),
                     "latency_seconds": time.monotonic() - started,
@@ -388,6 +433,7 @@ def _judge_task_trials(
     api_base: str,
     attempts: int,
     concurrency: int,
+    judge_identity: dict[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
     work_items = [
         (profile_name, trial)
@@ -410,6 +456,7 @@ def _judge_task_trials(
                     reference=str(reference["reference_answer"]),
                     candidate=str(trial["answer"]),
                     attempts=attempts,
+                    judge_identity=judge_identity,
                 )
             )
         try:
@@ -425,6 +472,7 @@ def _judge_task_trials(
             {
                 "trial_index": trial["trial_index"],
                 "trial_name": trial.get("trial_name"),
+                "model": trial.get("model"),
                 "judge": judge_result,
                 "metrics": {
                     "input_tokens": trial["input_tokens"],
@@ -496,8 +544,7 @@ def _summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
     usages = [trial["judge"]["usage"] for trial in trials]
     judge = {
-        "label": SELF_JUDGE_LABEL,
-        "model": "glm-5.2",
+        **{key: trials[0]["judge"][key] for key in ("label", "model", "self_judge")},
         "scores": scores,
         "total": sum(trial["judge"]["total"] for trial in trials) / count,
         "latency_seconds": sum(
@@ -663,10 +710,18 @@ def _metric_cell(
 
 
 def _render_report(report: dict[str, Any]) -> str:
+    agent_model = report.get("agent_model")
+    model_label = agent_model or "unknown (not recorded)"
+    judge = report["judge"]
+    judge_description = (
+        "GLM-5.2 self-judge" if judge.get("self_judge") is True else "GLM-5.2 judge"
+    )
     lines = [
-        "# SWE-QA-Bench CI report",
+        f"# SWE-QA-Bench CI report — {model_label}",
         "",
-        f"Judge: **{SELF_JUDGE_LABEL}** (GLM-5.2 self-judge).",
+        f"Agent model: **{model_label}**.",
+        "",
+        f"Judge: **{judge['label']}** ({judge_description}).",
         "",
         "This run is **report-only**. Numeric scores and deltas are not code-review or merge gates. The hard gate only requires every expected pair and every judge call to succeed.",
         "",
@@ -676,7 +731,7 @@ def _render_report(report: dict[str, Any]) -> str:
         "",
         "In the Aggregate row, baseline and zvec-grep efficiency values are sums of the per-task profile means (Judge is the equal-weight task mean), while the third value is the equal-weight arithmetic mean of task changes, not a ratio of totals. A task whose baseline denominator is zero has an N/A percentage change and is excluded only from that Aggregate metric.",
         "",
-        "| Case | Judge self-judge | input_token | toolcall | time (s) |",
+        "| Case | Judge | input_token | toolcall | time (s) |",
         "|---|---:|---:|---:|---:|",
     ]
     for case in report["cases"]:
@@ -905,9 +960,21 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
 
     judge = report.get("judge")
     if not isinstance(judge, dict) or (
-        judge.get("label") != SELF_JUDGE_LABEL
-        or judge.get("model") != "glm-5.2"
-        or judge.get("self_judge") is not True
+        judge.get("model") != "glm-5.2"
+        or "self_judge" not in judge
+        or not (
+            (
+                judge.get("label") == SELF_JUDGE_LABEL
+                and judge.get("self_judge") is True
+            )
+            or (
+                judge.get("label") == JUDGE_LABEL
+                and (
+                    judge.get("self_judge") is False
+                    or judge.get("self_judge") is None
+                )
+            )
+        )
         or judge.get("temperature") != 0
         or judge.get("rubric") != list(SCORE_KEYS)
     ):
@@ -965,6 +1032,38 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
     if declared_case_count != trial_counts[0]:
         raise SweQaError(f"{prefix}: case trial_count does not match evidence")
 
+    declared_models = {
+        model
+        for value in (report.get("agent_model"), case.get("agent_model"))
+        if (model := _agent_model_name(value, prefix=prefix)) is not None
+    }
+    if len(declared_models) > 1:
+        raise SweQaError(f"{prefix}: agent model mismatch: {sorted(declared_models)}")
+    agent_model = _resolve_agent_model(
+        [
+            trial
+            for name in PROFILE_NAMES
+            for trial in profiles[name].get("trials", [profiles[name]])
+        ],
+        declared=next(iter(declared_models), None),
+        prefix=prefix,
+    )
+    if agent_model is not None:
+        identity = _judge_identity(agent_model)
+        judge_results = [judge]
+        for name in PROFILE_NAMES:
+            profile = profiles[name]
+            judge_results.append(profile["judge"])
+            judge_results.extend(trial["judge"] for trial in profile.get("trials", []))
+        if any(
+            key in result and result[key] != value
+            for result in judge_results
+            for key, value in identity.items()
+        ):
+            raise SweQaError(f"{prefix}: judge metadata does not match agent model")
+    report["agent_model"] = agent_model
+    case["agent_model"] = agent_model
+
     if usage["calls"] != judgement_count:
         raise SweQaError(f"{prefix}: judge usage calls do not match trial evidence")
     if gate.get("successful_judgements") != judgement_count:
@@ -1014,6 +1113,15 @@ def aggregate_reports(
     for path in _report_paths(reports_root, output_dir):
         source = _load_object(path, label="per-task report")
         case = _validate_task_report(source, path)
+        if (
+            source_reports
+            and source["agent_model"] != source_reports[0]["agent_model"]
+        ):
+            raise SweQaError(
+                "per-task reports use different agent models "
+                f"({source_reports[0]['agent_model']!r} and {source['agent_model']!r}); "
+                "aggregate each model separately"
+            )
         task_id = case["task_id"]
         if task_id in task_sources:
             raise SweQaError(
@@ -1054,6 +1162,7 @@ def aggregate_reports(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "agent_model": source_reports[0]["agent_model"],
         "judge": _combined_judge(source_reports),
         "gate": {
             "kind": "completion-only",
@@ -1086,15 +1195,27 @@ def judge_pairs(
     references_path: Path,
     output_dir: Path,
     expected: Sequence[str],
+    agent_model: str | None = None,
     completion_fn: Completion | None = None,
     attempts: int = 3,
     concurrency: int | None = None,
 ) -> dict[str, Any]:
-    """Apply the same-model judge and emit JSON/Markdown reports."""
+    """Apply the fixed GLM-5.2 judge and emit reports for one agent model."""
     if attempts < 1 or attempts > 5:
         raise SweQaError("judge attempts must be between 1 and 5")
     concurrency = _judge_concurrency(concurrency)
     pairs = _load_pairs(pairs_root, expected)
+    agent_model = _resolve_agent_model(
+        [
+            trial
+            for pair in pairs.values()
+            for name in PROFILE_NAMES
+            for trial in pair["profiles"][name]["trials"]
+        ],
+        declared=agent_model,
+        prefix="judge pairs",
+    )
+    judge_identity = _judge_identity(agent_model)
     references = _load_references(references_path)
     missing_references = [task for task in expected if task not in references]
     if missing_references:
@@ -1104,7 +1225,7 @@ def judge_pairs(
 
     api_key = os.environ.get("GLM_API_KEY", "").strip()
     if not api_key:
-        raise SweQaError("GLM_API_KEY is required for the self-judge")
+        raise SweQaError("GLM_API_KEY is required for the GLM-5.2 judge")
     api_base = os.environ.get("GLM_BASE_URL", OPENCODE_CUSTOM_GLM_BASE_URL).strip()
     if not api_base:
         raise SweQaError("GLM_BASE_URL must not be empty")
@@ -1129,6 +1250,7 @@ def judge_pairs(
             api_base=api_base,
             attempts=attempts,
             concurrency=concurrency,
+            judge_identity=judge_identity,
         )
         profile_results: dict[str, dict[str, Any]] = {}
         for profile_name in PROFILE_NAMES:
@@ -1147,6 +1269,7 @@ def judge_pairs(
             profile_results[profile_name] = _summarize_profile(trial_results)
         case = {
             "task_id": str(reference["task_id"]),
+            "agent_model": agent_model,
             "role": reference.get("role"),
             "category": reference.get("category"),
             "trial_count": pair["actual_trials"],
@@ -1161,10 +1284,9 @@ def judge_pairs(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "agent_model": agent_model,
         "judge": {
-            "label": SELF_JUDGE_LABEL,
-            "model": "glm-5.2",
-            "self_judge": True,
+            **judge_identity,
             "temperature": 0,
             "rubric": list(SCORE_KEYS),
             "usage": judge_usage,

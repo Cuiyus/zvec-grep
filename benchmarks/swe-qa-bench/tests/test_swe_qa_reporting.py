@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from zg_bench.swe_qa import SELF_JUDGE_LABEL, SweQaError
+from zg_bench.swe_qa import JUDGE_LABEL, SELF_JUDGE_LABEL, SweQaError
 from zg_bench.swe_qa.cli import main as swe_qa_main
 from zg_bench.swe_qa.collect import collect_pair
 from zg_bench.swe_qa.judge import (
     MAX_JUDGE_CONCURRENCY,
+    SCORE_KEYS,
     _aggregate,
     _metric_cell,
     aggregate_reports,
@@ -67,7 +68,18 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def _judged_task_report(task_id: str, index: int = 0) -> dict[str, Any]:
+def _successful_judge_response() -> dict[str, Any]:
+    return {
+        "choices": [
+            {"message": {"content": json.dumps({key: 10 for key in SCORE_KEYS})}}
+        ],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 5},
+    }
+
+
+def _judged_task_report(
+    task_id: str, index: int = 0, *, agent_model: str | None = None
+) -> dict[str, Any]:
     scale = index + 1
     baseline_score = 10 + index % 5
     zvec_score = 12 + index % 5
@@ -172,7 +184,7 @@ def _judged_task_report(task_id: str, index: int = 0) -> dict[str, Any]:
             ],
         },
     }
-    return {
+    report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
         "judge": {
@@ -206,6 +218,21 @@ def _judged_task_report(task_id: str, index: int = 0) -> dict[str, Any]:
         "cases": [case],
         "aggregate": _aggregate([case]),
     }
+    if agent_model is not None:
+        report["agent_model"] = agent_model
+        case["agent_model"] = agent_model
+        self_judge = agent_model.rsplit("/", 1)[-1] == "glm-5.2"
+        identity = {
+            "label": SELF_JUDGE_LABEL if self_judge else JUDGE_LABEL,
+            "self_judge": self_judge,
+        }
+        report["judge"].update(identity)
+        for profile in case["profiles"].values():
+            profile["judge"].update(identity)
+            for trial in profile["trials"]:
+                trial["model"] = agent_model
+                trial["judge"].update(identity)
+    return report
 
 
 def _set_report_trial_metrics(
@@ -541,7 +568,9 @@ class JudgeTests(unittest.TestCase):
         )
         self.assertEqual(_metric_cell(0, 1, None), "0.00 / 1.00 / N/A")
 
-    def _write_pair_and_reference(self, root: Path) -> tuple[Path, Path]:
+    def _write_pair_and_reference(
+        self, root: Path, *, agent_model: str | None = "custom-openai/glm-5.2"
+    ) -> tuple[Path, Path]:
         pairs_root = root / "pairs"
         baseline_metrics = [
             (100, 20, 10, 10.0, 1.0),
@@ -561,6 +590,7 @@ class JudgeTests(unittest.TestCase):
                 {
                     "trial_index": index,
                     "trial_name": f"reflex-6-{profile}-{index}",
+                    "model": agent_model,
                     "answer": f"{profile} candidate {index}",
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -682,6 +712,7 @@ class JudgeTests(unittest.TestCase):
                 all(call["api_key"] == "test-secret" for call in requests)
             )
             self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["agent_model"], "custom-openai/glm-5.2")
             self.assertEqual(report["judge"]["label"], SELF_JUDGE_LABEL)
             self.assertTrue(report["judge"]["self_judge"])
             self.assertEqual(report["judge"]["usage"]["calls"], 6)
@@ -752,6 +783,110 @@ class JudgeTests(unittest.TestCase):
             serialized = (output_dir / "report.json").read_text()
             self.assertNotIn("judge-only reference", serialized)
             self.assertNotIn("test-secret", serialized)
+
+    def test_qwen_cli_uses_fixed_glm_judge_and_preserves_model_evidence(self) -> None:
+        for recorded_model in ("custom-openai/qwen3.8-max", "qwen3.8-max"):
+            with (
+                self.subTest(recorded_model=recorded_model),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                pairs_root, references = self._write_pair_and_reference(
+                    root, agent_model=recorded_model
+                )
+                with (
+                    patch.dict(
+                        "os.environ",
+                        {
+                            "GLM_API_KEY": "secret",
+                            "GLM_BASE_URL": "https://example.invalid/v1",
+                        },
+                        clear=True,
+                    ),
+                    patch("zg_bench.swe_qa.judge._default_completion") as completion,
+                    patch("builtins.print") as printed,
+                ):
+                    completion.return_value.return_value = _successful_judge_response()
+                    exit_code = swe_qa_main(
+                        [
+                            "judge", "--pairs-root", str(pairs_root),
+                            "--references", str(references),
+                            "--output-dir", str(root / "report"),
+                            "--expected", "reflex-6",
+                            "--agent-model", "custom-openai/qwen3.8-max",
+                        ]
+                    )
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(completion.return_value.call_count, 6)
+                for call in completion.return_value.call_args_list:
+                    self.assertEqual(call.kwargs["model"], "openai/glm-5.2")
+                    self.assertEqual(call.kwargs["api_key"], "secret")
+                    self.assertEqual(
+                        call.kwargs["api_base"], "https://example.invalid/v1"
+                    )
+                report = json.loads((root / "report" / "report.json").read_text())
+                self.assertEqual(report["agent_model"], "custom-openai/qwen3.8-max")
+                self.assertEqual(
+                    report["cases"][0]["agent_model"], report["agent_model"]
+                )
+                self.assertFalse(report["judge"]["self_judge"])
+                self.assertEqual(report["judge"]["label"], JUDGE_LABEL)
+                for profile in report["cases"][0]["profiles"].values():
+                    self.assertFalse(profile["judge"]["self_judge"])
+                    for trial in profile["trials"]:
+                        self.assertEqual(trial["model"], recorded_model)
+                        self.assertEqual(trial["judge"]["label"], JUDGE_LABEL)
+                markdown = (root / "report" / "report.md").read_text()
+                self.assertIn("custom-openai/qwen3.8-max", markdown.splitlines()[0])
+                self.assertNotIn("self-judge", markdown)
+                self.assertEqual(
+                    json.loads(printed.call_args.args[0])["agent_model"],
+                    report["agent_model"],
+                )
+                combined = aggregate_reports(
+                    reports_root=root / "report", output_dir=root / "combined"
+                )
+                self.assertEqual(combined["agent_model"], report["agent_model"])
+                self.assertFalse(combined["judge"]["self_judge"])
+
+    def test_missing_agent_model_is_not_invented(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(
+                root, agent_model=None
+            )
+            with patch.dict("os.environ", {"GLM_API_KEY": "secret"}, clear=True):
+                report = judge_pairs(
+                    pairs_root=pairs_root, references_path=references,
+                    output_dir=root / "report", expected=["reflex-6"],
+                    completion_fn=lambda **kwargs: _successful_judge_response(),
+                )
+            self.assertIsNone(report["agent_model"])
+            self.assertIsNone(report["judge"]["self_judge"])
+            markdown = (root / "report" / "report.md").read_text()
+            self.assertIn("unknown (not recorded)", markdown)
+            self.assertNotIn("self-judge", markdown)
+
+    def test_agent_model_mismatch_fails_before_model_call(self) -> None:
+        for declared in (None, "custom-openai/glm-5.2"):
+            with (
+                self.subTest(declared=declared),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                pairs_root, references = self._write_pair_and_reference(root)
+                pair_path = pairs_root / "pair-reflex-6.json"
+                pair = json.loads(pair_path.read_text())
+                pair["profiles"]["zvec-grep"]["trials"][0]["model"] = "qwen3.8-max"
+                _write_json(pair_path, pair)
+                with patch("zg_bench.swe_qa.judge._default_completion") as completion:
+                    with self.assertRaisesRegex(SweQaError, "agent model mismatch"):
+                        judge_pairs(
+                            pairs_root=pairs_root, references_path=references,
+                            output_dir=root / "report", expected=["reflex-6"],
+                            agent_model=declared,
+                        )
+                completion.assert_not_called()
 
     def test_default_and_environment_judge_concurrency_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1063,6 +1198,74 @@ class JudgeTests(unittest.TestCase):
 
 
 class AggregateReportTests(unittest.TestCase):
+    def test_aggregate_preserves_qwen_identity_and_normalizes_bare_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for task, model in (
+                ("reflex:6", "custom-openai/qwen3.8-max"),
+                ("sqlfluff:2", "qwen3.8-max"),
+            ):
+                _write_json(
+                    root / "reports" / task / "report.json",
+                    _judged_task_report(task, agent_model=model),
+                )
+            report = aggregate_reports(
+                reports_root=root / "reports", output_dir=root / "combined"
+            )
+            self.assertEqual(report["agent_model"], "custom-openai/qwen3.8-max")
+            self.assertFalse(report["judge"]["self_judge"])
+            self.assertEqual(report["judge"]["usage"]["calls"], 12)
+            markdown = (root / "combined" / "report.md").read_text()
+            self.assertIn("custom-openai/qwen3.8-max", markdown.splitlines()[0])
+            self.assertNotIn("self-judge", markdown)
+
+    def test_aggregate_rejects_different_or_unknown_agent_models(self) -> None:
+        for second_model in ("custom-openai/glm-5.2", None):
+            with (
+                self.subTest(second_model=second_model),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                for task, model in (
+                    ("reflex:6", "custom-openai/qwen3.8-max"),
+                    ("sqlfluff:2", second_model),
+                ):
+                    _write_json(
+                        root / "reports" / task / "report.json",
+                        _judged_task_report(task, agent_model=model),
+                    )
+                with self.assertRaisesRegex(SweQaError, "different agent models"):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+                self.assertFalse((root / "combined").exists())
+
+    def test_aggregate_rejects_conflicting_agent_evidence(self) -> None:
+        for mismatch in ("case", "trial", "judge", "trial_judge"):
+            with (
+                self.subTest(mismatch=mismatch),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                report = _judged_task_report(
+                    "reflex:6", agent_model="custom-openai/qwen3.8-max"
+                )
+                case = report["cases"][0]
+                if mismatch == "case":
+                    case["agent_model"] = "custom-openai/glm-5.2"
+                elif mismatch == "trial":
+                    case["profiles"]["baseline"]["trials"][0]["model"] = "glm-5.2"
+                elif mismatch == "judge":
+                    report["judge"].update(label=SELF_JUDGE_LABEL, self_judge=True)
+                else:
+                    trial = case["profiles"]["baseline"]["trials"][0]
+                    trial["judge"].update(label=SELF_JUDGE_LABEL, self_judge=True)
+                _write_json(root / "reports" / "source" / "report.json", report)
+                with self.assertRaisesRegex(SweQaError, "agent model"):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+
     def test_cli_aggregates_single_report_without_glm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1092,6 +1295,10 @@ class AggregateReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(print_mock.call_count, 1)
             report = json.loads((output_dir / "report.json").read_text())
+            self.assertIsNone(report["agent_model"])
+            self.assertIn(
+                "unknown (not recorded)", (output_dir / "report.md").read_text()
+            )
             self.assertEqual(
                 [case["task_id"] for case in report["cases"]], ["reflex:6"]
             )

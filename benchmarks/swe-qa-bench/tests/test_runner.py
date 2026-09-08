@@ -618,52 +618,115 @@ class RunValidationTests(unittest.TestCase):
 
         self.assertEqual(validate.call_args.kwargs["embedding_endpoint"], endpoint)
 
-    def test_custom_glm_uses_openai_compatible_provider(self) -> None:
+    def test_custom_models_resolve_independently(self) -> None:
+        for model in ("custom-openai/glm-5.2", "custom-openai/qwen3.8-max"):
+            with self.subTest(model=model):
+                support = runner.resolve_agent_model("opencode", model)
+                self.assertEqual(support.agent, "opencode")
+                self.assertEqual(support.model, model)
+
+    def test_custom_models_use_same_provider_in_both_profiles(self) -> None:
         suite = runner.load_suite(self.suite_name, tier="smoke")
+        base_url = (
+            "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/"
+            "compatible-mode/v1"
+        )
+        for model_id in ("glm-5.2", "qwen3.8-max"):
+            providers = []
+            for profile in runner.PROFILES:
+                with self.subTest(model_id=model_id, profile=profile), patch.dict(
+                    runner.os.environ,
+                    {"GLM_API_KEY": "glm-secret", "OPENAI_API_KEY": "openai-secret"},
+                    clear=True,
+                ):
+                    model = f"custom-openai/{model_id}"
+                    command = runner.build_harbor_command(
+                        suite,
+                        profile=profile,
+                        agent="opencode",
+                        model=model,
+                        embedding_model="local/potion-code-16m-v2",
+                        job_name=f"custom-{model_id}-{profile}",
+                    )
 
-        command = runner.build_harbor_command(
-            suite,
-            profile="zvec-grep",
-            agent="opencode",
-            model="custom-openai/glm-5.2",
-            embedding_model="local/potion-code-16m-v2",
-            job_name="custom-glm-test",
-        )
+                    self.assertEqual(command[command.index("--model") + 1], model)
+                    self.assertIn("version=1.18.4", command)
+                    self.assertIn("OPENAI_API_KEY=${OPENAI_API_KEY}", command)
+                    config_argument = next(
+                        value
+                        for value in command
+                        if value.startswith("opencode_config=")
+                    )
+                    config = json.loads(
+                        config_argument.removeprefix("opencode_config=")
+                    )
+                    self.assertEqual(config["model"], model)
+                    self.assertEqual(set(config["provider"]), {"custom-openai"})
+                    provider = config["provider"]["custom-openai"]
+                    self.assertEqual(provider["npm"], "@ai-sdk/openai-compatible")
+                    self.assertEqual(set(provider["models"]), {model_id})
+                    self.assertEqual(
+                        provider["options"],
+                        {"apiKey": "{env:OPENAI_API_KEY}", "baseURL": base_url},
+                    )
+                    for secret in ("glm-secret", "openai-secret", "GLM_API_KEY"):
+                        self.assertNotIn(secret, " ".join(command))
+                    if profile == "zvec-grep":
+                        self.assertEqual(
+                            command[command.index("--agent") + 1],
+                            runner.ZVEC_OPENCODE_IMPORT_PATH,
+                        )
+                        self.assertIn(
+                            "embedding_model=local/potion-code-16m-v2", command
+                        )
+                        self.assertTrue(config["mcp"]["zvec_grep"]["enabled"])
+                    else:
+                        self.assertEqual(
+                            command[command.index("--agent") + 1],
+                            runner.OPENCODE_IMPORT_PATH,
+                        )
+                        self.assertNotIn("mcp", config)
+                    providers.append(provider)
+            self.assertEqual(providers[0], providers[1])
 
-        self.assertEqual(
-            command[command.index("--model") + 1],
-            "custom-openai/glm-5.2",
+    def test_custom_models_environment_normalizes_and_scrubs_source_key(self) -> None:
+        credential_cases = (
+            ({"GLM_API_KEY": "glm-secret"}, "glm-secret"),
+            ({"OPENAI_API_KEY": "openai-secret"}, "openai-secret"),
+            (
+                {"GLM_API_KEY": " glm-secret ", "OPENAI_API_KEY": "openai-secret"},
+                "glm-secret",
+            ),
+            ({"GLM_API_KEY": " ", "OPENAI_API_KEY": "openai-secret"}, "openai-secret"),
         )
-        self.assertIn(
-            "embedding_model=local/potion-code-16m-v2",
-            command,
-        )
-        config_argument = next(
-            value for value in command if value.startswith("opencode_config=")
-        )
-        config = json.loads(config_argument.removeprefix("opencode_config="))
-        provider = config["provider"]["custom-openai"]
-        self.assertEqual(
-            provider["options"]["apiKey"],
-            "{env:OPENAI_API_KEY}",
-        )
-        self.assertNotIn("GLM_API_KEY", json.dumps(config))
-        self.assertIn("mcp", config)
+        for model in ("custom-openai/glm-5.2", "custom-openai/qwen3.8-max"):
+            for credentials, expected_key in credential_cases:
+                with (
+                    self.subTest(model=model, credentials=tuple(credentials)),
+                    patch.dict(
+                        runner.os.environ,
+                        {**credentials, "UNRELATED": "kept"},
+                        clear=True,
+                    ),
+                ):
+                    runner.validate_profile_credentials(
+                        ("baseline", "zvec-grep"),
+                        agent="opencode",
+                        model=model,
+                        embedding_model="local/potion-code-16m-v2",
+                    )
+                    environment = runner.execution_environment(
+                        agent="opencode", model=model
+                    )
 
-    def test_custom_glm_environment_normalizes_and_scrubs_source_key(self) -> None:
-        with patch.dict(
-            runner.os.environ,
-            {"GLM_API_KEY": "glm-secret", "UNRELATED": "kept"},
-            clear=True,
-        ):
-            environment = runner.execution_environment(
-                agent="opencode",
-                model="custom-openai/glm-5.2",
-            )
-
-        self.assertEqual(environment["OPENAI_API_KEY"], "glm-secret")
-        self.assertNotIn("GLM_API_KEY", environment)
-        self.assertEqual(environment["UNRELATED"], "kept")
+                    self.assertEqual(environment["OPENAI_API_KEY"], expected_key)
+                    self.assertEqual(
+                        environment["OPENAI_BASE_URL"], runner.OPENCODE_CUSTOM_BASE_URL
+                    )
+                    self.assertNotIn("GLM_API_KEY", environment)
+                    self.assertEqual(environment["UNRELATED"], "kept")
+                    for name, value in credentials.items():
+                        self.assertEqual(runner.os.environ[name], value)
 
     def test_local_embedding_does_not_require_embedding_key(self) -> None:
         with patch.dict(
