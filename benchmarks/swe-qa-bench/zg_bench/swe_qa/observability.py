@@ -178,11 +178,52 @@ def classify_call(name: str, arguments: Any) -> dict[str, Any]:
     return {"category": category, "logical_queries": queries if complete or queries else None, "query_count_complete": complete}
 
 
-def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+def native_tool_states(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Recover native completion/error states that ATIF may omit entirely."""
+    states: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if event.get("type") != "tool_use":
+            continue
+        part = event.get("part") or {}
+        state = part.get("state") or {}
+        call_id = part.get("callID")
+        if not isinstance(call_id, str) or not isinstance(state, dict):
+            continue
+        terminal = state.get("status") in {"completed", "error"}
+        if call_id in states and states[call_id].get("status") in {"completed", "error"} and not terminal:
+            continue
+        error = state.get("error") if isinstance(state.get("error"), str) else None
+        unavailable = bool(error and re.search(r"(?:unavailable|unknown) tool|tool .+ (?:not found|does not exist)", error, re.IGNORECASE))
+        states[call_id] = {"status": state.get("status"), "error": error,
+                           "failure_kind": "unavailable_tool" if unavailable else "tool_error" if state.get("status") == "error" else None,
+                           "execution_confirmed": True if state.get("status") == "completed" else False if unavailable else None,
+                           "function_name": part.get("tool"), "source": "opencode_native_tool_state"}
+    return states
+
+
+def _read_native_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    if not path.is_file():
+        return [], []
+    events, errors = [], []
+    for index, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+            if isinstance(value, dict):
+                events.append(value)
+        except json.JSONDecodeError:
+            errors.append(f"unparsed native stream line {index}")
+    return events, errors
+
+
+def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any], *,
+                       native_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     steps = trajectory.get("steps")
     if not isinstance(steps, list):
         raise ValueError("trajectory.steps must be a list")
     calls: dict[str, dict[str, Any]] = {}
+    native = native_tool_states(native_events or [])
     records = []
     visible: set[str] = set()
     seen_text: set[str] = set()
@@ -218,7 +259,12 @@ def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any]) -> dict
                 continue
             record = {"tool_call_id": call_id, "step_id": step_id, "function_name": call.get("function_name", "unknown"), "arguments": call.get("arguments", {})}
             record.update(classify_call(record["function_name"], record["arguments"]))
-            record.update({"observation_count": 0, "returned_text_bytes": 0, "evidence_ids": [], "is_error": False})
+            state = native.get(call_id, {})
+            record.update({"observation_count": 0, "returned_text_bytes": 0, "evidence_ids": [],
+                           "is_error": True if state.get("status") == "error" else False if state.get("status") == "completed" else None,
+                           "native_tool_state": state or None,
+                           "execution_confirmed": state.get("execution_confirmed"),
+                           "execution_error": state.get("error"), "failure_kind": state.get("failure_kind")})
             calls[call_id] = record
             records.append(record)
         observation = step.get("observation") or {}
@@ -254,7 +300,11 @@ def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any]) -> dict
                 record["observation_count"] += 1
                 record["returned_text_bytes"] += size
                 record["evidence_ids"] = sorted(set(record["evidence_ids"]) | set(matched))
-                record["is_error"] |= bool((result.get("extra") or {}).get("is_error"))
+                explicit_error = (result.get("extra") or {}).get("is_error")
+                if explicit_error is True:
+                    record["is_error"] = True
+                elif explicit_error is False and record["is_error"] is None:
+                    record["is_error"] = False
             if first_sufficient is None and any(set(required) <= visible for required in case["sufficient_sets"]):
                 first_sufficient = {
                     "step_id": step_id,
@@ -266,6 +316,11 @@ def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any]) -> dict
                 }
     categories = {name: sum(r["category"] == name for r in records) for name in ("search", "read", "other", "mixed", "unknown")}
     query_complete = all(r["query_count_complete"] for r in records)
+    search_records = [r for r in records if r["category"] == "search"]
+    zg_records = [r for r in search_records if "zvec" in r["function_name"].lower()]
+    execution_count_complete = query_complete and all(not r["logical_queries"] or r["execution_confirmed"] is not None for r in records)
+    def confirmed_count(selected: list[dict[str, Any]]) -> int | None:
+        return sum(r["execution_confirmed"] is True for r in selected) if all(r["execution_confirmed"] is not None for r in selected) else None
     return {
         "tool_calls": len(calls),
         "model_requests": model_count if not model_count_missing else None,
@@ -273,9 +328,20 @@ def analyze_trajectory(trajectory: dict[str, Any], case: dict[str, Any]) -> dict
         "agent_steps_missing_request_count": model_count_missing,
         "calls_by_category": categories,
         "logical_queries": sum(r["logical_queries"] or 0 for r in records) if query_complete else None,
+        "logical_queries_scope": "Attempted logical queries, including rejected calls; not successful backend executions.",
+        "attempted_logical_queries": sum(r["logical_queries"] or 0 for r in records) if query_complete else None,
+        "executed_logical_queries": sum(r["logical_queries"] or 0 for r in records if r["execution_confirmed"] is True) if execution_count_complete else None,
+        "confirmed_executed_logical_queries_lower_bound": sum(r["logical_queries"] or 0 for r in records if r["execution_confirmed"] is True),
+        "search_calls_attempted": len(search_records), "search_calls_executed": confirmed_count(search_records),
+        "zg_tool_calls_attempted": len(zg_records), "zg_tool_calls_executed": confirmed_count(zg_records),
+        "tool_errors": sum(r["is_error"] is True for r in records),
+        "calls_missing_execution_status": sum(r["execution_confirmed"] is None for r in records),
+        "unavailable_tool_errors": sum(r["failure_kind"] == "unavailable_tool" for r in records),
         "known_logical_queries_lower_bound": sum(r["logical_queries"] or 0 for r in records),
         "query_count_complete": query_complete,
         "returned_text_bytes": returned_bytes,
+        "returned_text_bytes_scope": "ATIF observation text only; native errors omitted by ATIF are counted separately.",
+        "native_only_error_text_bytes": sum(len(r["execution_error"].encode("utf-8")) for r in records if r["execution_error"] and not r["observation_count"]),
         "returned_text_tokens": None,
         "returned_text_tokenizer": None,
         "exact_repeated_observation_bytes": repeated_bytes,
@@ -303,6 +369,8 @@ def _trace_diagnostics(path: Path) -> dict[str, Any]:
     searches = [e for e in events if e.get("event") == "search"]
     return {
         "available": True, "path": str(path), "search_count": len(searches), "parse_errors": errors,
+        "successful_search_count": sum(e.get("status") == "success" for e in searches),
+        "failed_search_count": sum(e.get("status") == "error" for e in searches),
         "searches": [{k: e.get(k) for k in ("sequence", "status", "duration_ms", "request", "text_bytes", "text_sha256", "error")} for e in searches],
         "integrity_events": [e for e in events if e.get("event") in {"preflight", "integrity", "end"}],
         "evidence_policy": "Hidden raw results and uncorrelated sidecar text are not counted as agent-visible evidence.",
@@ -421,7 +489,9 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
                 try:
                     if trajectory_path.is_file():
                         trajectory = _json(trajectory_path)
-                        values = analyze_trajectory(trajectory, case)
+                        native_events, native_errors = _read_native_events(trial_dir / "agent" / "opencode.txt")
+                        errors.extend(native_errors)
+                        values = analyze_trajectory(trajectory, case, native_events=native_events)
                         final_metrics = trajectory.get("final_metrics") or final_metrics
                     else:
                         errors.append("trajectory unavailable")
@@ -434,6 +504,7 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
                         return None
                     value = context.get(key)
                     return _number(value if value is not None else final_metrics.get(fallback))
+                zg_trace = _trace_diagnostics(trial_dir / "agent" / "zg-trace.jsonl")
                 trials.append({
                     "trial_name": str(result.get("trial_name") or trial_dir.name), "job_name": job.name,
                     "path": str(trial_dir), "status": status, "errors": errors,
@@ -448,9 +519,11 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
                     "output_tokens": counter("n_output_tokens", "total_completion_tokens"),
                     "cached_tokens": counter("n_cache_tokens", "total_cached_tokens"),
                     "agent_wall_seconds": _wall_seconds(result),
-                    "usage_convention": "Agent/provider counter unchanged; cached tokens are separate and are NOT added to input_tokens.",
+                    "usage_convention": "Adapter final prompt counter, unchanged. Harbor OpenCode already sums native input + cache.read; cache.read is not added a second time. Native cache.write remains separate.",
                     "original_verifier": result.get("verifier_result"), "original_judge": None,
-                    "trajectory": values or None, "zg_trace": _trace_diagnostics(trial_dir / "agent" / "zg-trace.jsonl"),
+                    "trajectory": values or None, "zg_trace": zg_trace,
+                    "successful_zg_backend_searches": zg_trace.get("successful_search_count") if label == "zvec-grep" else None,
+                    "zero_successful_zg_search_observed": zg_trace.get("successful_search_count") == 0 if label == "zvec-grep" and zg_trace.get("available") and not zg_trace.get("parse_errors") else None,
                 })
         trials.sort(key=lambda row: (str(row.get("started_at") or ""), row["trial_name"]))
         if pair:
@@ -476,7 +549,7 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
         for index in range(len(trials), expected_trials):
             trials.append({"trial_name": f"missing-planned-trial-{index + 1}", "status": "missing", "input_tokens": None, "output_tokens": None, "trajectory": None, "original_judge": None})
         metrics = {}
-        for metric in ("input_tokens", "output_tokens", "agent_wall_seconds", "tool_calls", "model_requests", "returned_text_bytes", "exact_repeated_observation_bytes", "repeated_nontrivial_line_bytes_lower_bound"):
+        for metric in ("input_tokens", "output_tokens", "agent_wall_seconds", "tool_calls", "model_requests", "attempted_logical_queries", "executed_logical_queries", "tool_errors", "unavailable_tool_errors", "returned_text_bytes", "native_only_error_text_bytes", "exact_repeated_observation_bytes", "repeated_nontrivial_line_bytes_lower_bound"):
             metrics[metric] = _summary([t.get(metric) if metric in {"input_tokens", "output_tokens", "agent_wall_seconds"} else (t.get("trajectory") or {}).get(metric) for t in trials])
         evidence_values = [(t.get("trajectory") or {}).get("evidence_sufficient") for t in trials]
         configurations = set()
@@ -491,6 +564,8 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
                            "trial_count_matches_plan": actual == expected_trials and len(trials) == expected_trials,
                            "agent_model_configurations": sorted(configurations),
                            "configuration_consistent": len(configurations) <= 1,
+                           "successful_zg_backend_searches": _summary([t.get("successful_zg_backend_searches") for t in trials]),
+                           "trials_with_zero_successful_zg_search_observed": [t["trial_name"] for t in trials if t.get("zero_successful_zg_search_observed") is True],
                            "status_counts": {s: sum(t["status"] == s for t in trials) for s in statuses},
                            "metrics": metrics, "evidence_sufficient": {"successes": sum(v is True for v in evidence_values), "observed": sum(v is not None for v in evidence_values), "planned_or_observed": len(trials)}, "trials": trials}
     comparison = {}
@@ -503,9 +578,10 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
                                            "unavailable_reason": "Multiple agent/model configurations detected; analyze each configuration separately."})
     return {"schema_version": 1, "case_id": case["case_id"], "repo": case["repo"], "plan": plan, "manifest": manifest,
             "source_judge_summary": judged_report.get("summary") if judged_report else None,
-            "scope": "read-only QA with a prebuilt index; single-case repeated runs",
+            "scope": "read-only QA with index content frozen during evaluation; single-case repeated runs",
+            "index_preparation": manifest.get("index_preparation") if manifest else None,
             "evidence_matching": "Conservative exact source-text visibility; each evidence span must appear in one observation with its path in output or call arguments. Filename-only, hidden raw chunks, paraphrases and partial spans do not qualify. Evidence is accumulated across observations; gold sufficient_sets are OR-of-AND.",
-            "limitations": ["No final-quality or non-inferiority claim is derived from source visibility or completion rewards.", "Five repeats describe this case; they cannot establish cross-task generalization or rare-failure reliability.", "Tool-return tokens are N/A without a declared tokenizer; UTF-8 bytes are not model input tokens.", "Atomic search counts are conservative; unknown shell programs are never assumed to contain zero searches.", "Bootstrap intervals assume independent repeat sampling; no pairing or randomized schedule is inferred from directory order."],
+            "limitations": ["No final-quality or non-inferiority claim is derived from source visibility or completion rewards.", "Five repeats describe this case; they cannot establish cross-task generalization or rare-failure reliability.", "Tool-return tokens are N/A without a declared tokenizer; UTF-8 bytes are not model input tokens.", "Tool calls and attempted queries include rejected calls. Executed queries require native confirmation; unknown-tool errors count zero executions. Other ambiguous errors remain N/A.", "Native tool error details can be absent from ATIF; native-only error text bytes are reported separately from ATIF observation bytes.", "Atomic search counts are conservative; unknown shell programs are never assumed to contain zero searches.", "Bootstrap intervals assume independent repeat sampling; no pairing or randomized schedule is inferred from directory order."],
             "profiles": profiles, "comparison": comparison,
             "quality_gate": {"status": "not_evaluated", "reason": "Requires prespecified QA rubric, original judge review and non-inferiority margin; observability does not replace scoring."}}
 
@@ -513,12 +589,12 @@ def analyze_runs(*, runs_dir: Path, case: dict[str, Any], expected_trials: int =
 def render_markdown(report: dict[str, Any]) -> str:
     def cell(value: Any) -> str:
         return "N/A" if value is None else f"{value:.2f}" if isinstance(value, float) else str(value)
-    lines = [f"# Read-only QA observability: {report['case_id']}", "", report["scope"], "", "All planned and observed trials are retained. Quality scoring is separate.", "", "| Profile | Trial | Status | Input tokens | Tool calls | Model requests | Sufficient evidence | First sufficient step | Answer assessment |", "|---|---|---|---:|---:|---:|---|---|---|"]
+    lines = [f"# Read-only QA observability: {report['case_id']}", "", report["scope"], "", "All planned and observed trials are retained. Quality scoring is separate.", "", "| Profile | Trial | Status | Input tokens | Tool calls | Model requests | Sufficient evidence | First sufficient step | Answer assessment | Successful ZG backend searches |", "|---|---|---|---:|---:|---:|---|---|---|---:|"]
     for profile, group in report["profiles"].items():
         for trial in group["trials"]:
             trace = trial.get("trajectory") or {}
             milestone = trace.get("first_sufficient_evidence") or {}
-            values = (profile, trial["trial_name"], trial["status"], trial.get("input_tokens"), trace.get("tool_calls"), trace.get("model_requests"), trace.get("evidence_sufficient"), milestone.get("step_id"), (trial.get("original_judge") or {}).get("quality"))
+            values = (profile, trial["trial_name"], trial["status"], trial.get("input_tokens"), trace.get("tool_calls"), trace.get("model_requests"), trace.get("evidence_sufficient"), milestone.get("step_id"), (trial.get("original_judge") or {}).get("quality"), trial.get("successful_zg_backend_searches"))
             lines.append("| " + " | ".join(cell(v).replace("|", "\\|") for v in values) + " |")
     lines.extend(["", "| Profile | Metric | Known / missing | Mean | SD | Min | Max |", "|---|---|---|---:|---:|---:|---:|"])
     for profile, group in report["profiles"].items():
@@ -528,6 +604,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "Repeat uncertainty (fixed case only):", ""])
     for metric, comparison in report["comparison"].items():
         lines.append(f"- {metric}: reduction {cell(comparison['reduction_pct'])}%; descriptive repeat bootstrap 95% interval {comparison['repeat_bootstrap_95_interval_pct'] or 'N/A'}.")
+    preparation = report.get("index_preparation") or {}
+    if preparation:
+        lines.extend(["", f"Index preparation: mode={preparation.get('mode', 'unknown')}, status={preparation.get('status', 'unknown')}, elapsed={cell(preparation.get('wall_seconds'))} seconds; reported separately from QA input tokens and tool calls."])
+    lines.extend(["", "Native tool execution diagnostics:", ""])
+    for profile, group in report["profiles"].items():
+        for trial in group["trials"]:
+            for call in (trial.get("trajectory") or {}).get("calls", []):
+                if call.get("execution_error"):
+                    lines.append(f"- {trial['trial_name']}: `{call['function_name']}` failed ({call.get('failure_kind')}); attempted query remains in cost counters, execution confirmed={call.get('execution_confirmed')}.")
+            if trial.get("zero_successful_zg_search_observed") is True:
+                lines.append(f"- {trial['trial_name']}: zero successful ZG backend searches observed; retained in the planned treatment arm.")
     lines.extend(["", "Evidence matching: " + report["evidence_matching"], "", "Limitations:", ""])
     lines.extend("- " + value for value in report["limitations"])
     lines.extend(["", "Quality gate: not evaluated. Original QA judge results, when supplied, are retained per trial in JSON.", ""])
@@ -639,7 +726,7 @@ def analyze_retrieval(*, events: list[dict[str, Any]], case: dict[str, Any], exp
                           "visible_sufficient_successes": sum((row.get("visible_evidence") or {}).get("sufficient") is True for row in trials),
                           "raw_item_sufficient_successes_diagnostic": sum((row.get("raw_item_evidence_diagnostic") or {}).get("sufficient") is True for row in trials),
                           "metrics": metrics, "result_order_agreement": _repeat_order_agreement(trials), "trials": trials}
-    return {"schema_version": 1, "case_id": case["case_id"], "repo": case["repo"], "scope": "retrieval-only, fixed query, prebuilt index, no agent or QA answer generation",
+    return {"schema_version": 1, "case_id": case["case_id"], "repo": case["repo"], "scope": "retrieval-only, fixed query, index content frozen during evaluation, no agent or QA answer generation",
             "expected_total_trials": len(modes) * expected_trials, "profiles": profiles,
             "unclassified_retrieval_events": unknown_modes,
             "integrity_events": [event for event in events if event.get("event") in {"preflight", "integrity", "end", "error"}],

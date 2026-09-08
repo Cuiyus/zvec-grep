@@ -13,6 +13,7 @@ from zg_bench.swe_qa.observability import (
     classify_call,
     main,
     score_retrieval_event,
+    native_tool_states,
     validate_case,
     visible_evidence,
 )
@@ -44,6 +45,65 @@ def _step(index: int, path: str, text: str, *, prompt: int | None = 100) -> dict
 
 
 class ObservabilityTest(unittest.TestCase):
+    def test_native_unknown_tool_error_survives_missing_atif_observation(self):
+        # Minimal regression fixture taken from OpenCode's real state:error
+        # shape; Harbor ATIF kept this tool call but omitted its error result.
+        native = [
+            {"type": "tool_use", "part": {"tool": "zvec_grep_search", "callID": "bad",
+                "state": {"status": "error", "input": {"query": "find computation"},
+                          "error": "Model tried to call unavailable tool 'invalid'. Available tools: read, zvec_grep_zvec_grep_search."}}},
+            {"type": "tool_use", "part": {"tool": "zvec_grep_zvec_grep_search", "callID": "good",
+                "state": {"status": "completed", "input": {"query": "find computation"}, "output": "source preview"}}},
+        ]
+        trajectory = {"steps": [{"source": "agent", "step_id": 1, "llm_call_count": 1,
+            "tool_calls": [{"tool_call_id": "bad", "function_name": "zvec_grep_search", "arguments": {"query": "find computation"}},
+                           {"tool_call_id": "good", "function_name": "zvec_grep_zvec_grep_search", "arguments": {"query": "find computation"}}],
+            "observation": {"results": [{"source_call_id": "good", "content": "source preview"}]}}]}
+        report = analyze_trajectory(trajectory, _case(), native_events=native)
+        self.assertEqual(report["tool_calls"], 2)
+        self.assertEqual(report["attempted_logical_queries"], 2)
+        self.assertEqual(report["executed_logical_queries"], 1)
+        self.assertEqual(report["zg_tool_calls_attempted"], 2)
+        self.assertEqual(report["zg_tool_calls_executed"], 1)
+        self.assertEqual(report["unavailable_tool_errors"], 1)
+        self.assertTrue(report["calls"][0]["is_error"])
+        self.assertFalse(report["calls"][0]["execution_confirmed"])
+        self.assertIn("unavailable tool", report["calls"][0]["execution_error"])
+        self.assertEqual(report["native_only_error_text_bytes"], len(native[0]["part"]["state"]["error"].encode()))
+        self.assertEqual(report["returned_text_bytes"], len("source preview"))
+        self.assertEqual(report["calls_without_observations"], 1)
+
+    def test_ambiguous_native_error_does_not_invent_zero_executed_queries(self):
+        event = {"type": "tool_use", "part": {"tool": "grep", "callID": "x", "state": {"status": "error", "error": "transport timeout"}}}
+        trajectory = {"steps": [{"source": "agent", "tool_calls": [{"tool_call_id": "x", "function_name": "grep", "arguments": {"pattern": "thing"}}]}]}
+        report = analyze_trajectory(trajectory, _case(), native_events=[event])
+        self.assertTrue(report["calls"][0]["is_error"])
+        self.assertIsNone(report["executed_logical_queries"])
+        self.assertEqual(report["confirmed_executed_logical_queries_lower_bound"], 0)
+        # A later partial stream update cannot erase a terminal error.
+        pending = {"type": "tool_use", "part": {"tool": "grep", "callID": "x", "state": {"status": "running"}}}
+        self.assertEqual(native_tool_states([event, pending])["x"]["status"], "error")
+
+    def test_native_error_only_zg_trial_is_retained_with_zero_backend_searches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trial_id = "demo-1-r05-zvec-grep"
+            agent = root / trial_id / "agent"
+            agent.mkdir(parents=True)
+            (root / "plan.json").write_text(json.dumps({"case_id": "demo:1", "trials": [{"trial_id": trial_id, "profile": "zvec-grep", "trajectory_path": f"{trial_id}/agent/trajectory.json"}]}))
+            (agent.parent / "result.json").write_text(json.dumps({"status": "completed", "final_metrics": {"total_prompt_tokens": 100}}))
+            (agent / "trajectory.json").write_text(json.dumps({"steps": [{"source": "agent", "tool_calls": [{"tool_call_id": "bad", "function_name": "zvec_grep_search", "arguments": {"query": "thing"}}]}]}))
+            (agent / "opencode.txt").write_text(json.dumps({"type": "tool_use", "part": {"tool": "zvec_grep_search", "callID": "bad", "state": {"status": "error", "error": "Model tried to call unavailable tool 'invalid'."}}}) + "\n")
+            (agent / "zg-trace.jsonl").write_text(json.dumps({"event": "start"}) + "\n")
+            report = analyze_runs(runs_dir=root, case=_case(), profile="zvec-grep", expected_trials=1)
+            row = report["profiles"]["zvec-grep"]["trials"][0]
+            self.assertEqual(row["status"], "completed")
+            self.assertEqual(row["trajectory"]["tool_calls"], 1)
+            self.assertEqual(row["trajectory"]["executed_logical_queries"], 0)
+            self.assertEqual(row["successful_zg_backend_searches"], 0)
+            self.assertTrue(row["zero_successful_zg_search_observed"])
+            self.assertEqual(report["profiles"]["zvec-grep"]["trials_with_zero_successful_zg_search_observed"], [trial_id])
+
     def test_gold_rejects_corrupt_hash_and_inconsistent_span(self):
         case = _case()
         validate_case(case)
