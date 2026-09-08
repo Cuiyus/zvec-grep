@@ -34,6 +34,7 @@ QODER_CONFIG_DIR = "/tmp/qoder-benchmark-config"
 _AUTH_FILE = "/tmp/qoder-benchmark-auth/token"
 _OUTPUT_NAME = "qodercli-stream.jsonl"
 _NVM_INIT = '. "$HOME/.nvm/nvm.sh"; '
+_NATIVE_MODEL_ALIASES = {"qmodel_38max": "qwen3.8-max"}
 
 
 def read_stream_events(path: Path) -> list[dict[str, Any]]:
@@ -178,12 +179,14 @@ class QoderCLI(BaseInstalledAgent):
         )
         output = EnvironmentPaths.agent_dir / _OUTPUT_NAME
         stderr = EnvironmentPaths.agent_dir / "qodercli-stderr.txt"
+        # Pinned Qoder CLI 1.1.45 masks token counts unless this env flag is set.
         return (
             "set -euo pipefail; "
             + _NVM_INIT
             + f"trap 'rm -f {_AUTH_FILE}' EXIT; "
             + f'export QODER_PERSONAL_ACCESS_TOKEN="$(cat {_AUTH_FILE})"; '
             + f"export QODER_CONFIG_DIR={QODER_CONFIG_DIR}; "
+            + "export QODER_EXPOSE_TOKEN_USAGE=1; "
             + "qodercli --print --output-format stream-json --no-session-persistence "
             + "--permission-mode bypass_permissions "
             + f"--model {shlex.quote(cli_model)} -- {shlex.quote(instruction)} "
@@ -200,10 +203,11 @@ class QoderCLI(BaseInstalledAgent):
             await self.exec_as_agent(
                 environment, command=self._run_command(instruction)
             )
-            await environment.download_file(
-                (EnvironmentPaths.agent_dir / _OUTPUT_NAME).as_posix(),
-                self.logs_dir / _OUTPUT_NAME,
-            )
+            if not environment.capabilities.mounted:
+                await environment.download_file(
+                    (EnvironmentPaths.agent_dir / _OUTPUT_NAME).as_posix(),
+                    self.logs_dir / _OUTPUT_NAME,
+                )
             events = read_stream_events(self.logs_dir / _OUTPUT_NAME)
             results = [
                 event
@@ -228,8 +232,9 @@ class QoderCLI(BaseInstalledAgent):
             if not observed and isinstance(result.get("modelUsage"), dict):
                 # Token masking retains model names in the final result. Use
                 # that evidence when the stream omits assistant model fields.
+                # Qoder 1.1.45 reports the native catalog ID in modelUsage.
                 observed = {
-                    name.lower()
+                    _NATIVE_MODEL_ALIASES.get(name.lower(), name.lower())
                     for name in result["modelUsage"]
                     if isinstance(name, str)
                 }

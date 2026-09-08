@@ -87,7 +87,7 @@ runs use that scope until it is changed again. The workflow stays on dev
 branches and uses pushes, so testing does not depend on a manual-run entry
 on the default branch.
 
-CI runs three agent/model groups:
+CI supports three agent/model groups:
 
 | Group | Agent version | Agent model | Profiles |
 | --- | --- | --- | --- |
@@ -101,14 +101,21 @@ groups share the existing `GLM_API_KEY` Actions secret and custom
 OpenAI-compatible endpoint in `zg_bench/settings.py`. Qoder uses its account's
 native Qwen3.8-Max catalog route and a separate Qoder Access Token. Differences
 between Qoder and OpenCode results therefore include the provider route as
-well as the agent. Qoder native-account output can withhold token usage: when the CLI
-reports masked or missing counts, reports show token metrics and their
+well as the agent. The pinned Qoder CLI runs with `QODER_EXPOSE_TOKEN_USAGE=1`
+to include usage counters in its stream output. When the CLI still reports
+masked or missing counts, reports show token metrics and their
 comparisons as `N/A`; answer quality, tool calls, and wall time remain available.
 No token savings are inferred from masked zero values.
 
-`env.SWE_QA_GROUPS` selects the groups and defaults to all three. A smoke run
-contains 90 agent trials across the three groups (360 for `all-full`), with
-at most five task/group pairs running concurrently.
+`env.SWE_QA_GROUPS` selects the groups. The current dev iteration selects only
+`qodercli-qwen3.8-max` with scope `probe` and one trial per profile: the locked
+`reflex:6` task exercises baseline, zvec-grep, judging, and aggregation in two
+agent runs. Probe reports validate the CI path and are not repeated benchmark
+measurements. For the repeated comparison, set scope `smoke`, set
+`SWE_QA_TRIALS_PER_PROFILE` to `3`, and select
+`["opencode-glm-5.2","opencode-qwen3.8-max","qodercli-qwen3.8-max"]`.
+A smoke run of all three groups contains 90 agent trials (360 for `all-full`),
+with at most five task/group pairs running concurrently.
 
 Each task/group pair runs Baseline and zvec-grep on the same runner. All
 groups use the same GLM-5.2 judge and rubric. Reports identify both the agent
@@ -129,7 +136,7 @@ local session; GitHub-hosted runners need their own noninteractive credential.
    and create an Access Token for the account with Qwen3.8-Max access.
 2. In this fork's **Settings → Secrets and variables → Actions**, add the
    repository secret `QODER_PERSONAL_ACCESS_TOKEN` with that token.
-3. Push to `dev/benchmark-ci` to run all three groups. Missing Qoder credentials
+3. Push to `dev/benchmark-ci` to run the selected groups. Missing Qoder credentials
    fail the Qoder jobs with a specific setup message; the OpenCode groups remain
    independent. The `GLM_API_KEY` secret is also required for the common judge.
 

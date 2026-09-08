@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Trajectory
 
@@ -43,6 +44,7 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--model Qwen3.8-Max", command)
         self.assertIn("--output-format stream-json", command)
         self.assertIn("--no-session-persistence", command)
+        self.assertIn("export QODER_EXPOSE_TOKEN_USAGE=1;", command)
         self.assertIn("trap 'rm -f /tmp/qoder-benchmark-auth/token' EXIT", command)
 
     async def test_auth_upload_uses_private_file_and_always_removes_it(self) -> None:
@@ -55,6 +57,7 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
             uploaded["mode"] = source.stat().st_mode & 0o777
 
         environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
             default_user="benchmark",
             upload_file=upload,
             exec=AsyncMock(),
@@ -80,7 +83,11 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_pat_fails_without_trying_interactive_login(self) -> None:
         self.agent._personal_access_token = ""
-        environment = SimpleNamespace(exec=AsyncMock(), upload_file=AsyncMock())
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
+            exec=AsyncMock(),
+            upload_file=AsyncMock(),
+        )
         with self.assertRaisesRegex(ValueError, "QODER_PERSONAL_ACCESS_TOKEN"):
             await self.agent.run("question", environment, AgentContext())
         environment.upload_file.assert_not_awaited()
@@ -91,7 +98,11 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
         )
         self.agent._upload_auth = AsyncMock()
         self.agent.exec_as_agent = AsyncMock()
-        environment = SimpleNamespace(exec=AsyncMock(), download_file=AsyncMock())
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
+            exec=AsyncMock(),
+            download_file=AsyncMock(),
+        )
         with self.assertRaisesRegex(RuntimeError, "unsuccessful result"):
             await self.agent.run("question", environment, AgentContext())
 
@@ -110,7 +121,11 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
         )
         self.agent._upload_auth = AsyncMock()
         self.agent.exec_as_agent = AsyncMock()
-        environment = SimpleNamespace(exec=AsyncMock(), download_file=AsyncMock())
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
+            exec=AsyncMock(),
+            download_file=AsyncMock(),
+        )
         with self.assertRaisesRegex(RuntimeError, "response model differs"):
             await self.agent.run("question", environment, AgentContext())
 
@@ -119,11 +134,18 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         self.agent._upload_auth = AsyncMock()
         self.agent.exec_as_agent = AsyncMock()
-        environment = SimpleNamespace(exec=AsyncMock(), download_file=AsyncMock())
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
+            exec=AsyncMock(),
+            download_file=AsyncMock(),
+        )
         for model_usage, error in (
             ({}, "did not report"),
             ({"auto": {}}, "response model differs"),
             ({"Qwen3.8-Max": {}}, None),
+            ({"qmodel_38max": {}}, None),
+            ({"qmodel_39max": {}}, "response model differs"),
+            ({"qmodel_38max": {}, "auto": {}}, "response model differs"),
         ):
             with self.subTest(model_usage=model_usage):
                 self._write_events(
@@ -143,6 +165,66 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
                     context = AgentContext()
                     await self.agent.run("question", environment, context)
                     self.assertIs(context.metadata["token_usage_available"], False)
+
+    async def test_mounted_stream_is_parsed_without_copying_onto_itself(self) -> None:
+        self._write_events(
+            [
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "result": "answer",
+                    "modelUsage": {"qmodel_38max": {}},
+                }
+            ]
+        )
+        self.agent._upload_auth = AsyncMock()
+        self.agent.exec_as_agent = AsyncMock()
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(mounted=True),
+            exec=AsyncMock(),
+            download_file=AsyncMock(
+                side_effect=AssertionError("mounted logs must not be copied")
+            ),
+        )
+
+        await self.agent.run("question", environment, AgentContext())
+
+        environment.download_file.assert_not_awaited()
+        trajectory = Trajectory.model_validate_json(
+            (self.logs_dir / "trajectory.json").read_text()
+        )
+        self.assertEqual(trajectory.steps[-1].message, "answer")
+
+    async def test_nonmounted_stream_is_downloaded_before_parsing(self) -> None:
+        async def download(source: str, target: Path) -> None:
+            self.assertEqual(source, "/logs/agent/qodercli-stream.jsonl")
+            self.assertEqual(target, self.logs_dir / "qodercli-stream.jsonl")
+            self._write_events(
+                [
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "result": "downloaded answer",
+                        "modelUsage": {"qmodel_38max": {}},
+                    }
+                ]
+            )
+
+        self.agent._upload_auth = AsyncMock()
+        self.agent.exec_as_agent = AsyncMock()
+        environment = SimpleNamespace(
+            capabilities=EnvironmentCapabilities(),
+            exec=AsyncMock(),
+            download_file=AsyncMock(side_effect=download),
+        )
+
+        await self.agent.run("question", environment, AgentContext())
+
+        environment.download_file.assert_awaited_once()
+        trajectory = Trajectory.model_validate_json(
+            (self.logs_dir / "trajectory.json").read_text()
+        )
+        self.assertEqual(trajectory.steps[-1].message, "downloaded answer")
 
     def test_stream_parser_counts_tools_once_and_keeps_observations(self) -> None:
         tool_message = {

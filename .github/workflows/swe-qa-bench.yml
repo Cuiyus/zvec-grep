@@ -11,10 +11,11 @@ on:
 permissions: {}
 
 env:
-  # Set to all-full to run all 20 tasks on the next dev branch push.
-  SWE_QA_SCOPE: smoke
-  SWE_QA_GROUPS: '["opencode-glm-5.2","opencode-qwen3.8-max","qodercli-qwen3.8-max"]'
-  SWE_QA_TRIALS_PER_PROFILE: "3"
+  # probe: one locked task; smoke: five; all-full: all 20.
+  SWE_QA_SCOPE: probe
+  # Focus dev iteration on Qoder; the other two groups remain selectable below.
+  SWE_QA_GROUPS: '["qodercli-qwen3.8-max"]'
+  SWE_QA_TRIALS_PER_PROFILE: "1"
 
 concurrency:
   group: swe-qa-bench-${{ github.run_id }}-${{ github.run_attempt }}
@@ -82,7 +83,9 @@ jobs:
               raise SystemExit("SWE_QA_GROUPS must select unique supported agent/model groups")
           groups = [{"id": group, **supported_groups[group]} for group in group_ids]
           scope = os.environ["SCOPE"]
-          if scope in {"smoke", "auto"}:
+          if scope == "probe":
+              task_ids = [selection["gate"]["smoke_task"]]
+          elif scope in {"smoke", "auto"}:
               task_ids = selection["gate"]["auto_tasks"]
           elif scope in {"all-full", "gate-20"}:
               # gate-20 remains accepted for legacy API/CLI dispatches.
