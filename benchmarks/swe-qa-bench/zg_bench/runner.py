@@ -33,6 +33,8 @@ from .settings import (
     OPENCODE_DASHSCOPE_BASE_URL,
     OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
     OPENCODE_VERSION,
+    QODERCLI_QWEN_MODEL,
+    QODERCLI_VERSION,
     ZVEC_GREP_API_KEY_ENV_VARS,
     ZVEC_GREP_BINDING_PACKAGE,
     ZVEC_GREP_EMBEDDING,
@@ -46,9 +48,11 @@ BENCHMARKS_DIR = Path(__file__).resolve().parents[1]
 SUITES_DIR = BENCHMARKS_DIR / "suites"
 DEFAULT_RUNS_DIR = BENCHMARKS_DIR / "runs"
 OPENCODE_IMPORT_PATH = "zg_bench.agents.opencode:ResilientOpenCode"
+QODERCLI_IMPORT_PATH = "zg_bench.agents.qodercli:QoderCLI"
 ZVEC_CLAUDE_CODE_IMPORT_PATH = "zg_bench.agents.zvec_claude_code:ZvecClaudeCode"
 ZVEC_CODEX_IMPORT_PATH = "zg_bench.agents.zvec_codex:ZvecCodex"
 ZVEC_OPENCODE_IMPORT_PATH = "zg_bench.agents.zvec_opencode:ZvecOpenCode"
+ZVEC_QODERCLI_IMPORT_PATH = "zg_bench.agents.zvec_qodercli:ZvecQoderCLI"
 SETUP_CACHE_DIR = BENCHMARKS_DIR / ".cache" / "agent-setup"
 LOCAL_PACKAGE_DIR = SETUP_CACHE_DIR / "local-package"
 LOCAL_NPM_CACHE_DIR = SETUP_CACHE_DIR / "npm-cache"
@@ -59,11 +63,13 @@ _CLAUDE_CODE_INSTALL_CACHE_SOURCE = "claude-code-install-cache"
 _CODEX_AGENT = "codex"
 _CLAUDE_CODE_AGENT = "claude-code"
 _OPENCODE_AGENT = "opencode"
-_CACHEABLE_AGENTS = (_CLAUDE_CODE_AGENT, _CODEX_AGENT, _OPENCODE_AGENT)
+_QODERCLI_AGENT = "qodercli"
+_CACHEABLE_AGENTS = (_CLAUDE_CODE_AGENT, _CODEX_AGENT, _OPENCODE_AGENT, _QODERCLI_AGENT)
 _ZVEC_AGENT_IMPORT_PATHS = {
     _CLAUDE_CODE_AGENT: ZVEC_CLAUDE_CODE_IMPORT_PATH,
     _CODEX_AGENT: ZVEC_CODEX_IMPORT_PATH,
     _OPENCODE_AGENT: ZVEC_OPENCODE_IMPORT_PATH,
+    _QODERCLI_AGENT: ZVEC_QODERCLI_IMPORT_PATH,
 }
 _OPENCODE_ALIYUN_API_KEY_ENV_VARS = (
     "DASHSCOPE_API_KEY",
@@ -147,6 +153,11 @@ _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT = AgentModelSupport(
     _OPENCODE_AGENT,
     OPENCODE_CUSTOM_QWEN_MODEL,
 )
+_QODERCLI_QWEN_MODEL_SUPPORT = AgentModelSupport(
+    _QODERCLI_AGENT,
+    QODERCLI_QWEN_MODEL,
+    configuration="Qoder account catalog; requires QODER_PERSONAL_ACCESS_TOKEN",
+)
 AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
     # Codex owns its model catalog and receives the selected model unchanged.
     _CODEX_MODEL_SUPPORT,
@@ -155,6 +166,7 @@ AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
     _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT,
     _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT,
     _OPENCODE_QWEN_MODEL_SUPPORT,
+    _QODERCLI_QWEN_MODEL_SUPPORT,
 )
 
 
@@ -358,6 +370,13 @@ def validate_profile_credentials(
     embedding_endpoint: str | None = ZVEC_GREP_EMBEDDING_ENDPOINT,
 ) -> None:
     resolve_agent_model(agent, model)
+    if agent == _QODERCLI_AGENT:
+        if _first_nonempty_env(("QODER_PERSONAL_ACCESS_TOKEN",)) is None:
+            raise ValueError(
+                "Qoder CLI requires QODER_PERSONAL_ACCESS_TOKEN for headless runs; "
+                "create a token at https://qoder.com/account/integrations. "
+                "Interactive email login is not available in CI."
+            )
     if agent == _CLAUDE_CODE_AGENT:
         if _first_nonempty_env(_CLAUDE_CODE_CREDENTIAL_ENV_VARS) is None:
             accepted = ", ".join(_CLAUDE_CODE_CREDENTIAL_ENV_VARS)
@@ -444,6 +463,17 @@ def execution_environment(*, agent: str, model: str) -> dict[str, str]:
     """Return Harbor's environment without placing credentials in its command."""
     resolve_agent_model(agent, model)
     environment = os.environ.copy()
+    if agent == _QODERCLI_AGENT:
+        credential = _first_nonempty_env(("QODER_PERSONAL_ACCESS_TOKEN",))
+        if credential is not None:
+            environment["QODER_PERSONAL_ACCESS_TOKEN"] = credential[1]
+        # The Qoder adapter consumes its account token from the host environment.
+        # The fixed judge runs separately and its model key is unnecessary here.
+        environment.pop("GLM_API_KEY", None)
+        environment.pop("OPENAI_API_KEY", None)
+        environment.pop("OPENAI_BASE_URL", None)
+    else:
+        environment.pop("QODER_PERSONAL_ACCESS_TOKEN", None)
     if _opencode_dashscope_model_id(agent, model) is not None:
         credential = _first_nonempty_env(_OPENCODE_ALIYUN_API_KEY_ENV_VARS)
         if credential is not None:
@@ -490,6 +520,8 @@ def _agent_version(agent: str) -> str:
         return CODEX_VERSION
     if agent == _OPENCODE_AGENT:
         return OPENCODE_VERSION
+    if agent == _QODERCLI_AGENT:
+        return QODERCLI_VERSION
     raise ValueError(f"agent does not use a setup cache: {agent}")
 
 
@@ -781,6 +813,9 @@ def build_harbor_command(
 
     if agent == _CODEX_AGENT:
         agent_kwargs.append(f"version={CODEX_VERSION}")
+    elif agent == _QODERCLI_AGENT:
+        harbor_agent = QODERCLI_IMPORT_PATH
+        agent_kwargs.append(f"version={QODERCLI_VERSION}")
     elif agent == _CLAUDE_CODE_AGENT:
         agent_kwargs.extend(
             [
@@ -884,7 +919,8 @@ def build_harbor_command(
             agent_kwargs.append(f"embedding_endpoint={embedding_endpoint}")
         if zvec_grep_package_sha256 is not None:
             agent_kwargs.append(f"zvec_grep_package_sha256={zvec_grep_package_sha256}")
-        agent_kwargs.append(f"mcp_target={agent}")
+        mcp_target = "qoder" if agent == _QODERCLI_AGENT else agent
+        agent_kwargs.append(f"mcp_target={mcp_target}")
 
     source_args = (
         ["--dataset", suite.dataset]

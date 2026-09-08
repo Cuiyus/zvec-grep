@@ -745,6 +745,73 @@ class RunValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported agent 'qwen-coder'"):
             runner.resolve_agent_model("qwen-coder", "qwen3.7-max")
 
+    def test_qoder_native_model_and_treatment_commands_do_not_include_token(self) -> None:
+        suite = runner.load_suite(self.suite_name, tier="smoke")
+        for profile in runner.PROFILES:
+            with self.subTest(profile=profile), patch.dict(
+                runner.os.environ,
+                {"QODER_PERSONAL_ACCESS_TOKEN": "qoder-test-secret"},
+                clear=True,
+            ):
+                command = runner.build_harbor_command(
+                    suite,
+                    profile=profile,
+                    agent="qodercli",
+                    model="qwen3.8-max",
+                    embedding_model="local/potion-code-16m-v2",
+                    job_name=f"qoder-{profile}",
+                )
+                self.assertEqual(command[command.index("--model") + 1], "qwen3.8-max")
+                self.assertIn("version=1.1.45", command)
+                self.assertNotIn("qoder-test-secret", " ".join(command))
+                self.assertNotIn("--agent-env", command)
+                expected_agent = (
+                    runner.ZVEC_QODERCLI_IMPORT_PATH
+                    if profile == "zvec-grep" else runner.QODERCLI_IMPORT_PATH
+                )
+                self.assertEqual(command[command.index("--agent") + 1], expected_agent)
+                if profile == "zvec-grep":
+                    self.assertIn("mcp_target=qoder", command)
+
+    def test_qoder_requires_own_pat_and_keeps_it_out_of_opencode_environment(self) -> None:
+        with patch.dict(runner.os.environ, {"GLM_API_KEY": "glm-secret"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "QODER_PERSONAL_ACCESS_TOKEN"):
+                runner.validate_profile_credentials(
+                    ("baseline",), agent="qodercli", model="qwen3.8-max"
+                )
+        with patch.dict(
+            runner.os.environ,
+            {"QODER_PERSONAL_ACCESS_TOKEN": " qoder-secret ", "GLM_API_KEY": "glm-secret"},
+            clear=True,
+        ):
+            runner.validate_profile_credentials(
+                runner.PROFILES, agent="qodercli", model="qwen3.8-max",
+                embedding_model="local/potion-code-16m-v2",
+            )
+            qoder_env = runner.execution_environment(agent="qodercli", model="qwen3.8-max")
+            opencode_env = runner.execution_environment(
+                agent="opencode", model="custom-openai/qwen3.8-max"
+            )
+        self.assertEqual(qoder_env["QODER_PERSONAL_ACCESS_TOKEN"], "qoder-secret")
+        self.assertNotIn("GLM_API_KEY", qoder_env)
+        self.assertNotIn("OPENAI_API_KEY", qoder_env)
+        self.assertNotIn("QODER_PERSONAL_ACCESS_TOKEN", opencode_env)
+
+    def test_qoder_setup_cache_is_separate_and_excludes_auth_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            runner, "SETUP_CACHE_DIR", Path(temp_dir)
+        ), patch.object(runner, "_ensure_external_docker_volume"):
+            prepared = runner.prepare_setup_cache("qodercli", "baseline")
+            overlay = json.loads(prepared.compose_path.read_text())
+        self.assertEqual(
+            [volume["target"] for volume in overlay["services"]["main"]["volumes"]],
+            ["/root/.nvm"],
+        )
+        self.assertNotEqual(
+            runner.setup_cache_volume_name("qodercli", "baseline"),
+            runner.setup_cache_volume_name("opencode", "baseline"),
+        )
+
     def test_opencode_qwen_uses_dashscope_provider(self) -> None:
         suite = runner.load_suite(self.suite_name, tier="smoke")
 

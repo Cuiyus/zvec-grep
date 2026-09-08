@@ -228,18 +228,39 @@ def _profile_result(
     context = result.get("agent_result")
     if not isinstance(context, dict):
         raise SweQaError(f"{profile} trial is missing agent result")
+    agent_info = result.get("agent_info")
+    agent_name: str | None = None
+    model_name: str | None = None
+    if isinstance(agent_info, dict):
+        if isinstance(agent_info.get("name"), str):
+            agent_name = agent_info["name"]
+        raw_model = agent_info.get("model_info")
+        if isinstance(raw_model, dict) and isinstance(raw_model.get("name"), str):
+            model_name = raw_model["name"]
+    metadata = context.get("metadata")
+    tokens_unavailable = (
+        agent_name == "qodercli"
+        and isinstance(metadata, dict)
+        and metadata.get("token_usage_available") is False
+    )
     input_tokens = _number(
         context.get("n_input_tokens"),
         label=f"{profile} input_tokens",
         integer=True,
-        positive=True,
+        positive=not tokens_unavailable,
+        allow_none=tokens_unavailable,
     )
     output_tokens = _number(
         context.get("n_output_tokens"),
         label=f"{profile} output_tokens",
         integer=True,
-        positive=True,
+        positive=not tokens_unavailable,
+        allow_none=tokens_unavailable,
     )
+    if tokens_unavailable:
+        if input_tokens not in (None, 0) or output_tokens not in (None, 0):
+            raise SweQaError(f"{profile} unavailable token usage has numeric evidence")
+        input_tokens = output_tokens = None
     cost_usd = _number(
         context.get("cost_usd"),
         label=f"{profile} cost_usd",
@@ -266,20 +287,15 @@ def _profile_result(
         trial_dir / "agent" / "trajectory.json", label="agent trajectory"
     )
     trajectory_values = _trajectory_metrics(trajectory)
-    model_info = result.get("agent_info")
-    model_name: str | None = None
-    if isinstance(model_info, dict):
-        raw_model = model_info.get("model_info")
-        if isinstance(raw_model, dict) and isinstance(raw_model.get("name"), str):
-            model_name = raw_model["name"]
-
     return {
         "trial_index": trial_index,
         "profile": profile,
         "job_name": job_dir.name,
         "trial_name": str(result.get("trial_name") or trial_dir.name),
+        "agent": agent_name,
         "model": model_name,
         "answer": trajectory_values["answer"],
+        "token_usage_available": not tokens_unavailable,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "tool_calls": trajectory_values["tool_calls"],

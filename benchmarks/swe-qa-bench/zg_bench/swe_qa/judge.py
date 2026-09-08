@@ -30,14 +30,45 @@ JUDGE_CONCURRENCY_ENV = "SWE_QA_JUDGE_CONCURRENCY"
 Completion = Callable[..., Any]
 
 
-def _agent_model_name(value: Any, *, prefix: str) -> str | None:
+def _agent_name(value: Any, *, prefix: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SweQaError(f"{prefix}: agent must be a non-empty string")
+    return value.strip()
+
+
+def _resolve_agent(
+    trials: Sequence[dict[str, Any]],
+    *,
+    declared: Any = None,
+    prefix: str,
+) -> str | None:
+    declared = _agent_name(declared, prefix=prefix)
+    observed = [_agent_name(trial.get("agent"), prefix=prefix) for trial in trials]
+    agents = {agent for agent in observed if agent is not None}
+    if declared is not None:
+        agents.add(declared)
+    if len(agents) > 1:
+        raise SweQaError(f"{prefix}: agent mismatch: {sorted(agents)}")
+    if declared is not None:
+        return declared
+    # Legacy artifacts did not record the agent; do not invent that evidence.
+    return next(iter(agents)) if agents and all(observed) else None
+
+
+def _agent_model_name(
+    value: Any, *, prefix: str, agent: str | None = None
+) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise SweQaError(f"{prefix}: agent model must be a non-empty string")
     name = value.strip()
     # Harbor may record these OpenCode models with or without their provider.
-    if name in ("glm-5.2", "qwen3.8-max"):
+    # Retain normalization for historical OpenCode reports with no agent field.
+    # Qoder's native catalog IDs must not be relabeled as an OpenCode provider.
+    if agent in (None, "opencode") and name in ("glm-5.2", "qwen3.8-max"):
         return f"custom-openai/{name}"
     return name
 
@@ -46,11 +77,13 @@ def _resolve_agent_model(
     trials: Sequence[dict[str, Any]],
     *,
     declared: Any = None,
+    agent: str | None = None,
     prefix: str,
 ) -> str | None:
-    declared = _agent_model_name(declared, prefix=prefix)
+    declared = _agent_model_name(declared, prefix=prefix, agent=agent)
     observed = [
-        _agent_model_name(trial.get("model"), prefix=prefix) for trial in trials
+        _agent_model_name(trial.get("model"), prefix=prefix, agent=agent)
+        for trial in trials
     ]
     models = {model for model in observed if model is not None}
     if declared is not None:
@@ -151,6 +184,15 @@ def _pair_paths(root: Path) -> list[Path]:
     )
 
 
+def _tokens_unavailable(trial: dict[str, Any], *, prefix: str) -> bool:
+    available = trial.get("token_usage_available", True)
+    if not isinstance(available, bool):
+        raise SweQaError(f"{prefix}: invalid token_usage_available")
+    if available is False and trial.get("agent") != "qodercli":
+        raise SweQaError(f"{prefix}: unavailable token usage requires Qoder evidence")
+    return not available
+
+
 def _validate_trial(
     trial: Any, *, task: str, profile: str, default_index: int
 ) -> dict[str, Any]:
@@ -159,8 +201,13 @@ def _validate_trial(
     answer = trial.get("answer")
     if not isinstance(answer, str) or not answer.strip():
         raise SweQaError(f"{task} {profile} trial {default_index} has an empty answer")
+    unavailable = _tokens_unavailable(trial, prefix=f"{task} {profile}")
     for key in ("input_tokens", "output_tokens", "tool_calls"):
         value = trial.get(key)
+        if unavailable and key != "tool_calls":
+            if value is not None:
+                raise SweQaError(f"{task} {profile}: unavailable {key} must be null")
+            continue
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise SweQaError(
                 f"{task} {profile} trial {default_index} has invalid {key}"
@@ -472,7 +519,9 @@ def _judge_task_trials(
             {
                 "trial_index": trial["trial_index"],
                 "trial_name": trial.get("trial_name"),
+                "agent": trial.get("agent"),
                 "model": trial.get("model"),
+                "token_usage_available": trial.get("token_usage_available", True),
                 "judge": judge_result,
                 "metrics": {
                     "input_tokens": trial["input_tokens"],
@@ -564,8 +613,8 @@ def _summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
     metric_rows = [trial["metrics"] for trial in trials]
     metrics = {
-        "input_tokens": sum(row["input_tokens"] for row in metric_rows) / count,
-        "output_tokens": sum(row["output_tokens"] for row in metric_rows) / count,
+        "input_tokens": _mean_or_none([row["input_tokens"] for row in metric_rows]),
+        "output_tokens": _mean_or_none([row["output_tokens"] for row in metric_rows]),
         "tool_calls": sum(row["tool_calls"] for row in metric_rows) / count,
         "agent_wall_seconds": sum(
             row["agent_wall_seconds"] for row in metric_rows
@@ -653,7 +702,9 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         profile_rows = [case["profiles"][profile] for case in cases]
         profiles[profile] = {
             "judge": sum(row["judge"]["total"] for row in profile_rows) / count,
-            "input_tokens": sum(row["metrics"]["input_tokens"] for row in profile_rows),
+            "input_tokens": _sum_or_none(
+                [row["metrics"]["input_tokens"] for row in profile_rows]
+            ),
             "tool_calls": sum(row["metrics"]["tool_calls"] for row in profile_rows),
             "agent_wall_seconds": sum(
                 row["metrics"]["agent_wall_seconds"] for row in profile_rows
@@ -669,7 +720,14 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         value, sample_count = _mean_available(
             [task_comparison[key] for task_comparison in task_comparisons]
         )
-        comparison[key] = value
+        # A token comparison requires complete token evidence. Native Qoder
+        # counts may be hidden; do not present a subset as overall savings.
+        comparison[key] = (
+            None if key == "input_token_reduction_pct" and any(
+                profile["input_tokens"] is None for profile in profiles.values()
+            )
+            else value
+        )
         comparison_samples[key] = sample_count
     return {
         "profiles": profiles,
@@ -710,6 +768,7 @@ def _metric_cell(
 
 
 def _render_report(report: dict[str, Any]) -> str:
+    agent_label = report.get("agent") or "unknown (not recorded)"
     agent_model = report.get("agent_model")
     model_label = agent_model or "unknown (not recorded)"
     judge = report["judge"]
@@ -717,7 +776,9 @@ def _render_report(report: dict[str, Any]) -> str:
         "GLM-5.2 self-judge" if judge.get("self_judge") is True else "GLM-5.2 judge"
     )
     lines = [
-        f"# SWE-QA-Bench CI report — {model_label}",
+        f"# SWE-QA-Bench CI report — {agent_label} + {model_label}",
+        "",
+        f"Agent: **{agent_label}**.",
         "",
         f"Agent model: **{model_label}**.",
         "",
@@ -731,9 +792,19 @@ def _render_report(report: dict[str, Any]) -> str:
         "",
         "In the Aggregate row, baseline and zvec-grep efficiency values are sums of the per-task profile means (Judge is the equal-weight task mean), while the third value is the equal-weight arithmetic mean of task changes, not a ratio of totals. A task whose baseline denominator is zero has an N/A percentage change and is excluded only from that Aggregate metric.",
         "",
+    ]
+    if any(
+        case["profiles"][name]["metrics"]["input_tokens"] is None
+        for case in report["cases"] for name in PROFILE_NAMES
+    ):
+        lines.extend([
+            "Qoder did not expose all token counts. Missing counts and token comparisons are **N/A**; Aggregate token comparisons require complete token evidence for every trial and task. Answer quality, tool calls, and time are still reported.",
+            "",
+        ])
+    lines.extend([
         "| Case | Judge | input_token | toolcall | time (s) |",
         "|---|---:|---:|---:|---:|",
-    ]
+    ])
     for case in report["cases"]:
         baseline = case["profiles"]["baseline"]
         zvec = case["profiles"]["zvec-grep"]
@@ -896,11 +967,17 @@ def _validate_report_judge(value: Any, *, prefix: str) -> None:
             raise SweQaError(f"{prefix}: invalid judge scores")
 
 
-def _validate_report_metrics(value: Any, *, prefix: str) -> None:
+def _validate_report_metrics(
+    value: Any, *, prefix: str, tokens_unavailable: bool = False
+) -> None:
     if not isinstance(value, dict):
         raise SweQaError(f"{prefix}: invalid metrics")
     for key in ("input_tokens", "output_tokens", "tool_calls"):
         metric = value.get(key)
+        if tokens_unavailable and key != "tool_calls":
+            if metric is not None:
+                raise SweQaError(f"{prefix}: unavailable {key} must be null")
+            continue
         if not _valid_number(metric) or float(metric) < 0:
             raise SweQaError(f"{prefix}: invalid {key}")
     wall = value.get("agent_wall_seconds")
@@ -933,7 +1010,10 @@ def _report_profile_trial_count(profile: dict[str, Any], *, prefix: str) -> int:
         indexes.append(trial_index)
         trial_prefix = f"{prefix} trial {trial_index}"
         _validate_report_judge(trial.get("judge"), prefix=trial_prefix)
-        _validate_report_metrics(trial.get("metrics"), prefix=trial_prefix)
+        _validate_report_metrics(
+            trial.get("metrics"), prefix=trial_prefix,
+            tokens_unavailable=_tokens_unavailable(trial, prefix=trial_prefix),
+        )
     if sorted(indexes) != list(range(1, len(raw_trials) + 1)):
         raise SweQaError(f"{prefix}: trial_index values are not contiguous")
     declared = profile.get("trial_count", len(raw_trials))
@@ -1019,9 +1099,15 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
             raise SweQaError(f"{prefix}: case has no {profile_name} profile")
         profile_prefix = f"{prefix} {profile_name}"
         _validate_report_judge(profile.get("judge"), prefix=profile_prefix)
-        _validate_report_metrics(profile.get("metrics"), prefix=profile_prefix)
         trial_count = _report_profile_trial_count(
             profile, prefix=profile_prefix
+        )
+        _validate_report_metrics(
+            profile.get("metrics"), prefix=profile_prefix,
+            tokens_unavailable=any(
+                _tokens_unavailable(trial, prefix=profile_prefix)
+                for trial in profile.get("trials", [])
+            ),
         )
         trial_counts.append(trial_count)
         judgement_count += trial_count
@@ -1032,20 +1118,34 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
     if declared_case_count != trial_counts[0]:
         raise SweQaError(f"{prefix}: case trial_count does not match evidence")
 
+    trials = [
+        trial
+        for name in PROFILE_NAMES
+        for trial in profiles[name].get("trials", [profiles[name]])
+    ]
+    declared_agents = {
+        agent
+        for value in (report.get("agent"), case.get("agent"))
+        if (agent := _agent_name(value, prefix=prefix)) is not None
+    }
+    if len(declared_agents) > 1:
+        raise SweQaError(f"{prefix}: agent mismatch: {sorted(declared_agents)}")
+    agent = _resolve_agent(
+        trials,
+        declared=next(iter(declared_agents), None),
+        prefix=prefix,
+    )
     declared_models = {
         model
         for value in (report.get("agent_model"), case.get("agent_model"))
-        if (model := _agent_model_name(value, prefix=prefix)) is not None
+        if (model := _agent_model_name(value, prefix=prefix, agent=agent)) is not None
     }
     if len(declared_models) > 1:
         raise SweQaError(f"{prefix}: agent model mismatch: {sorted(declared_models)}")
     agent_model = _resolve_agent_model(
-        [
-            trial
-            for name in PROFILE_NAMES
-            for trial in profiles[name].get("trials", [profiles[name]])
-        ],
+        trials,
         declared=next(iter(declared_models), None),
+        agent=agent,
         prefix=prefix,
     )
     if agent_model is not None:
@@ -1061,6 +1161,8 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
             for key, value in identity.items()
         ):
             raise SweQaError(f"{prefix}: judge metadata does not match agent model")
+    report["agent"] = agent
+    case["agent"] = agent
     report["agent_model"] = agent_model
     case["agent_model"] = agent_model
 
@@ -1113,6 +1215,12 @@ def aggregate_reports(
     for path in _report_paths(reports_root, output_dir):
         source = _load_object(path, label="per-task report")
         case = _validate_task_report(source, path)
+        if source_reports and source["agent"] != source_reports[0]["agent"]:
+            raise SweQaError(
+                "per-task reports use different agents "
+                f"({source_reports[0]['agent']!r} and {source['agent']!r}); "
+                "aggregate each agent and model separately"
+            )
         if (
             source_reports
             and source["agent_model"] != source_reports[0]["agent_model"]
@@ -1120,7 +1228,7 @@ def aggregate_reports(
             raise SweQaError(
                 "per-task reports use different agent models "
                 f"({source_reports[0]['agent_model']!r} and {source['agent_model']!r}); "
-                "aggregate each model separately"
+                "aggregate each agent and model separately"
             )
         task_id = case["task_id"]
         if task_id in task_sources:
@@ -1162,6 +1270,7 @@ def aggregate_reports(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "agent": source_reports[0]["agent"],
         "agent_model": source_reports[0]["agent_model"],
         "judge": _combined_judge(source_reports),
         "gate": {
@@ -1195,24 +1304,28 @@ def judge_pairs(
     references_path: Path,
     output_dir: Path,
     expected: Sequence[str],
+    agent: str | None = None,
     agent_model: str | None = None,
     completion_fn: Completion | None = None,
     attempts: int = 3,
     concurrency: int | None = None,
 ) -> dict[str, Any]:
-    """Apply the fixed GLM-5.2 judge and emit reports for one agent model."""
+    """Apply the fixed GLM-5.2 judge for one agent and model combination."""
     if attempts < 1 or attempts > 5:
         raise SweQaError("judge attempts must be between 1 and 5")
     concurrency = _judge_concurrency(concurrency)
     pairs = _load_pairs(pairs_root, expected)
+    trials = [
+        trial
+        for pair in pairs.values()
+        for name in PROFILE_NAMES
+        for trial in pair["profiles"][name]["trials"]
+    ]
+    agent = _resolve_agent(trials, declared=agent, prefix="judge pairs")
     agent_model = _resolve_agent_model(
-        [
-            trial
-            for pair in pairs.values()
-            for name in PROFILE_NAMES
-            for trial in pair["profiles"][name]["trials"]
-        ],
+        trials,
         declared=agent_model,
+        agent=agent,
         prefix="judge pairs",
     )
     judge_identity = _judge_identity(agent_model)
@@ -1269,6 +1382,7 @@ def judge_pairs(
             profile_results[profile_name] = _summarize_profile(trial_results)
         case = {
             "task_id": str(reference["task_id"]),
+            "agent": agent,
             "agent_model": agent_model,
             "role": reference.get("role"),
             "category": reference.get("category"),
@@ -1284,6 +1398,7 @@ def judge_pairs(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "agent": agent,
         "agent_model": agent_model,
         "judge": {
             **judge_identity,

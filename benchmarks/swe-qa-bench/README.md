@@ -87,29 +87,65 @@ runs use that scope until it is changed again. The workflow stays on dev
 branches and uses pushes, so testing does not depend on a manual-run entry
 on the default branch.
 
-CI runs two OpenCode `1.18.4` model groups:
+CI runs three agent/model groups:
 
-| Group | Agent model | Profiles |
-| --- | --- | --- |
-| GLM-5.2 | `custom-openai/glm-5.2` | Baseline and zvec-grep |
-| Qwen3.8-Max | `custom-openai/qwen3.8-max` | Baseline and zvec-grep |
+| Group | Agent version | Agent model | Profiles |
+| --- | --- | --- | --- |
+| `opencode-glm-5.2` | OpenCode `1.18.4` | `custom-openai/glm-5.2` | Baseline and zvec-grep |
+| `opencode-qwen3.8-max` | OpenCode `1.18.4` | `custom-openai/qwen3.8-max` | Baseline and zvec-grep |
+| `qodercli-qwen3.8-max` | Qoder CLI `1.1.45` | `qwen3.8-max` | Baseline and zvec-grep |
 
-Both groups use the same locked tasks, local `local/potion-code-16m-v2`
-embedding model, and three trials per task and profile. They share the
-existing `GLM_API_KEY` Actions secret and custom OpenAI-compatible endpoint
-configured in `zg_bench/settings.py`; no additional secret is needed.
-`env.SWE_QA_MODELS` selects the model groups and defaults to both. A smoke
-run contains 60 agent trials across the two groups (240 for `all-full`),
-with at most five task/model pairs running concurrently.
+All groups use the same locked tasks, local `local/potion-code-16m-v2`
+embedding model, and three trials per task and profile. The two OpenCode
+groups share the existing `GLM_API_KEY` Actions secret and custom
+OpenAI-compatible endpoint in `zg_bench/settings.py`. Qoder uses its account's
+native Qwen3.8-Max catalog route and a separate Qoder Access Token. Differences
+between Qoder and OpenCode results therefore include the provider route as
+well as the agent. Qoder native-account output can withhold token usage: when the CLI
+reports masked or missing counts, reports show token metrics and their
+comparisons as `N/A`; answer quality, tool calls, and wall time remain available.
+No token savings are inferred from masked zero values.
 
-Each task/model pair runs Baseline and zvec-grep on the same runner. Both
-groups use the same GLM-5.2 judge and rubric. Reports identify the tested
-agent model; only GLM-5.2 candidates are labeled as self-judged. Harbor
+`env.SWE_QA_GROUPS` selects the groups and defaults to all three. A smoke run
+contains 90 agent trials across the three groups (360 for `all-full`), with
+at most five task/group pairs running concurrently.
+
+Each task/group pair runs Baseline and zvec-grep on the same runner. All
+groups use the same GLM-5.2 judge and rubric. Reports identify both the agent
+and its model; only GLM-5.2 candidates are labeled as self-judged. Harbor
 evidence, index caches, task reports, and aggregate artifacts are separated
-by model, and reports from different models cannot be aggregated together.
-A complete group produces its own aggregate report even if the other group
-fails. Report summaries appear in the Actions Job Summary. The Claude Code
-configuration above describes the published local protocol.
+by agent/model group. Reports from different agents or models cannot be
+aggregated together. A complete group produces its own aggregate report even
+if another group fails. Report summaries appear in the Actions Job Summary.
+The Claude Code configuration above describes the published local protocol.
+
+### Qoder authentication in GitHub Actions
+
+[Qoder's headless authentication](https://docs.qoder.com/cli/authentication)
+uses `QODER_PERSONAL_ACCESS_TOKEN`. Your interactive email/browser login is a
+local session; GitHub-hosted runners need their own noninteractive credential.
+
+1. Sign into [Qoder account integrations](https://qoder.com/account/integrations)
+   and create an Access Token for the account with Qwen3.8-Max access.
+2. In this fork's **Settings → Secrets and variables → Actions**, add the
+   repository secret `QODER_PERSONAL_ACCESS_TOKEN` with that token.
+3. Push to `dev/benchmark-ci` to run all three groups. Missing Qoder credentials
+   fail the Qoder jobs with a specific setup message; the OpenCode groups remain
+   independent. The `GLM_API_KEY` secret is also required for the common judge.
+
+The adapter passes the token through a temporary file inside each disposable
+task container. It does not put the token in Harbor command arguments, copied
+login settings, or the shared installation cache. Artifact checks reject either
+credential if it appears in saved evidence. Qoder config and MCP settings are
+isolated from cached installation files. Local benchmark commands likewise
+require an exported `QODER_PERSONAL_ACCESS_TOKEN`:
+
+```sh
+zg-bench run swe-qa-bench --tier smoke \
+  --agent qodercli --model qwen3.8-max --profile all \
+  --n-attempts 3 --embedding-model local/potion-code-16m-v2 \
+  --zvec-grep-package ../..
+```
 
 ## Local setup
 

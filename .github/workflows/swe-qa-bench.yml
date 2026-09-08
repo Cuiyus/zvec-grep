@@ -13,7 +13,7 @@ permissions: {}
 env:
   # Set to all-full to run all 20 tasks on the next dev branch push.
   SWE_QA_SCOPE: smoke
-  SWE_QA_MODELS: '["glm-5.2","qwen3.8-max"]'
+  SWE_QA_GROUPS: '["opencode-glm-5.2","opencode-qwen3.8-max","qodercli-qwen3.8-max"]'
   SWE_QA_TRIALS_PER_PROFILE: "3"
 
 concurrency:
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       task-matrix: ${{ steps.task-matrix.outputs.tasks }}
-      model-matrix: ${{ steps.task-matrix.outputs.models }}
+      group-matrix: ${{ steps.task-matrix.outputs.groups }}
       task-count: ${{ steps.task-matrix.outputs.count }}
       task_ids_json: ${{ steps.task-matrix.outputs.task_ids_json }}
     permissions:
@@ -53,7 +53,7 @@ jobs:
         id: task-matrix
         env:
           SCOPE: ${{ env.SWE_QA_SCOPE }}
-          MODELS_JSON: ${{ env.SWE_QA_MODELS }}
+          GROUPS_JSON: ${{ env.SWE_QA_GROUPS }}
         run: |
           python - <<'PY'
           import json
@@ -67,15 +67,20 @@ jobs:
           )
           tasks = selection["tasks"]
           tasks_by_id = {task["task_id"]: task for task in tasks}
-          models = json.loads(os.environ["MODELS_JSON"])
-          supported_models = {"glm-5.2", "qwen3.8-max"}
+          group_ids = json.loads(os.environ["GROUPS_JSON"])
+          supported_groups = {
+              "opencode-glm-5.2": {"agent": "opencode", "model": "custom-openai/glm-5.2"},
+              "opencode-qwen3.8-max": {"agent": "opencode", "model": "custom-openai/qwen3.8-max"},
+              "qodercli-qwen3.8-max": {"agent": "qodercli", "model": "qwen3.8-max"},
+          }
           if (
-              not isinstance(models, list)
-              or not models
-              or any(not isinstance(model, str) or model not in supported_models for model in models)
-              or len(models) != len(set(models))
+              not isinstance(group_ids, list)
+              or not group_ids
+              or any(not isinstance(group, str) or group not in supported_groups for group in group_ids)
+              or len(group_ids) != len(set(group_ids))
           ):
-              raise SystemExit("SWE_QA_MODELS must select unique supported model IDs")
+              raise SystemExit("SWE_QA_GROUPS must select unique supported agent/model groups")
+          groups = [{"id": group, **supported_groups[group]} for group in group_ids]
           scope = os.environ["SCOPE"]
           if scope in {"smoke", "auto"}:
               task_ids = selection["gate"]["auto_tasks"]
@@ -97,7 +102,7 @@ jobs:
           slugs = [task["task_slug"] for task in selected]
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"tasks={json.dumps(slugs, separators=(',', ':'))}\n")
-              output.write(f"models={json.dumps(models, separators=(',', ':'))}\n")
+              output.write(f"groups={json.dumps(groups, separators=(',', ':'))}\n")
               output.write(f"count={len(slugs)}\n")
               output.write(
                   f"task_ids_json={json.dumps(task_ids, separators=(',', ':'))}\n"
@@ -107,28 +112,29 @@ jobs:
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m unittest discover
           -s benchmarks/swe-qa-bench/tests -v
-      - name: Verify both models' Harbor commands without credentials
+      - name: Verify every group's Harbor commands without credentials
+        env:
+          GROUPS_JSON: ${{ steps.task-matrix.outputs.groups }}
         run: |
-          set -euo pipefail
-          mapfile -t models < <(
-            python -c 'import json, os; print(*json.loads(os.environ["SWE_QA_MODELS"]), sep="\n")'
-          )
-          for model_id in "${models[@]}"; do
-            uv run --project benchmarks/swe-qa-bench zg-bench run \
-              swe-qa-bench \
-              --tier smoke \
-              --agent opencode \
-              --model "custom-openai/$model_id" \
-              --profile all \
-              --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
-              --embedding-model local/potion-code-16m-v2 \
-              --zvec-grep-package "$GITHUB_WORKSPACE" \
-              --job-name "preflight-$model_id" \
-              --dry-run
-          done
+          python - <<'PYTHON'
+          import json
+          import os
+          import subprocess
+
+          for group in json.loads(os.environ["GROUPS_JSON"]):
+              subprocess.run([
+                  "uv", "run", "--project", "benchmarks/swe-qa-bench", "zg-bench", "run",
+                  "swe-qa-bench", "--tier", "smoke",
+                  "--agent", group["agent"], "--model", group["model"],
+                  "--profile", "all", "--n-attempts", os.environ["SWE_QA_TRIALS_PER_PROFILE"],
+                  "--embedding-model", "local/potion-code-16m-v2",
+                  "--zvec-grep-package", os.environ["GITHUB_WORKSPACE"],
+                  "--job-name", f"preflight-{group['id']}", "--dry-run",
+              ], check=True)
+          PYTHON
 
   run-pair:
-    name: Pair + judge / ${{ matrix.model }} / ${{ matrix.task }}
+    name: Pair + judge / ${{ matrix.group.id }} / ${{ matrix.task }}
     needs: validate
     if: >-
       github.event_name != 'pull_request' ||
@@ -145,10 +151,26 @@ jobs:
       max-parallel: 5
       matrix:
         task: ${{ fromJSON(needs.validate.outputs.task-matrix) }}
-        model: ${{ fromJSON(needs.validate.outputs.model-matrix) }}
+        group: ${{ fromJSON(needs.validate.outputs.group-matrix) }}
     env:
-      MODEL_ID: ${{ matrix.model }}
+      GROUP_ID: ${{ matrix.group.id }}
+      AGENT: ${{ matrix.group.agent }}
+      AGENT_MODEL: ${{ matrix.group.model }}
     steps:
+      - name: Check required credentials
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ matrix.group.agent == 'qodercli' && secrets.QODER_PERSONAL_ACCESS_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GLM_API_KEY:-}" ]]; then
+            echo "GLM_API_KEY Actions secret is not configured" >&2
+            exit 2
+          fi
+          if [[ "$AGENT" == "qodercli" && -z "${QODER_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+            echo "QODER_PERSONAL_ACCESS_TOKEN Actions secret is not configured; create a Qoder Access Token at https://qoder.com/account/integrations. Email verification login cannot run in CI." >&2
+            exit 2
+          fi
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -164,7 +186,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/swe-qa-index-seed
-          key: swe-qa-zvec-index-seed-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.model }}-${{ matrix.task }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task)) }}-npm-${{ hashFiles('package-lock.json') }}-zvec-${{ hashFiles('src/**', 'package.json', 'tsconfig.json', 'eslint.config.js', 'README.md', 'README_CN.md', 'LICENSE', 'docs/**', '.opencode/opencode.json', 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/agents/zvec_grep.py', 'benchmarks/swe-qa-bench/zg_bench/runner.py', 'benchmarks/swe-qa-bench/zg_bench/settings.py') }}
+          key: swe-qa-zvec-index-seed-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.group.id }}-${{ matrix.task }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task)) }}-npm-${{ hashFiles('package-lock.json') }}-zvec-${{ hashFiles('src/**', 'package.json', 'tsconfig.json', 'eslint.config.js', 'README.md', 'README_CN.md', 'LICENSE', 'docs/**', '.opencode/opencode.json', 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/agents/zvec_grep.py', 'benchmarks/swe-qa-bench/zg_bench/runner.py', 'benchmarks/swe-qa-bench/zg_bench/settings.py') }}
       - name: Install locked dependencies
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
@@ -173,32 +195,29 @@ jobs:
       - name: Run baseline and zvec-grep on the same runner
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ matrix.group.agent == 'qodercli' && secrets.QODER_PERSONAL_ACCESS_TOKEN || '' }}
           TASK_NAME: ${{ matrix.task }}
           ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
         run: |
           set -euo pipefail
-          if [[ -z "${GLM_API_KEY:-}" ]]; then
-            echo "GLM_API_KEY Actions secret is not configured" >&2
-            exit 2
-          fi
-          runs_dir="$RUNNER_TEMP/swe-qa-runs/$MODEL_ID/$TASK_NAME"
+          runs_dir="$RUNNER_TEMP/swe-qa-runs/$GROUP_ID/$TASK_NAME"
           uv run --project benchmarks/swe-qa-bench zg-bench run \
             swe-qa-bench \
             --tier full \
             --task "$TASK_NAME" \
-            --agent opencode \
-            --model "custom-openai/$MODEL_ID" \
+            --agent "$AGENT" \
+            --model "$AGENT_MODEL" \
             --profile all \
             --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
             --embedding-model local/potion-code-16m-v2 \
             --zvec-grep-package "$GITHUB_WORKSPACE" \
             --jobs-dir "$runs_dir" \
-            --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${MODEL_ID}-${TASK_NAME}"
+            --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GROUP_ID}-${TASK_NAME}"
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa collect \
             --runs-dir "$runs_dir" \
             --task "$TASK_NAME" \
             --expected-trials "$SWE_QA_TRIALS_PER_PROFILE" \
-            --output "$RUNNER_TEMP/pair-${MODEL_ID}-${TASK_NAME}.json"
+            --output "$RUNNER_TEMP/pair-${GROUP_ID}-${TASK_NAME}.json"
       - name: Judge this pair and write its independent report
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -206,16 +225,18 @@ jobs:
         run: |
           set -euo pipefail
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa judge \
-            --pairs-root "$RUNNER_TEMP/pair-${MODEL_ID}-${TASK_NAME}.json" \
+            --pairs-root "$RUNNER_TEMP/pair-${GROUP_ID}-${TASK_NAME}.json" \
             --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json \
-            --output-dir "$RUNNER_TEMP/swe-qa-task-report/${MODEL_ID}/${TASK_NAME}" \
+            --output-dir "$RUNNER_TEMP/swe-qa-task-report/${GROUP_ID}/${TASK_NAME}" \
             --expected "$TASK_NAME" \
-            --agent-model "custom-openai/$MODEL_ID"
+            --agent "$AGENT" \
+            --agent-model "$AGENT_MODEL"
       - name: Reject secret leakage in artifacts
         id: secret-scan
         if: always()
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ matrix.group.agent == 'qodercli' && secrets.QODER_PERSONAL_ACCESS_TOKEN || '' }}
           TASK_NAME: ${{ matrix.task }}
           ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
         run: |
@@ -234,36 +255,40 @@ jobs:
                       tail = window[-overlap:] if overlap else b""
               return False
 
-          secret = os.environ.get("GLM_API_KEY", "").encode()
+          secrets = [
+              os.environ.get(name, "").encode()
+              for name in ("GLM_API_KEY", "QODER_PERSONAL_ACCESS_TOKEN")
+              if os.environ.get(name, "")
+          ]
           roots = [
-              Path(os.environ["RUNNER_TEMP"]) / "swe-qa-runs" / os.environ["MODEL_ID"] / os.environ["TASK_NAME"],
-              Path(os.environ["RUNNER_TEMP"]) / f"pair-{os.environ['MODEL_ID']}-{os.environ['TASK_NAME']}.json",
-              Path(os.environ["RUNNER_TEMP"]) / "swe-qa-task-report" / os.environ["MODEL_ID"] / os.environ["TASK_NAME"],
+              Path(os.environ["RUNNER_TEMP"]) / "swe-qa-runs" / os.environ["GROUP_ID"] / os.environ["TASK_NAME"],
+              Path(os.environ["RUNNER_TEMP"]) / f"pair-{os.environ['GROUP_ID']}-{os.environ['TASK_NAME']}.json",
+              Path(os.environ["RUNNER_TEMP"]) / "swe-qa-task-report" / os.environ["GROUP_ID"] / os.environ["TASK_NAME"],
               Path(os.environ["ZG_BENCH_INDEX_SEED_DIR"]),
           ]
-          if secret:
+          if secrets:
               for root in roots:
                   files = [root] if root.is_file() else root.rglob("*") if root.exists() else []
                   for path in files:
-                      if path.is_file() and contains_secret(path, secret):
+                      if path.is_file() and any(contains_secret(path, secret) for secret in secrets):
                           raise SystemExit(f"secret material detected in artifact: {path}")
           PY
       - name: Upload paired Harbor evidence
         if: always() && steps.secret-scan.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: swe-qa-pair-${{ matrix.model }}-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: swe-qa-pair-${{ matrix.group.id }}-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/pair-${{ matrix.model }}-${{ matrix.task }}.json
-            ${{ runner.temp }}/swe-qa-runs/${{ matrix.model }}/${{ matrix.task }}/
+            ${{ runner.temp }}/pair-${{ matrix.group.id }}-${{ matrix.task }}.json
+            ${{ runner.temp }}/swe-qa-runs/${{ matrix.group.id }}/${{ matrix.task }}/
           if-no-files-found: warn
           retention-days: 30
       - name: Upload independent task report
         if: always() && steps.secret-scan.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: swe-qa-task-report-${{ matrix.model }}-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/swe-qa-task-report/${{ matrix.model }}/${{ matrix.task }}/
+          name: swe-qa-task-report-${{ matrix.group.id }}-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/swe-qa-task-report/${{ matrix.group.id }}/${{ matrix.task }}/
           if-no-files-found: warn
           retention-days: 90
       - name: Save this task's populated zvec index seed
@@ -274,7 +299,7 @@ jobs:
           key: ${{ steps.zvec-index-seed-restore.outputs.cache-primary-key }}
 
   aggregate-report:
-    name: Aggregate / ${{ matrix.model }}
+    name: Aggregate / ${{ matrix.group.id }}
     needs: [validate, run-pair]
     if: >-
       always() && !cancelled() &&
@@ -287,9 +312,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ${{ fromJSON(needs.validate.outputs.model-matrix) }}
+        group: ${{ fromJSON(needs.validate.outputs.group-matrix) }}
     env:
-      MODEL_ID: ${{ matrix.model }}
+      GROUP_ID: ${{ matrix.group.id }}
+      AGENT: ${{ matrix.group.agent }}
+      AGENT_MODEL: ${{ matrix.group.model }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -304,7 +331,7 @@ jobs:
       - name: Download this attempt's independent task reports
         uses: actions/download-artifact@v8
         with:
-          pattern: swe-qa-task-report-${{ matrix.model }}-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: swe-qa-task-report-${{ matrix.group.id }}-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/task-reports
       - name: Detect report scope and show partial task reports
         id: report-set
@@ -328,9 +355,9 @@ jobs:
             if (( GITHUB_RUN_ATTEMPT > 1 )); then
               echo "complete=false" >> "$GITHUB_OUTPUT"
               {
-                echo "## SWE-QA Aggregate / $MODEL_ID"
+                echo "## SWE-QA Aggregate / $GROUP_ID"
                 echo
-                echo "Attempt ${GITHUB_RUN_ATTEMPT} produced no new task reports for this model. No Aggregate was generated, and reports from earlier attempts were not used."
+                echo "Attempt ${GITHUB_RUN_ATTEMPT} produced no new task reports for this agent/model group. No Aggregate was generated, and reports from earlier attempts were not used."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -353,7 +380,7 @@ jobs:
 
           echo "complete=false" >> "$GITHUB_OUTPUT"
           {
-            echo "## SWE-QA Aggregate / $MODEL_ID"
+            echo "## SWE-QA Aggregate / $GROUP_ID"
             echo
             echo "**Partial attempt:** attempt ${GITHUB_RUN_ATTEMPT} contains ${actual_count} of ${expected_count} task reports. The cross-task Aggregate was intentionally skipped to avoid mixing workflow attempts, and no partial Aggregate artifact was generated."
             echo
@@ -391,7 +418,7 @@ jobs:
         if: steps.report-set.outputs.complete == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: swe-qa-aggregate-report-${{ matrix.model }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: swe-qa-aggregate-report-${{ matrix.group.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/swe-qa-aggregate-report/
           if-no-files-found: warn
           retention-days: 90

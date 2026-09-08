@@ -78,7 +78,8 @@ def _successful_judge_response() -> dict[str, Any]:
 
 
 def _judged_task_report(
-    task_id: str, index: int = 0, *, agent_model: str | None = None
+    task_id: str, index: int = 0, *, agent_model: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     scale = index + 1
     baseline_score = 10 + index % 5
@@ -218,6 +219,12 @@ def _judged_task_report(
         "cases": [case],
         "aggregate": _aggregate([case]),
     }
+    if agent is not None:
+        report["agent"] = agent
+        case["agent"] = agent
+        for profile in case["profiles"].values():
+            for trial in profile["trials"]:
+                trial["agent"] = agent
     if agent_model is not None:
         report["agent_model"] = agent_model
         case["agent_model"] = agent_model
@@ -396,6 +403,59 @@ def _harbor_trial(
 
 
 class CollectTests(unittest.TestCase):
+    def test_missing_tokens_require_explicit_qoder_metadata(self) -> None:
+        cases = (
+            ("qodercli", False, None, True),
+            ("qodercli", False, 0, True),
+            ("qodercli", None, None, False),
+            ("qodercli", None, 0, False),
+            ("opencode", False, None, False),
+            ("opencode", False, 0, False),
+            ("qodercli", False, -1, False),
+            ("qodercli", False, 0.0, False),
+            ("qodercli", False, 1, False),
+        )
+        for agent, available, tokens, succeeds in cases:
+            with (
+                self.subTest(agent=agent, available=available, tokens=tokens),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                for profile in ("baseline", "zvec-grep"):
+                    _write_harbor_job(
+                        root, profile=profile,
+                        trials=[_harbor_trial(
+                            f"reflex-6-{profile}", answer="final answer",
+                            input_tokens=10, output_tokens=5, tool_calls=2,
+                            agent_wall_seconds=10, cost_usd=None,
+                        )],
+                    )
+                for result_path in root.glob("*/*/result.json"):
+                    result = json.loads(result_path.read_text())
+                    result["agent_info"] = {
+                        "name": agent, "model_info": {"name": "qwen3.8-max"}
+                    }
+                    context = result["agent_result"]
+                    context["n_input_tokens"] = context["n_output_tokens"] = tokens
+                    context["metadata"] = (
+                        {} if available is None else {"token_usage_available": available}
+                    )
+                    _write_json(result_path, result)
+                kwargs = dict(runs_dir=root, task="reflex:6", output=root / "pair.json")
+                if not succeeds:
+                    with self.assertRaisesRegex(SweQaError, "token"):
+                        collect_pair(**kwargs)
+                    continue
+                pair = collect_pair(**kwargs)
+                for profile in pair["profiles"].values():
+                    trial = profile["trials"][0]
+                    self.assertIsNone(trial["input_tokens"])
+                    self.assertIsNone(trial["output_tokens"])
+                    self.assertFalse(trial["token_usage_available"])
+                    self.assertEqual(trial["tool_calls"], 2)
+                    self.assertEqual(trial["agent_wall_seconds"], 10)
+                    self.assertEqual(trial["answer"], "final answer")
+
     def test_collects_three_sorted_trials_from_each_harbor_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -477,6 +537,7 @@ class CollectTests(unittest.TestCase):
                 [1, 2, 3],
             )
             self.assertEqual(baseline["trials"][1]["input_tokens"], 100)
+            self.assertEqual(baseline["trials"][1]["agent"], "opencode")
             self.assertEqual(baseline["trials"][1]["tool_calls"], 3)
             self.assertEqual(
                 baseline["trials"][1]["agent_wall_seconds"], 10.0
@@ -569,7 +630,8 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(_metric_cell(0, 1, None), "0.00 / 1.00 / N/A")
 
     def _write_pair_and_reference(
-        self, root: Path, *, agent_model: str | None = "custom-openai/glm-5.2"
+        self, root: Path, *, agent_model: str | None = "custom-openai/glm-5.2",
+        agent: str | None = None,
     ) -> tuple[Path, Path]:
         pairs_root = root / "pairs"
         baseline_metrics = [
@@ -590,6 +652,7 @@ class JudgeTests(unittest.TestCase):
                 {
                     "trial_index": index,
                     "trial_name": f"reflex-6-{profile}-{index}",
+                    "agent": agent,
                     "model": agent_model,
                     "answer": f"{profile} candidate {index}",
                     "input_tokens": input_tokens,
@@ -862,10 +925,147 @@ class JudgeTests(unittest.TestCase):
                     completion_fn=lambda **kwargs: _successful_judge_response(),
                 )
             self.assertIsNone(report["agent_model"])
+            self.assertIsNone(report["agent"])
             self.assertIsNone(report["judge"]["self_judge"])
             markdown = (root / "report" / "report.md").read_text()
             self.assertIn("unknown (not recorded)", markdown)
             self.assertNotIn("self-judge", markdown)
+
+    def test_qoder_cli_preserves_native_model_and_agent_through_aggregate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(
+                root, agent="qodercli", agent_model="qwen3.8-max"
+            )
+            with (
+                patch.dict("os.environ", {"GLM_API_KEY": "secret"}, clear=True),
+                patch("zg_bench.swe_qa.judge._default_completion") as completion,
+                patch("builtins.print") as printed,
+            ):
+                completion.return_value.return_value = _successful_judge_response()
+                exit_code = swe_qa_main(
+                    [
+                        "judge", "--pairs-root", str(pairs_root),
+                        "--references", str(references),
+                        "--output-dir", str(root / "report"),
+                        "--expected", "reflex-6",
+                        "--agent", "qodercli", "--agent-model", "qwen3.8-max",
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(printed.call_args.args[0])["agent"], "qodercli")
+            self.assertEqual(completion.return_value.call_count, 6)
+            self.assertTrue(all(
+                call.kwargs["model"] == "openai/glm-5.2"
+                for call in completion.return_value.call_args_list
+            ))
+            report = aggregate_reports(
+                reports_root=root / "report", output_dir=root / "combined"
+            )
+            self.assertEqual(report["agent"], "qodercli")
+            self.assertEqual(report["agent_model"], "qwen3.8-max")
+            self.assertFalse(report["judge"]["self_judge"])
+            case = report["cases"][0]
+            self.assertEqual(case["agent"], "qodercli")
+            for profile in case["profiles"].values():
+                for trial in profile["trials"]:
+                    self.assertEqual(trial["agent"], "qodercli")
+                    self.assertEqual(trial["model"], "qwen3.8-max")
+            title = (root / "combined" / "report.md").read_text().splitlines()[0]
+            self.assertIn("qodercli + qwen3.8-max", title)
+            self.assertNotIn("custom-openai", title)
+
+    def test_agent_mismatch_fails_before_model_call(self) -> None:
+        for declared, mixed_trial in (("opencode", False), (None, True)):
+            with (
+                self.subTest(declared=declared, mixed_trial=mixed_trial),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                pairs_root, references = self._write_pair_and_reference(
+                    root, agent="qodercli", agent_model="qwen3.8-max"
+                )
+                if mixed_trial:
+                    pair_path = pairs_root / "pair-reflex-6.json"
+                    pair = json.loads(pair_path.read_text())
+                    pair["profiles"]["zvec-grep"]["trials"][0]["agent"] = "opencode"
+                    _write_json(pair_path, pair)
+                with patch("zg_bench.swe_qa.judge._default_completion") as completion:
+                    with self.assertRaisesRegex(SweQaError, "agent mismatch"):
+                        judge_pairs(
+                            pairs_root=pairs_root, references_path=references,
+                            output_dir=root / "report", expected=["reflex-6"],
+                            agent=declared,
+                        )
+                completion.assert_not_called()
+
+    def test_qoder_hidden_tokens_preserve_quality_and_never_claim_savings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(
+                root, agent="qodercli", agent_model="qwen3.8-max"
+            )
+            pair_path = pairs_root / "pair-reflex-6.json"
+            pair = json.loads(pair_path.read_text())
+            trial = pair["profiles"]["baseline"]["trials"][0]
+            trial.update(input_tokens=None, output_tokens=None, token_usage_available=False)
+            _write_json(pair_path, pair)
+            with patch.dict("os.environ", {"GLM_API_KEY": "secret"}, clear=True):
+                report = judge_pairs(
+                    pairs_root=pairs_root, references_path=references,
+                    output_dir=root / "reports" / "hidden", expected=["reflex-6"],
+                    completion_fn=lambda **kwargs: _successful_judge_response(),
+                )
+            self.assertTrue(report["gate"]["passed"])
+            self.assertEqual(report["judge"]["usage"]["calls"], 6)
+            baseline = report["cases"][0]["profiles"]["baseline"]
+            self.assertIsNone(baseline["metrics"]["input_tokens"])
+            self.assertIsNone(baseline["metrics"]["output_tokens"])
+            self.assertGreater(baseline["metrics"]["tool_calls"], 0)
+            self.assertGreater(baseline["metrics"]["agent_wall_seconds"], 0)
+            self.assertIsNone(report["cases"][0]["comparison"]["input_token_reduction_pct"])
+            self.assertIsNone(report["aggregate"]["comparison"]["input_token_reduction_pct"])
+            _write_json(
+                root / "reports" / "available" / "report.json",
+                _judged_task_report("sqlfluff:2", agent="qodercli", agent_model="qwen3.8-max"),
+            )
+            combined = aggregate_reports(
+                reports_root=root / "reports", output_dir=root / "combined"
+            )
+            self.assertTrue(combined["gate"]["passed"])
+            self.assertIsNone(combined["aggregate"]["profiles"]["baseline"]["input_tokens"])
+            self.assertIsNone(combined["aggregate"]["comparison"]["input_token_reduction_pct"])
+            self.assertEqual(combined["aggregate"]["comparison_samples"]["input_token_reduction_pct"], 1)
+            self.assertIsNotNone(combined["aggregate"]["comparison"]["time_reduction_pct"])
+            self.assertIn("N/A", (root / "combined" / "report.md").read_text())
+
+    def test_null_token_pair_requires_qoder_and_marker_before_judging(self) -> None:
+        for agent, available, tokens in (
+            ("opencode", False, None),
+            ("qodercli", None, None),
+            ("qodercli", False, -1),
+            ("qodercli", False, 0),
+        ):
+            with (
+                self.subTest(agent=agent, available=available, tokens=tokens),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                pairs_root, references = self._write_pair_and_reference(root, agent=agent)
+                pair_path = pairs_root / "pair-reflex-6.json"
+                pair = json.loads(pair_path.read_text())
+                trial = pair["profiles"]["baseline"]["trials"][0]
+                trial.update(input_tokens=tokens, output_tokens=tokens)
+                if available is not None:
+                    trial["token_usage_available"] = available
+                _write_json(pair_path, pair)
+                with patch("zg_bench.swe_qa.judge._default_completion") as completion:
+                    with self.assertRaisesRegex(SweQaError, "token"):
+                        judge_pairs(
+                            pairs_root=pairs_root, references_path=references,
+                            output_dir=root / "report", expected=["reflex-6"],
+                        )
+                completion.assert_not_called()
 
     def test_agent_model_mismatch_fails_before_model_call(self) -> None:
         for declared in (None, "custom-openai/glm-5.2"):
@@ -1198,6 +1398,47 @@ class JudgeTests(unittest.TestCase):
 
 
 class AggregateReportTests(unittest.TestCase):
+    def test_aggregate_rejects_different_or_unknown_agents_for_same_model(self) -> None:
+        for second_agent in ("opencode", None):
+            with (
+                self.subTest(second_agent=second_agent),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                for task, agent in (("reflex:6", "qodercli"), ("sqlfluff:2", second_agent)):
+                    _write_json(
+                        root / "reports" / task / "report.json",
+                        _judged_task_report(
+                            task, agent=agent, agent_model="qwen3.8-max"
+                        ),
+                    )
+                with self.assertRaisesRegex(SweQaError, "different agents"):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+                self.assertFalse((root / "combined").exists())
+
+    def test_aggregate_rejects_conflicting_agent_names(self) -> None:
+        for mismatch in ("case", "trial"):
+            with (
+                self.subTest(mismatch=mismatch),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                report = _judged_task_report(
+                    "reflex:6", agent="qodercli", agent_model="qwen3.8-max"
+                )
+                case = report["cases"][0]
+                if mismatch == "case":
+                    case["agent"] = "opencode"
+                else:
+                    case["profiles"]["baseline"]["trials"][0]["agent"] = "opencode"
+                _write_json(root / "reports" / "source" / "report.json", report)
+                with self.assertRaisesRegex(SweQaError, "agent mismatch"):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+
     def test_aggregate_preserves_qwen_identity_and_normalizes_bare_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
