@@ -58,11 +58,11 @@ Judge 失败或 `judged.json` 未产生时，观测报告仍执行，并保留 1
 
 ## CI 与旧 seed 恢复
 
-[readonly-qa.yml](../../.github/workflows/readonly-qa.yml) 对目标为 `dev/benchmark-ci`、来源分支以 `dev/benchmark-readonly-qa` 开头的同仓库 PR 执行本实验，也支持明确的 `workflow_dispatch`。现有 `swe-qa-bench.yml` 已对这一来源分支前缀跳过 `run-pair`；其低成本配置验证仍可执行，旧三组合矩阵不会因该 PR 再次付费运行。
+[readonly-qa.yml](../../.github/workflows/readonly-qa.yml) 在当前 `dev/benchmark-readonly-qa` 分支推送评测目录或此 workflow 的改动时直接执行本实验，也支持明确的 `workflow_dispatch`，无需创建 PR。现有 `swe-qa-bench.yml` 已对这一分支前缀跳过 `run-pair`；其低成本配置验证仍可执行，旧三组合矩阵不会因本分支推送再次付费运行。
 
 缓存首先查找本实验的 `readonly-qa-index-...-0.2.2-reflex-6-v1` key；没有精确命中时，按旧 OpenCode × GLM / reflex-6 key 前缀恢复。restore、save 和 `--seed-dir` 都保留原路径 `$RUNNER_TEMP/swe-qa-index-seed`。Actions 的 cache version 包含 path，改成另一个目标目录会破坏旧 archive 的版本匹配，即使 restore-key 前缀一致也不够。[缓存版本说明](https://github.com/actions/cache#cache-version)
 
-PR 可以访问目标分支缓存，但不能任意读取兄弟分支或其他 PR 的 merge-ref 缓存。因此旧 seed 必须实际存在于该 PR 可访问的作用域内；本工作流使用 `fail-on-cache-miss: true`，缓存被清理或作用域不匹配时明确失败，绝不回退为现场构建。新缓存 key 上的 `0.2.2` 指本次兼容性验证协议，不把旧 seed 的生成版本改写为 `0.2.2`。[缓存访问范围](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)
+Push 运行可以访问当前分支及默认分支的缓存；分支继承关系不会授予兄弟分支的缓存访问权。因此旧 seed 必须实际存在于当前分支可访问的作用域内，或事先通过有来源记录的产物迁移。本工作流使用 `fail-on-cache-miss: true`，缓存被清理或作用域不匹配时明确失败，绝不回退为现场构建。新缓存 key 上的 `0.2.2` 指本次兼容性验证协议，不把旧 seed 的生成版本改写为 `0.2.2`。[缓存访问范围](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)
 
 主实验、QA 评分、QA 观测报告和检索报告是独立步骤。只有 `judged.json` 存在时才向 analyze 传入 `--judged-report`。原始错误和计划状态随产物保留；上传前检查凭据值，发现泄漏则阻止上传。报告可以离线重算；重新执行 Agent 或 judge 则是新的运行，应使用新的输出目录。
 
