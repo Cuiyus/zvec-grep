@@ -1,0 +1,42 @@
+name: Audit recorded read-only QA results
+
+on:
+  push:
+    branches: [dev/benchmark-readonly-qa]
+    paths:
+      - ".github/workflows/readonly-qa-audit.yml"
+      - "benchmarks/audit-readonly-results.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Download the three existing result artifacts without running models
+        uses: actions/download-artifact@v5
+        with:
+          run-id: 34255587426
+          github-token: ${{ github.token }}
+          pattern: readonly-qa-v3-0.2.2-reflex-6-*-34255587426-1
+          path: ${{ runner.temp }}/recorded-qa
+      - name: Independently recount native usage and expose readable audit records
+        env:
+          PYTHONPATH: benchmarks/swe-qa-bench
+        run: >-
+          python benchmarks/audit-readonly-results.py
+          --artifacts "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --output "$RUNNER_TEMP/audit-summary.json"
+
