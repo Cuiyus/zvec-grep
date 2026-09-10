@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from zg_bench.swe_qa.retrieval_replay import build_plan, evaluate_replays, request_queries
+from zg_bench.swe_qa.retrieval_replay import main, SOURCE_COMMIT, SOURCE_RUN
 
 
 QUESTION = "What role does the getter have?"
@@ -265,6 +266,37 @@ class ReplayEvaluationTests(unittest.TestCase):
         self.assertEqual(result["scored_executions"], 0)
         for n in range(1, 6):
             self.assert_unscored_repetition(result, n)
+
+
+class OriginalArtifactContractTests(unittest.TestCase):
+    def test_native_qoder_model_identity_is_not_an_opencode_provider_identifier(self):
+        cases = Path(__file__).resolve().parents[1] / "cases"
+        case_path = cases / "reflex-6.json"
+        case = json.loads(case_path.read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            combinations = [("opencode", "custom-openai/glm-5.2"),
+                            ("opencode", "custom-openai/qwen3.8-max"), ("qodercli", "qwen3.8-max")]
+            for i, (agent, model) in enumerate(combinations):
+                write_json(root / "recorded" / str(i) / "manifest.json", {
+                    "ci_identity": {"GITHUB_RUN_ID": SOURCE_RUN, "GITHUB_SHA": SOURCE_COMMIT},
+                    "case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+                    "repo": case["repo"], "package": "@zvec/zvec-grep@0.2.2", "agent": agent, "model": model})
+            argv = ["analyze", "--recorded-runs", str(root / "recorded"), "--case", str(case_path),
+                    "--entries", str(cases / "reflex-6.entries.json"), "--labels", str(cases / "reflex-6.query-intents.json"),
+                    "--output", str(root / "analysis")]
+            with patch("zg_bench.swe_qa.retrieval_replay.analyze", return_value={"groups": [], "query_catalog": [], "input_artifacts": []}), \
+                    patch("zg_bench.swe_qa.retrieval_replay.write_report"), \
+                    patch("zg_bench.swe_qa.retrieval_replay.execute") as execution:
+                self.assertEqual(main(argv), 0)
+                execution.assert_not_called()
+                # A guessed provider-prefixed identity must not silently match.
+                path = root / "recorded" / "2" / "manifest.json"
+                manifest = json.loads(path.read_text()); manifest["model"] = "custom-openai/qwen3.8-max"
+                write_json(path, manifest)
+                argv[-1] = str(root / "rejected")
+                with self.assertRaisesRegex(ValueError, "three original agent/model"):
+                    main(argv)
 
 
 if __name__ == "__main__":

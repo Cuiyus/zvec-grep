@@ -371,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                 or m["case_sha256"] != file_digest(args.case) or m.get("repo") != case["repo"]
                 or m.get("package") != "@zvec/zvec-grep@0.2.2"):
             raise ValueError("Recorded corpus/CI identity differs from frozen development source")
-    if combinations != {("opencode", "custom-openai/glm-5.2"), ("opencode", "custom-openai/qwen3.8-max"), ("qodercli", "custom-openai/qwen3.8-max")}:
+    if combinations != {("opencode", "custom-openai/glm-5.2"), ("opencode", "custom-openai/qwen3.8-max"), ("qodercli", "qwen3.8-max")}:
         raise ValueError("Expected exactly the three original agent/model combinations")
     analysis = analyze(args.recorded_runs, question=case["question"])
     write_report(analysis, args.output / "first-query-analysis.json")
