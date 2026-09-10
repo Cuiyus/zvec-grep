@@ -239,3 +239,17 @@ zvec-grep setup error and exits non-zero. Inspect a saved run with:
 zg-bench diagnose --latest
 zg-bench diagnose <job-name>
 ```
+
+## Query-aware read-only development benchmark
+
+The [v4 protocol](../../docs/benchmark-protocols/readonly-qa-v4.zh-CN.md) evaluates
+the original `reflex-6` question and queries extracted from the first ZG decision
+round of the three recorded agent/model groups. It scores each query's source
+target separately from the original task's dependency entry, and replays fixed
+requests five times using published zg 0.2.2 and a freshly built index. It does
+not create new E2E sessions or call a generation model.
+
+See the [verified results and raw-evidence links](../../docs/benchmark-results/readonly-qa-v4-reflex-6.zh-CN.md)
+and [agent stability controls](../../docs/benchmark-protocols/agent-stability-controls.zh-CN.md).
+These are development results from one task with source-checked Codex labels,
+not independent human gold or a held-out claim of aggregate token savings.
