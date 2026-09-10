@@ -1,0 +1,2174 @@
+{
+  "schema_version": 1,
+  "labels_id": "reflex-6-query-intents-v4-dev1",
+  "case_id": "reflex-6",
+  "repo": {
+    "url": "https://github.com/reflex-dev/reflex.git",
+    "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78"
+  },
+  "original_question": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+  "source_case": "reflex-6.json",
+  "source_case_sha256": "7bd11e3bccd1b28085aead62ce59b617bded5c769c41b9cfa9961a71a9e576d1",
+  "legacy_task_entries": "reflex-6.entries.json",
+  "legacy_task_entries_sha256": "e7c44b993aaadc2d13b04db7dceb7bf5161c2840320d60451fc6ccfa8e4e0773",
+  "source_files": [
+    {
+      "path": "reflex/vars/base.py",
+      "sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d"
+    },
+    {
+      "path": "reflex/vars/dep_tracking.py",
+      "sha256": "c46169329c396669871c80477a80d145e13b926c517d2248f88a91bbf2b04910"
+    },
+    {
+      "path": "reflex/state.py",
+      "sha256": "213e08c5fa4a7efbaa29e197e9aaa3d4385f2569d1241f1d814218c5ef639cf9"
+    }
+  ],
+  "annotation_provenance": {
+    "annotator": "Codex development agent",
+    "independent_human_gold": false,
+    "official_benchmark_query_gold": false,
+    "annotation_is_semantic_judgment": true,
+    "prior_artifact_seen": "34255587426",
+    "prior_getter_result_seen": true,
+    "scope": "Development annotation using fixed source, task question and actual request strings. Prior artifacts were inspected; this is not held-out or independent gold. Labels are frozen for subsequent v4 replay and never inferred dynamically from replay output.",
+    "source_answer_role": "Original benchmark answer is a discovery clue only; fixed source verifies facts and anchors.",
+    "source_artifact_query_extraction": "first_query_analysis.analyze on all three locally available groups from run34255587426",
+    "excluded_artificial_queries": [
+      "dependency-discovery",
+      "selective-refresh"
+    ]
+  },
+  "task_facts": [
+    {
+      "fact_id": "getter_identity_and_value",
+      "statement": "ComputedVar.fget returns the stored user getter _fget, the function used to produce the computed value.",
+      "evidence_ids": [
+        "getter_accessor",
+        "evaluate_or_reuse_value"
+      ]
+    },
+    {
+      "fact_id": "dependency_discovery",
+      "statement": "Automatic dependency discovery inspects getter bytecode, records accessed state vars, and can retain explicit static dependencies; it does not discover reads by invoking the whole getter for its value.",
+      "evidence_ids": [
+        "getter_dependency_input",
+        "bytecode_attribute_dispatch",
+        "record_state_variable",
+        "static_and_automatic_dependencies"
+      ]
+    },
+    {
+      "fact_id": "selective_recomputation",
+      "statement": "Registered reverse dependencies identify dirty computed values; cache invalidation leads to getter execution on access. Uncached access invokes the getter directly; time expiry is another update path.",
+      "evidence_ids": [
+        "register_reverse_dependencies",
+        "lookup_dependents",
+        "invalidate_dependent_values",
+        "remove_cached_value",
+        "evaluate_or_reuse_value",
+        "interval_refresh_is_separate"
+      ]
+    }
+  ],
+  "source_evidence": [
+    {
+      "id": "getter_accessor",
+      "path": "reflex/vars/base.py",
+      "start_line": 2524,
+      "end_line": 2531,
+      "text": "    @property\n    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "cae1b1800fa57c96a5aa0f55a1d5a7230d8cd99eadf66b2aa3963491bd45eec8"
+    },
+    {
+      "id": "getter_dependency_input",
+      "path": "reflex/vars/base.py",
+      "start_line": 2440,
+      "end_line": 2453,
+      "text": "        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n",
+      "sha256": "b4e89b0ea6f6ad3d791bf24d94eda5593b270006edd332f231011a88ac2a5d4e"
+    },
+    {
+      "id": "bytecode_attribute_dispatch",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 296,
+      "end_line": 321,
+      "text": "    def _populate_dependencies(self) -> None:\n        \"\"\"Update self.dependencies based on the disassembly of self.func.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n        \"\"\"\n        for instruction in dis.get_instructions(self.func):\n            if self.scan_status == ScanStatus.GETTING_STATE:\n                self.handle_getting_state(instruction)\n            elif self.scan_status == ScanStatus.GETTING_VAR:\n                self.handle_getting_var(instruction)\n            elif (\n                instruction.opname in (\"LOAD_FAST\", \"LOAD_DEREF\", \"LOAD_FAST_BORROW\")\n                and instruction.argval in self.tracked_locals\n            ):\n                # bytecode loaded the class instance to the top of stack, next load instruction\n                # is referencing an attribute on self\n                self.top_of_stack = instruction.argval\n                self.scan_status = ScanStatus.GETTING_ATTR\n            elif self.scan_status == ScanStatus.GETTING_ATTR and instruction.opname in (\n                \"LOAD_ATTR\",\n                \"LOAD_METHOD\",\n            ):\n                self.load_attr_or_method(instruction)\n",
+      "sha256": "c437d03ba6543872a30886d1c77336b699bf4a378ab7cbe4ac257bf225b17343"
+    },
+    {
+      "id": "record_state_variable",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 140,
+      "end_line": 148,
+      "text": "        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n\n",
+      "sha256": "43971a458a3ff79e3414a6e31b32feaebee0a0660f5bf7ea9e8e98bab5de8430"
+    },
+    {
+      "id": "register_reverse_dependencies",
+      "path": "reflex/state.py",
+      "start_line": 783,
+      "end_line": 797,
+      "text": "            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n",
+      "sha256": "a397f67781e0577aec4ca40b243e8b0a90df2de3d97937026b1035b66e0cad1e"
+    },
+    {
+      "id": "lookup_dependents",
+      "path": "reflex/state.py",
+      "start_line": 1998,
+      "end_line": 2003,
+      "text": "        return {\n            (state_name, cvar)\n            for dirty_var in from_vars or self.dirty_vars\n            for state_name, cvar in self._var_dependencies.get(dirty_var, set())\n            if include_backend or not self.computed_vars[cvar]._backend\n        }\n",
+      "sha256": "a2b6100b1c641582d229c26d9cc4a1aea05de55f448b12aeaca4e3e7ac4d7a88"
+    },
+    {
+      "id": "invalidate_dependent_values",
+      "path": "reflex/state.py",
+      "start_line": 1954,
+      "end_line": 1967,
+      "text": "        dirty_vars = self.dirty_vars\n        while dirty_vars:\n            calc_vars, dirty_vars = dirty_vars, set()\n            for state_name, cvar in self._dirty_computed_vars(from_vars=calc_vars):\n                if state_name == self.get_full_name():\n                    defining_state = self\n                else:\n                    defining_state = self._get_root_state().get_substate(\n                        tuple(state_name.split(\".\"))\n                    )\n                defining_state.dirty_vars.add(cvar)\n                actual_var = defining_state.computed_vars.get(cvar)\n                if actual_var is not None:\n                    actual_var.mark_dirty(instance=defining_state)\n",
+      "sha256": "3e0ac1d734cbfb4b9db28c54b67fa798df82b7be12c40065c1c3d8de8345ea32"
+    },
+    {
+      "id": "remove_cached_value",
+      "path": "reflex/vars/base.py",
+      "start_line": 2462,
+      "end_line": 2469,
+      "text": "    def mark_dirty(self, instance: BaseState) -> None:\n        \"\"\"Mark this ComputedVar as dirty.\n\n        Args:\n            instance: the state instance that needs to recompute the value.\n        \"\"\"\n        with contextlib.suppress(AttributeError):\n            delattr(instance, self._cache_attr)\n",
+      "sha256": "e869987cf8e0e218fbea72f189d433135ab782afc4df70855ffd263347df5c52"
+    },
+    {
+      "id": "evaluate_or_reuse_value",
+      "path": "reflex/vars/base.py",
+      "start_line": 2387,
+      "end_line": 2398,
+      "text": "        if not self._cache:\n            value = self.fget(instance)\n        else:\n            # handle caching\n            if not hasattr(instance, self._cache_attr) or self.needs_update(instance):\n                # Set cache attr on state instance.\n                setattr(instance, self._cache_attr, self.fget(instance))\n                # Ensure the computed var gets serialized to redis.\n                instance._was_touched = True\n                # Set the last updated timestamp on the state instance.\n                setattr(instance, self._last_updated_attr, datetime.datetime.now())\n            value = getattr(instance, self._cache_attr)\n",
+      "sha256": "f52284f6b899d0056d98f94b1ad28a5071335be3514307285f78f46aa8e3259e"
+    },
+    {
+      "id": "interval_refresh_is_separate",
+      "path": "reflex/vars/base.py",
+      "start_line": 2272,
+      "end_line": 2286,
+      "text": "    def needs_update(self, instance: BaseState) -> bool:\n        \"\"\"Check if the computed var needs to be updated.\n\n        Args:\n            instance: The state instance that the computed var is attached to.\n\n        Returns:\n            True if the computed var needs to be updated, False otherwise.\n        \"\"\"\n        if self._update_interval is None:\n            return False\n        last_updated = getattr(instance, self._last_updated_attr, None)\n        if last_updated is None:\n            return True\n        return datetime.datetime.now() - last_updated > self._update_interval\n",
+      "sha256": "35a4b627e796f97ca4b58fb49010c23e91c249bf0d5024656ccc97193d07f0bd"
+    },
+    {
+      "id": "static_and_automatic_dependencies",
+      "path": "reflex/vars/base.py",
+      "start_line": 2433,
+      "end_line": 2453,
+      "text": "        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n",
+      "sha256": "4df605a5dc6e8e9604a1138afe59eb23cb9deb7a0475f16a5710b43122e0cbca",
+      "reason": "Static dependencies are merged before automatic analysis and passed into DependencyTracker."
+    }
+  ],
+  "targets": [
+    {
+      "target_id": "class-computed-var",
+      "level": "class",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar",
+      "entry_start_line": 2050,
+      "definition_line": 2055,
+      "entry_end_line": 2531,
+      "definition": "class ComputedVar(Var[RETURN_TYPE]):\n",
+      "definition_sha256": "7afc42afd67c8f1d7e1886cc65864029bf99ee3e1724d512aa6250baa3911257",
+      "primary": true,
+      "group_ids": [
+        "relevant-classes"
+      ],
+      "reason": "Defines the computation accessor and delegates getter analysis.",
+      "source_evidence_ids": [
+        "getter_accessor",
+        "getter_dependency_input"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ]
+    },
+    {
+      "target_id": "class-dependency-tracker",
+      "level": "class",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker",
+      "entry_start_line": 49,
+      "definition_line": 50,
+      "entry_end_line": 334,
+      "definition": "class DependencyTracker:\n",
+      "definition_sha256": "b0a464882ba9e411aa920747570b89ecb681b00b10866abc39aec6abe3c5b158",
+      "primary": true,
+      "group_ids": [
+        "relevant-classes"
+      ],
+      "reason": "Inspects function bytecode and collects accessed state variables.",
+      "source_evidence_ids": [
+        "bytecode_attribute_dispatch",
+        "record_state_variable"
+      ],
+      "task_fact_ids": [
+        "dependency_discovery"
+      ]
+    },
+    {
+      "target_id": "class-base-state",
+      "level": "class",
+      "path": "reflex/state.py",
+      "symbol": "BaseState",
+      "entry_start_line": 312,
+      "definition_line": 312,
+      "entry_end_line": 2382,
+      "definition": "class BaseState(EvenMoreBasicBaseState):\n",
+      "definition_sha256": "2f14b8b843f94effe13b2588e0f337888ba8ffa32865e7e94a02e2b3e3d548ca",
+      "primary": true,
+      "group_ids": [
+        "relevant-classes"
+      ],
+      "reason": "Registers and follows state-variable reverse dependencies.",
+      "source_evidence_ids": [
+        "register_reverse_dependencies",
+        "lookup_dependents"
+      ],
+      "task_fact_ids": [
+        "selective_recomputation"
+      ]
+    },
+    {
+      "target_id": "function-computed-var-deps",
+      "level": "function",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar._deps",
+      "entry_start_line": 2411,
+      "definition_line": 2411,
+      "entry_end_line": 2460,
+      "definition": "    def _deps(\n",
+      "definition_sha256": "4103ef710d0660fd7bbbd6ad1555fd16f7e879fd1adc1cd75a823c81e213f6ef",
+      "primary": true,
+      "group_ids": [
+        "dependency-entry",
+        "discovery"
+      ],
+      "reason": "Direct entry to how the getter supplies dependencies.",
+      "source_evidence_ids": [
+        "getter_dependency_input"
+      ],
+      "task_fact_ids": [
+        "dependency_discovery"
+      ]
+    },
+    {
+      "target_id": "function-dependency-scan",
+      "level": "function",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker._populate_dependencies",
+      "entry_start_line": 296,
+      "definition_line": 296,
+      "entry_end_line": 334,
+      "definition": "    def _populate_dependencies(self) -> None:\n",
+      "definition_sha256": "3ebac411c42c59509746397394e5f64cd195c19b17d99483341dbda8763f3835",
+      "primary": true,
+      "group_ids": [
+        "dependency-entry",
+        "discovery"
+      ],
+      "reason": "Direct entry to bytecode dependency discovery.",
+      "source_evidence_ids": [
+        "bytecode_attribute_dispatch"
+      ],
+      "task_fact_ids": [
+        "dependency_discovery"
+      ]
+    },
+    {
+      "target_id": "function-dependency-registration",
+      "level": "function",
+      "path": "reflex/state.py",
+      "symbol": "BaseState._init_var_dependency_dicts",
+      "entry_start_line": 769,
+      "definition_line": 770,
+      "entry_end_line": 822,
+      "definition": "    def _init_var_dependency_dicts(cls):\n",
+      "definition_sha256": "7058e5dc0cdedcf25604b1d154a06237f94e8da59ea3b2103fc2ac95f80574bd",
+      "primary": true,
+      "group_ids": [
+        "dependency-entry",
+        "registration"
+      ],
+      "reason": "Direct entry to using getter-derived dependencies for state recomputation.",
+      "source_evidence_ids": [
+        "register_reverse_dependencies"
+      ],
+      "task_fact_ids": [
+        "selective_recomputation"
+      ]
+    },
+    {
+      "target_id": "function-getter-accessor",
+      "level": "function",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.fget",
+      "entry_start_line": 2524,
+      "definition_line": 2525,
+      "entry_end_line": 2531,
+      "definition": "    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n",
+      "definition_sha256": "db9fba982e5812136f8fd235e05be987674f6a12a4cf09570a2e251ff95d183d",
+      "primary": false,
+      "group_ids": [
+        "accessor"
+      ],
+      "reason": "Useful accessor identification, but by itself does not explain dependency tracking.",
+      "source_evidence_ids": [
+        "getter_accessor"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value"
+      ]
+    },
+    {
+      "target_id": "function-async-getter-accessor",
+      "level": "function",
+      "path": "reflex/vars/base.py",
+      "symbol": "AsyncComputedVar.fget",
+      "entry_start_line": 2667,
+      "definition_line": 2668,
+      "entry_end_line": 2674,
+      "definition": "    def fget(self) -> Callable[[BaseState], Coroutine[None, None, RETURN_TYPE]]:\n",
+      "definition_sha256": "4c6f444bf6e89061da298014c66281e51fab620f8ac4c8ee92cc6592ad076b09",
+      "task_fact_ids": [
+        "getter_identity_and_value"
+      ],
+      "reason": "Source-grounded alternate/bridge entry; visibility of this anchor is not sufficient evidence for the whole QA."
+    },
+    {
+      "target_id": "class-async-computed-var",
+      "level": "class",
+      "path": "reflex/vars/base.py",
+      "symbol": "AsyncComputedVar",
+      "entry_start_line": 2542,
+      "definition_line": 2548,
+      "entry_end_line": 2674,
+      "definition": "class AsyncComputedVar(ComputedVar[RETURN_TYPE]):\n",
+      "definition_sha256": "6c7044814b55a7a5d2694341cb046d6498a5066d162789fb0c8150ffa37cb543",
+      "task_fact_ids": [
+        "getter_identity_and_value"
+      ],
+      "reason": "Source-grounded alternate/bridge entry; visibility of this anchor is not sufficient evidence for the whole QA."
+    },
+    {
+      "target_id": "function-invalidate-cache",
+      "level": "function",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.mark_dirty",
+      "entry_start_line": 2462,
+      "definition_line": 2462,
+      "entry_end_line": 2469,
+      "definition": "    def mark_dirty(self, instance: BaseState) -> None:\n",
+      "definition_sha256": "b5e72d8e2a8dd0fffb51e0d8ae5231d218137ad216c68ad6685c46225ad491ed",
+      "task_fact_ids": [
+        "selective_recomputation"
+      ],
+      "reason": "Source-grounded alternate/bridge entry; visibility of this anchor is not sufficient evidence for the whole QA."
+    },
+    {
+      "target_id": "function-lookup-dirty-computed",
+      "level": "function",
+      "path": "reflex/state.py",
+      "symbol": "BaseState._dirty_computed_vars",
+      "entry_start_line": 1986,
+      "definition_line": 1986,
+      "entry_end_line": 2003,
+      "definition": "    def _dirty_computed_vars(\n",
+      "definition_sha256": "b4c355b00fc10b7475ace129b048b1ff5d973f6fa83d89841f4d5537abd0925c",
+      "task_fact_ids": [
+        "selective_recomputation"
+      ],
+      "reason": "Source-grounded alternate/bridge entry; visibility of this anchor is not sufficient evidence for the whole QA."
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "original",
+      "text": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+      "classification": "original",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Original QA preserved verbatim; target entries are development annotations, not official retrieval groundtruth.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 0,
+      "observed_at": []
+    },
+    {
+      "query_id": "query-11bd3e44a0473bda",
+      "text": "[\"computed state variable getter for computation function\", \"dependency tracking for state recomputation\"]",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_1727beddc2d54c8897b4f1aa",
+          "message_id": "msg_0820ccb93001uSqGtjFuZBdi3T",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/vector",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/3/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "12ba6a62ae7ea75c05f6f1572480d4a41ac5760f46ec9e3086bdd47bdea62149",
+            "bytes": 158281,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-4490ab82ae7eb077",
+      "text": "[\"computed signal getter dependency tracking\", \"derived state recompute dependencies\"]",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_a8974ba9348f4deda815f4b5",
+          "message_id": "msg_08208e3a6001nWq7lB6QQQIKAV",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/vector",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/3/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "e08000152defb7dc490460b3c35bfcf0a7d7b0b1919eae7c524d0f6ad0bec6be",
+            "bytes": 128835,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-56d56c4841c181f4",
+      "text": "derived state variable computation function getter",
+      "classification": "legitimate_subgoal",
+      "goal": "Identify the derived variable getter/accessor before explaining its role in dependency tracking.",
+      "accepted_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor"
+      ],
+      "bridge_target_ids": [
+        "class-computed-var",
+        "class-async-computed-var",
+        "function-computed-var-deps"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value"
+      ],
+      "annotation_reason": "Inferred from getter wording and its same-round companion dependency query. This supports one task fact, without requiring the rest of the answer chain.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_c93ad93b1dd94ec083d3abd8",
+          "message_id": "msg_0820658cd001l4Zl19Xx1BYwQC",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "d92dfd6cde2515d668eae579185f679e597bad2e3f900eec14b11eb7b973cb92",
+            "bytes": 120265,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-647fe4ecb6a2ae1d",
+      "text": "[\"derived state computed getter dependency tracking\", \"state variable recompute dependencies\"]",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_a43bdfea19dc497e834a4152",
+          "message_id": "chatcmpl-da215b92-2794-9d22-abb8-f451035cfbf2",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/vector",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r04-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "ff3cbd751fc2e30934e38b956983bf4a6b55cd81c501f741cc3cfb3faad929c4",
+            "bytes": 235171,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-6f7818ee47659dc5",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 12,
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_4690f51e117f44b5b99573eb",
+          "message_id": "msg_0820301aa001X0LHgd6GhctpfZ",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r01-zvec-grep/agent/opencode.txt",
+            "sha256": "9dfffe1319cb5e84e85fa346c0379fae6cbee647803aa313be4883834986139c",
+            "bytes": 131788,
+            "line": 5,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_1913628d362b4a8da3207a36",
+          "message_id": "msg_0820658cd001l4Zl19Xx1BYwQC",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "d92dfd6cde2515d668eae579185f679e597bad2e3f900eec14b11eb7b973cb92",
+            "bytes": 120265,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_98426c26d9484d36bb62ab97",
+          "message_id": "msg_0820836c900193cUVHrvEIowey",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "ffde58e69b89c76f20bc90fd38bcd4e8813afac6c2e3e7a3496edd2467248b8f",
+            "bytes": 113635,
+            "line": 5,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_660e846e7f41403c92bb1f8a",
+          "message_id": "msg_082091735001S9618QVjeIP9KO",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "16868b159a7432d6c09580db0aabbe210891ab840017a5901de657fa29aabe27",
+            "bytes": 115631,
+            "line": 5,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_81f640b107714789b007a37e",
+          "message_id": "msg_0820aeeb1001xiRwVN1ujGrg75",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "805f6c020155ed2e8b61661a3eeba8df3a453dfa9c56142b7b84b375bd91bc03",
+            "bytes": 131118,
+            "line": 5,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_3a9e687c66ad43448521f6bb",
+          "message_id": "msg_08203582b001sh3Mos6bg5BNDK",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r01-zvec-grep/agent/opencode.txt",
+            "sha256": "cafc84f3e4748bd897048af38867865eb1007aa301279af5211406c3e38aabed",
+            "bytes": 131838,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_a8974ba9348f4deda815f4b5",
+          "message_id": "msg_08208e3a6001nWq7lB6QQQIKAV",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "e08000152defb7dc490460b3c35bfcf0a7d7b0b1919eae7c524d0f6ad0bec6be",
+            "bytes": 128835,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_7960273faf6347db97f0c545",
+          "message_id": "msg_0820e5b8c001EG2coyQeK79EJF",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "77216bf2b0c2a13dc1274c42b9a2fa93d48a7485925b820c2c043697cb39a553",
+            "bytes": 144754,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_6382bad3e1cb4fbc8e2d5cee",
+          "message_id": "msg_08210d0830015gLJ6c0i0SlTi4",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "6774cf4f2f08b9128cd4e66316956d39d096c767e9e80721622b08ee86068184",
+            "bytes": 130767,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_394cbdc9f47e42cd8a222793",
+          "message_id": "chatcmpl-cc64d721-2c81-932e-9ef6-5f3b9e68aaf8",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r01-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "464a0e4753998479e43186c1086958b84e67c38b3310b10b5022aa684df09d8f",
+            "bytes": 174235,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          }
+        },
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_a43bdfea19dc497e834a4152",
+          "message_id": "chatcmpl-da215b92-2794-9d22-abb8-f451035cfbf2",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r04-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "ff3cbd751fc2e30934e38b956983bf4a6b55cd81c501f741cc3cfb3faad929c4",
+            "bytes": 235171,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          }
+        },
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_dec0a27efff945848317ef6a",
+          "message_id": "chatcmpl-197ffe30-9490-9468-b436-c9246be109e7",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r05-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "61bb99af229d412e078b2d43ba2f841e366477f0b3136335627df809f7371d29",
+            "bytes": 179446,
+            "line": 7,
+            "pointer": "/message/content/0/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-7d806974be2d61b0",
+      "text": "[\"computed state variable getter returns compute function\", \"dependency tracking for state recomputation\"]",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_7960273faf6347db97f0c545",
+          "message_id": "msg_0820e5b8c001EG2coyQeK79EJF",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/vector",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/3/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "77216bf2b0c2a13dc1274c42b9a2fa93d48a7485925b820c2c043697cb39a553",
+            "bytes": 144754,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-b5c43bc240a1b4ad",
+      "text": "[\"DerivedState\", \"computation\", \"derived\"]",
+      "classification": "ambiguous",
+      "goal": "Possibly identify a derived-state class, but it is unclear whether DerivedState is an exact symbol hypothesis or a conceptual keyword.",
+      "accepted_target_ids": [],
+      "bridge_target_ids": [
+        "class-computed-var",
+        "class-async-computed-var",
+        "class-base-state"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value"
+      ],
+      "annotation_reason": "Keep the actual FTS string intact. The intended exact-symbol versus conceptual search is not established by the request; query-conditioned quality remains unknown.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_3a9e687c66ad43448521f6bb",
+          "message_id": "msg_08203582b001sh3Mos6bg5BNDK",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/fts",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "fts"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r01-zvec-grep/agent/opencode.txt",
+            "sha256": "cafc84f3e4748bd897048af38867865eb1007aa301279af5211406c3e38aabed",
+            "bytes": 131838,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-cb5cdcce70db0237",
+      "text": "[\"computed\", \"derive\", \"dependencies\"]",
+      "classification": "legitimate_subgoal",
+      "goal": "Find candidate computed-state or dependency-tracker implementation classes from broad lexical clues.",
+      "accepted_target_ids": [
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-async-computed-var"
+      ],
+      "bridge_target_ids": [
+        "class-base-state",
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration",
+        "function-getter-accessor",
+        "function-async-getter-accessor"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery"
+      ],
+      "annotation_reason": "Inferred lexical candidate-discovery subgoal in the original QA context. This one string is not split into separate keyword queries; finding the class does not answer the QA.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_7960273faf6347db97f0c545",
+          "message_id": "msg_0820e5b8c001EG2coyQeK79EJF",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/fts",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "fts"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "77216bf2b0c2a13dc1274c42b9a2fa93d48a7485925b820c2c043697cb39a553",
+            "bytes": 144754,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-ce364241d8efcba0",
+      "text": "derived state variable class computation function accessor dependency tracking",
+      "classification": "legitimate_subgoal",
+      "goal": "Locate how the derived getter participates in dependency discovery.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "function-dependency-registration",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery"
+      ],
+      "annotation_reason": "Dependency-discovery subgoal is inferred from the wording; runtime recomputation is not explicitly requested in this query.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_2230f87f64874e7db85681b8",
+          "message_id": "chatcmpl-f331bcd6-7d95-9957-a344-67612175c8cc",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r03-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "a4c579215c2310b04f478e09c8c520d4e5fedd0800b20b25860fd8e80ab768ea",
+            "bytes": 196622,
+            "line": 13,
+            "pointer": "/message/content/0/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-e27c4cf0a2491e88",
+      "text": "derived state variable class computation function accessor dependency tracking state recomputation",
+      "classification": "equivalent_rewrite",
+      "goal": "Locate the implementation connecting a derived getter to dependency discovery and recomputation.",
+      "accepted_target_ids": [
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration"
+      ],
+      "bridge_target_ids": [
+        "function-getter-accessor",
+        "function-async-getter-accessor",
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-base-state",
+        "class-async-computed-var",
+        "function-invalidate-cache",
+        "function-lookup-dirty-computed"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery",
+        "selective_recomputation"
+      ],
+      "annotation_reason": "Keyword/composite wording retains the getter-dependency mechanism of the original task. This is a Codex semantic interpretation, not an agent-declared intent.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 1,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_1727beddc2d54c8897b4f1aa",
+          "message_id": "msg_0820ccb93001uSqGtjFuZBdi3T",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/query",
+              "mode": null
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/queries/0",
+              "mode": null
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/1/query",
+              "mode": "vector"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "12ba6a62ae7ea75c05f6f1572480d4a41ac5760f46ec9e3086bdd47bdea62149",
+            "bytes": 158281,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    },
+    {
+      "query_id": "query-ef0fa9295718e8ed",
+      "text": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]",
+      "classification": "legitimate_subgoal",
+      "goal": "Find candidate computed-state or dependency-tracker implementation classes from broad lexical clues.",
+      "accepted_target_ids": [
+        "class-computed-var",
+        "class-dependency-tracker",
+        "class-async-computed-var"
+      ],
+      "bridge_target_ids": [
+        "class-base-state",
+        "function-computed-var-deps",
+        "function-dependency-scan",
+        "function-dependency-registration",
+        "function-getter-accessor",
+        "function-async-getter-accessor"
+      ],
+      "task_fact_ids": [
+        "getter_identity_and_value",
+        "dependency_discovery"
+      ],
+      "annotation_reason": "Inferred lexical candidate-discovery subgoal in the original QA context. This one string is not split into separate keyword queries; finding the class does not answer the QA.",
+      "intent_basis": "Codex inference from original question, exact request and same-decision-round request context; not agent-declared intent",
+      "string_semantics": "Preserve exact string including JSON-looking brackets and punctuation; no parsing into multiple queries.",
+      "observed_occurrence_count": 3,
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_a8974ba9348f4deda815f4b5",
+          "message_id": "msg_08208e3a6001nWq7lB6QQQIKAV",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/fts",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "fts"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "e08000152defb7dc490460b3c35bfcf0a7d7b0b1919eae7c524d0f6ad0bec6be",
+            "bytes": 128835,
+            "line": 3,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_1727beddc2d54c8897b4f1aa",
+          "message_id": "msg_0820ccb93001uSqGtjFuZBdi3T",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/fts",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "fts"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "12ba6a62ae7ea75c05f6f1572480d4a41ac5760f46ec9e3086bdd47bdea62149",
+            "bytes": 158281,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        },
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_6382bad3e1cb4fbc8e2d5cee",
+          "message_id": "msg_08210d0830015gLJ6c0i0SlTi4",
+          "locations": [
+            {
+              "layer": "raw_arguments",
+              "pointer": "/fts",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_request",
+              "pointer": "/routes/0/query",
+              "mode": "fts"
+            },
+            {
+              "layer": "backend_executed_routes",
+              "pointer": "/routes/2/query",
+              "mode": "fts"
+            }
+          ],
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "6774cf4f2f08b9128cd4e66316956d39d096c767e9e80721622b08ee86068184",
+            "bytes": 130767,
+            "line": 4,
+            "pointer": "/part/state/input"
+          }
+        }
+      ]
+    }
+  ],
+  "request_bindings": [
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_4690f51e117f44b5b99573eb",
+          "layer": "native_tool_arguments"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_1913628d362b4a8da3207a36",
+          "layer": "native_tool_arguments"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_98426c26d9484d36bb62ab97",
+          "layer": "native_tool_arguments"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_81f640b107714789b007a37e",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_4690f51e117f44b5b99573eb",
+          "layer": "backend_request"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_1913628d362b4a8da3207a36",
+          "layer": "backend_request"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_98426c26d9484d36bb62ab97",
+          "layer": "backend_request"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_81f640b107714789b007a37e",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable computation function getter"
+      },
+      "query_id": "query-56d56c4841c181f4",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_c93ad93b1dd94ec083d3abd8",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable computation function getter"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-56d56c4841c181f4",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_c93ad93b1dd94ec083d3abd8",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "limit": 15
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_660e846e7f41403c92bb1f8a",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "limit": 15,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_660e846e7f41403c92bb1f8a",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "fts": "[\"DerivedState\", \"computation\", \"derived\"]"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_3a9e687c66ad43448521f6bb",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"DerivedState\", \"computation\", \"derived\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_3a9e687c66ad43448521f6bb",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "vector": "[\"computed signal getter dependency tracking\", \"derived state recompute dependencies\"]",
+        "fts": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_a8974ba9348f4deda815f4b5",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]"
+          },
+          {
+            "mode": "vector",
+            "query": "[\"computed signal getter dependency tracking\", \"derived state recompute dependencies\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "call_id": "call_a8974ba9348f4deda815f4b5",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking state recomputation",
+        "vector": "[\"computed state variable getter for computation function\", \"dependency tracking for state recomputation\"]",
+        "fts": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]"
+      },
+      "query_id": "query-e27c4cf0a2491e88",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_1727beddc2d54c8897b4f1aa",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking state recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]"
+          },
+          {
+            "mode": "vector",
+            "query": "[\"computed state variable getter for computation function\", \"dependency tracking for state recomputation\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-e27c4cf0a2491e88",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_1727beddc2d54c8897b4f1aa",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "vector": "[\"computed state variable getter returns compute function\", \"dependency tracking for state recomputation\"]",
+        "fts": "[\"computed\", \"derive\", \"dependencies\"]"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_7960273faf6347db97f0c545",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derive\", \"dependencies\"]"
+          },
+          {
+            "mode": "vector",
+            "query": "[\"computed state variable getter returns compute function\", \"dependency tracking for state recomputation\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_7960273faf6347db97f0c545",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "fts": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]",
+        "fuse": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_6382bad3e1cb4fbc8e2d5cee",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derived\", \"dependency\", \"recompute\"]"
+          }
+        ],
+        "fuse": true,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_6382bad3e1cb4fbc8e2d5cee",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "fuse": true,
+        "limit": 20,
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "root": "/app"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_394cbdc9f47e42cd8a222793",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "fuse": true,
+        "limit": 20,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "call_id": "call_394cbdc9f47e42cd8a222793",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "query": "derived state variable class computation function accessor dependency tracking",
+        "root": "/app"
+      },
+      "query_id": "query-ce364241d8efcba0",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_2230f87f64874e7db85681b8",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-ce364241d8efcba0",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "call_id": "call_2230f87f64874e7db85681b8",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "fuse": true,
+        "limit": 15,
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "root": "/app",
+        "vector": "[\"derived state computed getter dependency tracking\", \"state variable recompute dependencies\"]"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_a43bdfea19dc497e834a4152",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "vector",
+            "query": "[\"derived state computed getter dependency tracking\", \"state variable recompute dependencies\"]"
+          }
+        ],
+        "fuse": true,
+        "limit": 15,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "call_id": "call_a43bdfea19dc497e834a4152",
+          "layer": "backend_request"
+        }
+      ]
+    },
+    {
+      "request": {
+        "fuse": true,
+        "query": "derived state variable class computation function accessor dependency tracking recomputation",
+        "root": "/app"
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_dec0a27efff945848317ef6a",
+          "layer": "native_tool_arguments"
+        }
+      ]
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "fuse": true,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "query_id": "query-6f7818ee47659dc5",
+      "scope": "Faithful combined request interpreted in original task context; route strings remain single strings, no component expansion.",
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "call_id": "call_dec0a27efff945848317ef6a",
+          "layer": "backend_request"
+        }
+      ]
+    }
+  ],
+  "protocol": {
+    "query_match": "exact Unicode string; request binding canonicalizes JSON object key order only",
+    "unknown_policy": "Unknown, ambiguous or off-task queries retain task entry metrics but query-conditioned quality is unknown.",
+    "target_policy": "Any accepted target is sufficient for entry localization (OR). Bridge targets are separate, not required and not silently promoted to accepted targets.",
+    "unreviewed_policy": "Unmatched entries are unreviewed, not automatically irrelevant. No exhaustive relevance labels or recall estimate.",
+    "task_scope": "The three task facts describe QA content. No individual query must cover every fact or original nine source spans.",
+    "native_ranks": "Faithful results retain all 15/20 or other native slots; Hit@1/5/10 and RR@10 remain fixed, without reranking or truncating duplicates.",
+    "byte_budgets": [
+      4096,
+      8192
+    ],
+    "quality_repeats": "Repeated queries are stability observations, not independent QA tasks."
+  }
+}

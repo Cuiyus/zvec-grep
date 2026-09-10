@@ -1,0 +1,95 @@
+name: Query-aware retrieval replay (no new E2E)
+
+on:
+  push:
+    branches: [dev/benchmark-readonly-qa]
+    paths:
+      - "benchmarks/swe-qa-bench/**"
+      - ".github/workflows/readonly-qa-v4.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: readonly-query-replay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install locked analysis environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Verify parsers, annotations, replay accounting and runtime contracts offline
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/replay-search.test.mjs
+      - name: Download recorded OpenCode GLM trials
+        uses: actions/download-artifact@v5
+        with:
+          run-id: 34255587426
+          github-token: ${{ github.token }}
+          name: readonly-qa-v3-0.2.2-reflex-6-opencode-glm52-34255587426-1
+          path: ${{ runner.temp }}/recorded-qa/opencode-glm52
+      - name: Download recorded OpenCode Qwen trials
+        uses: actions/download-artifact@v5
+        with:
+          run-id: 34255587426
+          github-token: ${{ github.token }}
+          name: readonly-qa-v3-0.2.2-reflex-6-opencode-qwen38max-34255587426-1
+          path: ${{ runner.temp }}/recorded-qa/opencode-qwen38max
+      - name: Download recorded Qoder Qwen trials
+        uses: actions/download-artifact@v5
+        with:
+          run-id: 34255587426
+          github-token: ${{ github.token }}
+          name: readonly-qa-v3-0.2.2-reflex-6-qoder-qwen38max-34255587426-1
+          path: ${{ runner.temp }}/recorded-qa/qoder-qwen38max
+      - name: Build runtime with published zg 0.2.2
+        run: >-
+          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
+          --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Analyze original trajectories and replay frozen requests on a fresh index
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.retrieval_replay run
+          --recorded-runs "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --labels benchmarks/swe-qa-bench/cases/reflex-6.query-intents.json
+          --output "$RUNNER_TEMP/readonly-qa-v4"
+          --image zg-readonly-qa:0.2.2
+      - name: Show query variation and query-conditioned retrieval scores
+        if: always()
+        run: |
+          for report in first-query-analysis observed-query-scores replay-report; do
+            if [ -f "$RUNNER_TEMP/readonly-qa-v4/$report.md" ]; then
+              cat "$RUNNER_TEMP/readonly-qa-v4/$report.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      - name: Preserve query labels, raw replay outputs and all failed attempts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: readonly-qa-v4-0.2.2-reflex-6-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/readonly-qa-v4/*.json
+            ${{ runner.temp }}/readonly-qa-v4/*.md
+            ${{ runner.temp }}/readonly-qa-v4/replay/
+            ${{ runner.temp }}/readonly-qa-v4/preparation/runtime/
+          if-no-files-found: warn
+          retention-days: 90
