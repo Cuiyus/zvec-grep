@@ -1,0 +1,125 @@
+name: Qoder Qwen3.8-Max Workspace QA
+
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - 'benchmarks/workspace-qa/**'
+      - '.github/actions/workspace-qa/**'
+      - '.github/workflows/workspace-qa-qoder.yml'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Smoke alone, or smoke followed by 10 tasks x 10 repetitions per arm
+        type: choice
+        options: [smoke, full]
+        default: full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-qa-qoder-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tasks: ${{ steps.matrix.outputs.tasks }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test dataset isolation, execution accounting, judge and reports
+        run: python -m unittest discover -s benchmarks/workspace-qa/tests -v
+      - id: matrix
+        name: Freeze matrix before any model results
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          lock = json.loads(Path('benchmarks/workspace-qa/data/lock.json').read_text())
+          tasks = [t['task_id'] for t in lock['tasks']]
+          assert len(tasks) == len(set(tasks)) == 10
+          assert lock['repetitions'] == 10 and lock['smoke_task_id'] == '128'
+          assert lock['experiment']['embedding']['model'] == 'qwen/qwen3.7-text-embedding'
+          assert lock['experiment']['zg_version'] == '0.2.2'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('tasks=' + json.dumps(tasks) + '\n')
+          PY
+  smoke:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: '128'
+          repetitions: '1'
+          phase: smoke
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+  batch:
+    needs: [validate, smoke]
+    if: github.event_name == 'push' || inputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        task: ${{ fromJSON(needs.validate.outputs.tasks) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: ${{ matrix.task }}
+          repetitions: '10'
+          phase: batch
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+  report:
+    needs: [smoke, batch]
+    if: always() && (github.event_name == 'push' || inputs.scope == 'full')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: workspace-qa-batch-*
+          path: results
+      - name: Aggregate all 200 planned trials, including absent results
+        run: >-
+          python benchmarks/workspace-qa/report.py --runs-dir results
+          --manifest benchmarks/workspace-qa/data/lock.json --output report
+          --require-complete
+      - name: Publish aggregate summary
+        if: always()
+        run: |
+          if [ -f report/summary.md ]; then
+            cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-qa-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report/
+          if-no-files-found: error

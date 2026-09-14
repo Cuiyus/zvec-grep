@@ -1,0 +1,109 @@
+name: Run original Workspace Lite CN QA task
+description: One frozen full-workspace task, paired Qoder trials, blind rubric judge
+inputs:
+  task-id:
+    required: true
+    description: Locked upstream task ID
+  repetitions:
+    required: true
+    description: Repetitions per arm
+  phase:
+    required: true
+    description: smoke or batch (artifact namespace)
+  qoder-token:
+    required: true
+    description: Existing Qoder CI personal access token
+  judge-key:
+    required: true
+    description: Existing GLM judge key
+  embedding-key:
+    required: true
+    description: Model Studio workspace key for remote Qwen3.7 text embedding
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install frozen Python dependencies
+      shell: bash
+      run: |
+        python -m pip install --disable-pip-version-check uv==0.9.17
+        uv sync --project benchmarks/swe-qa-bench --frozen
+    - name: Reserve disk for complete original persona workspace
+      shell: bash
+      run: |
+        # These are unused SDKs on an ephemeral hosted runner, not user files.
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h "$RUNNER_TEMP"
+    - uses: actions/checkout@v6
+      with:
+        repository: OpenDataBox/Workspace-Bench
+        ref: 3fbd0f1a136720fece86786545983e26642c3db2
+        path: .workspace-bench-upstream
+        persist-credentials: false
+    - name: Build pinned zg and Qoder runtime
+      shell: bash
+      run: >-
+        docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+        -f benchmarks/swe-qa-bench/runtime/Dockerfile
+        -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+    - name: Run pair series and blind rubric judge
+      shell: bash
+      env:
+        TASK_ID: ${{ inputs.task-id }}
+        REPETITIONS: ${{ inputs.repetitions }}
+        QODER_PERSONAL_ACCESS_TOKEN: ${{ inputs.qoder-token }}
+        GLM_API_KEY: ${{ inputs.judge-key }}
+        QWEN_API_KEY: ${{ inputs.embedding-key }}
+      run: >-
+        uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py
+        --task-id "$TASK_ID" --repetitions "$REPETITIONS"
+        --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream"
+        --output "$RUNNER_TEMP/workspace-qa"
+    - name: Publish task summary
+      if: always()
+      shell: bash
+      run: |
+        if [ -f "$RUNNER_TEMP/workspace-qa/report/summary.md" ]; then
+          cat "$RUNNER_TEMP/workspace-qa/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - name: Verify artifacts contain no CI credentials
+      if: always()
+      id: artifact-safety
+      shell: bash
+      env:
+        QODER_PERSONAL_ACCESS_TOKEN: ${{ inputs.qoder-token }}
+        GLM_API_KEY: ${{ inputs.judge-key }}
+        QWEN_API_KEY: ${{ inputs.embedding-key }}
+      run: |
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa'
+        secrets = [os.environ[k].encode() for k in ('QODER_PERSONAL_ACCESS_TOKEN','GLM_API_KEY','QWEN_API_KEY') if os.environ.get(k)]
+        for folder in ('runs','report'):
+            for path in (root / folder).rglob('*'):
+                if not path.is_file() or 'working-indexes' in path.parts or 'model-cache' in path.parts or 'index' in path.parts:
+                    continue
+                data = path.read_bytes()
+                if any(secret in data for secret in secrets):
+                    raise SystemExit('Credential found in artifact; upload blocked')
+        PY
+    - uses: actions/upload-artifact@v4
+      if: always() && steps.artifact-safety.outcome == 'success'
+      with:
+        name: workspace-qa-${{ inputs.phase }}-${{ inputs.task-id }}-${{ github.run_id }}-${{ github.run_attempt }}
+        retention-days: 30
+        if-no-files-found: error
+        path: |
+          ${{ runner.temp }}/workspace-qa/planned.json
+          ${{ runner.temp }}/workspace-qa/setup-failure.json
+          ${{ runner.temp }}/workspace-qa/embedding-preflight.json
+          ${{ runner.temp }}/workspace-qa/selection.json
+          ${{ runner.temp }}/workspace-qa/dataset/dataset-manifest.json
+          ${{ runner.temp }}/workspace-qa/report/
+          ${{ runner.temp }}/workspace-qa/runs/*.json
+          ${{ runner.temp }}/workspace-qa/runs/judge/
+          ${{ runner.temp }}/workspace-qa/runs/*-r*/
+          ${{ runner.temp }}/workspace-qa/runs/preparation/runtime/

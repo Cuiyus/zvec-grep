@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location("workspace_qa_" + name, ROOT / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+judge, report = load("judge"), load("report")
+
+
+def dump(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+class JudgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.task = self.root / "task"
+        self.task.mkdir()
+        (self.task / "data").mkdir()
+        (self.task / "data/a.py").write_text("# 原始代码\ndef add(a, b):\n    return a + b\n", encoding="utf-8")
+        self.metadata = {"task": "请分析 add 并输出 answer.md", "rubrics": ["正确解释返回值", "不存在的原始要求也要保留"],
+                         "rubric_types": ["结果评估", "结果评估"],
+                         "data_manifest": [{"stored_relpath": "data/a.py", "filename": "a.py", "target_path": "src"}],
+                         "agent_trace": "NEVER SEND TRACE", "profile": "NEVER SEND PROFILE"}
+        self.metadata_path = self.task / "metadata.json"
+        dump(self.metadata_path, self.metadata)
+        self.runs = self.root / "runs"
+        self.runs.mkdir()
+        self.trial = {"trial_id": "128-baseline-1", "task_id": "128", "profile": "baseline", "repetition": 1,
+                      "status": "completed", "answer": "相加", "candidate_output_path": "128-baseline-1/candidate/answer.md"}
+        candidate = self.runs / self.trial["candidate_output_path"]
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text(self.trial["answer"], encoding="utf-8")
+        dump(self.runs / "trial-results.json", {"task_id": "128", "repetitions_per_profile": 1, "trials": [self.trial]})
+
+    def response(self, scores=(True, False)):
+        return {"id": "response-1", "model": "glm-5.2", "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"criteria": [
+                    {"id": i, "score": value, "reason": "原文中找到依据"} for i, value in enumerate(scores)]})}}]}
+
+    def run_judge(self, completion=None, **kwargs):
+        with patch.dict("os.environ", {"GLM_API_KEY": "test-private-key"}):
+            return judge.judge_runs(metadata_path=self.metadata_path, task_dir=self.task, runs_dir=self.runs,
+                                    completion_fn=completion or (lambda **_: self.response()), sleep_fn=lambda _: None, **kwargs)
+
+    def test_prompt_is_blind_and_preserves_every_original_rubric(self):
+        evidence = judge.load_evidence(self.metadata_path, self.task)
+        messages = judge.build_messages(evidence, "answer")
+        payload = json.loads(messages[1]["content"])
+        self.assertEqual([r["text"] for r in payload["rubrics"]], self.metadata["rubrics"])
+        self.assertEqual([r["type"] for r in payload["rubrics"]], self.metadata["rubric_types"])
+        self.assertEqual(payload["task"], self.metadata["task"])
+        self.assertEqual(payload["source_files"][0]["text"], (self.task / "data/a.py").read_text())
+        self.assertNotIn("NEVER SEND", json.dumps(messages))
+        self.assertEqual(set(payload), {"task", "rubrics", "source_files", "candidate_answer", "candidate_outputs"})
+
+    def test_full_boolean_mean_hashes_raw_model_latency_and_harness_output(self):
+        captured = []
+        result = self.run_judge(lambda **kwargs: captured.append(kwargs) or self.response())
+        row = result["trials"][0]
+        self.assertEqual(row["score"], 0.5)
+        self.assertEqual(row["status"], "judged")
+        self.assertEqual(result["rubrics"], self.metadata["rubrics"])
+        self.assertEqual(len(row["prompt_sha256"]), 64)
+        self.assertEqual(len(result["source_hashes"][0]["sha256"]), 64)
+        self.assertGreaterEqual(row["judge_latency_seconds"], 0)
+        self.assertEqual(row["attempts"][0]["raw_response"], self.response())
+        self.assertEqual(json.loads(captured[0]["messages"][1]["content"])["candidate_outputs"][0]["filename"], "answer.md")
+        self.assertEqual(captured[0]["model"], "glm-5.2")
+        self.assertNotIn("test-private-key", (self.runs / "judgements.json").read_text())
+
+    def test_model_output_schema_rejects_omission_duplicate_ids_integer_scores_extra_keys(self):
+        valid = [{"id": 0, "score": True, "reason": "yes"}, {"id": 1, "score": False, "reason": "no"}]
+        bad = [valid[:1], [valid[0], valid[0]], [dict(valid[0], score=1), valid[1]],
+               [dict(valid[0], id=True), valid[1]], [dict(valid[0], reason=""), valid[1]],
+               [dict(valid[0], confidence=1), valid[1]]]
+        for criteria in bad:
+            with self.subTest(criteria=criteria), self.assertRaises(judge.JudgeError):
+                judge.parse_assessment(json.dumps({"criteria": criteria}), 2)
+        self.assertEqual(judge.parse_assessment(json.dumps({"criteria": valid[::-1]}), 2), valid)
+
+    def test_invalid_assessment_not_retried_or_zero_scored(self):
+        calls = []
+        result = self.run_judge(lambda **_: calls.append(1) or self.response((True,)), attempts=3)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["trials"][0]["status"], "judge_error")
+        self.assertIsNone(result["trials"][0]["score"])
+
+    def test_bounded_retry_only_for_operational_error(self):
+        calls = []
+        def completion(**_):
+            calls.append(1)
+            if len(calls) == 1:
+                raise HTTPError("https://example.invalid", 429, "limited", {}, None)
+            return self.response()
+        result = self.run_judge(completion)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["trials"][0]["status"], "judged")
+        calls.clear()
+        def unauthorized(**_):
+            calls.append(1)
+            raise HTTPError("https://example.invalid", 401, "unauthorized", {}, None)
+        result = self.run_judge(unauthorized)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(result["trials"][0]["score"])
+
+    def test_no_silent_source_or_prompt_truncation(self):
+        with self.assertRaisesRegex(judge.JudgeError, "no truncation"):
+            judge.load_evidence(self.metadata_path, self.task, max_source_bytes=1)
+        evidence = judge.load_evidence(self.metadata_path, self.task)
+        with self.assertRaisesRegex(judge.JudgeError, "no truncation"):
+            judge.build_messages(evidence, "answer", max_prompt_bytes=1)
+        result = self.run_judge(max_source_bytes=1)
+        self.assertEqual(result["trials"][0]["status"], "evidence_error")
+        self.assertIsNone(result["trials"][0]["score"])
+
+    def test_source_escape_hash_mismatch_binary_and_missing_are_errors(self):
+        for relative in ("../outside.py", "/tmp/outside.py", "data/missing.py"):
+            self.metadata["data_manifest"][0]["stored_relpath"] = relative
+            dump(self.metadata_path, self.metadata)
+            with self.subTest(relative=relative), self.assertRaises((judge.JudgeError, OSError)):
+                judge.load_evidence(self.metadata_path, self.task)
+        self.metadata["data_manifest"][0].update(stored_relpath="data/a.py", sha256="bad")
+        dump(self.metadata_path, self.metadata)
+        with self.assertRaisesRegex(judge.JudgeError, "SHA-256"):
+            judge.load_evidence(self.metadata_path, self.task)
+
+    def test_missing_answer_or_failed_execution_never_calls_judge(self):
+        for status, answer, expected in (("failed", "partial", "execution_not_completed"), ("completed", "", "missing_answer")):
+            self.trial.update(status=status, answer=answer)
+            dump(self.runs / "trial-results.json", {"task_id": "128", "repetitions_per_profile": 1, "trials": [self.trial]})
+            def never(**_):
+                self.fail("unscorable trial reached judge")
+            result = self.run_judge(never)
+            self.assertEqual(result["trials"][0]["status"], expected)
+            self.assertIsNone(result["trials"][0]["score"])
+
+    def test_changed_materialized_output_is_not_judged(self):
+        (self.runs / self.trial["candidate_output_path"]).write_text("changed")
+        result = self.run_judge()
+        self.assertEqual(result["trials"][0]["status"], "invalid_judge_input")
+        self.assertIsNone(result["trials"][0]["score"])
+
+
+class ReportTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.runs = self.root / "runs"
+        self.runs.mkdir()
+        self.manifest = self.root / "selected.json"
+        dump(self.manifest, {"tasks": [{"task_id": "128", "slice": "code_qa"}, {"task_id": "76", "slice": "document_qa"}], "repetitions": 2})
+
+    def write_task(self, task_id, values=(100, 80), repetitions=2, missing=(), score=(True, False)):
+        trials, judgments = [], []
+        for profile, tokens, passed in zip(report.PROFILES, values, score):
+            for repetition in range(1, repetitions + 1):
+                if (profile, repetition) in missing:
+                    continue
+                trial_id = f"{task_id}-{profile}-{repetition}"
+                trials.append({"trial_id": trial_id, "task_id": task_id, "profile": profile, "repetition": repetition,
+                    "status": "completed", "answer": "answer", "input_tokens": tokens,
+                    "output_tokens": 20, "tool_calls": tokens / 10, "wall_seconds": tokens / 20, "zg_tool_calls": 0})
+                judgments.append({"trial_id": trial_id, "task_id": task_id, "profile": profile, "repetition": repetition,
+                    "status": "judged", "score": float(passed), "criteria": [{"id": 0, "score": passed, "reason": "evidence"}],
+                    "answer_sha256": hashlib.sha256(b"answer").hexdigest(), "judge_latency_seconds": 1})
+        directory = self.runs / task_id
+        dump(directory / "trial-results.json", {"task_id": task_id, "repetitions_per_profile": repetitions, "trials": trials})
+        dump(directory / "judgements.json", {"task_id": task_id, "judge_model": "glm-5.2", "rubrics": ["original"], "trials": judgments})
+
+    def test_entire_missing_task_and_missing_trial_keep_expected_denominator(self):
+        self.write_task("128", missing=(("with-zg", 2),))
+        rows, plan = report.load_rows(self.runs, manifest_path=self.manifest)
+        self.assertEqual(plan["expected_trials"], 8)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(sum(r["execution_status"] == "missing_trial" for r in rows), 5)
+        summary = report.summarize(rows)
+        self.assertFalse(summary["complete"])
+        self.assertEqual(summary["paired_metrics"]["input_tokens"]["matched_pairs"], 1)
+        self.assertEqual(summary["paired_metrics"]["input_tokens"]["expected_pairs"], 4)
+        self.assertEqual(summary["profiles"]["with-zg"]["judged"], 1)
+
+    def test_task_equal_weighted_means_and_pairing_do_not_weight_by_available_repetitions(self):
+        self.write_task("128", values=(100, 50))
+        self.write_task("76", values=(1000, 800), missing=(("baseline", 2),))
+        rows, _ = report.load_rows(self.runs, manifest_path=self.manifest)
+        summary = report.summarize(rows)
+        metric = summary["paired_metrics"]["input_tokens"]
+        self.assertEqual(metric["baseline_mean"], 550)
+        self.assertEqual(metric["with_zg_mean"], 425)
+        self.assertAlmostEqual(metric["percent_savings"], 125 / 550 * 100)
+        self.assertEqual(metric["matched_pairs"], 3)
+        self.assertEqual(summary["paired_metrics"]["rubric_score"]["quality_delta_percentage_points"], -100)
+        self.assertIsNone(summary["paired_metrics"]["rubric_score"]["percent_savings"])
+
+    def test_complete_report_writes_reviewable_json_csv_markdown_and_separate_slices(self):
+        self.write_task("128")
+        self.write_task("76", values=(1000, 900), score=(True, True))
+        result = report.write_report(runs_dir=self.runs, output=self.root / "report", manifest_path=self.manifest)
+        self.assertTrue(result["efficacy_claim_ready"])
+        self.assertEqual(result["summary"]["profiles"]["baseline"]["metrics"]["input_tokens"]["mean"], 550)
+        self.assertEqual(set(result["by_slice"]), {"code_qa", "document_qa"})
+        self.assertEqual({p.name for p in (self.root / "report").iterdir()}, {"summary.json", "summary.md", "rows.json", "rows.csv", "rows.md"})
+        self.assertEqual(set(result["by_qa_group"]), {"code_qa", "other_readonly_qa"})
+        self.assertIn("original rubrics retained in full", (self.root / "report/summary.md").read_text())
+        self.assertEqual(result["summary"]["profiles"]["baseline"]["metrics"]["cached_input_tokens"]["observations"], 0)
+
+    def test_no_manifest_cannot_establish_complete_benchmark_claim(self):
+        self.write_task("128")
+        result = report.write_report(runs_dir=self.runs, output=self.root / "report")
+        self.assertTrue(result["summary"]["complete"])
+        self.assertFalse(result["efficacy_claim_ready"])
+
+    def test_zero_baseline_has_no_percentage_savings(self):
+        self.write_task("128", values=(0, 10))
+        rows, _ = report.load_rows(self.runs)
+        self.assertIsNone(report.summarize(rows)["paired_metrics"]["input_tokens"]["percent_savings"])
+
+    def test_stale_answer_hash_and_missing_criterion_are_rejected(self):
+        self.write_task("128")
+        path = self.runs / "128/judgements.json"
+        judgments = report.read_object(path)
+        judgments["trials"][0]["answer_sha256"] = "stale"
+        dump(path, judgments)
+        with self.assertRaisesRegex(report.ReportError, "answer hash"):
+            report.load_rows(self.runs)
+        judgments["trials"][0]["answer_sha256"] = hashlib.sha256(b"answer").hexdigest()
+        judgments["trials"][0]["criteria"] = []
+        dump(path, judgments)
+        with self.assertRaisesRegex(report.ReportError, "every original rubric"):
+            report.load_rows(self.runs)
+
+    def test_duplicate_task_artifact_and_repetition_mismatch_are_rejected(self):
+        self.write_task("128")
+        ledger = report.read_object(self.runs / "128/trial-results.json")
+        dump(self.runs / "duplicate/trial-results.json", ledger)
+        with self.assertRaisesRegex(report.ReportError, "duplicate task ledger"):
+            report.load_rows(self.runs)
+        (self.runs / "duplicate/trial-results.json").unlink()
+        with self.assertRaisesRegex(report.ReportError, "repetitions"):
+            report.load_rows(self.runs, repetitions=10)
+
+    def test_failed_judge_is_unknown_instead_of_zero_and_raw_execution_metrics_are_retained(self):
+        self.write_task("128")
+        path = self.runs / "128/judgements.json"
+        judgments = report.read_object(path)
+        judgments["trials"][0].update(status="judge_error", score=None, criteria=[])
+        dump(path, judgments)
+        rows, _ = report.load_rows(self.runs)
+        self.assertIsNone(rows[0]["rubric_score"])
+        self.assertEqual(rows[0]["judge_status"], "judge_error")
+        self.assertEqual(rows[0]["observed_metrics"]["input_tokens"], 100)
+        self.assertFalse(report.summarize(rows)["complete"])
+
+
+if __name__ == "__main__":
+    unittest.main()
