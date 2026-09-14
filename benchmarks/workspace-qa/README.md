@@ -1,226 +1,178 @@
 # Qoder + Qwen3.8-Max Workspace QA
 
-This experiment measures adding zg 0.2.2 to Qoder CLI 1.1.45 on an original
-Workspace-Bench Lite CN QA subset. It uses **remote
-`qwen/qwen3.7-text-embedding`**, as requested; there is no local model fallback.
-It does not reproduce the official full Lite leaderboard.
+**Current status: the experiment is being corrected to use the documented
+`zg install` integration. Standard installation has not yet passed its new
+end-to-end validation, and no standard-installation efficacy result is available.**
+
+The earlier implementation used released zg 0.2.2 through a benchmark-managed
+MCP bridge and manually assembled Qoder configuration. That did not satisfy the
+requested standard installation. All earlier probe, smoke, judge-recovery and
+full-run observations are now **legacy bridge diagnostics only**. They cannot
+validate, populate, or be combined with the new standard-installation experiment.
+The original artifacts remain intact; the classification is recorded in
+[legacy-bridge-runs.json](data/legacy-bridge-runs.json).
+
+The corrected experiment restarts **all 200 formal trials**: the same 10 tasks,
+10 repetitions per arm, baseline and with-zg. Its task selection, model versions,
+remote embedding, index size cap, QA budgets, source data and judge remain fixed.
+Old baseline observations are excluded as well as old with-zg observations.
+
+## Standard installation contract
+
+Follow the repository [README quickstart](../../README.md) and
+[agent installation guide](../../docs/01-agents.md#install-an-integration), using
+the pinned release rather than the branch's development package:
+
+```bash
+npm install -g @zvec/zvec-grep@0.2.2
+zg install --target qoder --yes
+```
+
+`qoder` is the canonical installer target even when the executable is
+`qodercli`. The installer manages the `zvec_grep` MCP entry, search guidance,
+Qoder trust and exact tool permissions. For Qoder CLI the configuration is
+`settings.json` and `AGENTS.md` under `${QODER_CONFIG_DIR:-~/.qoder}`; the IDE
+entry is normally `~/.qoder/mcp.json`, with `QODER_IDE_MCP_PATH` available for
+isolation. Documented transport options may be recorded explicitly. Start a new
+Qoder session after installation so it reads the installed configuration and
+guidance. A hand-written replacement MCP entry or benchmark-supplied substitute
+for the installed guidance is not evidence of standard installation.
+
+Each with-zg session must receive the actual installation output in its isolated
+configuration/home. Record the release identity, installation command and exit
+status, generated configuration/guidance hashes, and the Qoder session's loaded
+MCP/tool evidence. Baseline keeps its independent clean configuration. Package
+and corpus preparation can be shared without sharing answers or session state.
+The documented installer may start the local server when possible; verify the
+selected transport and readiness as described in the
+[setup verification guide](../../docs/01-agents.md#verify-the-setup).
+
+MCP tool permission and remote embedding authorization are separate. The user
+has selected remote `qwen/qwen3.7-text-embedding` for this experiment; its
+workspace authorization and provider credential must use the released product's
+supported path and be recorded separately. An API key alone does not establish
+that the installed MCP server can perform the authorized embedding operation.
+New validation must exercise that installed path. No local embedding or model
+fallback is allowed.
+
+## Frozen benchmark and controls
 
 The [selection protocol](../../docs/benchmark-protocols/qoder-workspace-lite-cn-selection.zh-CN.md)
-compares the five candidate benchmarks and explains exclusions. The
-[lock](data/lock.json) freezes 10 tasks, dataset/workspace revisions and source
-hashes. Tasks 3, 127 and 128 are code QA; 139, 143, 158, 160, 161, 191 and 373
-are other read-only workspace QA. Original Chinese tasks may contain English
-code or documents; this run does not add the separate English task split.
+compares the five requested candidates. [lock.json](data/lock.json) freezes the
+Workspace-Bench Lite CN subset, dataset/workspace revisions and input hashes:
 
-## CI execution
+- Code QA: 3, 127, 128.
+- Other read-only workspace QA: 139, 143, 158, 160, 161, 191, 373.
+- Qoder CLI 1.1.45; requested and observed model `qwen3.8-max`; zg 0.2.2.
+- Remote embedding `qwen/qwen3.7-text-embedding`; GLM-5.2 rubric judge.
+- 10 repetitions per arm per task; balanced AB/BA order fixed per task.
+- 4 CPU / 8 GiB per task container; 900 seconds, 60 model requests,
+  120 tool calls and 600,000 inclusive input tokens per QA trial.
+- Uniform 1 MiB index file-size cap; larger files remain fully readable in both
+  arms and are skipped as whole files by the index. Other selection follows
+  production defaults, without gold-dependent filtering.
 
-[Qoder Qwen3.8-Max Workspace QA](../../.github/workflows/workspace-qa-qoder.yml)
-runs on this branch with five explicit scopes:
+Both arms receive the original question and immutable original persona working
+files, including distractors. Only nested `.git` metadata is uniformly omitted.
+Original inputs must match the full workspace by SHA. The harness materializes
+the terminal answer verbatim into the original requested Markdown/text filename
+outside the corpus; file-delivery rubrics do not demonstrate agent file writes.
+This is a 10-task QA subset, not the official full Lite leaderboard or a pure
+code-QA benchmark. Chinese tasks may contain English documents or code.
 
-- An ordinary push affecting this experiment runs offline validation only.
-- `[workspace-qa-probe]` validates and checks the actual remote embedding,
-  released SDK and Qoder MCP chain on one synthetic file. It prepares no full
-  workspace and runs no benchmark trials or judge; use it for integration fixes.
-  The [first verified probe](data/probe-validation.json) completed its model and
-  retrieval checks in 26.117 seconds (about 95 seconds for the cold probe job).
-- `[workspace-qa-rejudge]` resumes only invalid or missing judgments on the
-  pinned smoke artifact, preserving its original QA observations and valid scores.
-- A push whose head commit message contains `[workspace-qa-smoke]` validates,
-  then runs task 3 once per arm: **two smoke trials**.
-- `[workspace-qa-full]` validates, reuses the pinned completed smoke when all
-  31 evaluation code/configuration files match, or runs fresh smoke when they
-  differ. The 10-task matrix requires complete validated smoke evidence. Every formal
-  task runs 10 independent repetitions per arm: **200 formal trials**.
+The source is prepared once per task. Each repetition uses a fresh container,
+session and home; with-zg receives an isolated index copy. Installation, source
+and index preparation are recorded separately from QA time and token usage.
+Installing the integration correctly does not require redownloading the complete
+workspace or rebuilding its index on every repetition.
 
-Smoke observations are excluded from the formal report. Manual dispatch supports
-`validate`, `probe`, `rejudge`, `smoke` (default) and `full` once GitHub exposes the workflow for
-dispatch. Concurrency groups separate these scopes so a long formal run does
-not queue quick validation behind it. A push must still affect the workflow's
-listed experiment paths; an empty commit alone does not trigger it.
-Explicit `smoke` always runs a new pair. For `full`, smoke reuse restores the
-exact prior recovery artifact, verifies its recorded evidence hashes, checks
-original raw Qoder/MCP traces and candidate bytes, then recomputes integration
-validation and reporting with the current code. Missing, corrupt or incompatible
-evidence cannot unlock the matrix. No model calls or new QA observations occur
-during reuse; every formal trial remains a fresh session.
-Smoke verifies a successful real Qoder vector search using the synthetic setup
-probe's native and MCP traces, plus tool registration and integrity in the QA
-trial. Natural non-use of zg on the original question is retained as an
-observation; it does not cause another rollout. If the QA agent does attempt zg
-but every search fails, the smoke still fails. A terminal answer alone cannot
-establish that integration works. All rubric judgments and required measurements
-must also be complete. Formal trials retain natural non-use without filtering.
+## CI validation and execution
 
-For a failed judge after completed QA, `[workspace-qa-rejudge]` (or dispatch
-`rejudge`) restores the exact artifact frozen in [judge-recovery.json](data/judge-recovery.json).
-Every artifact file is checked against its recorded hash. Only the small original
-judge evidence files are downloaded; source extraction, indexing and Qoder
-rollouts are not repeated. Explicit judge resume preserves valid scores and all
-prior attempts, checks candidate/prompt/model/evidence identity, and uses only the
-remaining retry budget. The original validation and judgments are retained along
-with new recovery provenance. This recovery artifact is excluded from formal
-batch aggregation.
+All actual installation checks, dataset preparation and model calls run through
+[GitHub Actions](../../.github/workflows/workspace-qa-qoder.yml). The corrected
+sequence is offline validation, a tiny probe of the **standard-installed** path,
+a fresh task-3 smoke pair, and then the 10-task / 200-trial formal matrix.
+Until the new installation and smoke evidence pass, this sequence is pending.
+An old bridge probe or smoke cannot unlock the corrected formal run, even when
+its old code hashes match or its bridge retrieval succeeded.
 
-Both arms use the same original question, read-only tools, 4 CPU/8 GiB container
-limits and 900-second agent limit. Balanced AB/BA ordering is frozen per task.
-With zg additionally receives the read-only MCP search tool. The harness writes
-the final response verbatim to the requested Markdown/text filename, outside
-the immutable source workspace. File-delivery rubric successes therefore do
-not establish that the agent itself wrote files.
+Scope names distinguish offline `validate`, tiny `probe`, task-3 `smoke`, and
+formal `full`; `rejudge` is only for a separately pinned scoring recovery. The
+existing [judge-recovery record](data/judge-recovery.json),
+[probe record](data/probe-validation.json) and
+[smoke record](data/smoke-validation.json) describe the legacy bridge protocol.
+Their success fields retain their historical meaning and do not certify the
+new installation. Any future validation reuse requires evidence from the
+standard-installation protocol itself, with compatible installation and
+execution configuration.
 
-Each job extracts the entire original persona's working files, including
-distractors, from the pinned ZIP using verified byte ranges and per-file CRC/SHA.
-Only nested `.git` metadata is uniformly omitted; no corpus selection uses the
-hidden dependency list. Original inputs must match the full workspace by SHA.
-Each task validates or builds an immutable remote-model index before its paired
-trials; each with-zg run receives an isolated copy. Index preparation is reported
-separately from agent time, tokens and tool calls. The runner never loads a
-Potion index.
+Natural non-use of zg on an original question remains an observation. A
+separate real installed-MCP vector probe establishes connectivity; QA logs must
+show the installed tool registration and integrity. Failed tool calls cannot be
+represented as successful retrieval. Neither a low judge score nor a model
+budget failure triggers a replacement QA sample. Smoke and probe observations
+remain outside the 200 formal trials.
 
-Read-only QA does not require reinstalling dependencies, redownloading source,
-or rebuilding an index for each repetition. All repetitions within a task share
-one prepared source and seed. The current matrix uses separate jobs per task;
-same-persona tasks share compatible preparation caches across jobs, not a live
-runner. Fresh sessions and homes isolate answers and execution state. The four
-personas have different corpora, so substituting one persona's files for another
-would change the frozen tasks.
+Verified 16 MiB archive blocks may be cached under frozen archive identity and
+persona, with a 4 GiB per-persona cap; Research only fits partially. Full CRC/SHA
+checks still apply. Only completed compatible index seeds may be reused, with
+content/runtime/model/endpoint/index-configuration identity and fresh validation.
+The standard installation must establish compatibility before using a seed from
+an earlier preparation; legacy bridge validation does not establish it.
+Candidate answers, judgments, sessions and modified trial copies are never
+preparation caches. Cache hits and build/download time are reported separately.
 
-CI reuses two preparation caches. Verified 16 MiB HTTP blocks are stored under
-the frozen archive identity and persona, with a **4 GiB cap per persona**. CRC
-and source SHA checks still run on extraction. The large Research workspace only
-fits partially in this cache; a hit does not imply zero remaining downloads.
-Completed index seeds are keyed by corpus/configuration, released runtime and
-build helpers, then revalidated against source and index content hashes and a
-new SDK preflight. A changed embedding endpoint/model, index limit or relevant
-build code invalidates reuse. No candidate answers, judgments, session state or
-trial-modified index copies are cached.
+Required Actions credentials remain Qoder access, a remote embedding key, and
+GLM judge access for smoke/full. The configured Model Studio workspace key may
+serve embedding as already configured. Credentials are passed by environment
+name and scanned out of artifacts; baseline receives no embedding key. Remote
+embedding usage is not added to Qoder's input tokens.
 
-Separate Actions restore/save steps retain downloaded blocks and completed
-seeds even if a later evaluation fails. First use still pays setup costs, and
-an evicted cache is rebuilt. We do not increase the repository's cache quota;
-GitHub's default is 10 GB shared across its caches, so retention depends on other
-workflows too. [GitHub cache limits](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#usage-limits-and-eviction-policy)
-`dataset/range-cache-metrics.json` records hit/download bytes even on preparation
-failure; `runs/manifest.json` and `runs/preparation/runtime/preparation.json`
-record index reuse/build provenance separately from QA metrics. Ephemeral Git
-snapshots use compression 0 and disable background GC to reduce setup CPU time.
+## Legacy bridge evidence
 
-Protocol v2 applies one uniform SDK `maxFileSizeBytes=1048576` (1 MiB) index
-limit to every task. Larger files remain available in full to both arms through
-Read/Grep; the index skips the whole file and does not truncate it. Other index
-selection behavior follows production defaults. Results describe this explicit
-index configuration, not unrestricted default indexing. Preparation stderr is
-redacted, streamed to Actions live and retained in the runtime artifact.
+The [legacy registry](data/legacy-bridge-runs.json) is the classification record
+for all earlier observations, including any partial formal results:
 
-The first two task-128 setup attempts produced no QA answers: run
-[34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317)
-exposed a missing SDK remote-operation permit (fixed), and run
-[34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894)
-hit the 30-minute index budget at 483/1226 files, with progress slowing at large
-LongDA data files. The uniform cap and smaller task-3 smoke were chosen before
-any QA output or score was observed. All 10 formal tasks, including 127/128,
-remain selected. Failed setup attempts are excluded from formal QA statistics.
+| Run | Historical observation; diagnostic use only |
+|---|---|
+| [34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317) | Task 128 setup failed because the SDK remote-operation permit was missing; no QA answers. |
+| [34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894) | Task 128 reached the 30-minute index budget at 483/1226 files; no QA answers. |
+| [34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811) | Both task-3 answers and scores existed, but the only bridge query failed due to missing embedding credentials. |
+| [34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904) | Bridge setup probe succeeded; both answers completed with natural zero zg usage; one judge response was invalid. |
+| [34832632725](https://github.com/Cuiyus/zvec-grep/actions/runs/34832632725) | The synthetic bridge probe completed in 26.117 seconds; this is not a standard-installation check. |
+| [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759) | One additional judge attempt completed the preceding bridge smoke's scoring, preserving the original QA. |
+| [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405) | A new bridge smoke had a with-zg budget-exhausted outcome; the formal matrix did not start. |
+| [34837171877](https://github.com/Cuiyus/zvec-grep/actions/runs/34837171877) | Bridge full run at `d1962c2107d80c8685acc5096d2e927972317a7c`; cancellation was requested during the installation correction. Any partial results remain legacy diagnostics. |
 
-Run [34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811)
-completed both task-3 answers and all judgments, but its only MCP query failed
-because Qoder removed the inherited embedding key. The old workflow incorrectly
-accepted terminal completion as successful integration. Those two observations
-are retained as diagnostics, **not a valid zg efficacy comparison**. Qoder's
-supported `${NAME}` MCP environment references now explicitly forward
-the three remote embedding variables without serializing their values. The
-smoke gate catches zero-success integration even when the model still answers.
+The 1 MiB cap and task-3 smoke selection were frozen before the first QA answer
+or judge score, following the two task-128 setup failures. They remain unchanged
+in the corrected experiment. Later bridge repairs, judge recovery, cache timings
+and smoke reuse explain those historical runs; none establishes standard
+installation or transfers any QA sample into the restarted formal experiment.
 
-Run [34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904)
-then passed the real setup search and completed both QA answers. The QA agent
-naturally made zero zg calls; the first gate incorrectly treated this as an
-integration failure. Gate v2 separates the successful integration probe from
-natural tool uptake. Independently, one judge response repeated text until its
-8192-token limit and was correctly rejected, leaving its score null. Recovery
-retains both original answers and the already-valid judgment, then resumes only
-the invalid assessment. No QA reroll is used to obtain a zg call.
+## Measurements and recovery
 
-Recovery [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759)
-completed in 17.974 seconds with one additional judge attempt and zero new QA
-trials. The baseline judgment and every original QA byte were preserved. The
-[smoke validation record](data/smoke-validation.json) now has complete measurements
-and judgments, with the separate vector probe proving integration. Its QA scores
-were baseline 18/21 and with-zg 16/21; natural zg uptake was zero. This one pair
-validates the workflow and is not a formal efficacy estimate. Formal execution
-retains all 10 locked tasks and 10 repetitions per arm.
+Retain judge score, inclusive native Qoder input tokens, attempted tool calls
+(including zg calls), agent wall seconds, outcome and original traces for every
+planned trial. Cached input is included in Qoder's counter and is not added
+twice. Missing measurements stay null; failures and unstarted trials remain in
+the planned denominator. Record installation/setup, embedding, host verification
+and judge time separately. The corrected runtime's timer boundaries require new
+validation; old bridge latency cannot establish standard-installation latency.
 
-That run restored 1,950,506,687 bytes of workspace archive blocks with zero new
-archive block downloads. Extraction took about 17 seconds, versus 194 seconds
-on the prior cold task-3 run; cache archive restore itself took about 18 seconds.
-Index rebuilding still took 71 seconds because the bridge fix changed its build
-identity. That completed seed was retained even though judging failed.
+The custom source-grounded GLM-5.2 adapter retains all original rubric texts and
+types, including known grounding defects. It is not the official ClaudeCode
+filesystem judge. Valid assessments are final regardless of score. Transient
+transport errors and invalid/truncated responses share the fixed three-attempt
+budget with the same model, candidate and prompt; recovery preserves previous
+attempts and does not reset that budget.
 
-The first full launch [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405)
-restored both caches: index build time was zero, with a 31-second fresh SDK
-validation. Its new random smoke pair had a completed baseline and a with-zg
-`budget_exhausted` outcome, so the old launch sequence blocked all 200 formal
-trials despite an already-complete, configuration-identical smoke. Full now
-revalidates that pinned completed smoke instead of requiring another random QA
-pair to finish. This failed smoke remains retained; budgets and formal tasks are
-unchanged, and no formal sample is selected or retried to obtain completion.
-
-Required Actions secrets:
-
-- `QODER_PERSONAL_ACCESS_TOKEN`: Qoder native model access.
-- `GLM_API_KEY`: existing Model Studio workspace key for GLM-5.2 rubric judging
-  in smoke/full. Probe does not require it when `QWEN_API_KEY` is configured.
-- `QWEN_API_KEY`, if a separate embedding key is used. Otherwise the workflow
-  maps the existing workspace `GLM_API_KEY` to `QWEN_API_KEY` for the **same
-  already-configured Model Studio workspace endpoint**. A bilingual embedding
-  probe must return the requested 1024-dimensional model before corpus download.
-  A second probe uses released zg SDK document indexing and vector retrieval on
-  a small synthetic bilingual file. A third probe reuses that fixture through
-  the actual Qoder MCP subprocess and requires successful vector retrieval plus
-  observable native model usage before any large workspace download. These are
-  setup diagnostics, excluded from all benchmark trial counts and metrics.
-  A denied/unavailable model stops the job; it does not trigger model fallback.
-
-The endpoint is the existing `ZVEC_GREP_EMBEDDING_ENDPOINT` in
-`benchmarks/swe-qa-bench/zg_bench/settings.py`. Keys travel to Docker by environment
-variable name, never as command-line values. Baseline receives no embedding key.
-The remote-only benchmark path explicitly grants each SDK operation a temporary
-permit for the exact Qwen model and endpoint, corresponding to CLI `--allow-remote`.
-It does not persist authorization files or enable remote access in the old local protocol.
-Artifacts are scanned for all configured secret values before upload.
-
-## Measurements and judgment
-
-Each planned run retains judge score, inclusive native Qoder input tokens,
-attempted tool calls (plus zg calls), agent wall seconds, outcome and raw trace.
-Missing measurements remain null and failed/planned runs stay in the denominator.
-Cached input is already included in Qoder's inclusive counter and is not added
-again. Remote embedding and judge usage are not added to Qoder input tokens.
-Wall time includes Qoder startup and, for with-zg, the MCP bridge's in-process
-integrity work. Host-side index preparation and post-trial verification are
-outside the agent interval; this harness overhead limits latency attribution.
-
-GLM-5.2 scores all unchanged source rubrics against original source files and one
-candidate report, blind to arm and cost metrics. This is a **custom rubric judge
-adapter**, not the official ClaudeCode filesystem judge. Source-rubric grounding
-defects are retained and disclosed; scores are descriptive, not a statistical
-non-inferiority claim. No automatic best-of selection or retry of low scores.
-Transient transport failures and invalid/truncated judge responses may use a
-fixed total of three attempts with the same model, candidate and prompt. Every
-attempt is retained; the first valid assessment is final regardless of score.
-
-Per-task artifacts contain `runs/trial-results.json`, `runs/judgements.json`,
-native JSONL/trajectory, candidate files and setup provenance. The final artifact
-contains `summary.json`, `summary.md`, `rows.json`, `rows.csv` and `rows.md`.
-Results are paired by task/repetition, averaged within task and then equally
-across tasks, with code QA and other QA reported separately. Incomplete runs
-produce a partial report and a failing completeness check rather than a claimed
-efficacy result.
-
-The final artifact also includes `failure-audit/`: execution coverage, QA
-completion, original termination reasons and budgets, separately labelled input
-token lower bounds, observed tool calls and elapsed time. A recorded budget
-failure is an attempted experiment outcome, not an unstarted trial or zero-cost
-sample. This companion audit does not replace missing final usage with a lower
-bound, retry failed model outcomes, or change the strict report completeness gate.
+Results pair task/repetition, average within each task, then weight tasks equally;
+report code QA and other workspace QA separately. Incomplete observations produce
+a partial report, not a completed efficacy claim. Failure audits retain actual
+termination reasons, budgets and explicitly labelled usage lower bounds without
+substituting them for missing final usage or rerunning failed model outcomes.
+No automatic recovery of the legacy bridge run may fill the new experiment.
 
 ## Offline validation
 
@@ -228,5 +180,5 @@ bound, retry failed model outcomes, or change the strict report completeness gat
 python3.12 -m unittest discover -s benchmarks/workspace-qa/tests -v
 ```
 
-Actual dataset preparation and model evaluations run through GitHub Actions.
-No measured results have been committed at initial implementation time.
+The standard-installation implementation and its GitHub Actions validation are
+in progress. No standard-installation smoke or 200-trial result is claimed here.

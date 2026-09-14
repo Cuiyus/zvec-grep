@@ -5,12 +5,16 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from native_fixtures import PROTOCOL, installation_stub, write_installation
 
 
 def load(name):
@@ -301,10 +305,13 @@ class ReportTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        proof = patch("qoder_probe.installation_evidence", side_effect=installation_stub)
+        proof.start()
+        self.addCleanup(proof.stop)
         self.runs = self.root / "runs"
         self.runs.mkdir()
         self.manifest = self.root / "selected.json"
-        dump(self.manifest, {"tasks": [{"task_id": "128", "slice": "code_qa"}, {"task_id": "76", "slice": "document_qa"}], "repetitions": 2})
+        dump(self.manifest, {"experiment": {"protocol": PROTOCOL}, "tasks": [{"task_id": "128", "slice": "code_qa"}, {"task_id": "76", "slice": "document_qa"}], "repetitions": 2})
 
     def write_task(self, task_id, values=(100, 80), repetitions=2, missing=(), score=(True, False)):
         trials, judgments = [], []
@@ -313,15 +320,74 @@ class ReportTests(unittest.TestCase):
                 if (profile, repetition) in missing:
                     continue
                 trial_id = f"{task_id}-{profile}-{repetition}"
-                trials.append({"trial_id": trial_id, "task_id": task_id, "profile": profile, "repetition": repetition,
+                installation = write_installation(self.runs / task_id / trial_id / "agent", profile)
+                trials.append({"protocol": PROTOCOL, "source_unchanged": True, "installation": installation, "trial_id": trial_id, "task_id": task_id, "profile": profile, "repetition": repetition,
                     "status": "completed", "answer": "answer", "input_tokens": tokens,
                     "output_tokens": 20, "tool_calls": tokens / 10, "wall_seconds": tokens / 20, "zg_tool_calls": 0})
                 judgments.append({"trial_id": trial_id, "task_id": task_id, "profile": profile, "repetition": repetition,
                     "status": "judged", "score": float(passed), "criteria": [{"id": 0, "score": passed, "reason": "evidence"}],
                     "answer_sha256": hashlib.sha256(b"answer").hexdigest(), "judge_latency_seconds": 1})
         directory = self.runs / task_id
-        dump(directory / "trial-results.json", {"task_id": task_id, "repetitions_per_profile": repetitions, "trials": trials})
+        dump(directory / "manifest.json", {"protocol": PROTOCOL, "task_id": task_id})
+        dump(directory / "trial-results.json", {"protocol": PROTOCOL, "task_id": task_id, "repetitions_per_profile": repetitions, "trials": trials})
         dump(directory / "judgements.json", {"task_id": task_id, "judge_model": "glm-5.2", "rubrics": ["original"], "trials": judgments})
+
+    def test_rejects_old_or_mixed_protocol_even_when_all_answers_are_scored(self):
+        self.write_task("128")
+        self.write_task("76")
+        path = self.runs / "76/trial-results.json"
+        ledger = report.read_object(path)
+        ledger["protocol"] = "workspace-qa-qoder-v1"
+        dump(path, ledger)
+        with self.assertRaisesRegex(report.ReportError, "old or mixed"):
+            report.load_rows(self.runs, manifest_path=self.manifest)
+
+    def test_rejects_old_selection_and_runtime_manifest(self):
+        self.write_task("128")
+        old = report.read_object(self.manifest)
+        old["experiment"]["protocol"] = "old-bridge"
+        dump(self.manifest, old)
+        with self.assertRaisesRegex(report.ReportError, "manifest requires"):
+            report.load_rows(self.runs, manifest_path=self.manifest)
+        dump(self.runs / "128/manifest.json", {"protocol": "old-bridge", "task_id": "128"})
+        with self.assertRaisesRegex(report.ReportError, "runtime manifest protocol"):
+            report.load_rows(self.runs)
+
+    def test_completed_trial_requires_original_installation_and_source_evidence(self):
+        for mutation in ("missing", "hash", "source", "manifest"):
+            with self.subTest(mutation=mutation):
+                self.write_task("128")
+                path = self.runs / "128/trial-results.json"
+                ledger = report.read_object(path)
+                trial = ledger["trials"][0]
+                if mutation == "missing":
+                    (path.parent / trial["trial_id"] / "agent/install-manifest.json").unlink()
+                elif mutation == "hash":
+                    trial["installation"]["manifest_sha256"] = "stale"
+                elif mutation == "source":
+                    trial["source_unchanged"] = False
+                else:
+                    (path.parent / "manifest.json").unlink()
+                dump(path, ledger)
+                with self.assertRaises(report.ReportError):
+                    report.load_rows(self.runs)
+
+    def test_failed_installation_keeps_null_observation_and_planned_denominator(self):
+        self.write_task("128")
+        path = self.runs / "128/trial-results.json"
+        ledger = report.read_object(path)
+        trial = ledger["trials"][0]
+        trial.update(status="launch_failure", installation=None, source_unchanged=None, input_tokens=None)
+        (path.parent / trial["trial_id"] / "agent/install-manifest.json").unlink()
+        dump(path, ledger)
+        judgments = report.read_object(path.parent / "judgements.json")
+        judgments["trials"][0].update(status="execution_not_completed", score=None, criteria=[])
+        dump(path.parent / "judgements.json", judgments)
+        rows, plan = report.load_rows(self.runs, manifest_path=self.manifest)
+        self.assertEqual(plan["expected_trials"], 8)
+        self.assertEqual(rows[0]["execution_status"], "launch_failure")
+        self.assertIsNone(rows[0]["input_tokens"])
+        self.assertFalse(report.summarize(rows)["complete"])
 
     def test_entire_missing_task_and_missing_trial_keep_expected_denominator(self):
         self.write_task("128", missing=(("with-zg", 2),))

@@ -13,6 +13,7 @@ from statistics import mean
 from typing import Any
 
 
+PROTOCOL = "workspace-qa-qoder-native-install-v3"
 PROFILES = ("baseline", "with-zg")
 SUCCESS_STATUSES = {"completed", "success", "succeeded"}
 METRICS = ("input_tokens", "output_tokens", "cached_input_tokens", "tool_calls", "zg_tool_calls", "wall_seconds", "rubric_score")
@@ -48,6 +49,8 @@ def manifest_plan(manifest_path: Path | None) -> tuple[dict[str, str], int | Non
     if manifest_path is None:
         return {}, None
     manifest = read_object(manifest_path)
+    if manifest.get("experiment", {}).get("protocol") != PROTOCOL:
+        raise ReportError("manifest requires the native installation protocol; old bridge experiments are excluded")
     tasks, repetitions = manifest.get("tasks"), manifest.get("repetitions")
     if not isinstance(tasks, list) or not tasks:
         raise ReportError("manifest must declare nonempty tasks")
@@ -74,6 +77,12 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
     trial_ids: dict[str, tuple[str, str, int]] = {}
     for path in ledger_files:
         ledger = read_object(path)
+        if ledger.get("protocol") != PROTOCOL:
+            raise ReportError("ledger protocol is not the native installation protocol; old or mixed experiments are excluded")
+        runtime_manifest_path = path.parent / "manifest.json"
+        runtime_manifest = read_object(runtime_manifest_path) if runtime_manifest_path.is_file() else None
+        if runtime_manifest is not None and runtime_manifest.get("protocol") != PROTOCOL:
+            raise ReportError("runtime manifest protocol differs from the native installation protocol")
         task_id, expected = ledger.get("task_id"), ledger.get("repetitions_per_profile")
         if not isinstance(task_id, str) or not task_id or type(expected) is not int or expected < 1:
             raise ReportError(f"invalid trial-results declaration: {path}")
@@ -97,7 +106,27 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
             key = (task_id, trial["profile"], rep)
             if key in trials:
                 raise ReportError("multiple observations for a planned task/profile/repetition")
-            trial_ids[trial_id], trials[key] = key, dict(trial, ledger_path=str(path.relative_to(runs_dir)))
+            installation = None
+            if trial.get("status") in SUCCESS_STATUSES:
+                if runtime_manifest is None or runtime_manifest.get("task_id") != task_id:
+                    raise ReportError("completed native trials require their matching runtime manifest")
+                if trial.get("source_unchanged") is not True:
+                    raise ReportError("completed native trials require unchanged source evidence")
+                if Path(trial_id).name != trial_id:
+                    raise ReportError("trial_id escapes evidence directory")
+                agent = (path.parent / trial_id / "agent").resolve()
+                if not agent.is_relative_to(path.parent.resolve()):
+                    raise ReportError("installation evidence escapes task directory")
+                from qoder_probe import installation_evidence
+                try:
+                    installation = installation_evidence(agent, profile=trial["profile"])
+                except (ValueError, OSError, TypeError, KeyError) as exc:
+                    raise ReportError("completed native trial has invalid installation evidence") from exc
+                reference = trial.get("installation")
+                if not isinstance(reference, dict) or reference.get("manifest_sha256") != installation.get("manifest_sha256"):
+                    raise ReportError("trial installation hash differs from its original installation evidence")
+            trial_ids[trial_id], trials[key] = key, dict(trial, ledger_path=str(path.relative_to(runs_dir)),
+                installation_evidence=installation)
     if not selected:
         selected = {task: "unspecified" for task in declarations}
     if not selected:
@@ -149,6 +178,7 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
                     row.update(trial_id=trial["trial_id"], execution_status=trial.get("status", "unknown"),
                                ledger_path=trial["ledger_path"], model_identity=trial.get("model_identity"),
                                provenance=trial.get("provenance"), error=trial.get("error"),
+                               installation=trial.get("installation"), installation_evidence=trial.get("installation_evidence"),
                                candidate_output_path=trial.get("candidate_output_path"))
                     # Failed execution metrics are retained separately and do not enter successful-pair savings.
                     row["observed_metrics"] = {metric: trial.get(metric) for metric in METRICS if metric != "rubric_score"}
@@ -182,7 +212,7 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
                                 raise ReportError("judgement score differs from the full original rubric mean")
                             row.update(rubric_count=count, rubrics_passed=passed, rubric_score=score)
                 rows.append(row)
-    plan = {"task_ids": sorted(selected), "expected_tasks": len(selected), "expected_trials": len(rows),
+    plan = {"protocol": PROTOCOL, "task_ids": sorted(selected), "expected_tasks": len(selected), "expected_trials": len(rows),
             "expected_pairs": len(rows) // 2, "repetitions_per_task": {task: declarations.get(task, repetitions) for task in sorted(selected)},
             "task_plan_source": "manifest" if manifest_path else "observed_ledgers_only",
             "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest() if manifest_path else None,
@@ -234,6 +264,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         return "N/A" if value is None else f"{value:.3f}"
     lines = ["# Workspace Lite CN · Qoder + Qwen3.8-max QA comparison", "",
         "Custom Qoder QA rubric adapter; original rubrics retained in full. This is not the official ClaudeCode judge or a leaderboard result.", "",
+        f"Integration: standard zg 0.2.2 install; protocol {PROTOCOL}. Original installation artifacts are hash-verified for completed trials.", "",
         f"Planned: {plan['expected_tasks']} tasks × 2 profiles = {plan['expected_trials']} trials ({plan['expected_pairs']} paired repetitions).",
         f"Coverage: {'COMPLETE' if report['efficacy_claim_ready'] else 'INCOMPLETE — descriptive observations only; no efficacy claim.'}", "",
         "Means use equal task weights. Paired comparisons use the same task and repetition in both profiles; missing/error observations stay unscored and remain in the planned denominator.",
@@ -280,7 +311,7 @@ def write_report(*, runs_dir: Path, output: Path, manifest_path: Path | None = N
     summary = summarize(rows)
     slices = {row["task_id"]: row["slice"] for row in rows}
     qa_group = lambda row: "code_qa" if row["slice"] == "code_qa" else ("unspecified" if row["slice"] == "unspecified" else "other_readonly_qa")
-    report = {"schema_version": 1, "adapter": "custom-qoder-qa-rubric-adapter-v1", "leaderboard_comparable": False,
+    report = {"schema_version": 2, "protocol": PROTOCOL, "adapter": "custom-qoder-qa-rubric-adapter-v1", "leaderboard_comparable": False,
         "plan": plan, "summary": summary, "efficacy_claim_ready": summary["complete"] and plan["task_plan_source"] == "manifest",
         "weighting": "equal task weights; paired within task and repetition, per metric",
         "task_slices": slices,
@@ -291,7 +322,7 @@ def write_report(*, runs_dir: Path, output: Path, manifest_path: Path | None = N
     (output / "summary.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
     (output / "rows.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
     columns = ["task_id", "slice", "profile", "repetition", "trial_id", "execution_status", "judge_status", *METRICS,
-               "rubrics_passed", "rubric_count", "judge_model", "judge_latency_seconds", "model_identity", "candidate_output_path", "ledger_path", "judgment_path", "observed_metrics", "provenance", "error"]
+               "rubrics_passed", "rubric_count", "judge_model", "judge_latency_seconds", "model_identity", "candidate_output_path", "ledger_path", "judgment_path", "observed_metrics", "provenance", "installation", "installation_evidence", "error"]
     with (output / "rows.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()

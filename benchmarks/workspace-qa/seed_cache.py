@@ -12,10 +12,10 @@ from typing import Any
 
 BUILD_FILES = (
     "benchmarks/swe-qa-bench/runtime/package-lock.json",
-    "benchmarks/swe-qa-bench/runtime/Dockerfile",
-    "benchmarks/swe-qa-bench/scripts/prepare-index.mjs",
-    "benchmarks/swe-qa-bench/scripts/readonly-search.mjs",
-    "benchmarks/swe-qa-bench/scripts/replay-search.mjs",
+    "benchmarks/workspace-qa/Dockerfile",
+    "benchmarks/workspace-qa/native_index.py",
+    "benchmarks/workspace-qa/native_runner.py",
+    "benchmarks/workspace-qa/native_session.py",
     "benchmarks/swe-qa-bench/zg_bench/swe_qa/readonly_run.py",
     "benchmarks/workspace-qa/dataset.py",
     "benchmarks/workspace-qa/runner.py",

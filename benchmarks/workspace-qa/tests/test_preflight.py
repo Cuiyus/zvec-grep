@@ -16,62 +16,21 @@ spec.loader.exec_module(module)
 
 
 class PreflightTests(unittest.TestCase):
-    def test_sdk_probe_exercises_container_with_remote_credentials_and_cleans_fixture(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"QWEN_API_KEY": "fixture-secret"}):
-            target = Path(tmp) / "probe"
-            def complete(command, name, **kwargs):
-                (target / "runtime" / "result.json").write_text(json.dumps({
-                    "status": "completed", "vector_query_retrieved_fixture": True, "wall_seconds": 0.1,
-                }))
-                return ""
-            with patch.object(module.subprocess, "run", return_value=CompletedProcess([], 0)), \
-                    patch("runner.run_named", side_effect=complete) as run, \
-                    patch("qoder_probe.qoder_mcp_preflight") as qoder_probe:
-                module.sdk_preflight(target)
-            qoder_probe.assert_called_once_with(target / "source", target / "qoder", target / "model-cache", target / "index")
-            command = run.call_args.args[0]
-            self.assertIn("QWEN_API_KEY", command)
-            self.assertIn("ZG_QA_ALLOW_REMOTE_EMBEDDING=1", command)
-            self.assertIn("/opt/qa/embedding-probe.mjs", command)
-            self.assertNotIn("fixture-secret", " ".join(command))
-            self.assertTrue((target / "runtime" / "result.json").is_file())
-            self.assertFalse((target / "source").exists())
-            self.assertFalse((target / "index").exists())
-
-    def test_sdk_failure_retains_diagnostics_but_removes_nonbenchmark_fixture(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"QWEN_API_KEY": "fixture-secret"}):
-            target = Path(tmp) / "probe"
-            with patch.object(module.subprocess, "run", return_value=CompletedProcess([], 0)), \
-                    patch("runner.run_named", side_effect=RuntimeError("SDK authorization failed")), \
-                    patch("qoder_probe.qoder_mcp_preflight") as qoder_probe, \
-                    self.assertRaisesRegex(RuntimeError, "SDK authorization"):
-                module.sdk_preflight(target)
-            qoder_probe.assert_not_called()
-            self.assertTrue((target / "runtime").exists())
-            self.assertFalse((target / "source").exists())
-            self.assertFalse((target / "model-cache").exists())
-
-    def test_qoder_child_probe_failure_blocks_preflight_and_keeps_diagnostics(self):
+    def test_preflight_uses_standard_native_entry_and_no_direct_sdk(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "probe"
-            def complete(command, name, **kwargs):
-                (target / "runtime/result.json").write_text(json.dumps({
-                    "status": "completed", "vector_query_retrieved_fixture": True, "wall_seconds": 0.1,
-                }))
-            def fail_qoder(source, output, cache, index):
-                self.assertTrue(source.is_dir())
-                self.assertTrue(index.is_dir())
-                output.mkdir()
-                (output / "result.json").write_text('{"status":"failed"}')
-                raise RuntimeError("Qoder MCP credential forwarding failed")
-            with patch.object(module.subprocess, "run", return_value=CompletedProcess([], 0)), \
-                    patch("runner.run_named", side_effect=complete), \
-                    patch("qoder_probe.qoder_mcp_preflight", side_effect=fail_qoder), \
-                    self.assertRaisesRegex(RuntimeError, "Qoder MCP"):
+            with patch("qoder_probe.standalone_native_probe") as native, \
+                    patch("runner.run_named", side_effect=AssertionError("No direct SDK route")):
                 module.sdk_preflight(target)
-            self.assertTrue((target / "qoder/result.json").is_file())
-            self.assertFalse((target / "source").exists())
-            self.assertFalse((target / "index").exists())
+            native.assert_called_once_with(target)
+
+    def test_native_preflight_failure_propagates_without_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe"
+            with patch("qoder_probe.standalone_native_probe", side_effect=RuntimeError("native install failed")) as native, \
+                    self.assertRaisesRegex(RuntimeError, "native install"):
+                module.sdk_preflight(target)
+            native.assert_called_once_with(target)
 
     def test_remote_probe_requests_exact_model_and_never_records_credentials(self):
         body = {"model": "qwen3.7-text-embedding", "data": [{"embedding": [0.25] * 1024}], "usage": {"prompt_tokens": 12}}

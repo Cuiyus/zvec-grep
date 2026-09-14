@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check embedding and Qoder MCP connectivity without preparing benchmark tasks."""
+"""Check embedding and standard zg installation in Qoder without benchmark tasks."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ def main(argv=None) -> int:
     root = parser.parse_args(argv).output.resolve()
     root.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    result = {"schema_version": 1, "phase": "setup_only", "included_in_benchmark": False,
+    result = {"schema_version": 2, "protocol": run_task.PROTOCOL, "phase": "setup_only", "included_in_benchmark": False,
               "status": "failed", "model": runner.MODEL, "embedding_model": runner.EMBEDDING}
     try:
         for name in ("QODER_PERSONAL_ACCESS_TOKEN", "QWEN_API_KEY"):
@@ -33,6 +33,7 @@ def main(argv=None) -> int:
         for relative, source_key, target_key in (
             ("embedding-preflight.json", "resolved_model", "resolved_embedding_model"),
             ("sdk-preflight/qoder/result.json", "model_identity", "model_identity"),
+            ("sdk-preflight/qoder/validation.json", "installation", "installation"),
         ):
             try:
                 diagnostic = json.loads((root / relative).read_text(encoding="utf-8"))

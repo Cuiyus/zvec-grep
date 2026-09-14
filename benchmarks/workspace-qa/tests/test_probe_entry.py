@@ -47,6 +47,7 @@ class ProbeEntryTests(unittest.TestCase):
             self.assertEqual(calls, [("embedding", root.resolve() / "embedding-preflight.json"),
                                     ("sdk", root.resolve() / "sdk-preflight")])
             self.assertEqual(result["phase"], "setup_only")
+            self.assertEqual(result["protocol"], "workspace-qa-qoder-native-install-v3")
             self.assertEqual(result["status"], "completed")
             self.assertFalse(result["included_in_benchmark"])
             self.assertEqual(result["model"], "qwen3.8-max")

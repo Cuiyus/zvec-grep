@@ -2,6 +2,8 @@
 
 研究日期：2026-09-14。本文记录选题、评测边界与准备阶段验证；不代表已取得 QA 收益结论。
 
+**协议更正：用户明确要求按 README 执行 `zg install` 标准安装。此前自定义 MCP bridge 的 probe、smoke、评分恢复和 full 全部降为历史诊断，不能验证或填充新实验。标准安装仍在实现与验证中，尚未通过新的完整 smoke；正式 200 次实验将从头开始。**
+
 ## 选择与范围
 
 选择用户列出的 **Workspace-Bench Lite CN**，冻结下方 10 个原始 task。用户已确认允许代码和文档/工作区的广义只读 QA。这里“只读”指保留输入资料和代码；原题要求的新建答案文件仍是交付物。三题直接涉及代码/项目 QA，七题涉及文本资料、JSON 与 CSV 的分析。结果应称为“Workspace-Bench Lite CN 的 10 题 QA 子集”，不能称为完整 Lite 成绩，也不能外推为 10 题纯代码 QA 的收益。
@@ -133,36 +135,67 @@
 
 为控制文件格式和任务歧义，未采用 53（metadata 的输出文件列表与输入文件名重合）、55/95（答案文件要求 `.doc`）、284/287（依赖 Excel 源文件）；未采用 7/131/146/154/372（需要文件复制、整理或移动）、116（包含向群组发送消息）、286（实现与重构代码）。这些排除发生在本次 rollout 之前。
 
-## 执行与观测口径
+## 标准安装更正与当前状态
 
-CI 分为五个显式范围：普通提交仅做离线校验；`[workspace-qa-probe]` 只用一个合成小文件验证真实 embedding、SDK 和 Qoder MCP 链路，不下载完整工作区、不运行 benchmark QA 或 judge；`[workspace-qa-rejudge]` 复用冻结 smoke artifact，仅恢复未合法的评分；`[workspace-qa-smoke]` 运行 1 题 × 2 组 × 1 次；`[workspace-qa-full]` 先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；probe、smoke 和评分恢复不混入正式统计。
+此前运行使用了发布版 zg `0.2.2` 的 SDK，但由 benchmark 自行构造 Qoder MCP 配置并接入自定义 bridge，没有执行用户要求的标准安装流程。真实调用过 zg SDK 或 bridge 检索成功，都不能替代 `zg install` 产生的配置、搜索指引和产品原生 MCP 路径。现更正为按照仓库 [README](../../README.md) 和 [Agent integrations 安装说明](../01-agents.md#install-an-integration) 执行：
 
-准备阶段增加两类缓存。按固定 archive 版本和 persona 缓存已校验的 16 MiB 下载块，每 persona 最多 4 GiB；Research 工作区超过此上限，因此只承诺部分下载复用。索引缓存只保存成功构建并通过 preflight 的不可变 seed，按完整源文件内容、运行时版本、embedding 模型与 endpoint、索引配置和构建代码身份核验，命中后仍重新执行当前工作区 preflight。每个 with-zg trial 继续使用独立副本，不缓存问答、judge、session 或被查询修改过的副本。
+```bash
+npm install -g @zvec/zvec-grep@0.2.2
+zg install --target qoder --yes
+```
 
-缓存采用分开的 restore/save 步骤，后续 QA 失败时仍保存已下载块和已完成 seed。首次运行或缓存被淘汰仍会产生准备成本；不调整仓库缓存收费额度。range-cache-metrics.json 与 preparation manifest 分别记录下载命中字节和索引缓存命中、校验、原始构建来源。冷构建、缓存准备、Qoder 执行及 judge 耗时分开解释，不能把缓存构建耗时节约当作 zg 的答题效率收益。临时 Git 快照关闭压缩及自动 GC，文件内容和 Git 对象内容身份不变。
+安装 target 是 `qoder`，即便命令行程序名为 `qodercli`。文档说明安装器管理 `zvec_grep` MCP 项、搜索指引、Qoder trust 和精确工具权限；Qoder CLI 使用 `${QODER_CONFIG_DIR:-~/.qoder}` 下的 `settings.json` 与 `AGENTS.md`，IDE 默认使用 `~/.qoder/mcp.json`，可通过 `QODER_IDE_MCP_PATH` 隔离。文档支持显式选择 stdio/HTTP transport，实际采用的选项必须记录。安装后启动新会话，才能证明 Qoder 加载了实际生成的配置和指引。不能用手写 MCP 条目或评测专用指引替换安装产物后，仍称为标准安装。
 
-协议 v2 对全部任务统一设置 zg 原生 SDK 参数 `maxFileSizeBytes=1048576`，即只索引不超过 1 MiB 的文件。超过上限的文件整体跳过索引，不截断内容；它们仍完整保留在两组可读工作区中，可用 Read/Grep/Glob 访问。其余筛选沿用生产默认规则，不按题目、依赖清单或 gold 选择索引文件。这是显式资源配置，最终结果不能描述成无限制的默认索引配置。
+with-zg 各独立配置环境应来自实际标准安装，保存 release 身份、安装命令与退出状态、配置/指引哈希、客户端加载与工具注册证据。baseline 继续使用独立的干净配置。软件包和原始数据可复用，答案与 session 不共享；复用准备成果不免除验证标准安装产物的要求。安装器可能启动本地服务，应按实际 transport 检查就绪状态，参见 [安装验证](../01-agents.md#verify-the-setup)。
 
-调整发生在任何 Qoder QA 回答或 judge 分数出现之前。首次 [CI 34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317) 在索引阶段发现 SDK 缺少远程 operation permit，已修复并通过真实 SDK 的远程建索引和向量查询探针。随后 [CI 34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894) 在 1,800 秒索引准备预算处超时：1,226 个候选文件中完成 483 个，最后进度报告 0 个文件失败；进入 LongDA 的大型数据文件后明显变慢。该次没有进入 QA，不能据此声称模型答题失败或 zg 有/无收益。
+本地 MCP 工具许可与远程 embedding 数据授权是两件事。用户已指定本实验使用远程 `qwen/qwen3.7-text-embedding`；CI 应通过发布版支持的授权路径落实并记录该实验工作区的授权，另行注入 provider credential。不能将持有 API key 等同于原生 MCP 授权已经生效，也不能继续以 benchmark 私有 operation permit 证明标准安装链路成功。
 
-据此冻结全局 1 MiB 索引上限，并把 smoke 从 Research 的 128 改为工作区较小的 Backend Developer task 3，以尽早验证完整问答和评分流程。正式任务仍为原 10 题。1 MiB 等于 zg 的代码文件默认上限，同时收紧 data/text 类型；不是按已知答案选取文件。两个准备阶段失败的 smoke 不进入 200 次正式 rollout 统计，原日志和修订依据保留。
+**当前标准安装尚未验证成功。** 新流程应在 GitHub Actions 中依次完成离线校验、标准安装路径的小文件 probe、task 3 的全新两组 smoke，再运行正式矩阵。此前所有 bridge 的 probe/smoke/rejudge 成功标志和哈希记录只保留历史含义，不能复用为新流程验证。新正式实验重新执行 10 题 × 2 组 × 10 次，共 200 次；旧 baseline 和旧 with-zg 均不并入新结果。后续不得以恢复旧 bridge 的未完成样本来填充这 200 次。
 
-随后 [CI 34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811) 完成两组回答和 judge，但原始日志显示唯一一次 zg MCP 查询因缺少 embedding key 而失败，成功检索为 0。此前只检查 agent 最终完成状态的 workflow 误判为成功；该次保留为集成诊断，不能当作有效 zg 收益比较。修复仅通过 MCP 配置中的 `${NAME}` 引用显式传递所需环境变量，不写入密钥值、不改变原题提示。新增下载前的微型真实 Qoder→MCP→远程向量检索探针，并要求 smoke 至少有一次 native 与 MCP 日志共同证实的成功检索。正式 batch 不强制调用 zg，也不筛除自主不使用 zg 的样本。
+## 保持冻结的实验条件
 
-[CI 34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904) 的同 job 真实探针已成功检索，两组原题回答也完整，with-zg 工具已注册并 connected、各项完整性检查通过，但模型自主未调用 zg。原 smoke 门槛将自然不使用误判为接入失败；门槛 v2 改为分别核验真实探针、QA 工具注册与完整性、完整评分和指标。自然 0 次调用保留，不重抽问答；若原题中尝试 zg 却全部失败，仍不能通过 smoke。同时，with-zg 的 judge 输出重复至 8192-token 上限而截断，评分保留 null。新增 `[workspace-qa-rejudge]` 恢复入口，按冻结 artifact 的逐文件 SHA 复用原回答、轨迹和已合法评分，仅下载小体积的原始评分依据并补未合法的 judge；不重复完整工作区准备或 Qoder rollout。原始失败评分和验证文件另行保留。无效格式与瞬时传输异常共享固定最多 3 次尝试，恢复不重置预算；模型、问题、候选和 prompt 不变，首个合法评分立即接受，低分不重试。
+本次更正改变安装与接入方法，不因已观察到的结果调整任务、模型或预算：
 
-该次恢复了 1,950,506,687 字节的 archive 缓存块，新下载块为 0；提取约 17 秒，前一冷运行约 194 秒，缓存归档本身恢复约 18 秒。修复 bridge 导致索引身份更新，本次仍花约 71 秒重建，完成 seed 在 judge 失败后仍成功保存。独立 [probe 34832632725](https://github.com/Cuiyus/zvec-grep/actions/runs/34832632725) 的实际模型与检索检查耗时 26.117 秒，冷启动 probe job 约 95 秒，均不计入 QA 指标。
+- 原 10 题保持为 3、127、128、139、143、158、160、161、191、373，仍为 3 题代码 QA、7 题其他只读 QA。
+- Qoder CLI `1.1.45`、请求与实际解析模型 `qwen3.8-max`、zg 发布版 `0.2.2`。
+- 远程 embedding `qwen/qwen3.7-text-embedding`；GLM-5.2 按原 rubric 评分。禁止静默切换模型或回退到本地 embedding。
+- baseline 与 with-zg 每题各 10 次；维持固定的 AB/BA 交错顺序、4 CPU / 8 GiB 容器限制，以及每次 QA 的 900 秒、60 次模型请求、120 次工具调用、600,000 inclusive input tokens 上限。
+- 原始完整 persona 工作文件、逐文件 SHA 校验、统一排除 `.git` 元数据、原题提示及答案文件交付方式保持不变。
+- 所有任务维持 1 MiB 索引文件上限；超过上限的文件整体跳过索引，在两组可读源工作区仍完整保留。其余筛选沿用发布版默认规则，不按题目、依赖清单或 gold 选文件。这不是无限制的默认索引配置。
 
-恢复运行 [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759) 仅用 17.974 秒补齐失败 judge，保留原两份回答、全部原始 attempt 和合法 baseline 评分，流程验证完整。随后首次 full [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405) 的全新 smoke 出现 with-zg budget_exhausted，导致正式矩阵尚未启动；两类准备缓存均命中，索引构建耗时为 0，SDK 校验约 31 秒。该预算失败原样保留。full 启动现在按固定 31 个评测核心代码/配置文件的 SHA 校验是否与已通过完整验证的 smoke 一致：一致时恢复指定 artifact，校验原始证据并重算 gate/report；不一致时才跑新 smoke。显式 smoke 始终执行新样本。复用只涉及流程验证，正式 200 条仍是新会话，任务、模型、预算和原题不变。
+每次使用独立任务容器、session 和 home，同一 task 可共享准备一次的只读源工作区；with-zg 的 index 状态继续隔离。只读 QA 无须每次重新下载原始工作区或重新安装 npm 包，但每个 Qoder 配置环境必须加载真实 `zg install` 的产物。10 题涉及 4 套不同语料，不能以统一为一个角色工作区减少准备成本。
 
-固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
+## CI、缓存与结果边界
 
-先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session 和 home，共享该 task 准备一次的只读源工作区；with-zg 使用不可变 seed 的独立副本。固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。
+实际安装、准备及模型调用均通过 GitHub workflow 执行。范围继续区分 `validate`、微型 `probe`、`smoke`、`full` 及独立评分恢复 `rejudge`；在标准安装实现完成并验证前，不宣称这些新路径已经走通。`data/probe-validation.json`、`data/smoke-validation.json`、`data/judge-recovery.json` 当前记录的是旧 bridge 流程。未来若复用验证，必须另有标准安装协议自己的完整证据和兼容配置。
 
-只读 QA 无须每轮重装环境、下载数据或建索引。当前同一 task 的 20 次正式测试共用准备成果；跨 task 仍是独立 CI job，通过相同 persona 的兼容缓存复用下载块和索引 seed，尚未合并成同一 runner。10 题对应 4 套不同语料工作区，软件运行时可以统一，但不能把所有题换成同一角色的文件。独立会话用于隔离上轮答案和执行状态，与重新下载文件是两回事。
+按固定 archive 版本和 persona 缓存已校验的 16 MiB 下载块，每 persona 最多 4 GiB；Research 工作区只能部分复用。原始语料缓存与安装方法无关，但使用前仍验证 CRC/SHA。索引 seed 只在完整内容、发布运行时、模型、endpoint、索引参数和准备方式兼容时复用，并重新验证；旧 bridge 成功不能替代新原生路径的兼容验证。不缓存问答、judge、session 或修改过的 trial index。冷下载、缓存恢复、索引构建、安装和校验时长分别记录，不作为模型答题效率收益。
 
-逐次记录 task ID、组别、重复序号、agent 成功/失败状态、原始 judge 逐条判断和总分、input tokens、tool calls、elapsed seconds，并保留原始轨迹作为核算依据。agent 异常、judge 异常、缺失 usage 必须单列；缺失值用 null，不能填 0。input tokens 使用 Qoder 实际报告的累计输入，若无缓存分项或逐请求 usage 则标注不可用，不能按工具调用数推算。tool calls 明确为模型发出的全部工具调用数，并另列 zg search/rg 使用次数；同一批查询是否计一次按真实 tool-call ID 核算。
+新 smoke 要证明标准安装后的 Qoder MCP 链路可用：小文件向量检索成功、配置和工具实际加载、只读与结果完整性、评分及四项指标完整。原题里模型自主不使用 zg 仍是有效观察，不为了获得一次 zg 调用重抽样；已尝试却失败的调用不能计为成功。probe 与 smoke 均不进入正式 200 次统计。
 
-judge 分数、token、tool-call 和耗时按同一 task/repeat 配对比较，至少给出每题两组均值、差值与失败数，再给总体宏平均；小样本收益只作为探索结果。不能按 judge 成功过滤后只报效率均值而不披露失败率，也不能用 pass@10 代替本轮重复试验的平均质量。
+## 旧 bridge 运行的保留与分类
 
-实际运行仍需可用的 Qoder/Qwen3.8-Max 认证、judge 认证、GitHub Actions Docker/网络资源；这些是执行前置条件，不属于已取得的实验结果。
+完整分类见 [legacy-bridge-runs.json](../../benchmarks/workspace-qa/data/legacy-bridge-runs.json)。该标记保留原始结果和失败，不覆盖原 artifact，也不将历史成功重写成当时的技术失败；它表示这些记录不满足更正后的安装协议。
+
+| 运行 | 原始观察；全部仅限旧 bridge 诊断 |
+| --- | --- |
+| [34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317) | task 128 索引阶段缺少 SDK remote-operation permit，未进入 QA。 |
+| [34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894) | task 128 在 1,800 秒索引预算处超时，1,226 个候选完成 483 个，未进入 QA。 |
+| [34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811) | 完成 task 3 两份回答及评分，但唯一 bridge 查询因 embedding key 缺失而失败。 |
+| [34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904) | bridge 探针成功，两份 QA 完成且自然 0 次 zg 调用；一次 judge 输出截断。 |
+| [34832632725](https://github.com/Cuiyus/zvec-grep/actions/runs/34832632725) | bridge 的合成文件探针完成，不能证明标准安装。 |
+| [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759) | 只补一次 judge，保留原回答和合法评分；通过的是旧 bridge 流程验证。 |
+| [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405) | 新 bridge smoke 的 with-zg 达到预算上限，正式矩阵未启动；保留原预算失败。 |
+| [34837171877](https://github.com/Cuiyus/zvec-grep/actions/runs/34837171877) | commit `d1962c2107d80c8685acc5096d2e927972317a7c` 的 bridge full；更正时已请求取消，任何部分结果均归历史诊断。 |
+
+前两次 task 128 准备失败之后、任何 QA 回答或分数出现之前，已冻结 1 MiB 索引上限并改用 task 3 smoke；该选择仍有效，原 127/128 没有移除。后续 bridge 的环境传递修复、自然不使用 gate、judge 恢复、缓存收益及 smoke 复用均有诊断价值，但不能转化为标准安装实验的通过证据或正式样本。
+
+## 观测与恢复口径
+
+逐次保留 task ID、组别、重复序号、judge 逐条判断和总分、Qoder 原生 inclusive input tokens、全部尝试的工具调用、zg 调用、elapsed seconds、原始轨迹及终止状态。缺失值为 null；预算失败、模型失败和未启动状态分别保留在计划分母中，不能写成零成本或用成功样本替代。cached input 已包括在 Qoder inclusive 计数中，不重复相加；embedding 和 judge token 不混入 QA 输入。
+
+安装、索引准备、host 校验和 judge 时长单列。新的标准安装运行时需要重新验证计时边界，不能用旧 bridge 的启动、检索或内部完整性检查耗时证明原生安装延迟。正式运行开始后保持同一时间口径，不中途改动以追求完整结果。
+
+GLM-5.2 使用原始资料和候选输出，盲于组别与成本指标，评分全部原始 rubrics；这仍是自定义适配器，不是官方 ClaudeCode 文件系统 judge。无效格式、截断或瞬时传输错误共用最多 3 次 judge 尝试；恢复时保留原尝试、候选、prompt、模型和合法评分，不重置预算，首个合法评分无论高低立即接受。合法模型失败和低分 QA 不重试。
+
+新实验结果按同一 task/repetition 配对，题内取平均后跨题等权汇总，并区分代码 QA 与其他只读 QA。未完整执行时报告覆盖率、失败原因和缺失项，不宣称已完成 200 次或得出收益结论。新标准安装的真实验证和正式结果仍待 GitHub Actions 产生。

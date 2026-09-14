@@ -50,20 +50,14 @@ jobs:
       - name: Test dataset isolation, execution accounting, judge and reports
         run: |
           python -m unittest discover -s benchmarks/workspace-qa/tests -v
-          PYTHONPATH=benchmarks/swe-qa-bench:benchmarks/swe-qa-bench/tests python -m unittest test_readonly_agents.ReadonlyAgentTests.test_remote_mcp_environment_is_only_explicit_named_references_on_with_zg -v
-      - name: Test released SDK bridge and scoped remote authorization
+      - name: Verify the released Qoder global guidance loader
         env:
-          ZG_QA_AUTH_TEST_PACKAGE_DIR: ${{ runner.temp }}/zg-auth-package/package
-          QODER_MCP_TEST_BUNDLE: ${{ runner.temp }}/qoder-mcp-package/package/bundle/qodercli.js
+          ZG_QA_QODER_TEST_BUNDLE: ${{ runner.temp }}/qoder-mcp-package/package/bundle/qodercli.js
         run: |
-          mkdir -p "$RUNNER_TEMP/zg-auth-package"
-          npm pack @zvec/zvec-grep@0.2.2 --pack-destination "$RUNNER_TEMP/zg-auth-package" --silent
-          tar -xzf "$RUNNER_TEMP/zg-auth-package/"*.tgz -C "$RUNNER_TEMP/zg-auth-package"
-          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/remote-authorization.test.mjs
           mkdir -p "$RUNNER_TEMP/qoder-mcp-package"
           npm pack @qoder-ai/qodercli@1.1.45 --pack-destination "$RUNNER_TEMP/qoder-mcp-package" --silent
           tar -xzf "$RUNNER_TEMP/qoder-mcp-package/"*.tgz -C "$RUNNER_TEMP/qoder-mcp-package"
-          node --test benchmarks/swe-qa-bench/scripts/qoder-mcp-environment.test.mjs
+          python -m unittest discover -s benchmarks/workspace-qa/tests -p test_native_session.py -v
       - id: matrix
         name: Freeze matrix before any model results
         run: |
@@ -102,8 +96,8 @@ jobs:
       - name: Build pinned zg and Qoder runtime
         run: >-
           docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
-          -f benchmarks/swe-qa-bench/runtime/Dockerfile
-          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+          -f benchmarks/workspace-qa/Dockerfile
+          -t zg-readonly-qa:0.2.2 benchmarks
       - name: Check remote embedding and real Qoder MCP retrieval on one tiny file
         env:
           QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
@@ -151,76 +145,18 @@ jobs:
             ${{ runner.temp }}/workspace-qa-probe/embedding-preflight.json
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/runtime/
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/
+            !${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/index/**
+            !${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/model-cache/**
   rejudge:
     needs: validate
     if: needs.validate.outputs.scope == 'rejudge'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Read frozen recovery source
-        id: recovery
+      - name: Reject legacy bridge judge recovery
         run: |
-          python - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          recovery = json.loads(Path('benchmarks/workspace-qa/data/judge-recovery.json').read_text())
-          assert type(recovery['source_run_id']) is int and recovery['source_run_id'] > 0
-          assert re.fullmatch(r'workspace-qa-smoke-[0-9]+-[0-9]+-[0-9]+', recovery['artifact_name'])
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('run_id=' + str(recovery['source_run_id']) + '\n')
-              output.write('artifact_name=' + recovery['artifact_name'] + '\n')
-          PY
-      - name: Restore exact completed QA observations
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.recovery.outputs.artifact_name }}
-          run-id: ${{ steps.recovery.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ${{ runner.temp }}/workspace-qa-recovery-input
-      - name: Resume invalid judgments without rerunning QA or valid scores
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        run: >-
-          python benchmarks/workspace-qa/run_rejudge.py
-          --artifact-root "$RUNNER_TEMP/workspace-qa-recovery-input"
-          --output "$RUNNER_TEMP/workspace-qa-rejudge"
-      - name: Publish recovered smoke summary
-        if: always()
-        run: |
-          if [ -f "$RUNNER_TEMP/workspace-qa-rejudge/report/summary.md" ]; then
-            cat "$RUNNER_TEMP/workspace-qa-rejudge/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Verify recovered artifacts contain no judge credential
-        if: always()
-        id: artifact-safety
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          secret = os.environ.get('GLM_API_KEY', '').encode()
-          root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-rejudge'
-          for path in root.rglob('*'):
-              if path.is_file() and secret and secret in path.read_bytes():
-                  raise SystemExit('Credential found in artifact; upload blocked')
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.artifact-safety.outcome == 'success'
-        with:
-          name: workspace-qa-rejudge-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 30
-          if-no-files-found: error
-          path: ${{ runner.temp }}/workspace-qa-rejudge/
+          echo 'Legacy bridge recovery cannot validate the standard zg install protocol.'
+          exit 1
+
   smoke:
     needs: validate
     if: needs.validate.outputs.scope == 'smoke' || needs.validate.outputs.scope == 'full'
@@ -233,42 +169,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Check whether identical evaluation code already has a validated smoke
-        if: needs.validate.outputs.scope == 'full'
-        id: reuse
-        run: python benchmarks/workspace-qa/smoke_reuse.py --check-compatibility --github-output "$GITHUB_OUTPUT"
-      - name: Restore the pinned completed smoke artifact
-        if: steps.reuse.outputs.reuse_eligible == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.reuse.outputs.artifact_name }}
-          run-id: ${{ steps.reuse.outputs.recovery_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ${{ runner.temp }}/workspace-qa-validated-smoke
-      - name: Verify original smoke evidence and current code without new rollouts
-        if: steps.reuse.outputs.reuse_eligible == 'true'
-        run: >-
-          python benchmarks/workspace-qa/smoke_reuse.py
-          --artifact-root "$RUNNER_TEMP/workspace-qa-validated-smoke"
-          --output "$RUNNER_TEMP/workspace-qa-smoke-reuse"
-      - name: Publish reused smoke validation
-        if: always() && steps.reuse.outputs.reuse_eligible == 'true'
-        run: |
-          if [ -f "$RUNNER_TEMP/workspace-qa-smoke-reuse/summary.md" ]; then
-            cat "$RUNNER_TEMP/workspace-qa-smoke-reuse/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.reuse.outputs.reuse_eligible == 'true'
-        with:
-          name: workspace-qa-smoke-reuse-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 30
-          if-no-files-found: error
-          path: ${{ runner.temp }}/workspace-qa-smoke-reuse/
+      # Prior bridge smoke/rejudge artifacts cannot validate the native install protocol.
       - uses: ./.github/actions/workspace-qa
-        if: steps.reuse.outputs.reuse_eligible != 'true'
         with:
           task-id: '3'
           repetitions: '1'

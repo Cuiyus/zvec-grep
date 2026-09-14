@@ -1,82 +1,146 @@
-"""Exercise the real Qoder -> MCP -> remote vector path before corpus downloads."""
+"""Verify real zg installation and Qoder native retrieval on a tiny fixture."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import time
 
 import runner
 
+PROTOCOL = "workspace-qa-qoder-native-install-v3"
+ZG_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"
+PROBE_MARKER = "WORKSPACE_QA_NATIVE_PROBE_7f3a"
+PROBE_TEXT = ("代码仓库问答：检索源代码并引用文件。 Repository code search finds source files. "
+              + PROBE_MARKER + "\n")
 
-def qoder_mcp_preflight(source: Path, output: Path, cache: Path, index: Path) -> None:
-    """Use the synthetic SDK fixture; this diagnostic is never a benchmark trial."""
+
+def read_object(path: Path) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("Evidence must contain a JSON object")
+    return value
+
+
+def installation_evidence(agent: Path, *, profile: str = "with-zg") -> dict:
+    from native_session import validate_installation
+    return validate_installation(agent, profile=profile)
+
+
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(block["text"] for block in content if isinstance(block, dict)
+                         and block.get("type") == "text" and isinstance(block.get("text"), str))
+    return ""
+
+
+def native_mcp_evidence(agent: Path) -> dict:
+    """Read actual native calls/results; no private bridge trace is required."""
+    path = agent / "qodercli-stream.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    calls, observations, initialized = {}, {}, []
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("Native trace must contain objects")
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            initialized.append(event.get("qodercli_version") == "1.1.45"
+                and event.get("model") == "Qwen3.8-Max"
+                and ZG_SEARCH_TOOL in event.get("tools", [])
+                and any(server.get("name") == "zvec_grep" and server.get("status") == "connected"
+                        for server in event.get("mcp_servers", []) if isinstance(server, dict)))
+        message = event.get("message")
+        blocks = message.get("content", []) if isinstance(message, dict) else []
+        if not isinstance(blocks, list):
+            continue
+        scope = (event.get("session_id"), event.get("parent_tool_use_id"))
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if event.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("name") == ZG_SEARCH_TOOL:
+                if not isinstance(block.get("id"), str) or not block["id"]:
+                    raise ValueError("Native zg call has no ID")
+                key, value = (*scope, block["id"]), block.get("input", {})
+                if key in calls and calls[key] != value:
+                    raise ValueError("Conflicting native call IDs")
+                calls[key] = value
+            elif event.get("type") == "user" and block.get("type") == "tool_result":
+                key = (*scope, block.get("tool_use_id"))
+                value = {"is_error": block.get("is_error") is True, "text": _content_text(block.get("content"))}
+                if key in observations and observations[key] != value:
+                    raise ValueError("Conflicting native tool results")
+                observations[key] = value
+    succeeded = [key for key in calls if key in observations and not observations[key]["is_error"]]
+    vectors = [key for key in succeeded if isinstance(calls[key], dict)
+               and isinstance(calls[key].get("vector"), str) and calls[key]["vector"].strip()]
+    fixtures = [key for key in vectors if "probe.md" in observations[key]["text"]
+                and PROBE_MARKER in observations[key]["text"]]
+    return {"mcp_registered_and_connected": bool(initialized) and all(initialized),
+            "native_attempts": len(calls), "native_successes": len(succeeded),
+            "native_errors": sum(observations[key]["is_error"] for key in calls if key in observations),
+            "native_missing_results": sum(key not in observations for key in calls),
+            "native_empty_successes": sum(not observations[key]["text"].strip() for key in succeeded),
+            "native_vector_successes": len(vectors), "native_fixture_vector_successes": len(fixtures),
+            "native_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def validate_probe(output: Path) -> dict:
+    report = read_object(output / "result.json")
+    evidence = native_mcp_evidence(output / "agent")
+    installation = installation_evidence(output / "agent")
+    measured, attempts = report.get("zg_tool_calls_successful"), report.get("zg_tool_calls")
+    valid = (report.get("protocol") == PROTOCOL and report.get("status") == "completed"
+        and report.get("phase") == "setup_qoder_mcp_probe" and report.get("included_in_benchmark") is False
+        and report.get("embedding_model") == runner.EMBEDDING and report.get("model") == runner.MODEL
+        and isinstance(report.get("model_identity"), dict) and report["model_identity"].get("valid") is True
+        and report.get("source_unchanged") is True and evidence["mcp_registered_and_connected"]
+        and isinstance(report.get("installation"), dict)
+        and report["installation"].get("manifest_sha256") == installation["manifest_sha256"]
+        and type(report.get("input_tokens")) is int and report["input_tokens"] > 0
+        and type(report.get("tool_calls")) is int and report["tool_calls"] >= 1
+        and type(attempts) is int and attempts == evidence["native_attempts"]
+        and type(measured) is int and measured == evidence["native_successes"] and measured > 0
+        and evidence["native_missing_results"] == 0 and evidence["native_empty_successes"] == 0
+        and evidence["native_fixture_vector_successes"] > 0)
+    if not valid:
+        raise ValueError("Native probe requires standard installation, unchanged source, actual fixture vector retrieval and observable Qoder usage")
+    return {"status": "valid", "protocol": PROTOCOL, "included_in_qa_metrics": False,
+            "verified_successful_vector_searches": evidence["native_fixture_vector_successes"],
+            "result_sha256": hashlib.sha256((output / "result.json").read_bytes()).hexdigest(),
+            "installation": installation, **evidence}
+
+
+def qoder_mcp_preflight(source: Path, output: Path, cache: Path | None = None, index: Path | None = None) -> None:
+    """Run only the released native CLI/daemon/install route; legacy arguments are unused."""
+    from native_runner import run_native_probe
     output.mkdir(parents=True, exist_ok=True)
-    agent = output / "agent"
-    agent.mkdir()
-    image = "zg-readonly-qa:0.2.2"
-    endpoint = runner.embedding_endpoint()
     started = time.monotonic()
-    report = {"phase": "setup_qoder_mcp_probe", "status": "failed",
-              "included_in_benchmark": False, "embedding_model": runner.EMBEDDING,
-              "model": runner.MODEL, "successful_vector_searches": 0}
-    flags = ["--root", "/app", "--package-dir", runner.PACKAGE_DIR,
-             "--embedding-model", runner.EMBEDDING, "--model-cache-dir", "/models", "--working-copy"]
-    prompt = ("This is a connectivity check on a synthetic fixture, not a benchmark question. "
-              "Call " + runner.QODER_SEARCH_TOOL + " exactly once with "
-              '{"vector":"代码仓库 repository source files","limit":1}. '
-              "Do not use other tools. After the tool returns, reply with the retrieved filename only. "
-              "If the tool fails, report its error without retrying.")
     try:
-        command = runner.with_embedding_environment(
-            runner.docker_command(image, source, output, cache, index=index), endpoint)
-        runner.run_named(command + [image, "node", runner.BRIDGE, "preflight", *flags,
-            "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"],
-            "workspaceqa-qoder-probe-preflight", timeout=120,
-            diagnostic_path=output / "preflight-failure.json")
-        config = output / runner.SPEC.config_filename
-        config_path = "/run/qa/" + runner.SPEC.config_filename
-        mcp = ["node", runner.BRIDGE, "serve", *flags,
-               "--snapshot", "/run/qa/snapshot.json", "--log", "/logs/zg-trace.jsonl"]
-        runner.write_json(config, runner.build_agent_config(
-            runner.SPEC, zg=True, mcp_command=mcp, max_model_turns=4,
-            mcp_env_names=runner.REMOTE_EMBEDDING_ENV_NAMES))
-        spec = {"command": runner.build_agent_command(runner.SPEC, prompt, config_path=config_path,
-                                                      zg=True, max_model_turns=4),
-                "env": runner.agent_environment(runner.SPEC, config_path=config_path),
-                "config_path": config_path,
-                "limits": {"model_requests": 4, "tool_calls": 4, "input_tokens": 50000, "wall_seconds": 120},
-                "native_name": runner.SPEC.stream_filename, "log_dir": "/logs"}
-        runner.write_json(agent / "session-spec.json", spec)
-        command = runner.with_embedding_environment(runner.docker_command(
-            image, source, agent, cache, index=index, snapshot=output / "snapshot.json"), endpoint)
-        command += ["--env", runner.SPEC.credential_env] + runner.mount(config, config_path)
-        runner.run_named(command + [image, "python3", "/opt/qa/qa-session.py", "--spec", "/logs/session-spec.json"],
-                         "workspaceqa-qoder-probe", timeout=150,
-                         diagnostic_path=agent / "launcher-failure.json",
-                         stream_output=agent / "launcher")
-        session = json.loads((agent / "session.json").read_text())
-        conversion = runner.convert_agent_trace(agent, runner.SPEC, prompt, zg=True)
-        metrics = runner.trial_metrics(agent, conversion)
-        report.update(model_identity=conversion.get("model_identity"),
-                      input_tokens=metrics.get("input_tokens"), tool_calls=metrics.get("tool_calls"),
-                      zg_tool_calls_successful=metrics.get("zg_tool_calls_successful"))
-        traces = [json.loads(line) for line in (agent / "zg-trace.jsonl").read_text().splitlines() if line.strip()]
-        successes = [event for event in traces if event.get("event") == "search"
-                     and event.get("origin") == "agent-mcp" and event.get("status") == "success"
-                     and any(route.get("mode") == "vector" for route in event.get("request", {}).get("routes", []))
-                     and "probe.md" in event.get("text", "")]
-        report["successful_vector_searches"] = len(successes)
-        if (session.get("status") != "completed" or conversion.get("contract_error_count")
-                or conversion.get("error_event_count") or not conversion.get("has_final_answer")
-                or not (conversion.get("model_identity") or {}).get("valid")
-                or metrics.get("input_tokens") is None
-                or not metrics.get("zg_tool_calls_successful") or not successes):
-            raise RuntimeError("Qoder MCP probe requires a successful remote vector search and observable native model usage")
-        report["status"] = "completed"
+        run_native_probe(source, output)
+        validation = validate_probe(output)
+        runner.write_json(output / "validation.json", validation)
+        print(json.dumps({**validation, "phase": "native_install_preflight", "status": "completed"}), flush=True)
     except Exception as error:
-        report.update(error_type=type(error).__name__, error=runner.redact(str(error)))
+        failure = {"status": "invalid", "protocol": PROTOCOL, "included_in_qa_metrics": False,
+                   "error_type": type(error).__name__, "error": runner.redact(str(error)),
+                   "wall_seconds": round(time.monotonic() - started, 3)}
+        runner.write_json(output / "validation.json", failure)
         raise
+
+
+def standalone_native_probe(root: Path) -> None:
+    """Create the independent synthetic fixture, preserving diagnostics after cleanup."""
+    source = root / "source"
+    source.mkdir(parents=True, exist_ok=False)
+    (source / "probe.md").write_text(PROBE_TEXT, encoding="utf-8")
+    try:
+        for args in (["init", "-q", str(source)], ["-C", str(source), "add", "probe.md"],
+                     ["-C", str(source), "-c", "user.name=Workspace QA", "-c", "user.email=benchmark@localhost",
+                      "-c", "gc.auto=0", "commit", "-qm", "Synthetic native connectivity fixture"]):
+            subprocess.run(["git", *args], check=True)
+        qoder_mcp_preflight(source, root / "qoder")
     finally:
-        report["wall_seconds"] = round(time.monotonic() - started, 3)
-        runner.write_json(output / "result.json", report)
-        print(json.dumps(report, ensure_ascii=False), flush=True)
+        shutil.rmtree(source)
