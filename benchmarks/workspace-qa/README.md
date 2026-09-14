@@ -132,6 +132,15 @@ natural tool uptake. Independently, one judge response repeated text until its
 retains both original answers and the already-valid judgment, then resumes only
 the invalid assessment. No QA reroll is used to obtain a zg call.
 
+Recovery [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759)
+completed in 17.974 seconds with one additional judge attempt and zero new QA
+trials. The baseline judgment and every original QA byte were preserved. The
+[smoke validation record](data/smoke-validation.json) now has complete measurements
+and judgments, with the separate vector probe proving integration. Its QA scores
+were baseline 18/21 and with-zg 16/21; natural zg uptake was zero. This one pair
+validates the workflow and is not a formal efficacy estimate. Formal execution
+retains all 10 locked tasks and 10 repetitions per arm.
+
 That run restored 1,950,506,687 bytes of workspace archive blocks with zero new
 archive block downloads. Extraction took about 17 seconds, versus 194 seconds
 on the prior cold task-3 run; cache archive restore itself took about 18 seconds.
