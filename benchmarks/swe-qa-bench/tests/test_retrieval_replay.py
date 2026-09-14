@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from zg_bench.swe_qa.retrieval_replay import build_plan, evaluate_replays, request_queries
+from zg_bench.swe_qa.retrieval_replay import build_plan, evaluate_replays, replay_markdown, request_queries
 from zg_bench.swe_qa.retrieval_replay import main, SOURCE_COMMIT, SOURCE_RUN
 
 
@@ -51,12 +51,36 @@ def write_events(path, values):
 
 
 class ReplayPlanTests(unittest.TestCase):
+    def test_default_replays_only_actual_requests_and_fixed_original_hybrid(self):
+        plan = build_plan(analysis_fixture(), QUESTION)
+        self.assertEqual([u["kind"] for u in plan["units"]].count("faithful"), 1)
+        self.assertEqual([u["kind"] for u in plan["units"]].count("original"), 1)
+        self.assertNotIn("controlled", {u["kind"] for u in plan["units"]})
+        self.assertEqual(plan["planned_executions"], 10)
+        self.assertEqual(plan["quality_repetition"], 1)
+        original = next(u for u in plan["units"] if u["kind"] == "original")
+        self.assertEqual(original["unit_id"], "original-hybrid")
+        self.assertEqual(original["mode"], "hybrid")
+        self.assertEqual(original["query_texts"], [QUESTION])
+        self.assertEqual(original["request"], {
+            "root": "/app", "query": QUESTION, "limit": 10, "autoUpdate": False, "trace": True})
+        faithful_ids = [u["unit_id"] for u in plan["units"] if u["kind"] == "faithful"]
+        self.assertTrue(plan["report_groups"]["primary"]["enabled"])
+        self.assertEqual(plan["report_groups"]["primary"]["unit_ids"], faithful_ids)
+        self.assertTrue(plan["report_groups"]["original"]["enabled"])
+        self.assertEqual(plan["report_groups"]["original"]["unit_ids"], ["original-hybrid"])
+        self.assertFalse(plan["report_groups"]["diagnostic"]["enabled"])
+        self.assertEqual(plan["report_groups"]["diagnostic"]["unit_ids"], [])
+
     def test_controlled_inputs_are_only_original_and_recorded_literal_queries(self):
         source = analysis_fixture()
-        plan = build_plan(source, QUESTION)
-        controlled = [u for u in plan["units"] if u["kind"] == "controlled"]
+        plan = build_plan(source, QUESTION, include_mode_diagnostics=True)
+        diagnostic_ids = plan["report_groups"]["diagnostic"]["unit_ids"]
+        controlled = [u for u in plan["units"] if u["unit_id"] in diagnostic_ids]
         self.assertEqual(plan["distinct_query_texts_including_original"], 3)
         self.assertEqual(len(controlled), 9)
+        self.assertEqual(sum(u["kind"] == "controlled" for u in plan["units"]), 8)
+        self.assertEqual(plan["planned_executions"], 50)
         self.assertEqual({u["query_texts"][0] for u in controlled}, {QUESTION, QUERY, ARRAY_LITERAL})
         for text in (QUESTION, QUERY, ARRAY_LITERAL):
             units = [u for u in controlled if u["query_texts"] == [text]]
@@ -68,6 +92,45 @@ class ReplayPlanTests(unittest.TestCase):
         self.assertEqual(plan["quality_repetition"], 1)
         with self.assertRaises(ValueError):
             build_plan(source, QUESTION, repetitions=4)
+
+    def test_diagnostics_reuse_original_without_changing_primary_units(self):
+        source = analysis_fixture()
+        default = build_plan(source, QUESTION)
+        diagnostic = build_plan(source, QUESTION, include_mode_diagnostics=True)
+        main_units = lambda plan: [u for u in plan["units"] if u["kind"] in {"faithful", "original"}]
+        self.assertEqual(main_units(default), main_units(diagnostic))
+        for group in ("primary", "original"):
+            self.assertEqual(default["report_groups"][group], diagnostic["report_groups"][group])
+        self.assertTrue(diagnostic["report_groups"]["diagnostic"]["enabled"])
+        self.assertEqual(diagnostic["report_groups"]["diagnostic"]["unit_ids"].count("original-hybrid"), 1)
+        originals = [u for u in diagnostic["units"] if u["query_texts"] == [QUESTION] and u["mode"] == "hybrid"]
+        self.assertEqual(len(originals), 1)
+        self.assertEqual(originals[0]["kind"], "original")
+        primary_ids = set(diagnostic["report_groups"]["primary"]["unit_ids"])
+        diagnostic_ids = set(diagnostic["report_groups"]["diagnostic"]["unit_ids"])
+        self.assertTrue(primary_ids.isdisjoint(diagnostic_ids))
+        self.assertEqual(len({u["unit_id"] for u in diagnostic["units"]}), len(diagnostic["units"]))
+
+    def test_full_recorded_request_is_preserved_in_both_suites(self):
+        request = {**REQUEST, "limit": 20, "depth": 80, "fuse": False, "preferSymbol": True,
+                   "routes": [{"mode": "vector", "query": ARRAY_LITERAL,
+                               "filter": {"path": "reflex/vars/**", "kind": "function"}}]}
+        source = analysis_fixture()
+        source["groups"][0]["trials"] = [trial("full", [call("full-call", request)])]
+        before = copy.deepcopy(source)
+        for diagnostics in (False, True):
+            with self.subTest(diagnostics=diagnostics):
+                plan = build_plan(source, QUESTION, include_mode_diagnostics=diagnostics)
+                faithful = [u for u in plan["units"] if u["kind"] == "faithful"]
+                self.assertEqual(len(faithful), 1)
+                self.assertEqual(faithful[0]["request"], request)
+                occurrence = faithful[0]["occurrences"][0]
+                original_call = source["groups"][0]["trials"][0]["first_zg_decision_round"]["zg_calls"][0]
+                self.assertEqual(occurrence["raw_arguments"], original_call["raw_arguments"])
+                self.assertEqual(occurrence["backend_source"], original_call["backend"]["source"])
+                self.assertEqual(occurrence["trial_id"], "full")
+                self.assertEqual(occurrence["call_id"], "full-call")
+        self.assertEqual(source, before)
 
     def test_exact_requests_deduplicate_but_frequency_and_omitted_fields_survive(self):
         source = analysis_fixture()
@@ -166,6 +229,19 @@ class ReplayEvaluationTests(unittest.TestCase):
         self.assertEqual(unit["stability"]["known_repeats"], 5)
         self.assertEqual(unit["stability"]["distinct_public_outputs"], 5)
         self.assertFalse(unit["stability"]["all_public_outputs_identical"])
+
+    def test_evaluation_preserves_separate_report_groups(self):
+        self.plan["report_groups"] = {
+            "primary": {"enabled": True, "unit_ids": []},
+            "original": {"enabled": True, "unit_ids": []},
+            "diagnostic": {"enabled": True, "unit_ids": [self.unit["unit_id"]]}}
+        self.plan["include_mode_diagnostics"] = True
+        self.plan["comparison_policy"] = "Separate primary, original, and diagnostic observations"
+        result, calls = self.evaluate()
+        self.assertEqual(calls, 5)
+        self.assertEqual(result["report_groups"], self.plan["report_groups"])
+        self.assertIs(result["include_mode_diagnostics"], True)
+        self.assertEqual(result["comparison_policy"], self.plan["comparison_policy"])
 
     def test_bad_request_source_index_or_public_hash_never_reaches_scoring(self):
         mutations = {
@@ -268,7 +344,108 @@ class ReplayEvaluationTests(unittest.TestCase):
             self.assert_unscored_repetition(result, n)
 
 
+class ReplayReportTests(unittest.TestCase):
+    def report(self, *, diagnostics):
+        plan = build_plan(analysis_fixture(), QUESTION, include_mode_diagnostics=diagnostics)
+        report = copy.deepcopy(plan)
+        report["scored_executions"] = plan["planned_executions"]
+        def score(rank):
+            return {"query_relevance": {"classification": "equivalent", "target": {
+                        "first_hit_rank": rank, "bytes_through_first_hit": rank * 100}},
+                    "task_entry_score": {"levels": {"function": {"first_hit_rank": rank}}}}
+        for unit in report["units"]:
+            # Deliberately make diagnostic and per-text scores look better than the
+            # primary joint-request score: neither may replace the primary result.
+            rank = 6 if unit["kind"] == "original" else 1
+            unit["quality_observation"] = {
+                "repetition": 1,
+                "scores": {view: [score(rank)] for view in ("native", "bytes_4096", "bytes_8192")},
+                "request_scores": {view: score(9) for view in ("native", "bytes_4096", "bytes_8192")}}
+            unit["occurrence_count"] = len(unit["occurrences"])
+            unit["stability"] = {"all_public_outputs_identical": True, "known_repeats": 5}
+        return report
+
+    def test_three_tables_do_not_promote_diagnostic_scores_into_primary_results(self):
+        report = self.report(diagnostics=True)
+        sections = replay_markdown(report).split("\n## ")[1:]
+        self.assertEqual(len(sections), 3)
+        self.assertTrue(sections[0].startswith("主回归：Agent 真实完整请求\n"))
+        self.assertTrue(sections[1].startswith("原始问题：固定 hybrid 默认配置\n"))
+        self.assertTrue(sections[2].startswith("辅助诊断：FTS / vector / hybrid\n"))
+        for section, group in zip(sections, ("primary", "original", "diagnostic")):
+            rows = [line for line in section.splitlines() if line.startswith("| ") and not line.startswith("| unit |")]
+            ids = [row.split("|")[1].strip() for row in rows]
+            self.assertEqual(ids, report["report_groups"][group]["unit_ids"])
+        primary_row = next(line for line in sections[0].splitlines() if line.startswith("| faithful-"))
+        self.assertEqual(primary_row.split("|")[4].strip(), "9")
+        self.assertNotIn("| original-hybrid |", sections[0])
+        self.assertIn("| original-hybrid |", sections[1])
+        self.assertIn("| original-hybrid |", sections[2])
+        self.assertIn("不重新运行", sections[2])
+        self.assertEqual(report["planned_executions"], 50)
+
+    def test_disabled_diagnostics_are_reported_as_not_executed_not_a_miss(self):
+        report = self.report(diagnostics=False)
+        rendered = replay_markdown(report)
+        sections = rendered.split("\n## ")[1:]
+        self.assertEqual(len(sections), 3)
+        self.assertEqual(rendered.count("| unit |"), 2)
+        self.assertIn("本次未启用；未执行不等于未命中。", sections[2])
+        self.assertNotIn("| unit |", sections[2])
+        self.assertIn("不合并总分、不挑最好模式", rendered)
+
+    def test_historical_v4_reports_remain_renderable_without_report_groups(self):
+        report = self.report(diagnostics=False)
+        report.pop("report_groups")
+        report["protocol"] = "readonly-query-retrieval-v4"
+        rendered = replay_markdown(report)
+        self.assertTrue(rendered.startswith("# Query-conditioned retrieval replay\n"))
+        for unit in report["units"]:
+            self.assertIn("| " + unit["unit_id"] + " |", rendered)
+
+
 class OriginalArtifactContractTests(unittest.TestCase):
+    def test_cli_diagnostics_are_opt_in_and_pass_the_selected_plan_to_execution(self):
+        cases = Path(__file__).resolve().parents[1] / "cases"
+        case_path = cases / "reflex-6.json"
+        case = json.loads(case_path.read_text())
+        for command in ("analyze", "run"):
+            for diagnostics in (False, True):
+                with self.subTest(command=command, diagnostics=diagnostics), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    combinations = [("opencode", "custom-openai/glm-5.2"),
+                                    ("opencode", "custom-openai/qwen3.8-max"), ("qodercli", "qwen3.8-max")]
+                    for i, (agent, model) in enumerate(combinations):
+                        write_json(root / "recorded" / str(i) / "manifest.json", {
+                            "ci_identity": {"GITHUB_RUN_ID": SOURCE_RUN, "GITHUB_SHA": SOURCE_COMMIT},
+                            "case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+                            "repo": case["repo"], "package": "@zvec/zvec-grep@0.2.2", "agent": agent, "model": model})
+                    argv = [command, "--recorded-runs", str(root / "recorded"), "--case", str(case_path),
+                            "--entries", str(cases / "reflex-6.entries.json"), "--labels", str(cases / "reflex-6.query-intents.json"),
+                            "--output", str(root / "analysis")]
+                    if diagnostics:
+                        argv.append("--include-mode-diagnostics")
+                    source = {**analysis_fixture(), "input_artifacts": []}
+                    def completed(plan, *_):
+                        return {"planned_executions": plan["planned_executions"],
+                                "scored_executions": plan["planned_executions"]}
+                    with patch("zg_bench.swe_qa.retrieval_replay.analyze", return_value=source), \
+                            patch("zg_bench.swe_qa.retrieval_replay.write_report"), \
+                            patch("zg_bench.swe_qa.retrieval_replay.observed_scores", return_value=[]), \
+                            patch("zg_bench.swe_qa.retrieval_replay.build_plan", wraps=build_plan) as planner, \
+                            patch("zg_bench.swe_qa.retrieval_replay.execute", side_effect=completed) as execution:
+                        self.assertEqual(main(argv), 0)
+                    planner.assert_called_once_with(source, case["question"], include_mode_diagnostics=diagnostics)
+                    plan = json.loads((root / "analysis" / "replay-plan.json").read_text())
+                    self.assertEqual(plan["planned_executions"], 50 if diagnostics else 10)
+                    self.assertEqual(plan["report_groups"]["diagnostic"]["enabled"], diagnostics)
+                    if command == "run":
+                        execution.assert_called_once()
+                        self.assertEqual(execution.call_args.args[0], plan)
+                        self.assertIs(execution.call_args.args[1].include_mode_diagnostics, diagnostics)
+                    else:
+                        execution.assert_not_called()
+
     def test_native_qoder_model_identity_is_not_an_opencode_provider_identifier(self):
         cases = Path(__file__).resolve().parents[1] / "cases"
         case_path = cases / "reflex-6.json"

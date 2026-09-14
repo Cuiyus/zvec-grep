@@ -1,12 +1,17 @@
-name: Query-aware retrieval replay (no new E2E)
+name: Retrieval request regression (no new E2E)
 
 on:
   push:
     branches: [dev/benchmark-readonly-qa]
     paths:
       - "benchmarks/swe-qa-bench/**"
-      - ".github/workflows/readonly-qa-v4.yml"
+      - ".github/workflows/readonly-qa-v5.yml"
   workflow_dispatch:
+    inputs:
+      include_mode_diagnostics:
+        description: Also run the auxiliary FTS/vector/hybrid comparison
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,32 +69,40 @@ jobs:
           docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
           --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
           -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
-      - name: Analyze original trajectories and replay frozen requests on a fresh index
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.retrieval_replay run
-          --recorded-runs "$RUNNER_TEMP/recorded-qa"
-          --case benchmarks/swe-qa-bench/cases/reflex-6.json
-          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
-          --labels benchmarks/swe-qa-bench/cases/reflex-6.query-intents.json
-          --output "$RUNNER_TEMP/readonly-qa-v4"
-          --image zg-readonly-qa:0.2.2
-      - name: Show query variation and query-conditioned retrieval scores
+      - name: Replay recorded requests and the fixed original-question default on a fresh index
+        env:
+          INCLUDE_MODE_DIAGNOSTICS: ${{ inputs.include_mode_diagnostics || false }}
+        run: |
+          set -euo pipefail
+          diagnostic_args=()
+          if [[ "$INCLUDE_MODE_DIAGNOSTICS" == "true" ]]; then
+            diagnostic_args+=(--include-mode-diagnostics)
+          fi
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.retrieval_replay run \
+            --recorded-runs "$RUNNER_TEMP/recorded-qa" \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            --labels benchmarks/swe-qa-bench/cases/reflex-6.query-intents.json \
+            --output "$RUNNER_TEMP/readonly-qa-v5" \
+            --image zg-readonly-qa:0.2.2 \
+            "${diagnostic_args[@]}"
+      - name: Show request regression, original-question default and optional diagnostics separately
         if: always()
         run: |
           for report in first-query-analysis observed-query-scores replay-report; do
-            if [ -f "$RUNNER_TEMP/readonly-qa-v4/$report.md" ]; then
-              cat "$RUNNER_TEMP/readonly-qa-v4/$report.md" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "$RUNNER_TEMP/readonly-qa-v5/$report.md" ]; then
+              cat "$RUNNER_TEMP/readonly-qa-v5/$report.md" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
       - name: Preserve query labels, raw replay outputs and all failed attempts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: readonly-qa-v4-0.2.2-reflex-6-${{ github.run_id }}-${{ github.run_attempt }}
+          name: readonly-qa-v5-0.2.2-reflex-6-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/readonly-qa-v4/*.json
-            ${{ runner.temp }}/readonly-qa-v4/*.md
-            ${{ runner.temp }}/readonly-qa-v4/replay/
-            ${{ runner.temp }}/readonly-qa-v4/preparation/runtime/
+            ${{ runner.temp }}/readonly-qa-v5/*.json
+            ${{ runner.temp }}/readonly-qa-v5/*.md
+            ${{ runner.temp }}/readonly-qa-v5/replay/
+            ${{ runner.temp }}/readonly-qa-v5/preparation/runtime/
           if-no-files-found: warn
           retention-days: 90

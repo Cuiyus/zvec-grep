@@ -1,4 +1,4 @@
-"""Query-conditioned analysis/replay of recorded first ZG decisions. No LLM calls."""
+"""Request-first retrieval regression with optional mode diagnostics. No LLM calls."""
 from __future__ import annotations
 
 import argparse
@@ -44,21 +44,18 @@ def request_queries(request: dict) -> list[str]:
     return list(dict.fromkeys(v for v in values if isinstance(v, str) and v.strip()))
 
 
-def build_plan(analysis: dict, question: str, *, repetitions: int = 5) -> dict:
+def build_plan(analysis: dict, question: str, *, repetitions: int = 5,
+               include_mode_diagnostics: bool = False) -> dict:
     if repetitions != 5:
         raise ValueError("This development protocol freezes five retrieval repetitions")
     texts = list(dict.fromkeys([question, *[q["text"] for q in analysis["query_catalog"]]]))
     catalog = {q["text"]: q for q in analysis["query_catalog"]}
-    units = []
-    for text in texts:
-        qid = "original" if text == question else catalog[text]["query_id"]
-        for mode in ("fts", "vector", "hybrid"):
-            request = {"root": "/app", "limit": 10, "autoUpdate": False, "trace": True}
-            request.update({"query": text} if mode == "hybrid" else {"routes": [{"mode": mode, "query": text}]})
-            units.append({"unit_id": f"{qid}-{mode}", "kind": "controlled", "mode": mode,
-                          "query_id": qid, "query_texts": [text], "request": request,
-                          "occurrences": catalog.get(text, {}).get("occurrences", []),
-                          "quality_unit": "one recorded formulation, correlated with the same QA task"})
+    original = {"unit_id": "original-hybrid", "kind": "original", "mode": "hybrid",
+                "query_id": "original", "query_texts": [question],
+                "request": {"root": "/app", "query": question, "limit": 10,
+                            "autoUpdate": False, "trace": True},
+                "occurrences": [],
+                "quality_unit": "original question under the protocol's fixed hybrid default; not an agent request"}
     faithful = {}
     unreplayable = []
     for group in analysis["groups"]:
@@ -88,17 +85,44 @@ def build_plan(analysis: dict, question: str, *, repetitions: int = 5) -> dict:
                                      "quality_unit": "joint output of one recorded backend request; route effects not separable"}
                 faithful[key]["occurrences"].append({**origin, "raw_arguments": call["raw_arguments"],
                                                     "backend_source": backend.get("source")})
-    units.extend(faithful[key] for key in sorted(faithful))
+    # Main requests always execute first and are independent of diagnostic selection.
+    units = [faithful[key] for key in sorted(faithful)] + [original]
+    diagnostic_ids = []
+    if include_mode_diagnostics:
+        for text in texts:
+            qid = "original" if text == question else catalog[text]["query_id"]
+            for mode in ("fts", "vector", "hybrid"):
+                uid = f"{qid}-{mode}"
+                diagnostic_ids.append(uid)
+                if uid == original["unit_id"]:
+                    # The exact same experiment already runs in the original group.
+                    continue
+                request = {"root": "/app", "limit": 10, "autoUpdate": False, "trace": True}
+                request.update({"query": text} if mode == "hybrid" else {"routes": [{"mode": mode, "query": text}]})
+                units.append({"unit_id": uid, "kind": "controlled", "mode": mode,
+                              "query_id": qid, "query_texts": [text], "request": request,
+                              "occurrences": catalog.get(text, {}).get("occurrences", []),
+                              "quality_unit": "auxiliary mode comparison of one formulation; never replaces the recorded-request result"})
     if len({u["unit_id"] for u in units}) != len(units):
         raise ValueError("Replay unit ID collision")
-    return {"schema_version": 1, "protocol": "readonly-query-retrieval-v4", "question": question,
+    report_groups = {
+        "primary": {"enabled": True, "unit_ids": [u["unit_id"] for u in units if u["kind"] == "faithful"]},
+        "original": {"enabled": True, "unit_ids": [original["unit_id"]]},
+        "diagnostic": {"enabled": include_mode_diagnostics, "unit_ids": diagnostic_ids},
+    }
+    return {"schema_version": 2, "protocol": "readonly-query-retrieval-v5", "question": question,
             "source_run": SOURCE_RUN, "source_commit": SOURCE_COMMIT,
             "repetitions": repetitions, "quality_repetition": 1, "byte_budgets": [4096, 8192],
             "independent_tasks": 1, "distinct_query_texts_including_original": len(texts),
             "controlled_units": sum(u["kind"] == "controlled" for u in units),
-            "faithful_units": len(faithful), "planned_executions": len(units) * repetitions,
+            "faithful_units": len(faithful), "original_units": 1,
+            "include_mode_diagnostics": include_mode_diagnostics,
+            "original_request": original["request"], "report_groups": report_groups,
+            "diagnostic_comparison_units": len(diagnostic_ids),
+            "planned_executions": len(units) * repetitions,
             "unreplayable_planned_trials_or_calls": unreplayable, "units": units,
-            "scope": "All observed first-decision queries retained; no invented probes. Post-hoc development labels, not a held-out evaluation."}
+            "comparison_policy": "Recorded complete requests are primary. Original hybrid and optional mode diagnostics are separate; no pooled score or best-of-mode selection. Shared requests retain all occurrence origins.",
+            "scope": "All observed first-decision requests retained. Original hybrid is protocol-defined. Post-hoc development labels, not a held-out evaluation."}
 
 
 def score_output(text: str, texts: list[str], labels: dict, entries: dict) -> dict:
@@ -205,6 +229,7 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
         latencies = [r["duration_ms"] for r in known if isinstance(r["duration_ms"], (int, float))]
         rows.append({"unit_id": unit["unit_id"], "kind": unit["kind"], "mode": unit["mode"],
                      "query_texts": unit["query_texts"], "request": unit["request"],
+                     "occurrences": unit["occurrences"],
                      "occurrence_count": len(unit["occurrences"]), "quality_observation": repeated[0],
                      "repeats": repeated, "parse_errors": parse_errors,
                      "stability": {"known_repeats": len(known), "planned_repeats": plan["repetitions"],
@@ -212,7 +237,10 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
                                    "all_public_outputs_identical": len({r["output_sha256"] for r in known}) == 1 if len(known) == plan["repetitions"] else None,
                                    "latency_median_ms": statistics.median(latencies) if latencies else None},
                      "scope": unit["quality_unit"]})
-    return {"schema_version": 1, "protocol": plan["protocol"], "independent_tasks": 1,
+    return {"schema_version": plan.get("schema_version", 1), "protocol": plan["protocol"], "independent_tasks": 1,
+            **({"report_groups": plan["report_groups"],
+                "include_mode_diagnostics": plan["include_mode_diagnostics"],
+                "comparison_policy": plan["comparison_policy"]} if "report_groups" in plan else {}),
             "planned_executions": plan["planned_executions"],
             "scored_executions": sum(r["status"] == "scored" for u in rows for r in u["repeats"]),
             "units": rows, "scope": "Repeated fixed queries estimate retrieval variation, not new agent behavior samples."}
@@ -243,7 +271,7 @@ def observed_markdown(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def replay_markdown(report: dict) -> str:
+def _legacy_replay_markdown(report: dict) -> str:
     lines = ["# Query-conditioned retrieval replay", "",
              f"完成评分 {report['scored_executions']} / {report['planned_executions']} 次；独立 QA 任务 1 道。质量统一使用预定第 1 次，五次只检验固定请求的检索重复性。", "",
              "| unit | query 类型 | 目标排名 | 原任务依赖入口排名 | 到目标字节 | 4 KiB 目标排名 | 相同输出 / 5 次 |", "|---|---|---:|---:|---:|---:|---|"]
@@ -258,6 +286,48 @@ def replay_markdown(report: dict) -> str:
         lines.append("| " + " | ".join([unit["unit_id"], *score_cells(view("native")), score_cells(view("bytes_4096"))[1], stability]) + " |")
     lines += ["", "受控视图固定 limit=10，逐条文本运行 FTS / vector / hybrid。faithful 视图保持实际请求及省略的默认参数，完整 request 的开发标注为主列；附加分文本分数仍基于联合输出，不构成 route 归因。", "",
               "query 对应文本与实际来源见 replay-plan.json。JSON 同时保留 Hit@1/5/10、RR@10、bridge、原任务入口、4/8 KiB 预算视图、原始哈希和全部失败。字节是输出窗口代理，不是模型 input token。不同改写来自同题，不能算成 12 道独立题。"]
+    return "\n".join(lines) + "\n"
+
+
+def replay_markdown(report: dict) -> str:
+    if "report_groups" not in report:
+        return _legacy_replay_markdown(report)
+    lines = ["# Request-first retrieval regression", "",
+             f"执行校验通过 {report['scored_executions']} / {report['planned_executions']} 次；独立 QA 任务 1 道。各单元固定使用第 1 次质量观察，五次重复用于检验检索稳定性。", "",
+             "真实完整请求是主回归；原题默认配置、辅助三模式分别报告，不合并总分、不挑最好模式，也不把同题改写或重复视为独立 QA。", ""]
+    by_id = {u["unit_id"]: u for u in report["units"]}
+    for key, title, description in [
+        ("primary", "主回归：Agent 真实完整请求", "保留完整后端请求和缺省字段，以联合返回评分；去重请求保留全部来源，不将分文本或单路由命中代替完整请求结果。"),
+        ("original", "原始问题：固定 hybrid 默认配置", "固定 hybrid、limit=10、autoUpdate=false、trace=true；它是协议预设请求，不代表 Agent 实际选用了这种方式。"),
+        ("diagnostic", "辅助诊断：FTS / vector / hybrid", "仅在明确启用时执行，固定文本和 limit=10。原题 hybrid 引用上一表同一单元的结果，不重新运行；此表不能替代主回归成绩。"),
+    ]:
+        group = report["report_groups"][key]
+        lines += [f"## {title}", "", description, ""]
+        if not group["enabled"]:
+            lines += ["本次未启用；未执行不等于未命中。", ""]
+            continue
+        if not group["unit_ids"]:
+            lines += ["没有可回放请求；无调用、缺失或关联不明的计划试验保留在 replay-plan.json 中，不推断成功。", ""]
+            continue
+        lines += ["| unit | 来源组合 / 出现次数 | query 类型 | 目标排名 | 原任务依赖入口排名 | 到目标块末字节 | 4 KiB 目标排名 | 8 KiB 目标排名 | 相同输出 / 5 次 |",
+                  "|---|---|---|---:|---:|---:|---:|---:|---|"]
+        for uid in group["unit_ids"]:
+            unit = by_id[uid]
+            observation = unit["quality_observation"]
+            def view(name: str) -> dict | None:
+                if unit["kind"] == "faithful":
+                    return (observation.get("request_scores") or {}).get(name)
+                items = (observation.get("scores") or {}).get(name, [])
+                return items[0] if items else None
+            sources = sorted({o["group"] for o in unit.get("occurrences", []) if "group" in o})
+            source = (", ".join(sources) + f" / {unit['occurrence_count']}") if sources else "协议固定" if unit["kind"] == "original" else "见计划"
+            stable = unit["stability"]
+            stability = str(stable["all_public_outputs_identical"]) + f" ({stable['known_repeats']}/5 已校验)"
+            lines.append("| " + " | ".join([uid, source, *score_cells(view("native")),
+                                           score_cells(view("bytes_4096"))[1], score_cells(view("bytes_8192"))[1], stability]) + " |")
+        lines.append("")
+    lines += ["JSON 保留 Hit@1/5/10、RR@10、bridge、输出长度、4/8 KiB 视图、延迟、哈希及所有失败。字节不是模型 input token；到命中块末的长度不等于定义锚点首次出现的位置。", "",
+              "当前标签为源码核验的开发入口标注，尚不穷尽所有相关结果；unknown 不记作未命中。完整请求来源和不可回放试验见 replay-plan.json。"]
     return "\n".join(lines) + "\n"
 
 
@@ -350,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--labels", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
+    parser.add_argument("--include-mode-diagnostics", action="store_true",
+                        help="Also compare all literal queries in FTS/vector/hybrid; never replace primary request scores")
     args = parser.parse_args(argv)
     if args.output.exists() and any(args.output.iterdir()): raise ValueError("Output must be new/empty")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -380,12 +452,13 @@ def main(argv: list[str] | None = None) -> int:
     write(args.output / "recorded-input-integrity.json", {"consumed_files": len(analysis["input_artifacts"]),
           "consumed_files_unchanged": not changed, "changed_paths": changed})
     if changed: raise ValueError("Recorded input changed during analysis")
-    plan = build_plan(analysis, case["question"])
+    plan = build_plan(analysis, case["question"], include_mode_diagnostics=args.include_mode_diagnostics)
     write(args.output / "replay-plan.json", plan)
     observed = observed_scores(analysis, labels, entries)
     write(args.output / "observed-query-scores.json", observed)
     (args.output / "observed-query-scores.md").write_text(observed_markdown(observed))
     write(args.output / "provenance.json", {"source_run": SOURCE_RUN, "source_commit": SOURCE_COMMIT,
+          "protocol": plan["protocol"], "include_mode_diagnostics": args.include_mode_diagnostics,
           "generated_at": datetime.now(UTC).isoformat(), "analysis_only": args.command == "analyze",
           "case_sha256": file_digest(args.case), "entries_sha256": file_digest(args.entries),
           "query_labels_sha256": file_digest(args.labels), "plan_sha256": file_digest(args.output / "replay-plan.json"),

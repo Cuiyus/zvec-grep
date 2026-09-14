@@ -242,6 +242,15 @@ zg-bench diagnose <job-name>
 
 ## Query-aware read-only development benchmark
 
+The current [v5 protocol](../../docs/benchmark-protocols/readonly-qa-v5.zh-CN.md)
+uses recorded complete requests as the main regression, plus the original question
+with a fixed hybrid default. The [v5 workflow](../../.github/workflows/readonly-qa-v5.yml)
+runs 65 searches by default; optional `include_mode_diagnostics` adds the
+FTS/vector/hybrid comparison for 240 searches in total. The three result groups
+are reported separately, without choosing the best mode as the benchmark score.
+There are no new v5 retrieval measurements or E2E samples yet. Its runtime still
+uses published zg 0.2.2, so source changes are not automatically benchmarked.
+
 The [v4 protocol](../../docs/benchmark-protocols/readonly-qa-v4.zh-CN.md) evaluates
 the original `reflex-6` question and queries extracted from the first ZG decision
 round of the three recorded agent/model groups. It scores each query's source
