@@ -15,12 +15,20 @@ code or documents; this run does not add the separate English task split.
 ## CI execution
 
 [Qoder Qwen3.8-Max Workspace QA](../../.github/workflows/workspace-qa-qoder.yml)
-runs on this branch. A push affecting this experiment first validates the harness,
-then runs task 128 once per arm. Only a successful smoke, including complete
-measurements and rubric judgments, unlocks the 10-task matrix. Every task runs
-10 independent repetitions per arm: **200 formal runs**, plus two smoke runs.
+runs on this branch with three explicit scopes:
+
+- An ordinary push affecting this experiment runs offline validation only.
+- A push whose head commit message contains `[workspace-qa-smoke]` validates,
+  then runs task 3 once per arm: **two smoke trials**.
+- `[workspace-qa-full]` validates, runs smoke, then unlocks the 10-task matrix
+  only after complete smoke measurements and rubric judgments. Every formal
+  task runs 10 independent repetitions per arm: **200 formal trials**.
+
 Smoke observations are excluded from the formal report. Manual dispatch supports
-`smoke` and `full` scopes once GitHub exposes the workflow for dispatch.
+`validate`, `smoke` (default) and `full` once GitHub exposes the workflow for
+dispatch. Concurrency groups separate these scopes so a long formal run does
+not queue quick validation behind it. A push must still affect the workflow's
+listed experiment paths; an empty commit alone does not trigger it.
 
 Both arms use the same original question, read-only tools, 4 CPU/8 GiB container
 limits and 900-second agent limit. Balanced AB/BA ordering is frozen per task.
@@ -33,9 +41,46 @@ Each job extracts the entire original persona's working files, including
 distractors, from the pinned ZIP using verified byte ranges and per-file CRC/SHA.
 Only nested `.git` metadata is uniformly omitted; no corpus selection uses the
 hidden dependency list. Original inputs must match the full workspace by SHA.
-Each task builds a fresh remote-model index before its paired trials; each
-with-zg run receives an isolated copy. Index preparation is reported separately
-from agent time, tokens and tool calls. The runner never loads a Potion index.
+Each task validates or builds an immutable remote-model index before its paired
+trials; each with-zg run receives an isolated copy. Index preparation is reported
+separately from agent time, tokens and tool calls. The runner never loads a
+Potion index.
+
+CI reuses two preparation caches. Verified 16 MiB HTTP blocks are stored under
+the frozen archive identity and persona, with a **4 GiB cap per persona**. CRC
+and source SHA checks still run on extraction. The large Research workspace only
+fits partially in this cache; a hit does not imply zero remaining downloads.
+Completed index seeds are keyed by corpus/configuration, released runtime and
+build helpers, then revalidated against source and index content hashes and a
+new SDK preflight. A changed embedding endpoint/model, index limit or relevant
+build code invalidates reuse. No candidate answers, judgments, session state or
+trial-modified index copies are cached.
+
+Separate Actions restore/save steps retain downloaded blocks and completed
+seeds even if a later evaluation fails. First use still pays setup costs, and
+an evicted cache is rebuilt. We do not increase the repository's cache quota;
+GitHub's default is 10 GB shared across its caches, so retention depends on other
+workflows too. [GitHub cache limits](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#usage-limits-and-eviction-policy)
+`dataset/range-cache-metrics.json` records hit/download bytes even on preparation
+failure; `runs/manifest.json` and `runs/preparation/runtime/preparation.json`
+record index reuse/build provenance separately from QA metrics. Ephemeral Git
+snapshots use compression 0 and disable background GC to reduce setup CPU time.
+
+Protocol v2 applies one uniform SDK `maxFileSizeBytes=1048576` (1 MiB) index
+limit to every task. Larger files remain available in full to both arms through
+Read/Grep; the index skips the whole file and does not truncate it. Other index
+selection behavior follows production defaults. Results describe this explicit
+index configuration, not unrestricted default indexing. Preparation stderr is
+redacted, streamed to Actions live and retained in the runtime artifact.
+
+The first two task-128 setup attempts produced no QA answers: run
+[34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317)
+exposed a missing SDK remote-operation permit (fixed), and run
+[34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894)
+hit the 30-minute index budget at 483/1226 files, with progress slowing at large
+LongDA data files. The uniform cap and smaller task-3 smoke were chosen before
+any QA output or score was observed. All 10 formal tasks, including 127/128,
+remain selected. Failed setup attempts are excluded from formal QA statistics.
 
 Required Actions secrets:
 

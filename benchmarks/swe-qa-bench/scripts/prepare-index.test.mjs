@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareIndex } from "./prepare-index.mjs";
+import { main, prepareIndex } from "./prepare-index.mjs";
 
 async function fixture(t) {
   const directory = await realpath(
@@ -140,6 +140,33 @@ test("incomplete build fails even if indexing returned normally", async (t) => {
   assert.equal(report.fresh, false);
   assert.equal(report.source_unchanged, true);
   assert.equal(f.calls.at(-1)[0], "close");
+});
+
+test("uniform resource cap reaches SDK and report without changing source or supplying selected paths", async (t) => {
+  const f = await fixture(t);
+  f.options.maxFileSizeBytes = 1048576;
+  const report = await prepareIndex(f.options, f.production);
+  const indexOptions = f.calls.find(([name]) => name === "index")[1];
+  assert.deepEqual(Object.keys(indexOptions).sort(), ["maxFileSizeBytes", "onProgress", "root"]);
+  assert.equal(indexOptions.maxFileSizeBytes, 1048576);
+  assert.deepEqual(report.index_options, {
+    root: f.root, selection: "production-defaults-with-uniform-file-size-cap",
+    maxFileSizeBytes: 1048576, query_or_gold_provided: false,
+  });
+  assert.equal(report.source_unchanged, true);
+});
+
+test("invalid SDK or CLI resource caps fail before loading a package or indexing", async (t) => {
+  const f = await fixture(t);
+  for (const value of [0, -1, 1.5, true, "1048576", Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(prepareIndex({ ...f.options, maxFileSizeBytes: value }, f.production), /positive safe integer/);
+  }
+  for (const value of ["0", "-1", "1.5", "1e6", "NaN", "9007199254740992"]) {
+    await assert.rejects(main(["--root", f.root, "--package-dir", "/must-not-load",
+      "--model-cache-dir", f.options.modelCacheDir, "--log", f.options.log,
+      "--max-file-size-bytes=" + value]), /positive safe integer/);
+  }
+  assert.equal(f.calls.length, 0);
 });
 
 test("index errors are preserved in an external report and service closes", async (t) => {

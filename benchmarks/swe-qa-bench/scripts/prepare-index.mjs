@@ -51,6 +51,10 @@ function errorRecord(error) {
 }
 
 export async function prepareIndex(options, production) {
+  if (options.maxFileSizeBytes !== undefined &&
+      (!Number.isSafeInteger(options.maxFileSizeBytes) || options.maxFileSizeBytes < 1)) {
+    throw new Error("maxFileSizeBytes must be a positive safe integer");
+  }
   const startedAt = new Date().toISOString();
   const started = performance.now();
   const root = await realpath(options.root);
@@ -79,7 +83,9 @@ export async function prepareIndex(options, production) {
       .digest("hex"),
     index_options: {
       root,
-      selection: "production-defaults",
+      selection: options.maxFileSizeBytes === undefined
+        ? "production-defaults" : "production-defaults-with-uniform-file-size-cap",
+      ...(options.maxFileSizeBytes === undefined ? {} : { maxFileSizeBytes: options.maxFileSizeBytes }),
       query_or_gold_provided: false,
     },
     index_initially_present: await exists(
@@ -101,14 +107,15 @@ export async function prepareIndex(options, production) {
     });
     const buildStarted = performance.now();
     try {
-      // One completed production build. No custom chunks, paths, filters,
-      // query hints, or reference answers are supplied to the indexing API.
+      // One production build, optionally with a uniform resource cap. No custom
+      // chunks, selected paths, query hints, or reference answers are supplied.
       report.result = await withBenchmarkRemoteEmbeddingAuthorization(
         { root, embeddingModel: options.embeddingModel },
         production,
         () =>
           service.index({
             root,
+            ...(options.maxFileSizeBytes === undefined ? {} : { maxFileSizeBytes: options.maxFileSizeBytes }),
             onProgress(progress) {
               report.progress_events++;
               report.last_progress = progress;
@@ -196,6 +203,7 @@ export async function main(argv = process.argv.slice(2)) {
         default: "local/potion-code-16m-v2",
       },
       "model-cache-dir": { type: "string" },
+      "max-file-size-bytes": { type: "string" },
       log: { type: "string" },
     },
   });
@@ -209,6 +217,13 @@ export async function main(argv = process.argv.slice(2)) {
       "Usage: prepare-index.mjs --root /app --package-dir ZG_0.2.2_DIR --embedding-model local/potion-code-16m-v2 --model-cache-dir /models --log /logs/index-build.json",
     );
   }
+  const maxFileSizeBytes = values["max-file-size-bytes"] === undefined
+    ? undefined : Number(values["max-file-size-bytes"]);
+  if (maxFileSizeBytes !== undefined &&
+      (!/^\d+$/.test(values["max-file-size-bytes"]) ||
+       !Number.isSafeInteger(maxFileSizeBytes) || maxFileSizeBytes < 1)) {
+    throw new Error("--max-file-size-bytes must be a positive safe integer");
+  }
   const production = await loadProduction(values["package-dir"]);
   const report = await prepareIndex(
     {
@@ -216,6 +231,7 @@ export async function main(argv = process.argv.slice(2)) {
       embeddingModel: values["embedding-model"],
       modelCacheDir: values["model-cache-dir"],
       log: values.log,
+      maxFileSizeBytes,
     },
     production,
   );

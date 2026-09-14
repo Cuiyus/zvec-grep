@@ -1,12 +1,12 @@
 # Qoder + Qwen3.8-Max：Workspace-Bench Lite CN 选题协议
 
-研究日期：2026-09-14。本文记录选题与评测边界；不代表实验已经运行或证明 zg 有收益。
+研究日期：2026-09-14。本文记录选题、评测边界与准备阶段验证；不代表已取得 QA 收益结论。
 
 ## 选择与范围
 
 选择用户列出的 **Workspace-Bench Lite CN**，冻结下方 10 个原始 task。用户已确认允许代码和文档/工作区的广义只读 QA。这里“只读”指保留输入资料和代码；原题要求的新建答案文件仍是交付物。三题直接涉及代码/项目 QA，七题涉及文本资料、JSON 与 CSV 的分析。结果应称为“Workspace-Bench Lite CN 的 10 题 QA 子集”，不能称为完整 Lite 成绩，也不能外推为 10 题纯代码 QA 的收益。
 
-选择规则在看到本次模型结果前确定：原任务以资料理解、定位、核对、汇总或解释为主；输入依赖为文本/代码/CSV；交付物为 Markdown/TXT；不要求修复源代码、重排文件、实际发送消息或生成 Office 文件。该子集用于先验证流程和量化收益方向，既不按 zg 是否获胜筛题，也不按官方难度分布加权。首个流程 case 选 **128**。
+选择规则在看到本次模型结果前确定：原任务以资料理解、定位、核对、汇总或解释为主；输入依赖为文本/代码/CSV；交付物为 Markdown/TXT；不要求修复源代码、重排文件、实际发送消息或生成 Office 文件。该子集用于先验证流程和量化收益方向，既不按 zg 是否获胜筛题，也不按官方难度分布加权。当前流程 case 选 **3**；128 的两次准备阶段失败及调整依据记录如下，正式 10 题保持不变。
 
 ## 五个候选的比较
 
@@ -39,7 +39,7 @@
 | --- | --- | --- | --- | --- |
 | 3 | 代码与依赖 QA | 37 个依赖文档/清单；跨 Markdown、package.json、pom.xml 提取与去重，不修改项目配置。 | `project_dependencies_unique_list.md` | 21 |
 | 127 | 代码依赖 QA | 8 个 manifest 源文件；区分第三方包与标准库、导入名与安装包名，生成依赖说明。 | `requirement.txt` | 21 |
-| 128 | 代码使用与参数 QA | 5 个 Python 源文件；解释脚本入口、参数、默认值与运行关系，适合先做单 case 烟测。 | `ST-Raptor运行指令与参数说明.md` | 17 |
+| 128 | 代码使用与参数 QA | 5 个 Python 源文件；解释脚本入口、参数、默认值与运行关系。 | `ST-Raptor运行指令与参数说明.md` | 17 |
 | 139 | 文档检索与事实汇总 | 60 个 Markdown 活动计划；定位日期与地点并归并，需要覆盖全部相关文档。 | `行程安排.md` | 25 |
 | 143 | 结构化资料分析 | 100 个 JSON 社媒记录；比较平台和内容表现，解释点赞、互动与曝光指标，不发布内容。 | `social-media-post-summary.md` | 24 |
 | 158 | 沟通记录分析 | 3 份 Markdown 用户反馈；将需求关联到部门、优先级与计划，只交付分析报告。 | `运营团队工作计划.md` | 22 |
@@ -135,9 +135,21 @@
 
 ## 执行与观测口径
 
+CI 分为三个显式范围：普通提交仅做离线校验；提交信息带 `[workspace-qa-smoke]` 时运行 1 题 × 2 组 × 1 次；带 `[workspace-qa-full]` 时先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；smoke 不混入正式统计。
+
+准备阶段增加两类缓存。按固定 archive 版本和 persona 缓存已校验的 16 MiB 下载块，每 persona 最多 4 GiB；Research 工作区超过此上限，因此只承诺部分下载复用。索引缓存只保存成功构建并通过 preflight 的不可变 seed，按完整源文件内容、运行时版本、embedding 模型与 endpoint、索引配置和构建代码身份核验，命中后仍重新执行当前工作区 preflight。每个 with-zg trial 继续使用独立副本，不缓存问答、judge、session 或被查询修改过的副本。
+
+缓存采用分开的 restore/save 步骤，后续 QA 失败时仍保存已下载块和已完成 seed。首次运行或缓存被淘汰仍会产生准备成本；不调整仓库缓存收费额度。range-cache-metrics.json 与 preparation manifest 分别记录下载命中字节和索引缓存命中、校验、原始构建来源。冷构建、缓存准备、Qoder 执行及 judge 耗时分开解释，不能把缓存构建耗时节约当作 zg 的答题效率收益。临时 Git 快照关闭压缩及自动 GC，文件内容和 Git 对象内容身份不变。
+
+协议 v2 对全部任务统一设置 zg 原生 SDK 参数 `maxFileSizeBytes=1048576`，即只索引不超过 1 MiB 的文件。超过上限的文件整体跳过索引，不截断内容；它们仍完整保留在两组可读工作区中，可用 Read/Grep/Glob 访问。其余筛选沿用生产默认规则，不按题目、依赖清单或 gold 选择索引文件。这是显式资源配置，最终结果不能描述成无限制的默认索引配置。
+
+调整发生在任何 Qoder QA 回答或 judge 分数出现之前。首次 [CI 34818892317](https://github.com/Cuiyus/zvec-grep/actions/runs/34818892317) 在索引阶段发现 SDK 缺少远程 operation permit，已修复并通过真实 SDK 的远程建索引和向量查询探针。随后 [CI 34821814894](https://github.com/Cuiyus/zvec-grep/actions/runs/34821814894) 在 1,800 秒索引准备预算处超时：1,226 个候选文件中完成 483 个，最后进度报告 0 个文件失败；进入 LongDA 的大型数据文件后明显变慢。该次没有进入 QA，不能据此声称模型答题失败或 zg 有/无收益。
+
+据此冻结全局 1 MiB 索引上限，并把 smoke 从 Research 的 128 改为工作区较小的 Backend Developer task 3，以尽早验证完整问答和评分流程。正式任务仍为原 10 题。1 MiB 等于 zg 的代码文件默认上限，同时收紧 data/text 类型；不是按已知答案选取文件。两个准备阶段失败的 smoke 不进入 200 次正式 rollout 统计，原日志和修订依据保留。
+
 固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
 
-先用 128 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session、home 和 workspace，固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。
+先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session、home 和 workspace，固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。
 
 逐次记录 task ID、组别、重复序号、agent 成功/失败状态、原始 judge 逐条判断和总分、input tokens、tool calls、elapsed seconds，并保留原始轨迹作为核算依据。agent 异常、judge 异常、缺失 usage 必须单列；缺失值用 null，不能填 0。input tokens 使用 Qoder 实际报告的累计输入，若无缓存分项或逐请求 usage 则标注不可用，不能按工具调用数推算。tool calls 明确为模型发出的全部工具调用数，并另列 zg search/rg 使用次数；同一批查询是否计一次按真实 tool-call ID 核算。
 

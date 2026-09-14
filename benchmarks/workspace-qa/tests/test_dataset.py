@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import struct
@@ -34,8 +35,28 @@ def archive_bytes(entries: dict[str, bytes]) -> bytes:
 class MemoryArchive(io.BytesIO):
     fetched = 0
 
+    def metrics(self):
+        return {"enabled": False, "downloaded_bytes": 0, "cache_hit_bytes": 0,
+                "persisted_bytes": 0, "cache_stored_bytes": 0}
+
 
 class DatasetTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": "",
+                                               "WORKSPACE_QA_RANGE_CACHE_BYTES": "4294967296"})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    @staticmethod
+    def mock_http(payload, requests):
+        def fetch(argv, **kwargs):
+            low, high = map(int, argv[argv.index("--range") + 1].split("-"))
+            requests.append((low, high))
+            Path(argv[argv.index("--dump-header") + 1]).write_text(
+                f"HTTP/2 206\nContent-Range: bytes {low}-{high}/{len(payload)}\n")
+            Path(argv[argv.index("--output") + 1]).write_bytes(payload[low:high + 1])
+        return fetch
+
     def test_dataset_paths_cannot_escape_destination(self):
         for value in ("", "/tmp/out", "../out", "data/../../out", "data\\out", "a\x00b"):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -235,6 +256,134 @@ class DatasetTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     reader.read(1)
                 self.assertEqual(reader.fetched, 0)
+
+    def test_persistent_cache_second_reader_needs_no_http_or_credentials_on_disk(self):
+        payload, requests = b"abcdefghijk", []
+        url = "https://example.test/archive-v1.zip?token=DO_NOT_CACHE_CREDENTIAL"
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": tmp}):
+            with patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, requests)):
+                first = dataset.RangeArchive(url, len(payload), block_size=4)
+                self.assertEqual(first.read(), payload)
+            self.assertEqual(first.fetched, len(payload))
+            self.assertEqual(first.persisted_bytes, len(payload))
+            self.assertEqual(first.cache_limit, 4294967296)
+            self.assertLessEqual(len(first.cache), 2)
+            with patch.object(dataset.subprocess, "run") as fetch:
+                second = dataset.RangeArchive(url, len(payload), block_size=4)
+                self.assertEqual(second.read(), payload)
+                fetch.assert_not_called()
+            self.assertEqual(second.cache_hit_bytes, len(payload))
+            self.assertEqual(second.fetched, 0)
+            self.assertEqual(second.persisted_bytes, 0)
+            self.assertLessEqual(len(second.cache), 2)
+            for path in Path(tmp).iterdir():
+                self.assertIn(path.suffix, (".block", ".json"))
+                self.assertNotIn("DO_NOT_CACHE_CREDENTIAL", path.name)
+                self.assertNotIn(b"DO_NOT_CACHE_CREDENTIAL", path.read_bytes())
+
+    def test_corrupt_persistent_blocks_are_downloaded_again(self):
+        payload = b"abcdefghijk"
+        for corruption in ("checksum", "length", "identity", "missing_sidecar"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as tmp:
+                with patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": tmp}):
+                    with patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, [])):
+                        first = dataset.RangeArchive("https://example.test/v1.zip", len(payload), block_size=4)
+                        first.read()
+                    key = first._cache_key(0)
+                    body, sidecar = Path(tmp) / f"{key}.block", Path(tmp) / f"{key}.json"
+                    if corruption == "checksum":
+                        body.write_bytes(b"xxxx")
+                    elif corruption == "length":
+                        body.write_bytes(b"x")
+                    elif corruption == "identity":
+                        metadata = json.loads(sidecar.read_text())
+                        metadata["key"] = "another-cache-entry"
+                        sidecar.write_text(json.dumps(metadata))
+                    else:
+                        sidecar.unlink()
+                    requested = []
+                    with patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, requested)):
+                        second = dataset.RangeArchive("https://example.test/v1.zip", len(payload), block_size=4)
+                        self.assertEqual(second.read(), payload)
+                    self.assertEqual(requested, [(0, 3)])
+                    self.assertEqual(second.fetched, 4)
+                    self.assertEqual(second.cache_hit_bytes, 7)
+                    self.assertEqual(second.persisted_bytes, 4)
+                    self.assertEqual(body.read_bytes(), b"abcd")
+
+    def test_cache_identity_separates_archive_url_size_block_size_and_offset(self):
+        payload = b"abcdefghijk"
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": tmp}):
+            identities = [("v1", 11, 4), ("v2", 11, 4), ("v1", 10, 4), ("v1", 11, 5)]
+            keys = set()
+            for version, size, block_size in identities:
+                calls = []
+                with patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload[:size], calls)):
+                    reader = dataset.RangeArchive(f"https://example.test/{version}.zip", size, block_size=block_size)
+                    self.assertEqual(reader.read(1), payload[:1])
+                    keys.add(reader._cache_key(0))
+                    keys.add(reader._cache_key(block_size))
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(reader.cache_hit_bytes, 0)
+            self.assertEqual(len(keys), 8)
+
+    def test_cache_budget_exhaustion_does_not_truncate_remote_content(self):
+        payload = b"abcdefghijk"
+        for budget in (0, 200):
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as tmp:
+                with (patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": tmp,
+                                               "WORKSPACE_QA_RANGE_CACHE_BYTES": str(budget)}),
+                      patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, []))):
+                    reader = dataset.RangeArchive("https://example.test/archive.zip", len(payload), block_size=4)
+                    self.assertEqual(reader.read(), payload)
+                    self.assertEqual(reader.fetched, len(payload))
+                    self.assertLessEqual(reader.metrics()["cache_stored_bytes"], budget)
+                    self.assertLess(reader.persisted_bytes, len(payload))
+                    if budget:
+                        self.assertGreater(reader.persisted_bytes, 0)
+                    self.assertLessEqual(len(reader.cache), 2)
+
+    def test_chinese_zip_extraction_is_identical_when_all_ranges_are_cached(self):
+        payload = archive_bytes({"Research_Workdir/项目/说明.md": "中文资料".encode(),
+                                 "Research_Workdir/无关/空文件.txt": b"",
+                                 "Research_Workdir/其他.csv": b"kind,count\nother,3\n"})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": str(root / "cache")}),
+                  patch.object(dataset.shutil, "disk_usage", return_value=SimpleNamespace(free=10**12))):
+                manifests = []
+                for repeat in range(2):
+                    with patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, [])) as fetch:
+                        with dataset.RangeArchive("https://example.test/cn.zip", len(payload), block_size=64) as reader:
+                            with zipfile.ZipFile(reader) as archive:
+                                manifests.append(dataset.extract_persona(archive, "Researcher", root / str(repeat)))
+                        if repeat:
+                            fetch.assert_not_called()
+                            self.assertEqual(reader.fetched, 0)
+                            self.assertGreater(reader.cache_hit_bytes, 0)
+                self.assertEqual(manifests[0], manifests[1])
+                self.assertEqual((root / "1/项目/说明.md").read_text(), "中文资料")
+
+    def test_failed_prepare_retains_downloaded_blocks_and_cache_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock, upstream, _, fetch_metadata, _ = self.fixture(root)
+            # A valid ZIP with the wrong persona fails after remote ZIP inspection.
+            payload = archive_bytes({"BackendDeveloper_Workdir/file.txt": b"working file"})
+            lock["workspace"]["size_bytes"] = len(payload)
+            output = root / "prepared"
+            with (patch.dict(os.environ, {"WORKSPACE_QA_RANGE_CACHE": str(root / "cache")}),
+                  patch.object(dataset, "download", side_effect=fetch_metadata),
+                  patch.object(dataset.subprocess, "check_output", return_value="fixed-commit\n"),
+                  patch.object(dataset.subprocess, "run", side_effect=self.mock_http(payload, []))):
+                with self.assertRaisesRegex(ValueError, "one original persona root"):
+                    dataset.prepare(lock, "128", output, upstream)
+            metrics = json.loads((output / "range-cache-metrics.json").read_text())
+            self.assertEqual(metrics["downloaded_bytes"], len(payload))
+            self.assertEqual(metrics["persisted_bytes"], len(payload))
+            self.assertGreater(metrics["cache_stored_bytes"], len(payload))
+            self.assertEqual(len(list((root / "cache").glob("*.block"))), 1)
+            self.assertFalse((output / "dataset-manifest.json").exists())
 
 
 if __name__ == "__main__":

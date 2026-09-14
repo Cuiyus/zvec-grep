@@ -1,4 +1,5 @@
 name: Qoder Qwen3.8-Max Workspace QA
+run-name: "Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || 'validate') }} · ${{ github.ref_name }}"
 
 on:
   push:
@@ -12,16 +13,17 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Smoke alone, or smoke followed by 10 tasks x 10 repetitions per arm
+        description: Offline validation, one-task smoke, or smoke followed by 200 formal trials
         type: choice
-        options: [smoke, full]
-        default: full
+        options: [validate, smoke, full]
+        default: smoke
 
 permissions:
   contents: read
 
 concurrency:
-  group: workspace-qa-qoder-${{ github.ref }}
+  # A long formal run must not queue unrelated fast validation behind it.
+  group: workspace-qa-qoder-${{ github.ref }}-${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || 'validate') }}
   cancel-in-progress: false
 
 jobs:
@@ -30,6 +32,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       tasks: ${{ steps.matrix.outputs.tasks }}
+      scope: ${{ steps.scope.outputs.scope }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,6 +40,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - id: scope
+        name: Select explicitly requested execution scope
+        run: python benchmarks/workspace-qa/ci_plan.py --event-path "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
       - name: Test dataset isolation, execution accounting, judge and reports
         run: python -m unittest discover -s benchmarks/workspace-qa/tests -v
       - name: Test released SDK bridge and scoped remote authorization
@@ -51,19 +57,24 @@ jobs:
         name: Freeze matrix before any model results
         run: |
           python - <<'PY'
-          import json, os
+          import json, os, sys
           from pathlib import Path
+          sys.path.insert(0, 'benchmarks/workspace-qa')
+          import runner
           lock = json.loads(Path('benchmarks/workspace-qa/data/lock.json').read_text())
           tasks = [t['task_id'] for t in lock['tasks']]
           assert len(tasks) == len(set(tasks)) == 10
-          assert lock['repetitions'] == 10 and lock['smoke_task_id'] == '128'
+          assert lock['repetitions'] == 10 and lock['smoke_task_id'] == '3'
           assert lock['experiment']['embedding']['model'] == 'qwen/qwen3.7-text-embedding'
           assert lock['experiment']['zg_version'] == '0.2.2'
+          assert lock['experiment']['protocol'] == runner.PROTOCOL
+          assert lock['experiment']['index']['max_file_size_bytes'] == runner.INDEX_MAX_FILE_SIZE_BYTES == 1048576
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write('tasks=' + json.dumps(tasks) + '\n')
           PY
   smoke:
     needs: validate
+    if: needs.validate.outputs.scope == 'smoke' || needs.validate.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -72,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/workspace-qa
         with:
-          task-id: '128'
+          task-id: '3'
           repetitions: '1'
           phase: smoke
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
@@ -80,7 +91,7 @@ jobs:
           embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
   batch:
     needs: [validate, smoke]
-    if: github.event_name == 'push' || inputs.scope == 'full'
+    if: needs.validate.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -101,8 +112,8 @@ jobs:
           judge-key: ${{ secrets.GLM_API_KEY }}
           embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
   report:
-    needs: [smoke, batch]
-    if: always() && (github.event_name == 'push' || inputs.scope == 'full')
+    needs: [validate, smoke, batch]
+    if: always() && needs.validate.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

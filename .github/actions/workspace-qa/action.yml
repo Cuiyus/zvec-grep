@@ -48,6 +48,40 @@ runs:
         docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
         -f benchmarks/swe-qa-bench/runtime/Dockerfile
         -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+    - name: Read actual runtime identity for index compatibility
+      shell: bash
+      run: |
+        uv run --project benchmarks/swe-qa-bench python - <<'PY'
+        import json, os, sys
+        from pathlib import Path
+        sys.path.insert(0, 'benchmarks/workspace-qa')
+        from runner import runtime_identity
+        target = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-runtime.json'
+        target.write_text(json.dumps(runtime_identity('zg-readonly-qa:0.2.2')) + '\n')
+        PY
+    - name: Resolve immutable data and index cache keys
+      id: cache-plan
+      shell: bash
+      env:
+        TASK_ID: ${{ inputs.task-id }}
+      run: >-
+        python benchmarks/workspace-qa/ci_plan.py --task-id "$TASK_ID"
+        --runtime-identity "$RUNNER_TEMP/workspace-qa-runtime.json"
+        --cache-root "$RUNNER_TEMP/workspace-qa-cache" --github-output "$GITHUB_OUTPUT"
+    - name: Restore validated workspace download blocks
+      id: range-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.cache-plan.outputs.range_cache_path }}
+        key: ${{ steps.cache-plan.outputs.range_cache_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ${{ steps.cache-plan.outputs.range_cache_key }}-
+    - name: Restore completed immutable index seed
+      id: index-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.cache-plan.outputs.index_cache_path }}
+        key: ${{ steps.cache-plan.outputs.index_cache_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ${{ steps.cache-plan.outputs.index_cache_key }}-
     - name: Run pair series and blind rubric judge
       shell: bash
       env:
@@ -56,15 +90,73 @@ runs:
         QODER_PERSONAL_ACCESS_TOKEN: ${{ inputs.qoder-token }}
         GLM_API_KEY: ${{ inputs.judge-key }}
         QWEN_API_KEY: ${{ inputs.embedding-key }}
+        WORKSPACE_QA_RANGE_CACHE: ${{ steps.cache-plan.outputs.range_cache_path }}
+        WORKSPACE_QA_RANGE_CACHE_BYTES: ${{ steps.cache-plan.outputs.range_cache_bytes }}
+        WORKSPACE_QA_INDEX_CACHE: ${{ steps.cache-plan.outputs.index_cache_path }}
       run: >-
         uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py
         --task-id "$TASK_ID" --repetitions "$REPETITIONS"
         --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream"
         --output "$RUNNER_TEMP/workspace-qa"
+    # Cache generations let a failed partial download grow on a later run.
+    # Restore prefixes include the COMPLETE compatibility hash; no cross-config fallback.
+    - name: Check whether preparation produced new reusable cache content
+      if: always() && steps.cache-plan.outcome == 'success'
+      id: cache-save-plan
+      shell: bash
+      run: |
+        python - <<'PY'
+        import json, os
+        from pathlib import Path
+        root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa'
+        def read(relative):
+            path = root / relative
+            return json.loads(path.read_text()) if path.is_file() else {}
+        ranges = read('dataset/range-cache-metrics.json')
+        preparation = read('runs/preparation/runtime/preparation.json')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('save_range=' + str(ranges.get('persisted_bytes', 0) > 0).lower() + '\n')
+            output.write('save_index=' + str(preparation.get('cache', {}).get('published') is True).lower() + '\n')
+        PY
+    # Split restore/save: useful preparation survives a later SDK, QA or judge failure.
+    # Answers, traces and trial working copies never enter either cache.
+    - name: Save workspace blocks even when later evaluation fails
+      if: always() && steps.cache-save-plan.outputs.save_range == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.cache-plan.outputs.range_cache_path }}
+        key: ${{ steps.cache-plan.outputs.range_cache_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Save completed index seed even when later evaluation fails
+      if: always() && steps.cache-save-plan.outputs.save_index == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.cache-plan.outputs.index_cache_path }}
+        key: ${{ steps.cache-plan.outputs.index_cache_key }}-${{ github.run_id }}-${{ github.run_attempt }}
     - name: Publish task summary
       if: always()
       shell: bash
+      env:
+        RANGE_CACHE_HIT: ${{ steps.range-cache.outputs.cache-matched-key != '' }}
+        INDEX_CACHE_HIT: ${{ steps.index-cache.outputs.cache-matched-key != '' }}
       run: |
+        python - <<'PY'
+        import json, os
+        from pathlib import Path
+        root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa'
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+            summary.write('### Preparation cache\n\n')
+            summary.write('Actions archive restored: range=' + os.environ.get('RANGE_CACHE_HIT', '') + ', index=' + os.environ.get('INDEX_CACHE_HIT', '') + '. Content validation is recorded separately below.\n\n')
+            for relative in ('dataset/range-cache-metrics.json', 'runs/preparation/runtime/preparation.json'):
+                path = root / relative
+                if path.is_file():
+                    data = json.loads(path.read_text())
+                    if 'cache' in data:
+                        cache = data['cache']
+                        data = {key: data[key] for key in ('status', 'wall_seconds', 'preflight_wall_seconds') if key in data}
+                        data['cache'] = {key: cache[key] for key in ('status', 'validation_seconds', 'published') if key in cache}
+                        data['cache']['original_build_wall_seconds'] = cache.get('original_build_info', {}).get('wall_seconds')
+                    summary.write('`' + relative + '`\n\n```json\n' + json.dumps(data, ensure_ascii=False, indent=2) + '\n```\n\n')
+        PY
         if [ -f "$RUNNER_TEMP/workspace-qa/report/summary.md" ]; then
           cat "$RUNNER_TEMP/workspace-qa/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
         fi
@@ -103,6 +195,7 @@ runs:
           ${{ runner.temp }}/workspace-qa/sdk-preflight/runtime/
           ${{ runner.temp }}/workspace-qa/selection.json
           ${{ runner.temp }}/workspace-qa/dataset/dataset-manifest.json
+          ${{ runner.temp }}/workspace-qa/dataset/range-cache-metrics.json
           ${{ runner.temp }}/workspace-qa/report/
           ${{ runner.temp }}/workspace-qa/runs/*.json
           ${{ runner.temp }}/workspace-qa/runs/judge/

@@ -5,9 +5,11 @@ import importlib.util
 import io
 import json
 import shutil
+import sys
 import tempfile
+import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -146,8 +148,10 @@ class RunnerTests(unittest.TestCase):
                     return Path(next(x.removeprefix("source=") for x in fields if x.startswith("source=")))
         return None
 
-    def mocked_run(self, args, *, contract_failure=False, mutate_seed=False, verify_failure=False):
+    def mocked_run(self, args, *, contract_failure=False, mutate_seed=False, verify_failure=False,
+                   commit="frozen-commit", preflight_failure_once=False):
         commands, calls, indexes = [], [], []
+        preflight_calls = 0
         original_copy, original_remove = runner.working_index, shutil.rmtree
 
         def copy_one(seed, destination):
@@ -164,16 +168,24 @@ class RunnerTests(unittest.TestCase):
             return original_remove(path, *positional, **kwargs)
 
         def checked(command, **kwargs):
+            nonlocal preflight_calls
             commands.append(command)
             if "rev-parse" in command:
-                return "frozen-commit"
+                return commit
             if "ls-files" in command:
                 return "资料.md"
             target = self.mounted(command, "/logs")
             if runner.PREPARE_INDEX in command:
                 self.mounted(command, "/app/.zvec-grep").joinpath("data").write_text("fixed seed")
+                (target / "index-build.json").write_text(json.dumps({
+                    "status": "completed", "fresh": True, "source_unchanged": True,
+                    "build_duration_ms": 1250, "source_git_commit": commit,
+                    "index_options": {"root": "/app", "maxFileSizeBytes": 1048576}}))
             if "preflight" in command:
                 (target / "snapshot.json").write_text("{}")
+                preflight_calls += 1
+                if preflight_failure_once and preflight_calls == 1:
+                    raise RuntimeError("simulated stale restored index")
             if "verify" in command and verify_failure:
                 raise RuntimeError("simulated semantic index corruption")
             return "{}"
@@ -199,10 +211,13 @@ class RunnerTests(unittest.TestCase):
                       "final_metrics": {"total_prompt_tokens": 100, "total_completion_tokens": 10,
                                         "total_cached_tokens": 60}}
         with (patch.dict("os.environ", {runner.SPEC.credential_env: "fake-secret", "QWEN_API_KEY": "fake-embedding-secret"}),
-              patch.object(runner, "runtime_identity", return_value={"image_id": "sha256:fixed"}),
+              patch.object(runner, "runtime_identity", return_value={"image_id": "sha256:fixed",
+                  "installed_versions": {"zg": "0.2.2", "qoder": "1.1.45", "node": "v24.0.0"},
+                  "os": "linux", "architecture": "amd64"}),
               patch.object(runner, "working_index", side_effect=copy_one),
               patch.object(runner.shutil, "rmtree", side_effect=remove_after_record),
               patch.object(runner, "run_checked", side_effect=checked),
+              patch.object(runner, "run_streamed", side_effect=checked),
               patch.object(runner, "cleanup_container"),
               patch.object(runner.subprocess, "Popen", side_effect=launch),
               patch.object(runner, "convert_agent_trace", return_value=conversion),
@@ -216,6 +231,11 @@ class RunnerTests(unittest.TestCase):
             result, commands, calls, indexes = self.mocked_run(args)
             self.assertEqual(result, 0)
             self.assertEqual(sum(runner.PREPARE_INDEX in c for c in commands), 1)
+            index_command = next(c for c in commands if runner.PREPARE_INDEX in c)
+            self.assertEqual(index_command[index_command.index("--max-file-size-bytes") + 1], "1048576")
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(manifest["index_options"], {"root": "/app", "maxFileSizeBytes": 1048576})
+            self.assertEqual(manifest["protocol"], "workspace-qa-qoder-v2")
             self.assertFalse(any("retrieve" in c for c in commands))
             self.assertEqual(len(calls), 4)
             self.assertEqual(len(set(indexes)), 2)
@@ -259,6 +279,104 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "contract_failure")
             self.assertTrue(all(r["status"] == "planned" and r["input_tokens"] is None for r in rows[1:]))
 
+    def test_completed_seed_cache_survives_qa_failure_and_hits_across_git_commits_and_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache = root / "cached-index"
+            (root / "first").mkdir()
+            (root / "second").mkdir()
+            first = self.args(root / "first")
+            second = self.args(root / "second", task_id="different-question")
+            second.question_file.write_text("另一道题，仍使用同一完整工作区。")
+            with patch.dict("os.environ", {"WORKSPACE_QA_INDEX_CACHE": str(cache)}):
+                status, _, _, _ = self.mocked_run(first, contract_failure=True, commit="commit-one")
+                self.assertEqual(status, 1)
+                prepared = json.loads((first.output / "preparation/runtime/preparation.json").read_text())
+                self.assertTrue(prepared["cache"]["published"])
+                entry = cache / prepared["cache"]["key"]
+                self.assertEqual({p.name for p in entry.iterdir()}, {"index", "metadata.json", "COMPLETE"})
+                self.assertFalse(any("candidate" in str(p) or "trajectory" in str(p) for p in entry.rglob("*")))
+                self.assertEqual((entry / "index/data").read_text(), "fixed seed")
+                status, commands, _, _ = self.mocked_run(second, commit="different-commit")
+            self.assertEqual(status, 0)
+            self.assertFalse(any(runner.PREPARE_INDEX in command for command in commands))
+            self.assertEqual(sum("preflight" in command for command in commands), 1)
+            manifest = json.loads((second.output / "manifest.json").read_text())
+            self.assertEqual(manifest["source_git_commit"], "different-commit")
+            info = manifest["index_preparation"]["cache"]
+            self.assertEqual(info["status"], "hit")
+            self.assertFalse(info["published"])
+            self.assertEqual(info["original_build_info"]["source_git_commit"], "commit-one")
+            self.assertGreaterEqual(info["validation_seconds"], 0)
+
+    def test_corrupt_cached_hash_or_rejected_preflight_rebuilds_before_trials(self):
+        for corruption in ("bytes", "preflight"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cache = root / "cached-index"
+                (root / "first").mkdir()
+                (root / "second").mkdir()
+                first, second = self.args(root / "first"), self.args(root / "second")
+                with patch.dict("os.environ", {"WORKSPACE_QA_INDEX_CACHE": str(cache)}):
+                    self.mocked_run(first)
+                    info = json.loads((first.output / "preparation/runtime/preparation.json").read_text())["cache"]
+                    if corruption == "bytes":
+                        (cache / info["key"] / "index/data").write_text("corrupt")
+                    status, commands, _, _ = self.mocked_run(second, preflight_failure_once=corruption == "preflight")
+                self.assertEqual(status, 0)
+                self.assertEqual(sum(runner.PREPARE_INDEX in command for command in commands), 1)
+                prepared = json.loads((second.output / "preparation/runtime/preparation.json").read_text())
+                self.assertEqual(prepared["cache"]["status"], "miss")
+                self.assertTrue(prepared["cache"]["published"])
+                self.assertEqual((cache / info["key"] / "index/data").read_text(), "fixed seed")
+
+    def test_cache_identity_changes_with_source_runtime_endpoint_model_cap_and_build_code(self):
+        runtime = {"installed_versions": {"zg": "0.2.2", "qoder": "1.1.45", "node": "v24.0.0"},
+                   "os": "linux", "architecture": "amd64"}
+        kwargs = dict(protocol=runner.PROTOCOL, embedding_model=runner.EMBEDDING,
+                      endpoint="https://example.invalid/embeddings", max_file_size_bytes=1048576)
+        original = runner.seed_cache.make_identity({"资料.md": "content"}, runtime, **kwargs)
+        variants = [runner.seed_cache.make_identity({"资料.md": "changed"}, runtime, **kwargs)]
+        for key, value in (("embedding_model", "qwen/changed"), ("endpoint", "https://other.invalid/embeddings"),
+                           ("max_file_size_bytes", 100)):
+            variants.append(runner.seed_cache.make_identity({"资料.md": "content"}, runtime, **{**kwargs, key: value}))
+        variants.append(runner.seed_cache.make_identity({"资料.md": "content"},
+            {**runtime, "installed_versions": {**runtime["installed_versions"], "node": "v24.1.0"}}, **kwargs))
+        with patch.object(runner.seed_cache, "file_hash", return_value="changed-build-code"):
+            variants.append(runner.seed_cache.make_identity({"资料.md": "content"}, runtime, **kwargs))
+        self.assertTrue(all(runner.seed_cache.digest(v) != runner.seed_cache.digest(original) for v in variants))
+
+    def test_cache_rejects_missing_completion_marker_and_never_publishes_incomplete_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = root / "seed"
+            seed.mkdir()
+            (seed / "data").write_text("index")
+            identity = {"source_fingerprint": "frozen"}
+            build = {"status": "completed", "fresh": True, "source_unchanged": True}
+            self.assertEqual(runner.seed_cache.publish(root / "cache", seed, identity, build,
+                preflight_passed=False)["status"], "not_saved")
+            self.assertEqual(runner.seed_cache.publish(root / "cache", seed, identity, build,
+                preflight_passed=True)["status"], "saved")
+            (root / "cache" / runner.seed_cache.digest(identity) / "COMPLETE").unlink()
+            restored = root / "restored"
+            result = runner.seed_cache.restore(root / "cache", restored, identity)
+            self.assertEqual(result["status"], "miss")
+            self.assertEqual({p.name for p in restored.iterdir()}, {"locks"})
+
+    def test_wrong_json_metadata_shape_is_a_cache_miss(self):
+        for metadata in ([], "string", 3, None, {"schema_version": 2}):
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                identity = {"source_fingerprint": "frozen"}
+                entry = root / "cache" / runner.seed_cache.digest(identity)
+                entry.mkdir(parents=True)
+                (entry / "metadata.json").write_text(json.dumps(metadata))
+                (entry / "COMPLETE").write_text(runner.seed_cache.digest(metadata))
+                result = runner.seed_cache.restore(root / "cache", root / "restored", identity)
+                self.assertEqual(result["status"], "miss")
+                self.assertIn("supported object", result["reason"])
+
     def test_seed_integrity_failure_stops_new_trials(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp))
@@ -282,6 +400,76 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("working_index_files_after_sha256", row)
             self.assertEqual(row["working_index_disposal"], "removed_after_verification_and_provenance_saved")
             self.assertEqual((args.output / "preparation" / "index" / "data").read_text(), "fixed seed")
+
+    def test_index_stream_is_visible_before_exit_and_redacts_split_secrets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            release = root / "release"
+            observed = threading.Event()
+
+            class Observer(io.StringIO):
+                def write(self, text):
+                    result = super().write(text)
+                    if "progress=" in text:
+                        observed.set()
+                    return result
+
+            console = Observer()
+            outcome = {}
+            script = (
+                "import os,sys,time,pathlib\n"
+                "secret=os.environ['QWEN_API_KEY']\n"
+                "sys.stderr.write('progress='+secret[:5]);sys.stderr.flush()\n"
+                "time.sleep(.05)\n"
+                "sys.stderr.write(secret[5:]+' 中文\\n');sys.stderr.flush()\n"
+                "while not pathlib.Path(sys.argv[1]).exists(): time.sleep(.01)\n"
+                "print('summary='+secret)\n")
+
+            def run():
+                try:
+                    outcome["stdout"] = runner.run_streamed(
+                        [sys.executable, "-u", "-c", script, str(release)], timeout=5,
+                        diagnostic_path=root / "failure.json", output_prefix=root / "index-build")
+                except Exception as error:
+                    outcome["error"] = error
+
+            with patch.dict("os.environ", {"QWEN_API_KEY": "secret-split-across-pipe-writes"}), redirect_stderr(console):
+                worker = threading.Thread(target=run)
+                worker.start()
+                try:
+                    self.assertTrue(observed.wait(3), "Progress remained buffered until process exit")
+                    self.assertTrue(worker.is_alive())
+                    saved = (root / "index-build.stderr.txt").read_text()
+                    self.assertEqual(saved, "progress=[REDACTED] 中文\n")
+                    self.assertEqual(console.getvalue(), saved)
+                finally:
+                    release.touch()
+                    worker.join(5)
+            self.assertFalse(worker.is_alive())
+            self.assertNotIn("error", outcome)
+            self.assertEqual(outcome["stdout"], "summary=[REDACTED]")
+            self.assertEqual((root / "index-build.stdout.txt").read_text(), "summary=[REDACTED]\n")
+            self.assertFalse((root / "failure.json").exists())
+
+    def test_index_timeout_and_exit_failure_preserve_redacted_partial_logs(self):
+        for ending, timeout, expected_kind in (("time.sleep(5)", .2, "TimeoutExpired"),
+                                               ("sys.exit(7)", 5, "CalledProcessError")):
+            with self.subTest(kind=expected_kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                script = ("import os,sys,time\n"
+                          "print('partial='+os.environ['QWEN_API_KEY'],flush=True)\n"
+                          "print('progress='+os.environ['QWEN_API_KEY'],file=sys.stderr,flush=True)\n"
+                          + ending)
+                with patch.dict("os.environ", {"QWEN_API_KEY": "offline-private-value"}), redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, expected_kind):
+                        runner.run_streamed([sys.executable, "-u", "-c", script], timeout=timeout,
+                            diagnostic_path=root / "failure.json", output_prefix=root / "index-build")
+                report = json.loads((root / "failure.json").read_text())
+                self.assertEqual(report["kind"], expected_kind)
+                self.assertTrue(report["logs_redacted"])
+                self.assertEqual(Path(report["stdout_path"]).read_text(), "partial=[REDACTED]\n")
+                self.assertEqual(Path(report["stderr_path"]).read_text(), "progress=[REDACTED]\n")
+                self.assertNotIn("offline-private-value", json.dumps(report))
 
 
 if __name__ == "__main__":

@@ -7,12 +7,14 @@ Only final-answer delivery is adapted: the harness saves it as the task's report
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import json
 import math
 import os
 import random
 import re
+import selectors
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,8 @@ from urllib.parse import urlsplit
 
 # Reuse the locked benchmark package when invoked directly from this directory.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "swe-qa-bench"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import seed_cache  # noqa: E402
 from zg_bench.swe_qa.readonly_agents import (  # noqa: E402
     QODER_SEARCH_TOOL, agent_environment, agent_spec, build_agent_command,
     build_agent_config, control_manifest, convert_agent_trace, expected_tools,
@@ -39,9 +43,10 @@ from zg_bench.swe_qa.readonly_judge import extract_final_answer  # noqa: E402
 from zg_bench.settings import ZVEC_GREP_EMBEDDING_ENDPOINT  # noqa: E402
 
 PROFILES = ("baseline", "with-zg")
-PROTOCOL = "workspace-qa-qoder-v1"
+PROTOCOL = "workspace-qa-qoder-v2"
 MODEL = "qwen3.8-max"
 EMBEDDING = "qwen/qwen3.7-text-embedding"
+INDEX_MAX_FILE_SIZE_BYTES = 1048576
 SPEC = agent_spec("qodercli", MODEL)
 
 
@@ -182,13 +187,14 @@ def runtime_identity(image: str) -> dict[str, Any]:
     # Check the installed releases, not merely a mutable Docker tag's spelling.
     script = ("const fs=require('node:fs'),cp=require('node:child_process');"
               "const p=JSON.parse(fs.readFileSync('/opt/qa/node_modules/@zvec/zvec-grep/package.json','utf8'));"
-              "console.log(JSON.stringify({zg:p.version,qoder:cp.execFileSync('qodercli',['--version'],{encoding:'utf8'}).trim()}))")
+              "console.log(JSON.stringify({zg:p.version,node:process.version,qoder:cp.execFileSync('qodercli',['--version'],{encoding:'utf8'}).trim()}))")
     versions = json.loads(run_checked(["docker", "run", "--rm", "--network", "none", image,
                                       "node", "-e", script], timeout=60))
-    if versions != {"zg": "0.2.2", "qoder": SPEC.version}:
+    if {key: versions.get(key) for key in ("zg", "qoder")} != {"zg": "0.2.2", "qoder": SPEC.version}:
         raise RuntimeError("Runtime versions differ from zg 0.2.2 / Qoder " + SPEC.version)
     return {"image_id": metadata["Id"], "image_repo_digests": metadata.get("RepoDigests", []),
-            "installed_versions": versions}
+            "installed_versions": versions, "os": metadata.get("Os"),
+            "architecture": metadata.get("Architecture")}
 
 
 def cleanup_container(name: str) -> None:
@@ -198,9 +204,99 @@ def cleanup_container(name: str) -> None:
         pass
 
 
-def run_named(command: list[str], name: str, **kwargs: Any) -> str:
+def run_streamed(command: list[str], *, timeout: float, diagnostic_path: Path,
+                 output_prefix: Path) -> str:
+    """Stream complete redacted stderr lines, retaining both pipes even on failure.
+
+    Reads are multiplexed so large stdout cannot block stderr or the deadline.
+    Partial UTF-8 and secrets split across reads stay buffered until a full line.
+    """
+    paths = {name: output_prefix.with_name(output_prefix.name + f".{name}.txt")
+             for name in ("stdout", "stderr")}
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    handles = {name: path.open("w", encoding="utf-8") for name, path in paths.items()}
+    buffers = dict.fromkeys(paths, "")
+    decoders = {name: codecs.getincrementaldecoder("utf-8")("replace") for name in paths}
+    child = None
+    failure = None
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+
+    def emit(name: str, line: str) -> None:
+        safe = redact(line)
+        handles[name].write(safe)
+        handles[name].flush()
+        if name == "stderr":
+            sys.stderr.write(safe)
+            sys.stderr.flush()
+
+    def consume(name: str, data: bytes, *, final: bool = False) -> None:
+        buffers[name] += decoders[name].decode(data, final=final)
+        while "\n" in buffers[name]:
+            line, buffers[name] = buffers[name].split("\n", 1)
+            emit(name, line + "\n")
+        if final and buffers[name]:
+            emit(name, buffers[name])
+            buffers[name] = ""
+
+    try:
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for name in paths:
+            selector.register(getattr(child, name), selectors.EVENT_READ, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if failure:
+                    break
+                failure = "TimeoutExpired"
+                if child.poll() is None:
+                    child.kill()
+                deadline = time.monotonic() + 5  # Drain partial output after killing the CLI.
+                continue
+            for key, _ in selector.select(min(0.2, remaining)):
+                data = os.read(key.fd, 65536)
+                if data:
+                    consume(key.data, data)
+                else:
+                    consume(key.data, b"", final=True)
+                    selector.unregister(key.fileobj)
+        if not failure:
+            try:
+                child.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                failure = "TimeoutExpired"
+        if not failure and child.returncode:
+            failure = "CalledProcessError"
+    except (OSError, subprocess.SubprocessError) as error:
+        failure = type(error).__name__
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
+            for key in list(selector.get_map().values()):
+                consume(key.data, b"", final=True)
+            for name in paths:
+                getattr(child, name).close()
+        selector.close()
+        for handle in handles.values():
+            handle.close()
+    if failure:
+        stderr = paths["stderr"].read_text(encoding="utf-8")[-16000:]
+        write_json(diagnostic_path, {"status": "failed", "kind": failure,
+            "returncode": child.returncode if child else None, "timeout_seconds": timeout,
+            "stderr": stderr, "stdout_path": str(paths["stdout"]),
+            "stderr_path": str(paths["stderr"]), "logs_redacted": True})
+        raise RuntimeError(f"{command[0]} failed ({failure}); see {diagnostic_path}")
+    return paths["stdout"].read_text(encoding="utf-8").strip()
+
+
+def run_named(command: list[str], name: str, *, stream_output: Path | None = None,
+              **kwargs: Any) -> str:
     command[2:2] = ["--name", name]
     try:
+        if stream_output is not None:
+            return run_streamed(command, output_prefix=stream_output, **kwargs)
         return run_checked(command, **kwargs)
     finally:
         cleanup_container(name)
@@ -257,6 +353,13 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
     if not empty_index.is_dir() or any(empty_index.iterdir()):
         raise RuntimeError("Prepared workspace must have an empty .zvec-grep directory")
     source_before = directory_identity(source, skip_git=True)
+    cache_root = Path(os.environ["WORKSPACE_QA_INDEX_CACHE"]).resolve() if os.environ.get("WORKSPACE_QA_INDEX_CACHE") else None
+    if cache_root and any(cache_root.is_relative_to(path) or path.is_relative_to(cache_root)
+                          for path in (source, output)):
+        raise ValueError("Index cache must be separate from source and run output")
+    cache_identity = seed_cache.make_identity(source_before, identity, protocol=PROTOCOL,
+        embedding_model=EMBEDDING, endpoint=endpoint,
+        max_file_size_bytes=INDEX_MAX_FILE_SIZE_BYTES) if cache_root else None
     limits = {"model_requests": 60, "tool_calls": 120, "input_tokens": 600000,
               "wall_seconds": args.timeout}
     prepared = output / "preparation"
@@ -274,24 +377,33 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
                 "controls": control_manifest(SPEC, max_model_turns=limits["model_requests"]),
                 "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
                 "gold_visible_to_agent": False, "corpus_readonly_mount": True,
-                "index_policy": "one fresh remote-embedding preparation build; immutable seed plus at most one mutable copy; copy deleted after verification and provenance saved",
+                "index_options": {"root": "/app", "maxFileSizeBytes": INDEX_MAX_FILE_SIZE_BYTES},
+                "index_policy": "validated cached or fresh immutable remote-embedding seed; fresh preflight per job; at most one mutable trial copy, deleted after verification and provenance saved",
                 "wall_seconds_scope": "Agent container execution, including zg bridge startup/shutdown full-corpus verification when inside the session. Excludes index preparation, index copying, and host post-trial verification; host verification is timed separately.",
                 "answer_delivery": "Harness saves terminal response verbatim outside corpus to requested report path",
                 "ci_identity": {k: os.environ.get(k) for k in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")},
                 **identity}
     write_json(output / "manifest.json", manifest)
-    preparation = {"status": "running", "started_at": now(),
+    cache_result = seed_cache.restore(cache_root, index, cache_identity) if cache_root else {"status": "disabled", "validation_seconds": 0.0}
+    cache_result["published"] = False
+    print(json.dumps({"phase": "index_cache", "status": cache_result["status"],
+                      "validation_seconds": cache_result["validation_seconds"]}), flush=True)
+    preparation = {"status": "running", "started_at": now(), "cache": cache_result,
                    "included_in_qa_tokens_or_toolcalls": False}
     write_json(logs / "preparation.json", preparation)
     started = time.monotonic()
     print(json.dumps({"phase": "index_preparation", "status": "running"}), flush=True)
-    try:
+    def build_index() -> None:
         command = with_embedding_environment(docker_command(args.image, source, logs, cache, index=index), endpoint)
-        stdout = run_named(command + [args.image, "node", PREPARE_INDEX, "--root", "/app",
+        run_named(command + [args.image, "node", PREPARE_INDEX, "--root", "/app",
             "--package-dir", PACKAGE_DIR, "--embedding-model", EMBEDDING,
-            "--model-cache-dir", "/models", "--log", "/logs/index-build.json"],
-            prefix + "-prepare", timeout=1800, diagnostic_path=logs / "index-build-failure.json")
-        (logs / "index-build.stdout.txt").write_text(redact(stdout))
+            "--model-cache-dir", "/models", "--log", "/logs/index-build.json",
+            "--max-file-size-bytes", str(INDEX_MAX_FILE_SIZE_BYTES)],
+            prefix + "-prepare", timeout=1800, diagnostic_path=logs / "index-build-failure.json",
+            stream_output=logs / "index-build")
+    try:
+        if cache_result["status"] != "hit":
+            build_index()
         preparation["status"] = "completed"
     except Exception:
         preparation["status"] = "failed"
@@ -309,22 +421,62 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
     query_flags = ["--root", "/app", "--package-dir", PACKAGE_DIR, "--embedding-model", EMBEDDING,
                    "--model-cache-dir", "/models", "--working-copy"]
     working_root = prepared / "working-indexes"
-    preflight_index = working_index(index, working_root / "preflight")
     snapshot = prepared / "snapshot.json"
-    command = with_embedding_environment(docker_command(args.image, source, logs, cache, index=preflight_index), endpoint)
-    preflight_started = time.monotonic()
-    preflight_status = "failed"
-    print(json.dumps({"phase": "index_preflight", "status": "running"}), flush=True)
-    try:
-        run_named(command + [args.image, "node", BRIDGE, "preflight", *query_flags,
-                             "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"],
-                  prefix + "-preflight", timeout=900, diagnostic_path=logs / "preflight-failure.json")
-        shutil.copyfile(logs / "snapshot.json", snapshot)
-        preflight_status = "completed"
-    finally:
-        shutil.rmtree(preflight_index)
-        print(json.dumps({"phase": "index_preflight", "status": preflight_status,
-                          "wall_seconds": round(time.monotonic() - preflight_started, 3)}), flush=True)
+    for attempt in range(2):
+        preflight_index = working_index(index, working_root / "preflight")
+        command = with_embedding_environment(docker_command(args.image, source, logs, cache, index=preflight_index), endpoint)
+        preflight_started = time.monotonic()
+        preflight_status, rebuild_cached = "failed", False
+        print(json.dumps({"phase": "index_preflight", "status": "running"}), flush=True)
+        try:
+            run_named(command + [args.image, "node", BRIDGE, "preflight", *query_flags,
+                                 "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"],
+                      prefix + "-preflight", timeout=900, diagnostic_path=logs / "preflight-failure.json")
+            shutil.copyfile(logs / "snapshot.json", snapshot)
+            preflight_status = "completed"
+        except Exception as error:
+            if cache_result["status"] != "hit" or attempt:
+                raise
+            cache_result.update(status="miss", reason="restored_preflight_rejected: " + redact(str(error)))
+            rebuild_cached = True
+        finally:
+            shutil.rmtree(preflight_index)
+            preparation["preflight_wall_seconds"] = preparation.get("preflight_wall_seconds", 0) + round(time.monotonic() - preflight_started, 3)
+            print(json.dumps({"phase": "index_preflight", "status": preflight_status,
+                              "wall_seconds": round(time.monotonic() - preflight_started, 3)}), flush=True)
+        if not rebuild_cached:
+            break
+        for path in (snapshot, logs / "snapshot.json", logs / "preflight.jsonl", logs / "preflight-failure.json"):
+            if path.exists():
+                path.rename(path.with_name("cache-rejected-" + path.name))
+        shutil.rmtree(index)
+        (index / "locks").mkdir(parents=True)
+        rebuild_started = time.monotonic()
+        print(json.dumps({"phase": "index_preparation", "status": "rebuilding_rejected_cache"}), flush=True)
+        try:
+            build_index()
+        except Exception:
+            preparation["status"] = "failed"
+            raise
+        finally:
+            preparation["wall_seconds"] += round(time.monotonic() - rebuild_started, 3)
+            write_json(logs / "preparation.json", preparation)
+            manifest["index_preparation"] = preparation
+            write_json(output / "manifest.json", manifest)
+        if directory_identity(source, skip_git=True) != source_before:
+            raise RuntimeError("Corpus changed while rebuilding rejected cache")
+        seed_before = directory_identity(index)
+    if cache_root and cache_result["status"] != "hit":
+        build_report = json.loads(redact((logs / "index-build.json").read_text()))
+        cache_result["original_build_info"] = build_report
+        cache_result["publication"] = seed_cache.publish(cache_root, index, cache_identity,
+            build_report, preflight_passed=preflight_status == "completed")
+        cache_result["published"] = cache_result["publication"]["status"] == "saved"
+        print(json.dumps({"phase": "index_cache", **cache_result["publication"]}), flush=True)
+    elif cache_root:
+        cache_result["publication"] = {"status": "reused", "wall_seconds": 0.0}
+    write_json(logs / "preparation.json", preparation)
+    manifest["index_preparation"] = preparation
     manifest.update(index_files=seed_before, source_snapshot_sha256=sha256(snapshot))
     write_json(output / "manifest.json", manifest)
     for trial in plan["trials"]:
