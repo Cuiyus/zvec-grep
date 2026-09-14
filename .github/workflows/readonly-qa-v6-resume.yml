@@ -1,0 +1,296 @@
+name: Resume v6 retrieval diagnosis from fixed E2E evidence
+
+# This is an explicit recovery of the 30 planned E2E samples from run
+# 34831000387, commit 0fd55b4125c32995ac243f913f5f1ddc7ec9fc3c, attempt 1.
+# Only the analysis code advances. The original runtime, corpus, index, E2E
+# answers and quality reviews come from the exact source artifacts below.
+# No index preparation, E2E replacement, or answer re-judging occurs here.
+on:
+  push:
+    branches: [dev/benchmark-readonly-qa]
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Existing E2E workflow run to diagnose; no new E2E is run
+        required: true
+        default: "34831000387"
+        type: string
+      source_commit:
+        description: Exact commit recorded in that run's prepared and E2E manifests
+        required: true
+        default: "0fd55b4125c32995ac243f913f5f1ddc7ec9fc3c"
+        type: string
+      source_attempt:
+        description: Exact original artifact attempt; attempts are never mixed
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: readonly-qa-v6-resume-${{ inputs.source_run || '34831000387' }}-${{ inputs.source_attempt || '1' }}
+  cancel-in-progress: false
+
+env:
+  CASE_ID: reflex-6
+  ZG_PACKAGE: "@zvec/zvec-grep@0.2.2"
+  QA_EVIDENCE_RUN_ID: ${{ inputs.source_run || '34831000387' }}
+  QA_EVIDENCE_COMMIT: ${{ inputs.source_commit || '0fd55b4125c32995ac243f913f5f1ddc7ec9fc3c' }}
+  QA_EVIDENCE_ATTEMPT: ${{ inputs.source_attempt || '1' }}
+
+jobs:
+  diagnosis:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[v6-diagnosis]')
+    name: Diagnose the same 30 E2E samples with corrected analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Record separate evidence and analysis identities
+        id: identity
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          evidence = {"run_id": os.environ["QA_EVIDENCE_RUN_ID"], "commit": os.environ["QA_EVIDENCE_COMMIT"], "attempt": os.environ["QA_EVIDENCE_ATTEMPT"]}
+          if not re.fullmatch(r"[1-9][0-9]*", evidence["run_id"]) or not re.fullmatch(r"[1-9][0-9]*", evidence["attempt"]):
+              raise ValueError("Source run and attempt must be positive decimal identifiers")
+          if not re.fullmatch(r"[0-9a-f]{40}", evidence["commit"]):
+              raise ValueError("Source commit must be a complete lowercase Git commit SHA")
+          analysis = {"run_id": os.environ["GITHUB_RUN_ID"], "commit": os.environ["GITHUB_SHA"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+          record = {"protocol": "readonly-qa-v6-diagnosis-resume", "evidence_identity": evidence, "analysis_identity": analysis,
+                    "new_e2e_trials": 0, "new_index_builds": 0, "new_answer_reviews": 0,
+                    "scope": "Same original 30 planned E2E samples; fresh diagnostic annotation and retrieval replay only."}
+          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic"
+          root.mkdir(parents=True)
+          (root / "resume-identity.json").write_text(json.dumps(record, indent=2) + "\n")
+          print(json.dumps(record))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("本次仅恢复诊断，沿用原来的 30 个计划 E2E 样本，不新增或替换 E2E，不新建索引，不重新评判原答案。\n\n")
+              summary.write(f"原始证据：run `{evidence['run_id']}` / attempt `{evidence['attempt']}` / commit `{evidence['commit']}`。\n\n")
+              summary.write(f"本次分析：run `{analysis['run_id']}` / attempt `{analysis['attempt']}` / commit `{analysis['commit']}`。\n\n")
+          PY
+      - name: Install locked benchmark environment
+        id: environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Run the corrected analysis and replay tests offline
+        id: offline-tests
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/replay-search.test.mjs
+      - name: Download the exact original prepared runtime and index artifact
+        id: prepared-artifact
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.QA_EVIDENCE_RUN_ID }}
+          name: readonly-qa-v6-prepared-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}
+          path: ${{ runner.temp }}/bundle
+      - name: Load the original image and index without rebuilding either
+        id: runtime
+        run: |
+          docker load -i "$RUNNER_TEMP/bundle/runtime-image.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/bundle/prepared.tar.gz"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          identity = json.loads((root / "diagnostic/resume-identity.json").read_text())
+          identity["downloaded_bundle_sha256"] = {}
+          for filename in ("runtime-image.tar.gz", "prepared.tar.gz"):
+              with (root / "bundle" / filename).open("rb") as stream:
+                  identity["downloaded_bundle_sha256"][filename] = hashlib.file_digest(stream, "sha256").hexdigest()
+          (root / "diagnostic/resume-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+          PY
+      - name: Verify the original pinned OpenCode contracts using a local fake provider
+        id: native-contracts
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,source="$PWD/benchmarks/swe-qa-bench",target=/qa,readonly
+          --env PYTHONPATH=/qa:/qa/tests
+          --env OPENCODE_READONLY_TEST_BINARY=/opt/qa/node_modules/.bin/opencode
+          zg-readonly-qa:0.2.2 python3 -m unittest -v
+          test_readonly_agents.OpenCodeRequestContractTests
+          test_query_ground_truth.OpenCodeAnnotationPacketContractTests
+      - name: Download the original OpenCode GLM group
+        id: glm-artifact
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.QA_EVIDENCE_RUN_ID }}
+          name: readonly-qa-v6-e2e-opencode-glm52-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}
+          path: ${{ runner.temp }}/downloaded-e2e/opencode-glm52
+      - name: Download the original OpenCode Qwen group
+        id: opencode-qwen-artifact
+        if: always() && steps.native-contracts.outcome == 'success'
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.QA_EVIDENCE_RUN_ID }}
+          name: readonly-qa-v6-e2e-opencode-qwen38max-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}
+          path: ${{ runner.temp }}/downloaded-e2e/opencode-qwen38max
+      - name: Download the original Qoder Qwen group
+        id: qoder-artifact
+        if: always() && steps.native-contracts.outcome == 'success'
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.QA_EVIDENCE_RUN_ID }}
+          name: readonly-qa-v6-e2e-qoder-qwen38max-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}
+          path: ${{ runner.temp }}/downloaded-e2e/qoder-qwen38max
+      - name: Assemble all original groups without attempt or success filtering
+        id: assemble
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          paths = [root / "prepared/prepared-manifest.json"]
+          paths += [root / "downloaded-e2e" / group / "manifest.json" for group in ("opencode-glm52", "opencode-qwen38max", "qoder-qwen38max")]
+          expected = {"GITHUB_RUN_ID": os.environ["QA_EVIDENCE_RUN_ID"], "GITHUB_SHA": os.environ["QA_EVIDENCE_COMMIT"], "GITHUB_RUN_ATTEMPT": os.environ["QA_EVIDENCE_ATTEMPT"]}
+          identities = []
+          for path in paths:
+              raw = path.read_bytes()
+              observed = json.loads(raw).get("ci_identity", {})
+              if any(str(observed.get(key)) != value for key, value in expected.items()):
+                  raise ValueError(f"Source manifest does not match the exact declared run, commit and attempt: {path.name}")
+              identities.append({"path": str(path.relative_to(root)), "sha256": hashlib.sha256(raw).hexdigest(), "ci_identity": observed})
+          (root / "diagnostic/evidence-manifest-identities.json").write_text(json.dumps(identities, indent=2) + "\n")
+          PY
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts assemble \
+            --downloaded "$RUNNER_TEMP/downloaded-e2e" --output "$RUNNER_TEMP/recorded-qa" \
+            --run-id "$QA_EVIDENCE_RUN_ID" --commit "$QA_EVIDENCE_COMMIT"
+      - name: Validate the original corpus, index, runtime, measurements and trial plan
+        id: validate
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_runtime validate
+          --recorded-runs "$RUNNER_TEMP/recorded-qa"
+          --prepared-dir "$RUNNER_TEMP/prepared"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --run-id "$QA_EVIDENCE_RUN_ID" --commit "$QA_EVIDENCE_COMMIT"
+      - name: Collect the original question and all recorded query contexts
+        id: collect
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_trajectory
+          --runs-dir "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --output "$RUNNER_TEMP/diagnostic/query-analysis.json"
+      - name: Generate three independent groups of candidates and source-backed cross reviews
+        id: ground-truth
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_ground_truth
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --source-root "$RUNNER_TEMP/prepared/source"
+          --image zg-readonly-qa:0.2.2
+          --output "$RUNNER_TEMP/diagnostic/ground-truth"
+      - name: Replay the recorded complete requests and original question five times
+        id: replay
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_runtime replay
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --recorded-runs "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --labels "$RUNNER_TEMP/diagnostic/ground-truth/query-intents.json"
+          --prepared-dir "$RUNNER_TEMP/prepared"
+          --output "$RUNNER_TEMP/diagnostic/retrieval"
+          --image zg-readonly-qa:0.2.2
+          --run-id "$QA_EVIDENCE_RUN_ID" --commit "$QA_EVIDENCE_COMMIT"
+      - name: Produce a complete or partial joint report for the original E2E samples
+        id: joint
+        if: always() && steps.collect.outcome == 'success'
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.joint_report
+          --runs-dir "$RUNNER_TEMP/recorded-qa"
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --replay-dir "$RUNNER_TEMP/diagnostic/retrieval"
+          --labels "$RUNNER_TEMP/diagnostic/ground-truth/query-intents.json"
+          --annotation-dir "$RUNNER_TEMP/diagnostic/ground-truth"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --output "$RUNNER_TEMP/diagnostic/joint-report.json"
+      - name: Retain stage failures and display available diagnosis
+        if: always()
+        env:
+          RESUME_STEP_OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic"
+          root.mkdir(parents=True, exist_ok=True)
+          steps = json.loads(os.environ["RESUME_STEP_OUTCOMES"])
+          outcomes = {name: {"outcome": item.get("outcome"), "conclusion": item.get("conclusion")} for name, item in steps.items()}
+          complete = outcomes.get("joint", {}).get("outcome") == "success" and outcomes.get("replay", {}).get("outcome") == "success"
+          record = {"status": "completed" if complete else "partial", "steps": outcomes,
+                    "evidence_identity": {"run_id": os.environ["QA_EVIDENCE_RUN_ID"], "commit": os.environ["QA_EVIDENCE_COMMIT"], "attempt": os.environ["QA_EVIDENCE_ATTEMPT"]},
+                    "analysis_identity": {"run_id": os.environ["GITHUB_RUN_ID"], "commit": os.environ["GITHUB_SHA"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"]},
+                    "new_e2e_trials": 0, "new_index_builds": 0}
+          (root / "resume-stage-status.json").write_text(json.dumps(record, indent=2) + "\n")
+          lines = ["# 原 E2E 样本的诊断恢复", "", "诊断阶段状态：`" + record["status"] + "`。失败与未执行阶段完整保留，不以重新运行 E2E 替换原样本。", "",
+                   "原始证据：run `" + os.environ["QA_EVIDENCE_RUN_ID"] + "` / attempt `" + os.environ["QA_EVIDENCE_ATTEMPT"] + "` / commit `" + os.environ["QA_EVIDENCE_COMMIT"] + "`。", "",
+                   "本次分析：run `" + os.environ["GITHUB_RUN_ID"] + "` / commit `" + os.environ["GITHUB_SHA"] + "`。", "", "| 阶段 | 状态 |", "|---|---|"]
+          lines += [f"| {name} | {item['outcome']} |" for name, item in outcomes.items()]
+          if not complete:
+              lines += ["", "本产物为部分诊断记录；尚未完成的 GroundTruth、回放或联合报告不能视为已有结果。"]
+          (root / "resume-stage-status.md").write_text("\n".join(lines) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("\n".join(lines) + "\n")
+              for name in ("query-analysis", "ground-truth/annotation-report", "retrieval/replay-report", "joint-report"):
+                  path = root / (name + ".md")
+                  if path.is_file():
+                      summary.write("\n\n" + path.read_text())
+          PY
+      - name: Check every newly uploaded artifact for credential values
+        id: secret-scan
+        if: always() && steps.environment.outcome == 'success'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          for folder in diagnostic downloaded-e2e recorded-qa prepared/runtime; do
+            if [ -d "$RUNNER_TEMP/$folder" ]; then
+              uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan --root "$RUNNER_TEMP/$folder"
+            fi
+          done
+      - name: Preserve recovery identity, original E2E, candidates, reviews and raw replay
+        if: always() && steps.secret-scan.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: readonly-qa-v6-resumed-diagnosis-source-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}-analysis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/diagnostic/*.json
+            ${{ runner.temp }}/diagnostic/*.md
+            ${{ runner.temp }}/diagnostic/ground-truth/
+            ${{ runner.temp }}/diagnostic/retrieval/*.json
+            ${{ runner.temp }}/diagnostic/retrieval/*.md
+            ${{ runner.temp }}/diagnostic/retrieval/replay/
+            ${{ runner.temp }}/diagnostic/retrieval/preparation/runtime/
+            ${{ runner.temp }}/diagnostic/retrieval/preparation/verification/
+            ${{ runner.temp }}/downloaded-e2e/
+            ${{ runner.temp }}/recorded-qa/assembly-manifest.json
+            ${{ runner.temp }}/recorded-qa/*/preparation/consumer-verification/
+            ${{ runner.temp }}/prepared/runtime/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

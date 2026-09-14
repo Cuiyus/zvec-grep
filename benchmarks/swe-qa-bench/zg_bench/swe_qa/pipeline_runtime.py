@@ -21,6 +21,7 @@ from .readonly_run import (BRIDGE, EMBEDDING, PACKAGE, PACKAGE_DIR, PREPARE_INDE
     directory_identity, docker_command, run_checked, sha256, working_index)
 from .retrieval_replay import (METRIC_PROFILE, digest, evaluate_replays, request_queries,
     score_cells, score_request, write)
+from .embedding_integrity import compare_embedding_cache
 
 PROTOCOL = "readonly-qa-v6"
 COMBINATIONS = {("opencode", "custom-openai/glm-5.2"),
@@ -28,9 +29,22 @@ COMBINATIONS = {("opencode", "custom-openai/glm-5.2"),
 PREPARED_MANIFEST = "prepared-manifest.json"
 
 
-def _identity(run_id: str | None, commit: str | None) -> dict:
+def _identity(run_id: str | None, commit: str | None, *, allow_evidence_origin: bool = False) -> dict:
     if not run_id or not commit:
         raise ValueError("Same-run pipeline requires explicit nonempty CI run ID and commit")
+    evidence_run = os.environ.get("QA_EVIDENCE_RUN_ID")
+    evidence_commit = os.environ.get("QA_EVIDENCE_COMMIT")
+    if evidence_run or evidence_commit:
+        if not allow_evidence_origin:
+            raise ValueError("Evidence-origin override is only allowed for post-E2E diagnostics")
+        if not evidence_run or not evidence_commit or not os.environ.get("GITHUB_RUN_ID") or not os.environ.get("GITHUB_SHA"):
+            raise ValueError("Diagnostic resume requires both evidence and analysis CI identities")
+        if str(run_id) != evidence_run or commit != evidence_commit:
+            raise ValueError("Explicit identity differs from the declared evidence origin")
+        return {"GITHUB_RUN_ID": str(run_id), "GITHUB_SHA": commit, "GITHUB_RUN_ATTEMPT": os.environ.get("QA_EVIDENCE_ATTEMPT"),
+                "execution_kind": "post_e2e_diagnosis_resume",
+                "analysis_ci_identity": {key: os.environ.get(key) for key in
+                    ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_RUN_ATTEMPT")}}
     for key, value in (("GITHUB_RUN_ID", str(run_id)), ("GITHUB_SHA", commit)):
         observed = os.environ.get(key)
         if observed and observed != value:
@@ -55,7 +69,7 @@ def _snapshot_identity(snapshot: dict, case: dict) -> None:
 
 def validate_prepared(prepared: Path, case_path: Path, *, run_id: str, commit: str) -> dict:
     """Validate relocatable content; no absolute host paths are hashed as identity."""
-    ci = _identity(run_id, commit)
+    ci = _identity(run_id, commit, allow_evidence_origin=True)
     case = json.loads(case_path.read_text())
     manifest = json.loads((prepared / PREPARED_MANIFEST).read_text())
     if (manifest.get("protocol") != PROTOCOL or not manifest.get("image_id") or manifest.get("package") != PACKAGE
@@ -66,7 +80,9 @@ def validate_prepared(prepared: Path, case_path: Path, *, run_id: str, commit: s
         raise ValueError("Prepared runtime is not from this CI run, commit, case and package")
     for name in ("source", "index", "model-cache"):
         expected = manifest.get("file_identities", {}).get(name)
-        if not expected or directory_identity(prepared / name, skip_git=name == "source") != expected:
+        observed = directory_identity(prepared / name, skip_git=name == "source")
+        matches = compare_embedding_cache(expected, observed)["valid"] if name == "model-cache" else observed == expected
+        if not expected or not matches:
             raise ValueError(f"Prepared {name} content hash mismatch or incomplete manifest")
     snapshot_file = prepared / "runtime" / "snapshot.json"
     if not snapshot_file.is_file() or sha256(snapshot_file) != manifest.get("snapshot_sha256"):
@@ -169,8 +185,11 @@ def validate_group_manifests(recorded_runs: Path, case_path: Path, prepared: Pat
     if len(paths) != 3:
         raise ValueError("Expected exactly three current-run E2E group manifests")
     combinations = []
+    embedding_checks = {}
     for path in paths:
         value = json.loads(path.read_text())
+        embedding_checks[path.parent.name] = compare_embedding_cache(
+            value.get("embedding_weight_files_before_e2e"), value.get("embedding_weight_files_after_e2e"))
         combinations.append((value.get("agent"), value.get("model")))
         if (value.get("protocol") != PROTOCOL or not value.get("e2e_only")
                 or value.get("prepared_manifest_sha256") != identity
@@ -183,7 +202,7 @@ def validate_group_manifests(recorded_runs: Path, case_path: Path, prepared: Pat
                 or value.get("source_files") != shared["file_identities"]["source"]
                 or value.get("index_files") != shared["file_identities"]["index"]
                 or value.get("embedding_weight_files_before_e2e") != shared["file_identities"]["model-cache"]
-                or value.get("embedding_weights_unchanged_during_e2e") is not True):
+                or not embedding_checks[path.parent.name]["valid"]):
             raise ValueError(f"E2E group does not match current frozen runtime: {path.parent.name}")
         plan = json.loads((path.parent / "plan.json").read_text())
         trials = plan.get("trials", [])
@@ -205,7 +224,10 @@ def validate_group_manifests(recorded_runs: Path, case_path: Path, prepared: Pat
     if len(set(combinations)) != 3 or set(combinations) != COMBINATIONS:
         raise ValueError("Expected the three protocol agent/model combinations")
     return {"source_run": str(run_id), "source_commit": commit, "prepared_manifest_sha256": identity,
-            "group_manifest_sha256": {p.parent.name: sha256(p) for p in paths}, "validated": True}
+            "group_manifest_sha256": {p.parent.name: sha256(p) for p in paths},
+            "embedding_integrity": embedding_checks,
+            "analysis_ci_identity": {key: os.environ.get(key) for key in ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_RUN_ATTEMPT")},
+            "validated": True}
 
 
 def build_v6_plan(analysis: dict, question: str, *, source_run: str, source_commit: str,
@@ -321,7 +343,7 @@ def execute_from_prepared(plan: dict, args: argparse.Namespace, labels: dict, en
     write(output / "runtime-manifest.json", {"protocol": PROTOCOL, "metric_profile": METRIC_PROFILE,
         "package": PACKAGE, "embedding_model": EMBEDDING, "source_identity": snapshot["source"],
         "prepared_manifest_sha256": plan["prepared_manifest_sha256"], "snapshot_sha256": sha256(snapshot_file),
-        "ci_identity": _identity(args.run_id, args.commit), "cross_ci_index_reuse": False,
+        "ci_identity": _identity(args.run_id, args.commit, allow_evidence_origin=True), "cross_ci_index_reuse": False,
         "new_index_builds": 0, "new_model_calls": 0, "new_e2e_trials": 0,
         "image": json.loads(run_checked(["docker", "image", "inspect", args.image]))[0]["Id"]})
     for position, unit in enumerate(plan["units"], 1):
@@ -354,9 +376,12 @@ def execute_from_prepared(plan: dict, args: argparse.Namespace, labels: dict, en
             write(output / "integrity-failure.json", {"unit": unit["unit_id"], "error": str(error), "remaining_units_retained": True})
             break
     report = evaluate_replays(plan, output / "replay", labels, entries, snapshot)
+    embedding_check = compare_embedding_cache(shared["file_identities"]["model-cache"], directory_identity(cache))
     final = {"source_unchanged": directory_identity(source, skip_git=True) == shared["file_identities"]["source"],
         "seed_unchanged": directory_identity(index) == shared["file_identities"]["index"],
-        "embedding_weights_unchanged": directory_identity(cache) == shared["file_identities"]["model-cache"]}
+        "embedding_weights_unchanged": embedding_check["valid"],
+        "embedding_cache_directory_unchanged": embedding_check["cache_directory_unchanged"],
+        "embedding_integrity": embedding_check}
     write(output / "final-integrity.json", final)
     report["prepared_runtime_integrity"] = final
     report["same_run_provenance"] = {"source_run": args.run_id, "source_commit": args.commit,
@@ -437,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
     (args.output / "replay-report.md").write_text(v6_replay_markdown(report))
     print(json.dumps({"planned_executions": report["planned_executions"], "scored_executions": report["scored_executions"]}))
     return 0 if (report["scored_executions"] == report["planned_executions"]
-                 and all(report["prepared_runtime_integrity"].values())) else 1
+                 and all(report["prepared_runtime_integrity"].get(key) is True for key in
+                         ("source_unchanged", "seed_unchanged", "embedding_weights_unchanged"))) else 1
 
 
 if __name__ == "__main__":

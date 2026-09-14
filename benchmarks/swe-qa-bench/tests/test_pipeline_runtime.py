@@ -136,6 +136,27 @@ class PreparedRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "nonempty"):
                 runtime._identity(None, "actual-commit")
 
+    def test_diagnostic_resume_preserves_evidence_and_analysis_identities_without_allowing_new_e2e_preparation(self):
+        environment = {"GITHUB_RUN_ID": "analysis-run", "GITHUB_SHA": "analysis-commit",
+                       "QA_EVIDENCE_RUN_ID": "run-new", "QA_EVIDENCE_COMMIT": "commit-new"}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, environment, clear=True):
+            root = Path(folder); case, prepared, manifest, _ = prepared_fixture(root)
+            result = runtime.validate_prepared(prepared, case, run_id="run-new", commit="commit-new")
+            self.assertEqual(result, manifest)
+            identity = runtime._identity("run-new", "commit-new", allow_evidence_origin=True)
+            self.assertEqual(identity["GITHUB_RUN_ID"], "run-new")
+            self.assertEqual(identity["analysis_ci_identity"]["GITHUB_RUN_ID"], "analysis-run")
+            self.assertEqual(identity["analysis_ci_identity"]["GITHUB_SHA"], "analysis-commit")
+            with self.assertRaisesRegex(ValueError, "only allowed for post-E2E"):
+                runtime.prepare(case, root / "new-preparation", image="pinned", run_id="run-new", commit="commit-new")
+            self.assertFalse((root / "new-preparation").exists())
+            with self.assertRaisesRegex(ValueError, "declared evidence origin"):
+                runtime.validate_prepared(prepared, case, run_id="other-run", commit="commit-new")
+        for missing in environment:
+            with self.subTest(missing=missing), patch.dict(os.environ, {k: v for k, v in environment.items() if k != missing}, clear=True):
+                with self.assertRaisesRegex(ValueError, "both evidence and analysis"):
+                    runtime._identity("run-new", "commit-new", allow_evidence_origin=True)
+
     def test_same_semantic_package_is_insufficient_when_consumer_image_differs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); _, prepared, _, _ = prepared_fixture(root)
@@ -155,12 +176,25 @@ class PreparedRuntimeTests(unittest.TestCase):
                     **{k: shared[k] for k in ("case_sha256", "case_id", "repo", "package", "embedding_model", "ci_identity")},
                     "source_files": shared["file_identities"]["source"], "index_files": shared["file_identities"]["index"],
                     "embedding_weight_files_before_e2e": shared["file_identities"]["model-cache"],
+                    "embedding_weight_files_after_e2e": shared["file_identities"]["model-cache"],
                     "embedding_weights_unchanged_during_e2e": True, "repetitions_per_profile": 5}
                 manifest["image_id"] = shared["image_id"]
                 runner.write_json(runs / str(i) / "manifest.json", manifest)
                 runner.write_json(runs / str(i) / "plan.json", runner.make_plan("reflex-6"))
             self.assertTrue(runtime.validate_group_manifests(runs, case, prepared, run_id="run-new", commit="commit-new")["validated"])
             path = runs / "1" / "manifest.json"
+            original = json.loads(path.read_text())
+            for changed in ("missing_after", "changed_weights"):
+                with self.subTest(changed=changed):
+                    mutated = copy.deepcopy(original)
+                    if changed == "missing_after":
+                        del mutated["embedding_weight_files_after_e2e"]
+                    else:
+                        mutated["embedding_weight_files_after_e2e"]["weights.onnx"] = "modified"
+                    runner.write_json(path, mutated)
+                    with self.assertRaisesRegex(ValueError, "frozen runtime"):
+                        runtime.validate_group_manifests(runs, case, prepared, run_id="run-new", commit="commit-new")
+            runner.write_json(path, original)
             manifest = json.loads(path.read_text()); manifest["prepared_manifest_sha256"] = "separately-rebuilt-index"
             runner.write_json(path, manifest)
             with self.assertRaisesRegex(ValueError, "frozen runtime"):

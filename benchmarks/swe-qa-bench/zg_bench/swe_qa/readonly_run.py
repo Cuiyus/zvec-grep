@@ -550,7 +550,11 @@ def execute_experiment(args: argparse.Namespace) -> int:
         if not source_ok or not index_ok:
             raise RuntimeError("Corpus/index integrity failure; remaining planned trials retained")
     manifest["embedding_weight_files_after_e2e"] = directory_identity(model_cache)
-    manifest["embedding_weights_unchanged_during_e2e"] = manifest["embedding_weight_files_after_retrieval"] == manifest["embedding_weight_files_after_e2e"]
+    from .embedding_integrity import compare_embedding_cache
+    manifest["embedding_integrity"] = compare_embedding_cache(
+        manifest["embedding_weight_files_before_e2e"], manifest["embedding_weight_files_after_e2e"])
+    manifest["embedding_weights_unchanged_during_e2e"] = manifest["embedding_integrity"]["valid"]
+    manifest["embedding_cache_directory_unchanged_during_e2e"] = manifest["embedding_integrity"]["cache_directory_unchanged"]
     write_json(output / "manifest.json", manifest)
     return 0 if all(t["status"] == "completed" for t in plan["trials"]) and not retrieval_failures else 1
 
