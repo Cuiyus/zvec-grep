@@ -248,8 +248,15 @@ with a fixed hybrid default. The [v5 workflow](../../.github/workflows/readonly-
 runs 65 searches by default; optional `include_mode_diagnostics` adds the
 FTS/vector/hybrid comparison for 240 searches in total. The three result groups
 are reported separately, without choosing the best mode as the benchmark score.
-There are no new v5 retrieval measurements or E2E samples yet. Its runtime still
-uses published zg 0.2.2, so source changes are not automatically benchmarked.
+The current `entry-ranking-v1` metric profile scores the complete native output
+using entry Hit@1/5/10, first-hit rank, and RR@10. Bridge entries and legacy task
+entries remain separate; output consistency, latency, errors, and integrity
+diagnostics remain available. It no longer scores 4/8 KiB prefixes or reports
+output bytes and cumulative bytes as quality or cost metrics. Raw output and
+integrity metadata are retained, and native E2E token accounting is unchanged.
+Historical reports keep their original metric profile; saved raw output can be
+rescored without new retrieval executions or E2E samples. Its runtime still uses
+published zg 0.2.2, so source changes are not automatically benchmarked.
 
 The [v4 protocol](../../docs/benchmark-protocols/readonly-qa-v4.zh-CN.md) evaluates
 the original `reflex-6` question and queries extracted from the first ZG decision

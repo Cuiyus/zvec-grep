@@ -9,8 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from zg_bench.swe_qa.retrieval_replay import build_plan, evaluate_replays, replay_markdown, request_queries
+from zg_bench.swe_qa.retrieval_replay import (
+    build_plan, evaluate_replays, observed_markdown, replay_markdown, request_queries,
+    score_output, score_request,
+)
 from zg_bench.swe_qa.retrieval_replay import main, SOURCE_COMMIT, SOURCE_RUN
+from zg_bench.swe_qa.query_relevance import load_labels
+from zg_bench.swe_qa.retrieval_eval import load_manifest
 
 
 QUESTION = "What role does the getter have?"
@@ -58,6 +63,8 @@ class ReplayPlanTests(unittest.TestCase):
         self.assertNotIn("controlled", {u["kind"] for u in plan["units"]})
         self.assertEqual(plan["planned_executions"], 10)
         self.assertEqual(plan["quality_repetition"], 1)
+        self.assertEqual(plan["metric_profile"], "entry-ranking-v1")
+        self.assertNotIn("byte_budgets", plan)
         original = next(u for u in plan["units"] if u["kind"] == "original")
         self.assertEqual(original["unit_id"], "original-hybrid")
         self.assertEqual(original["mode"], "hybrid")
@@ -90,6 +97,8 @@ class ReplayPlanTests(unittest.TestCase):
         self.assertEqual(plan["independent_tasks"], 1)
         self.assertEqual(plan["planned_executions"], len(plan["units"]) * 5)
         self.assertEqual(plan["quality_repetition"], 1)
+        self.assertEqual(plan["metric_profile"], "entry-ranking-v1")
+        self.assertNotIn("byte_budgets", plan)
         with self.assertRaises(ValueError):
             build_plan(source, QUESTION, repetitions=4)
 
@@ -237,11 +246,13 @@ class ReplayEvaluationTests(unittest.TestCase):
             "diagnostic": {"enabled": True, "unit_ids": [self.unit["unit_id"]]}}
         self.plan["include_mode_diagnostics"] = True
         self.plan["comparison_policy"] = "Separate primary, original, and diagnostic observations"
+        self.plan["metric_profile"] = "entry-ranking-v1"
         result, calls = self.evaluate()
         self.assertEqual(calls, 5)
         self.assertEqual(result["report_groups"], self.plan["report_groups"])
         self.assertIs(result["include_mode_diagnostics"], True)
         self.assertEqual(result["comparison_policy"], self.plan["comparison_policy"])
+        self.assertEqual(result["metric_profile"], self.plan["metric_profile"])
 
     def test_bad_request_source_index_or_public_hash_never_reaches_scoring(self):
         mutations = {
@@ -344,6 +355,86 @@ class ReplayEvaluationTests(unittest.TestCase):
             self.assert_unscored_repetition(result, n)
 
 
+class ReplayMetricProfileTests(unittest.TestCase):
+    """New replay artifacts retain ranking evidence without retired byte metrics."""
+
+    def setUp(self):
+        cases = Path(__file__).resolve().parents[1] / "cases"
+        self.labels = load_labels(cases / "reflex-6.query-intents.json")
+        self.entries = load_manifest(cases / "reflex-6.entries.json")
+        self.getter_query = "derived state variable computation function getter"
+
+    def public(self, *, getter_rank=4):
+        items = []
+        for rank in range(1, getter_rank + 1):
+            if rank == getter_rank:
+                items.append(f"#{rank} matchedBy=vector reflex/vars/base.py:2524-2531\n"
+                             "source:\n2525\t    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n"
+                             "2531\t        return self._fget\n\n")
+            else:
+                items.append(f"#{rank} matchedBy=vector unreviewed.py:1-2\nsource:\n1\tpass\n\n")
+        return "freshness: fresh\n" + "".join(items)
+
+    def assert_no_retired_metrics(self, value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                self.assertNotIn("byte", key, f"Retired metric leaked into artifact: {key}")
+                self.assertNotEqual(key, "truncated")
+                self.assert_no_retired_metrics(child)
+        elif isinstance(value, list):
+            for child in value:
+                self.assert_no_retired_metrics(child)
+
+    def test_native_query_scores_preserve_ranking_matches_and_hash_without_byte_views(self):
+        text = self.public()
+        scores = score_output(text, [self.getter_query, self.labels["original_question"]], self.labels, self.entries)
+        self.assertEqual(set(scores), {"native"})
+        self.assertEqual(len(scores["native"]), 2)
+        getter, original = scores["native"]
+        self.assertEqual(getter["metric_profile"], "entry-ranking-v1")
+        self.assertEqual(original["metric_profile"], "entry-ranking-v1")
+        target = getter["query_relevance"]["target"]
+        self.assertEqual(target["status"], "scored")
+        self.assertEqual(target["first_hit_rank"], 4)
+        self.assertFalse(target["hit_at_1"])
+        self.assertTrue(target["hit_at_5"])
+        self.assertTrue(target["hit_at_10"])
+        self.assertEqual(target["rr_at_10"], 0.25)
+        self.assertEqual(target["matches"][0]["symbol"], "ComputedVar.fget")
+        self.assertEqual(target["matches"][0]["rank"], 4)
+        self.assertFalse(getter["task_entry_score"]["levels"]["function"]["hit_at_10"])
+        self.assertTrue(getter["task_entry_score"]["groups"]["accessor"]["hit_at_5"])
+        self.assertFalse(original["query_relevance"]["target"]["hit_at_10"])
+        self.assertTrue(original["query_relevance"]["bridge"]["hit_at_5"])
+        self.assertEqual(getter["query_relevance"]["public_text_sha256"], hashlib.sha256(text.encode()).hexdigest())
+        self.assert_no_retired_metrics(scores)
+
+    def test_native_request_score_preserves_ranks_beyond_top_ten_and_joint_request_binding(self):
+        request = {"query": self.getter_query}
+        scores = score_request(self.public(getter_rank=15), request, self.labels, self.entries)
+        self.assertEqual(set(scores), {"native"})
+        self.assertEqual(scores["native"]["metric_profile"], "entry-ranking-v1")
+        relevance = scores["native"]["query_relevance"]
+        self.assertEqual(relevance["resolution_method"], "single_exact_request_text")
+        self.assertEqual(relevance["target"]["first_hit_rank"], 15)
+        self.assertFalse(relevance["target"]["hit_at_10"])
+        self.assertEqual(relevance["target"]["rr_at_10"], 0.0)
+        self.assert_no_retired_metrics(scores)
+
+    def test_unknown_query_or_joint_request_remains_unknown_instead_of_zero(self):
+        text = "freshness: fresh\n#1 matchedBy=vector reflex/vars/base.py:2411-2460\nsource:\n2411\t    def _deps(\n\n"
+        query_scores = score_output(text, ["unreviewed rewrite"], self.labels, self.entries)["native"][0]
+        request_scores = score_request(text, {"query": self.getter_query, "vector": "unreviewed route"}, self.labels, self.entries)["native"]
+        for score in (query_scores, request_scores):
+            with self.subTest(resolution=score["query_relevance"]["resolution_method"]):
+                self.assertEqual(score["query_relevance"]["status"], "unknown")
+                target = score["query_relevance"]["target"]
+                for key in ("first_hit_rank", "hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"):
+                    self.assertIsNone(target[key])
+                self.assertTrue(score["task_entry_score"]["levels"]["function"]["hit_at_1"])
+                self.assert_no_retired_metrics(score)
+
+
 class ReplayReportTests(unittest.TestCase):
     def report(self, *, diagnostics):
         plan = build_plan(analysis_fixture(), QUESTION, include_mode_diagnostics=diagnostics)
@@ -351,7 +442,8 @@ class ReplayReportTests(unittest.TestCase):
         report["scored_executions"] = plan["planned_executions"]
         def score(rank):
             return {"query_relevance": {"classification": "equivalent", "target": {
-                        "first_hit_rank": rank, "bytes_through_first_hit": rank * 100}},
+                        "status": "scored", "first_hit_rank": rank, "rr_at_10": 1 / rank,
+                        **{f"hit_at_{k}": rank <= k for k in (1, 5, 10)}}},
                     "task_entry_score": {"levels": {"function": {"first_hit_rank": rank}}}}
         for unit in report["units"]:
             # Deliberately make diagnostic and per-text scores look better than the
@@ -359,8 +451,8 @@ class ReplayReportTests(unittest.TestCase):
             rank = 6 if unit["kind"] == "original" else 1
             unit["quality_observation"] = {
                 "repetition": 1,
-                "scores": {view: [score(rank)] for view in ("native", "bytes_4096", "bytes_8192")},
-                "request_scores": {view: score(9) for view in ("native", "bytes_4096", "bytes_8192")}}
+                "scores": {"native": [score(rank)]},
+                "request_scores": {"native": score(9)}}
             unit["occurrence_count"] = len(unit["occurrences"])
             unit["stability"] = {"all_public_outputs_identical": True, "known_repeats": 5}
         return report
@@ -384,6 +476,18 @@ class ReplayReportTests(unittest.TestCase):
         self.assertIn("不重新运行", sections[2])
         self.assertEqual(report["planned_executions"], 50)
 
+    def test_current_reports_show_ranking_and_omit_retired_metrics(self):
+        report = self.report(diagnostics=True)
+        faithful = next(unit for unit in report["units"] if unit["kind"] == "faithful")
+        observed = [{"group": "g", "trial_id": "r1", "call_id": "c1", "status": "scored",
+                     "request_scores": faithful["quality_observation"]["request_scores"]}]
+        for renderer, rendered in (("replay", replay_markdown(report)), ("observed", observed_markdown(observed))):
+            with self.subTest(renderer=renderer):
+                for field in ("Hit@1", "Hit@5", "Hit@10", "RR@10", "原任务依赖入口排名"):
+                    self.assertIn(field, rendered)
+                for retired in ("KiB", "字节", "bytes_", "输出长度"):
+                    self.assertNotIn(retired, rendered)
+
     def test_disabled_diagnostics_are_reported_as_not_executed_not_a_miss(self):
         report = self.report(diagnostics=False)
         rendered = replay_markdown(report)
@@ -398,8 +502,21 @@ class ReplayReportTests(unittest.TestCase):
         report = self.report(diagnostics=False)
         report.pop("report_groups")
         report["protocol"] = "readonly-query-retrieval-v4"
+        report.pop("metric_profile", None)
+        for unit in report["units"]:
+            observation = unit["quality_observation"]
+            for view in ("bytes_4096", "bytes_8192"):
+                observation["scores"][view] = copy.deepcopy(observation["scores"]["native"])
+                observation["request_scores"][view] = copy.deepcopy(observation["request_scores"]["native"])
+            for scores in observation["scores"].values():
+                for score in scores:
+                    score["query_relevance"]["target"]["bytes_through_first_hit"] = 1234
+            for score in observation["request_scores"].values():
+                score["query_relevance"]["target"]["bytes_through_first_hit"] = 1234
         rendered = replay_markdown(report)
         self.assertTrue(rendered.startswith("# Query-conditioned retrieval replay\n"))
+        self.assertIn("4 KiB", rendered)
+        self.assertIn("1234", rendered)
         for unit in report["units"]:
             self.assertIn("| " + unit["unit_id"] + " |", rendered)
 

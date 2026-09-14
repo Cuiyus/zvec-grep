@@ -18,6 +18,9 @@ from .retrieval_eval import load_manifest
 
 SOURCE_RUN = "34255587426"
 SOURCE_COMMIT = "dc0c2f2a7c52cbeb127e90e9a8cfcac2b8ab81a7"
+METRIC_PROFILE = "entry-ranking-v1"
+_OUTPUT_METRIC_FIELDS = {"budget_bytes", "native_bytes", "visible_bytes",
+                         "bytes_through_first_hit", "prefix_bytes", "truncated"}
 
 
 def canonical(value: Any) -> str:
@@ -112,7 +115,7 @@ def build_plan(analysis: dict, question: str, *, repetitions: int = 5,
     }
     return {"schema_version": 2, "protocol": "readonly-query-retrieval-v5", "question": question,
             "source_run": SOURCE_RUN, "source_commit": SOURCE_COMMIT,
-            "repetitions": repetitions, "quality_repetition": 1, "byte_budgets": [4096, 8192],
+            "repetitions": repetitions, "quality_repetition": 1, "metric_profile": METRIC_PROFILE,
             "independent_tasks": 1, "distinct_query_texts_including_original": len(texts),
             "controlled_units": sum(u["kind"] == "controlled" for u in units),
             "faithful_units": len(faithful), "original_units": 1,
@@ -125,17 +128,31 @@ def build_plan(analysis: dict, question: str, *, repetitions: int = 5,
             "scope": "All observed first-decision requests retained. Original hybrid is protocol-defined. Post-hoc development labels, not a held-out evaluation."}
 
 
+def _entry_ranking_score(score: dict) -> dict:
+    """Project the shared legacy detector onto the active native ranking metrics.
+
+    Retain source matches, exact ranks, unknowns and hashes. Historical scorers
+    and raw artifacts remain unchanged; retired output-size fields are omitted
+    at every depth, including each matched entry and the legacy task column.
+    """
+    def project(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: project(v) for k, v in value.items() if k not in _OUTPUT_METRIC_FIELDS}
+        if isinstance(value, list):
+            return [project(v) for v in value]
+        return value
+    return {**project(score), "metric_profile": METRIC_PROFILE}
+
+
 def score_output(text: str, texts: list[str], labels: dict, entries: dict) -> dict:
     from .query_relevance import score_query_text
-    return {view: [score_query_text(text, labels, entries, query=query, budget=budget)
-                   for query in texts]
-            for view, budget in [("native", None), ("bytes_4096", 4096), ("bytes_8192", 8192)]}
+    return {"native": [_entry_ranking_score(score_query_text(text, labels, entries, query=query))
+                       for query in texts]}
 
 
 def score_request(text: str, request: dict, labels: dict, entries: dict) -> dict:
     from .query_relevance import score_query_text
-    return {view: score_query_text(text, labels, entries, request=request, budget=budget)
-            for view, budget in [("native", None), ("bytes_4096", 4096), ("bytes_8192", 8192)]}
+    return {"native": _entry_ranking_score(score_query_text(text, labels, entries, request=request))}
 
 
 def observed_scores(analysis: dict, labels: dict, entries: dict) -> list[dict]:
@@ -238,6 +255,7 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
                                    "latency_median_ms": statistics.median(latencies) if latencies else None},
                      "scope": unit["quality_unit"]})
     return {"schema_version": plan.get("schema_version", 1), "protocol": plan["protocol"], "independent_tasks": 1,
+            "metric_profile": METRIC_PROFILE,
             **({"report_groups": plan["report_groups"],
                 "include_mode_diagnostics": plan["include_mode_diagnostics"],
                 "comparison_policy": plan["comparison_policy"]} if "report_groups" in plan else {}),
@@ -246,7 +264,7 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
             "units": rows, "scope": "Repeated fixed queries estimate retrieval variation, not new agent behavior samples."}
 
 
-def score_cells(score: dict | None) -> list[str]:
+def _legacy_score_cells(score: dict | None) -> list[str]:
     if not score:
         return ["unknown"] * 4
     query = score["query_relevance"]
@@ -259,10 +277,27 @@ def score_cells(score: dict | None) -> list[str]:
             str(target["bytes_through_first_hit"]) if target.get("bytes_through_first_hit") is not None else "—"]
 
 
+def score_cells(score: dict | None) -> list[str]:
+    if not score:
+        return ["unknown"] * 7
+    query = score["query_relevance"]
+    target = query["target"]
+    def rank(metric: dict) -> str:
+        if metric.get("status") == "unknown": return "unknown"
+        return str(metric["first_hit_rank"]) if metric.get("first_hit_rank") is not None else "未命中"
+    hits = ["是" if target.get(f"hit_at_{k}") is True else "否" if target.get(f"hit_at_{k}") is False else "unknown"
+            for k in (1, 5, 10)]
+    rr = target.get("rr_at_10")
+    task = score["task_entry_score"].get("levels", {}).get("function", {})
+    return [query.get("classification") or "unknown", rank(target), *hits,
+            f"{rr:.3g}" if rr is not None else "unknown", rank(task)]
+
+
 def observed_markdown(rows: list[dict]) -> str:
     lines = ["# 原有首次批次输出的 query 目标评分", "",
              "只重评原始产物；无新模型调用。完整请求绑定是主列，多 route 的联合输出不归因到某条 route。标注为已看过旧输出的开发标注，非独立人工 gold。", "",
-             "| 组合 / trial / call | 状态 | query 类型 | 目标排名 | 原任务依赖入口排名 | 到目标字节 |", "|---|---|---|---:|---:|---:|"]
+             f"指标口径：{METRIC_PROFILE}；仅评价完整原生输出中的入口命中和排名。", "",
+             "| 组合 / trial / call | 状态 | query 类型 | 目标排名 | Hit@1 | Hit@5 | Hit@10 | RR@10 | 原任务依赖入口排名 |", "|---|---|---|---:|---|---|---|---:|---:|"]
     for row in rows:
         key = "/".join(row[k] for k in ("group", "trial_id", "call_id") if k in row)
         cells = score_cells((row.get("request_scores") or {}).get("native"))
@@ -283,7 +318,7 @@ def _legacy_replay_markdown(report: dict) -> str:
             return items[0] if items else None
         stable = unit["stability"]
         stability = str(stable["all_public_outputs_identical"]) + f" ({stable['known_repeats']}/5 已评分)"
-        lines.append("| " + " | ".join([unit["unit_id"], *score_cells(view("native")), score_cells(view("bytes_4096"))[1], stability]) + " |")
+        lines.append("| " + " | ".join([unit["unit_id"], *_legacy_score_cells(view("native")), _legacy_score_cells(view("bytes_4096"))[1], stability]) + " |")
     lines += ["", "受控视图固定 limit=10，逐条文本运行 FTS / vector / hybrid。faithful 视图保持实际请求及省略的默认参数，完整 request 的开发标注为主列；附加分文本分数仍基于联合输出，不构成 route 归因。", "",
               "query 对应文本与实际来源见 replay-plan.json。JSON 同时保留 Hit@1/5/10、RR@10、bridge、原任务入口、4/8 KiB 预算视图、原始哈希和全部失败。字节是输出窗口代理，不是模型 input token。不同改写来自同题，不能算成 12 道独立题。"]
     return "\n".join(lines) + "\n"
@@ -294,6 +329,7 @@ def replay_markdown(report: dict) -> str:
         return _legacy_replay_markdown(report)
     lines = ["# Request-first retrieval regression", "",
              f"执行校验通过 {report['scored_executions']} / {report['planned_executions']} 次；独立 QA 任务 1 道。各单元固定使用第 1 次质量观察，五次重复用于检验检索稳定性。", "",
+             f"指标口径：{report.get('metric_profile', METRIC_PROFILE)}；仅评价完整原生输出中的入口命中和排名。", "",
              "真实完整请求是主回归；原题默认配置、辅助三模式分别报告，不合并总分、不挑最好模式，也不把同题改写或重复视为独立 QA。", ""]
     by_id = {u["unit_id"]: u for u in report["units"]}
     for key, title, description in [
@@ -309,8 +345,8 @@ def replay_markdown(report: dict) -> str:
         if not group["unit_ids"]:
             lines += ["没有可回放请求；无调用、缺失或关联不明的计划试验保留在 replay-plan.json 中，不推断成功。", ""]
             continue
-        lines += ["| unit | 来源组合 / 出现次数 | query 类型 | 目标排名 | 原任务依赖入口排名 | 到目标块末字节 | 4 KiB 目标排名 | 8 KiB 目标排名 | 相同输出 / 5 次 |",
-                  "|---|---|---|---:|---:|---:|---:|---:|---|"]
+        lines += ["| unit | 来源组合 / 出现次数 | query 类型 | 目标排名 | Hit@1 | Hit@5 | Hit@10 | RR@10 | 原任务依赖入口排名 | 相同输出 / 5 次 |",
+                  "|---|---|---|---:|---|---|---|---:|---:|---|"]
         for uid in group["unit_ids"]:
             unit = by_id[uid]
             observation = unit["quality_observation"]
@@ -323,10 +359,9 @@ def replay_markdown(report: dict) -> str:
             source = (", ".join(sources) + f" / {unit['occurrence_count']}") if sources else "协议固定" if unit["kind"] == "original" else "见计划"
             stable = unit["stability"]
             stability = str(stable["all_public_outputs_identical"]) + f" ({stable['known_repeats']}/5 已校验)"
-            lines.append("| " + " | ".join([uid, source, *score_cells(view("native")),
-                                           score_cells(view("bytes_4096"))[1], score_cells(view("bytes_8192"))[1], stability]) + " |")
+            lines.append("| " + " | ".join([uid, source, *score_cells(view("native")), stability]) + " |")
         lines.append("")
-    lines += ["JSON 保留 Hit@1/5/10、RR@10、bridge、输出长度、4/8 KiB 视图、延迟、哈希及所有失败。字节不是模型 input token；到命中块末的长度不等于定义锚点首次出现的位置。", "",
+    lines += ["JSON 保留 Hit@1/5/10、RR@10、bridge、原任务入口、延迟、哈希及所有失败。原始工具输出保留供审查；实际 input token 和 tool call 收益由 E2E 验证。", "",
               "当前标签为源码核验的开发入口标注，尚不穷尽所有相关结果；unknown 不记作未命中。完整请求来源和不可回放试验见 replay-plan.json。"]
     return "\n".join(lines) + "\n"
 
@@ -371,6 +406,7 @@ def execute(plan: dict, args: argparse.Namespace, labels: dict, entries: dict) -
                            "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"], "preflight", 900)
     snapshot_file = logs / "snapshot.json"; snapshot = json.loads(snapshot_file.read_text())
     write(output / "runtime-manifest.json", {"protocol": plan["protocol"], "package": PACKAGE,
+          "metric_profile": METRIC_PROFILE,
           "embedding_model": EMBEDDING, "source_repo": case["repo"], "source_identity": snapshot["source"],
           "index_preparation_seconds": time.monotonic() - started, "cross_ci_index_reuse": False,
           "image": json.loads(run_checked(["docker", "image", "inspect", args.image]))[0]["Id"],
@@ -459,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     (args.output / "observed-query-scores.md").write_text(observed_markdown(observed))
     write(args.output / "provenance.json", {"source_run": SOURCE_RUN, "source_commit": SOURCE_COMMIT,
           "protocol": plan["protocol"], "include_mode_diagnostics": args.include_mode_diagnostics,
+          "metric_profile": METRIC_PROFILE,
           "generated_at": datetime.now(UTC).isoformat(), "analysis_only": args.command == "analyze",
           "case_sha256": file_digest(args.case), "entries_sha256": file_digest(args.entries),
           "query_labels_sha256": file_digest(args.labels), "plan_sha256": file_digest(args.output / "replay-plan.json"),
