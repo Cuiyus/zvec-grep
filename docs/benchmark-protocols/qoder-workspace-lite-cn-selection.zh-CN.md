@@ -135,7 +135,7 @@
 
 ## 执行与观测口径
 
-CI 分为三个显式范围：普通提交仅做离线校验；提交信息带 `[workspace-qa-smoke]` 时运行 1 题 × 2 组 × 1 次；带 `[workspace-qa-full]` 时先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；smoke 不混入正式统计。
+CI 分为四个显式范围：普通提交仅做离线校验；`[workspace-qa-probe]` 只用一个合成小文件验证真实 embedding、SDK 和 Qoder MCP 链路，不下载完整工作区、不运行 benchmark QA 或 judge；`[workspace-qa-smoke]` 运行 1 题 × 2 组 × 1 次；`[workspace-qa-full]` 先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；probe 和 smoke 不混入正式统计。
 
 准备阶段增加两类缓存。按固定 archive 版本和 persona 缓存已校验的 16 MiB 下载块，每 persona 最多 4 GiB；Research 工作区超过此上限，因此只承诺部分下载复用。索引缓存只保存成功构建并通过 preflight 的不可变 seed，按完整源文件内容、运行时版本、embedding 模型与 endpoint、索引配置和构建代码身份核验，命中后仍重新执行当前工作区 preflight。每个 with-zg trial 继续使用独立副本，不缓存问答、judge、session 或被查询修改过的副本。
 
@@ -151,7 +151,9 @@ CI 分为三个显式范围：普通提交仅做离线校验；提交信息带 `
 
 固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
 
-先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session、home 和 workspace，固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。
+先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session 和 home，共享该 task 准备一次的只读源工作区；with-zg 使用不可变 seed 的独立副本。固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。
+
+只读 QA 无须每轮重装环境、下载数据或建索引。当前同一 task 的 20 次正式测试共用准备成果；跨 task 仍是独立 CI job，通过相同 persona 的兼容缓存复用下载块和索引 seed，尚未合并成同一 runner。10 题对应 4 套不同语料工作区，软件运行时可以统一，但不能把所有题换成同一角色的文件。独立会话用于隔离上轮答案和执行状态，与重新下载文件是两回事。
 
 逐次记录 task ID、组别、重复序号、agent 成功/失败状态、原始 judge 逐条判断和总分、input tokens、tool calls、elapsed seconds，并保留原始轨迹作为核算依据。agent 异常、judge 异常、缺失 usage 必须单列；缺失值用 null，不能填 0。input tokens 使用 Qoder 实际报告的累计输入，若无缓存分项或逐请求 usage 则标注不可用，不能按工具调用数推算。tool calls 明确为模型发出的全部工具调用数，并另列 zg search/rg 使用次数；同一批查询是否计一次按真实 tool-call ID 核算。
 

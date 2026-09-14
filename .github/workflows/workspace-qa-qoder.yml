@@ -1,5 +1,5 @@
 name: Qoder Qwen3.8-Max Workspace QA
-run-name: "Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || 'validate') }} · ${{ github.ref_name }}"
+run-name: "Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || 'validate') }} · ${{ github.ref_name }}"
 
 on:
   push:
@@ -10,12 +10,16 @@ on:
       - '.github/workflows/workspace-qa-qoder.yml'
       - 'benchmarks/swe-qa-bench/scripts/**'
       - 'benchmarks/swe-qa-bench/runtime/**'
+      - 'benchmarks/swe-qa-bench/zg_bench/swe_qa/**'
+      - 'benchmarks/swe-qa-bench/zg_bench/agents/qodercli.py'
+      - 'benchmarks/swe-qa-bench/zg_bench/settings.py'
+      - 'benchmarks/swe-qa-bench/tests/test_readonly_agents.py'
   workflow_dispatch:
     inputs:
       scope:
-        description: Offline validation, one-task smoke, or smoke followed by 200 formal trials
+        description: Offline validation, tiny integration probe, one-task smoke, or 200 formal trials
         type: choice
-        options: [validate, smoke, full]
+        options: [validate, probe, smoke, full]
         default: smoke
 
 permissions:
@@ -23,7 +27,7 @@ permissions:
 
 concurrency:
   # A long formal run must not queue unrelated fast validation behind it.
-  group: workspace-qa-qoder-${{ github.ref }}-${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || 'validate') }}
+  group: workspace-qa-qoder-${{ github.ref }}-${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || 'validate') }}
   cancel-in-progress: false
 
 jobs:
@@ -79,6 +83,74 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write('tasks=' + json.dumps(tasks) + '\n')
           PY
+  probe:
+    needs: validate
+    if: needs.validate.outputs.scope == 'probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install frozen Python dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Build pinned zg and Qoder runtime
+        run: >-
+          docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+          -f benchmarks/swe-qa-bench/runtime/Dockerfile
+          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Check remote embedding and real Qoder MCP retrieval on one tiny file
+        env:
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_probe.py
+          --output "$RUNNER_TEMP/workspace-qa-probe"
+      - name: Publish setup-only result
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          result = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-probe/result.json'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Tiny integration probe\n\nSetup diagnostics only: zero benchmark trials, no full workspace download or rubric judge.\n\n')
+              if result.is_file():
+                  summary.write('```json\n' + result.read_text() + '\n```\n')
+          PY
+      - name: Verify probe artifacts contain no CI credentials
+        if: always()
+        id: artifact-safety
+        env:
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-probe'
+          secrets = [os.environ[k].encode() for k in ('QODER_PERSONAL_ACCESS_TOKEN', 'QWEN_API_KEY') if os.environ.get(k)]
+          for path in root.rglob('*'):
+              if path.is_file() and 'index' not in path.parts and 'model-cache' not in path.parts:
+                  if any(secret in path.read_bytes() for secret in secrets):
+                      raise SystemExit('Credential found in artifact; upload blocked')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.artifact-safety.outcome == 'success'
+        with:
+          name: workspace-qa-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/workspace-qa-probe/result.json
+            ${{ runner.temp }}/workspace-qa-probe/embedding-preflight.json
+            ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/runtime/
+            ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/
   smoke:
     needs: validate
     if: needs.validate.outputs.scope == 'smoke' || needs.validate.outputs.scope == 'full'

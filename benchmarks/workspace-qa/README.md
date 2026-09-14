@@ -15,9 +15,12 @@ code or documents; this run does not add the separate English task split.
 ## CI execution
 
 [Qoder Qwen3.8-Max Workspace QA](../../.github/workflows/workspace-qa-qoder.yml)
-runs on this branch with three explicit scopes:
+runs on this branch with four explicit scopes:
 
 - An ordinary push affecting this experiment runs offline validation only.
+- `[workspace-qa-probe]` validates and checks the actual remote embedding,
+  released SDK and Qoder MCP chain on one synthetic file. It prepares no full
+  workspace and runs no benchmark trials or judge; use it for integration fixes.
 - A push whose head commit message contains `[workspace-qa-smoke]` validates,
   then runs task 3 once per arm: **two smoke trials**.
 - `[workspace-qa-full]` validates, runs smoke, then unlocks the 10-task matrix
@@ -25,7 +28,7 @@ runs on this branch with three explicit scopes:
   task runs 10 independent repetitions per arm: **200 formal trials**.
 
 Smoke observations are excluded from the formal report. Manual dispatch supports
-`validate`, `smoke` (default) and `full` once GitHub exposes the workflow for
+`validate`, `probe`, `smoke` (default) and `full` once GitHub exposes the workflow for
 dispatch. Concurrency groups separate these scopes so a long formal run does
 not queue quick validation behind it. A push must still affect the workflow's
 listed experiment paths; an empty commit alone does not trigger it.
@@ -49,6 +52,14 @@ Each task validates or builds an immutable remote-model index before its paired
 trials; each with-zg run receives an isolated copy. Index preparation is reported
 separately from agent time, tokens and tool calls. The runner never loads a
 Potion index.
+
+Read-only QA does not require reinstalling dependencies, redownloading source,
+or rebuilding an index for each repetition. All repetitions within a task share
+one prepared source and seed. The current matrix uses separate jobs per task;
+same-persona tasks share compatible preparation caches across jobs, not a live
+runner. Fresh sessions and homes isolate answers and execution state. The four
+personas have different corpora, so substituting one persona's files for another
+would change the frozen tasks.
 
 CI reuses two preparation caches. Verified 16 MiB HTTP blocks are stored under
 the frozen archive identity and persona, with a **4 GiB cap per persona**. CRC
@@ -98,7 +109,8 @@ smoke gate catches zero-success integration even when the model still answers.
 Required Actions secrets:
 
 - `QODER_PERSONAL_ACCESS_TOKEN`: Qoder native model access.
-- `GLM_API_KEY`: existing Model Studio workspace key for GLM-5.2 rubric judging.
+- `GLM_API_KEY`: existing Model Studio workspace key for GLM-5.2 rubric judging
+  in smoke/full. Probe does not require it when `QWEN_API_KEY` is configured.
 - `QWEN_API_KEY`, if a separate embedding key is used. Otherwise the workflow
   maps the existing workspace `GLM_API_KEY` to `QWEN_API_KEY` for the **same
   already-configured Model Studio workspace endpoint**. A bilingual embedding
