@@ -95,7 +95,7 @@ def control_manifest(spec: AgentSpec, *, max_model_turns: int) -> dict[str, Any]
     return {
         "temperature": 0 if spec.name == "opencode" else None,
         "temperature_control": "provider.models.<model>.temperature=true + agent.build.temperature=0" if spec.name == "opencode"
-        else "unsupported_by_verified_qoder_1.1.45_cli",
+        else "not_configured_native_effective_value_unverified",
         "temperature_wire_verification_required": spec.name == "opencode",
         "model_turn_limit": max_model_turns,
         "native_model_turn_limit": "agent.build.steps" if spec.name == "opencode" else "--max-turns (pinned bundle verified)",

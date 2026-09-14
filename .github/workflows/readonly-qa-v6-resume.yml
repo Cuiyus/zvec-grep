@@ -5,6 +5,8 @@ name: Resume v6 retrieval diagnosis from fixed E2E evidence
 # Only the analysis code advances. The original runtime, corpus, index, E2E
 # answers and quality reviews come from the exact source artifacts below.
 # No index preparation, E2E replacement, or answer re-judging occurs here.
+# The explicit prior diagnosis also supplies valid completed candidate sessions;
+# their raw answers are revalidated, and inaccessible inputs are supplemented.
 on:
   push:
     branches: [dev/benchmark-readonly-qa]
@@ -25,6 +27,16 @@ on:
         required: true
         default: "1"
         type: string
+      annotation_run:
+        description: Prior diagnostic run whose complete valid candidate sessions are reused
+        required: true
+        default: "34833758208"
+        type: string
+      annotation_attempt:
+        description: Exact prior diagnostic artifact attempt
+        required: true
+        default: "1"
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +52,8 @@ env:
   QA_EVIDENCE_RUN_ID: ${{ inputs.source_run || '34831000387' }}
   QA_EVIDENCE_COMMIT: ${{ inputs.source_commit || '0fd55b4125c32995ac243f913f5f1ddc7ec9fc3c' }}
   QA_EVIDENCE_ATTEMPT: ${{ inputs.source_attempt || '1' }}
+  QA_ANNOTATION_RUN_ID: ${{ inputs.annotation_run || '34833758208' }}
+  QA_ANNOTATION_ATTEMPT: ${{ inputs.annotation_attempt || '1' }}
 
 jobs:
   diagnosis:
@@ -69,9 +83,13 @@ jobs:
           if not re.fullmatch(r"[0-9a-f]{40}", evidence["commit"]):
               raise ValueError("Source commit must be a complete lowercase Git commit SHA")
           analysis = {"run_id": os.environ["GITHUB_RUN_ID"], "commit": os.environ["GITHUB_SHA"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+          annotation = {"run_id": os.environ["QA_ANNOTATION_RUN_ID"], "attempt": os.environ["QA_ANNOTATION_ATTEMPT"]}
+          if any(not re.fullmatch(r"[1-9][0-9]*", value) for value in annotation.values()):
+              raise ValueError("Prior annotation run and attempt must be positive decimal identifiers")
           record = {"protocol": "readonly-qa-v6-diagnosis-resume", "evidence_identity": evidence, "analysis_identity": analysis,
+                    "prior_annotation_identity": annotation,
                     "new_e2e_trials": 0, "new_index_builds": 0, "new_answer_reviews": 0,
-                    "scope": "Same original 30 planned E2E samples; fresh diagnostic annotation and retrieval replay only."}
+                    "scope": "Same original 30 planned E2E samples; revalidate preserved valid candidates, supplement inaccessible annotation inputs, then cross-review and replay."}
           root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic"
           root.mkdir(parents=True)
           (root / "resume-identity.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -189,19 +207,29 @@ jobs:
           --runs-dir "$RUNNER_TEMP/recorded-qa"
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
           --output "$RUNNER_TEMP/diagnostic/query-analysis.json"
+      - name: Download preserved candidate sessions from the explicit prior diagnostic run
+        id: prior-annotations
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.QA_ANNOTATION_RUN_ID }}
+          name: readonly-qa-v6-resumed-diagnosis-source-${{ env.QA_EVIDENCE_RUN_ID }}-${{ env.QA_EVIDENCE_ATTEMPT }}-analysis-${{ env.QA_ANNOTATION_RUN_ID }}-${{ env.QA_ANNOTATION_ATTEMPT }}
+          path: ${{ runner.temp }}/prior-diagnosis
       - name: Generate three independent groups of candidates and source-backed cross reviews
         id: ground-truth
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_ground_truth
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_ground_truth_resume
           --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
           --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
           --source-root "$RUNNER_TEMP/prepared/source"
           --image zg-readonly-qa:0.2.2
           --output "$RUNNER_TEMP/diagnostic/ground-truth"
+          --resume-candidates-dir "$RUNNER_TEMP/prior-diagnosis/diagnostic/ground-truth"
+          --resume-identity "$RUNNER_TEMP/prior-diagnosis/diagnostic/resume-identity.json"
       - name: Replay the recorded complete requests and original question five times
         id: replay
         run: >-
@@ -240,8 +268,11 @@ jobs:
           root.mkdir(parents=True, exist_ok=True)
           steps = json.loads(os.environ["RESUME_STEP_OUTCOMES"])
           outcomes = {name: {"outcome": item.get("outcome"), "conclusion": item.get("conclusion")} for name, item in steps.items()}
-          complete = outcomes.get("joint", {}).get("outcome") == "success" and outcomes.get("replay", {}).get("outcome") == "success"
+          joint_path = root / "joint-report.json"
+          joint_status = json.loads(joint_path.read_text()).get("status") if joint_path.is_file() else None
+          complete = outcomes.get("joint", {}).get("outcome") == "success" and outcomes.get("replay", {}).get("outcome") == "success" and joint_status == "complete"
           record = {"status": "completed" if complete else "partial", "steps": outcomes,
+                    "joint_report_status": joint_status,
                     "evidence_identity": {"run_id": os.environ["QA_EVIDENCE_RUN_ID"], "commit": os.environ["QA_EVIDENCE_COMMIT"], "attempt": os.environ["QA_EVIDENCE_ATTEMPT"]},
                     "analysis_identity": {"run_id": os.environ["GITHUB_RUN_ID"], "commit": os.environ["GITHUB_SHA"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"]},
                     "new_e2e_trials": 0, "new_index_builds": 0}

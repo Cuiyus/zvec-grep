@@ -7,19 +7,22 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from zg_bench.swe_qa.query_ground_truth import (
-    GROUPS, annotation_catalog, annotation_config, digest, execute, freeze_labels, parse_response, reconcile,
-    source_anchor, verify_candidates, verify_review_sources,
+    GROUPS, MAX_INLINE_INSTRUCTION_BYTES, annotation_catalog, annotation_config, annotation_instruction,
+    digest, execute, freeze_labels, parse_response, print_phase_result, reconcile, run_session,
+    source_anchor, split_annotation_packet, verify_candidates, verify_review_sources,
 )
 from zg_bench.swe_qa.query_relevance import load_labels, resolve_label, score_query_text
-from zg_bench.swe_qa.readonly_agents import agent_environment, agent_spec, build_agent_command
+from zg_bench.swe_qa.readonly_agents import agent_environment, agent_spec, build_agent_command, build_agent_config
 
 
 class QueryGroundTruthTest(unittest.TestCase):
@@ -82,6 +85,25 @@ class QueryGroundTruthTest(unittest.TestCase):
                         {"definition_line": 3}, {"evidence_start_line": 1}, {"evidence_end_line": 99}]:
             with self.subTest(changes=changes), self.assertRaises((ValueError, OSError)):
                 source_anchor(self.source, {**self.nomination(), **changes})
+
+    def test_exact_file_module_prefix_resolves_to_same_canonical_target(self):
+        original, _ = source_anchor(self.source, self.nomination())
+        prefixed, _ = source_anchor(self.source, {**self.nomination(), "symbol": "state.Computed.dependencies"})
+        self.assertEqual(prefixed["symbol"], "Computed.dependencies")
+        self.assertEqual(prefixed["original_symbol"], "state.Computed.dependencies")
+        self.assertEqual(prefixed["target_id"], original["target_id"])
+        path = self.source / "reflex/vars/base.py"
+        path.parent.mkdir(parents=True)
+        path.write_text((self.source / "state.py").read_text().replace("Computed:", "ComputedVar:"))
+        target, _ = source_anchor(self.source, {"path": "reflex/vars/base.py", "symbol": "reflex.vars.base.ComputedVar.getter", "definition_line": 3})
+        self.assertEqual(target["symbol"], "ComputedVar.getter")
+        self.assertEqual(target["original_symbol"], "reflex.vars.base.ComputedVar.getter")
+
+    def test_module_compatibility_never_uses_wrong_prefix_or_arbitrary_suffix(self):
+        for symbol in ("other.Computed.dependencies", "other.state.Computed.dependencies",
+                       "state.extra.Computed.dependencies", "dependencies", "Computed.dependencies.extra"):
+            with self.subTest(symbol=symbol), self.assertRaises(ValueError):
+                source_anchor(self.source, {**self.nomination(), "symbol": symbol})
 
     def test_symlink_escape_is_not_a_source_anchor(self):
         with tempfile.TemporaryDirectory() as outside:
@@ -207,6 +229,89 @@ class QueryGroundTruthTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_response(text)
 
+    def test_single_complete_fence_accepts_real_glm_prose_without_repairing_json(self):
+        answer = 'Now I have all the information needed. Here is my final annotation:\n\n```json\n{"annotations": [{"annotation_id": "one"}]}\n```\nThis concludes my annotation.'
+        self.assertEqual(parse_response(answer), {"annotations": [{"annotation_id": "one"}]})
+        self.assertEqual(parse_response('{"annotations": [], "note": "``` is literal source text"}')["annotations"], [])
+        for text in ('```json\n{"annotations": []}\n```\n```json\n{"annotations": []}\n```',
+                     '{"other": 1}\n```json\n{"annotations": []}\n```',
+                     '```json\n{"annotations": []}\n```\n{"other":',
+                     '```json\n{"annotations": []} {"annotations": []}\n```',
+                     '```json\n{"annotations": [}\n```',
+                     '```json\n{"annotations": []}',
+                     '```python\n{"annotations": []}\n```'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_response(text)
+
+    def test_qoder_receives_exact_inline_packet_without_changing_its_readonly_permissions(self):
+        spec = agent_spec("qodercli", "qwen3.8-max")
+        packet = {"annotations": [{"annotation_id": "fixture", "query": "中文 query with quotes \\\" and `$(unsafe)`"}]}
+        instruction = annotation_instruction(spec, "candidate", packet)
+        self.assertNotIn("/annotation/input.json", instruction)
+        data = instruction.split("\nANNOTATION_PACKET_JSON_START\n", 1)[1].rsplit("\nANNOTATION_PACKET_JSON_END", 1)[0]
+        self.assertEqual(json.loads(data), packet)
+        command = build_agent_command(spec, instruction, config_path="/run/qa/qoder.json")
+        self.assertEqual(command[-2:], ["--", instruction])
+        self.assertEqual(annotation_config(spec), build_agent_config(spec, zg=False, max_model_turns=40))
+        opencode = agent_spec("opencode", "glm-5.2", base_url="http://localhost/v1")
+        self.assertIn("/annotation/input.json", annotation_instruction(opencode, "candidate", packet))
+        self.assertNotIn("ANNOTATION_PACKET_JSON_START\n", annotation_instruction(opencode, "candidate", packet))
+
+    def test_oversize_qoder_candidate_and_review_split_preserves_full_context(self):
+        spec = agent_spec("qodercli", "qwen3.8-max")
+        units = [{"annotation_id": "a" + str(i), "prior_turn_feedback": "源" * 20000} for i in range(2)]
+        parts = split_annotation_packet(GROUPS[2], "candidate", {"annotations": units})
+        self.assertEqual([u for part in parts for u in part["annotations"]], units)
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(all(len(annotation_instruction(spec, "candidate", p).encode()) + 1 <= MAX_INLINE_INSTRUCTION_BYTES for p in parts))
+        proposals = [{"proposal_id": str(i), "annotation_id": "a0", "evidence": "文" * 20000} for i in range(2)]
+        packet = {"queries": [{"annotation_id": "a0", "context": "full unchanged context"}], "proposals": proposals}
+        parts = split_annotation_packet(GROUPS[2], "review", packet)
+        self.assertEqual([p for part in parts for p in part["proposals"]], proposals)
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(all(part["queries"] == packet["queries"] for part in parts))
+        self.assertEqual(split_annotation_packet(GROUPS[0], "candidate", {"annotations": units}), [{"annotations": units}])
+
+    def test_indivisible_large_qoder_packet_is_preserved_and_never_launches_agent(self):
+        packet = {"annotations": [{"annotation_id": "a", "context": "界" * MAX_INLINE_INSTRUCTION_BYTES}]}
+        self.assertEqual(split_annotation_packet(GROUPS[2], "candidate", packet), [packet])
+        with tempfile.TemporaryDirectory() as directory, patch("zg_bench.swe_qa.query_ground_truth.subprocess.Popen") as launch:
+            output = Path(directory) / "oversized"
+            result = run_session(group=GROUPS[2], phase="candidate", packet=packet, source_root=self.source, image="fixture", output=output)
+            self.assertEqual(result["status"], "packet_too_large")
+            self.assertEqual(json.loads((output / "packet/input.json").read_text()), packet)
+            launch.assert_not_called()
+
+    def test_failure_progress_explains_reason_without_exposing_credentials(self):
+        capture = io.StringIO()
+        with patch.dict(os.environ, {"GLM_API_KEY": "fixture-secret"}), contextlib.redirect_stdout(capture):
+            print_phase_result("candidate", GROUPS[0], 0, {"status": "failed", "error_kind": "JSONDecodeError", "error": "Cannot decode fixture-secret"})
+        row = json.loads(capture.getvalue())
+        self.assertEqual(row["error_kind"], "JSONDecodeError")
+        self.assertIn("[REDACTED]", row["error"])
+        self.assertNotIn("fixture-secret", capture.getvalue())
+
+    def test_native_session_wrapper_passes_qoder_inline_argument_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = root / "record.py"
+            received = root / "received.json"
+            recorder.write_text("import json, os, sys\nfrom pathlib import Path\nPath(os.environ['ANNOTATION_CAPTURE']).write_text(json.dumps(sys.argv[1:], ensure_ascii=False))\nprint(json.dumps({'type':'result','subtype':'success','result':'done'}))\n")
+            spec = agent_spec("qodercli", "qwen3.8-max")
+            instruction = annotation_instruction(spec, "candidate", {"annotations": [{"query": "带换行\n和引号 \\\" 和$(literal)", "context": "源" * 1000}]})
+            command = build_agent_command(spec, instruction, config_path="/run/qa/qoder.json")
+            session = {"command": [sys.executable, str(recorder), *command[1:]],
+                       "env": {"ANNOTATION_CAPTURE": str(received)}, "log_dir": str(root / "logs"),
+                       "native_name": spec.stream_filename,
+                       "limits": {"wall_seconds": 5, "tool_calls": 100, "model_requests": 40, "input_tokens": 600000}}
+            session_path = root / "session-spec.json"
+            session_path.write_text(json.dumps(session))
+            script = Path(__file__).resolve().parents[1] / "scripts/qa-session.py"
+            result = subprocess.run([sys.executable, str(script), "--spec", str(session_path)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(received.read_text()), command[1:])
+            self.assertEqual(json.loads(received.read_text())[-1].encode(), instruction.encode())
+
     def test_whole_annotation_pipeline_uses_fresh_cross_review_packets_then_freezes_labels(self):
         with tempfile.TemporaryDirectory() as output_directory:
             root = Path(output_directory)
@@ -217,16 +322,27 @@ class QueryGroundTruthTest(unittest.TestCase):
             entries = {"repo": self.case["repo"], "source_case_sha256": digest(case_path.read_bytes())}
             entries_path.write_text(json.dumps(entries))
             calls = []
+            call_lock = threading.Lock()
+            candidate_barrier = threading.Barrier(3)
+            candidate_finished = set()
 
             def runner(**kwargs):
                 packet = kwargs["packet"]
-                calls.append(kwargs)
+                with call_lock:
+                    calls.append(kwargs)
                 for forbidden in ("HIDDEN_REFERENCE", "HIDDEN_GOLD", "HIDDEN_FINAL", "HIDDEN_CURRENT_OUTPUT"):
                     self.assertNotIn(forbidden, json.dumps(packet))
                 if kwargs["phase"] == "candidate":
+                    candidate_barrier.wait(timeout=3)
+                    if kwargs["group"] == GROUPS[0]:
+                        time.sleep(0.03)
                     rows = [self.candidate(u["annotation_id"]) for u in packet["annotations"]]
                     self.assertEqual(len(packet["annotations"]), 2)
+                    with call_lock:
+                        candidate_finished.add(kwargs["group"])
                 else:
+                    with call_lock:
+                        self.assertEqual(candidate_finished, set(GROUPS))
                     self.assertTrue(all("proposer_group" not in p for p in packet["proposals"]))
                     rows = [{"proposal_id": p["proposal_id"], "decision": "accept", "reason": "The definition directly discovers dependencies by inspecting getter bytecode.",
                              "source_checks": [{"path": "state.py", "start_line": 6, "end_line": 7,
@@ -246,6 +362,8 @@ class QueryGroundTruthTest(unittest.TestCase):
             self.assertEqual(report["unknown_queries"], 0)
             self.assertFalse(report["annotation_cost_included_in_e2e"])
             self.assertEqual(report["annotation_cost"]["input_tokens"], 738)
+            self.assertEqual(report["execution"]["max_parallel_groups"], 3)
+            self.assertEqual([s["group"] for s in report["sessions"]], list(GROUPS) * 2)
             labels = load_labels(args.output / "query-intents.json", self.source)
             self.assertEqual(report["labels_sha256"], digest((args.output / "query-intents.json").read_bytes()))
             self.assertEqual(len(labels["request_bindings"]), 2)

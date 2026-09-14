@@ -13,8 +13,10 @@ import ast
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -30,6 +32,10 @@ from ..settings import OPENCODE_CUSTOM_BASE_URL
 
 GROUPS = ("opencode-glm52", "opencode-qwen38max", "qoder-qwen38max")
 PROTOCOL = "query-ground-truth-v6"
+# Linux limits each execve argv string to 32 pages (typically 128 KiB).
+# Keep a conservative UTF-8 ceiling, including the terminal NUL, for Qoder's
+# explicit prompt argument. No source/context is truncated to fit this limit.
+MAX_INLINE_INSTRUCTION_BYTES = 100 * 1024
 
 
 def digest(value: Any) -> str:
@@ -39,13 +45,28 @@ def digest(value: Any) -> str:
 
 
 def parse_response(text: str) -> dict[str, Any]:
-    """Accept one JSON object or a single fenced object; never harvest fragments."""
+    """Accept one complete object, optionally in one fence surrounded by prose.
+
+    A fence is framing, not a repair operation: malformed or concatenated JSON,
+    additional fences, or JSON containers outside the fence remain invalid.
+    """
     value = text.strip()
-    if value.startswith("```json\n") and value.endswith("\n```"):
-        value = value[8:-4]
-    elif value.startswith("```\n") and value.endswith("\n```"):
-        value = value[4:-4]
-    parsed = json.loads(value)
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is None and "```" in value:
+        if value.count("```") != 2:
+            raise ValueError("Expected exactly one complete JSON fence")
+        match = re.search(r"(?m)^[ \t]*```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```[ \t]*(?=\r?$)", value, re.S)
+        if match is None:
+            raise ValueError("Malformed JSON fence")
+        outside = value[:match.start()] + value[match.end():]
+        if any(char in outside for char in "{}[]"):
+            raise ValueError("Additional JSON containers or fragments outside the sole fence")
+        value = match.group(1)
+    if parsed is None:
+        parsed = json.loads(value)
     if not isinstance(parsed, dict) or not isinstance(parsed.get("annotations"), list):
         raise ValueError("Expected an object with an annotations array")
     return parsed
@@ -92,11 +113,21 @@ def source_anchor(source_root: Path, proposal: dict[str, Any]) -> tuple[dict[str
                 visit(child, parents)
 
     visit(ast.parse(raw, filename=filename), [])
-    matching = [(name, n) for name, n in definitions if name == symbol
+    module_parts = list(Path(filename).with_suffix("").parts)
+    if module_parts[-1] == "__init__":
+        module_parts.pop()
+    module = ".".join(module_parts)
+    # Accept only the module derived from this exact file, never arbitrary
+    # suffix matching. Keep the supplied spelling in the audit trail.
+    original_symbol = symbol
+    names = {symbol}
+    if module and symbol.startswith(module + "."):
+        names.add(symbol[len(module) + 1:])
+    matching = [(name, n) for name, n in definitions if name in names
                 and (proposal.get("definition_line") is None or n.lineno == proposal["definition_line"])]
     if len(matching) != 1:
         raise ValueError("Symbol must resolve to exactly one qualified source definition")
-    _, node = matching[0]
+    symbol, node = matching[0]
     definition_line, end_line = node.lineno, node.end_lineno
     entry_start = min([definition_line, *[d.lineno for d in node.decorator_list]])
     start = proposal.get("evidence_start_line", definition_line)
@@ -108,7 +139,7 @@ def source_anchor(source_root: Path, proposal: dict[str, Any]) -> tuple[dict[str
     definition = lines[definition_line - 1]
     target_id = "target-" + digest([filename, symbol, definition_line])[:20]
     evidence_id = "evidence-" + digest([filename, start, end])[:20]
-    target = {"target_id": target_id, "path": filename, "symbol": symbol,
+    target = {"target_id": target_id, "path": filename, "symbol": symbol, "original_symbol": original_symbol,
               "level": "class" if isinstance(node, ast.ClassDef) else "function",
               "definition": definition, "definition_line": definition_line,
               "definition_sha256": digest(definition), "entry_start_line": entry_start,
@@ -290,6 +321,65 @@ def annotation_config(spec: Any, *, packet_directory: str = "/annotation") -> di
     return config
 
 
+def annotation_instruction(spec: Any, phase: str, packet: dict[str, Any]) -> str:
+    """Qoder receives explicit prompt data; OpenCode keeps its verified mount."""
+    if phase not in {"candidate", "review"}:
+        raise ValueError("Unknown annotation phase")
+    instruction = CANDIDATE_INSTRUCTION if phase == "candidate" else REVIEW_INSTRUCTION
+    if spec.name == "qodercli":
+        instruction = instruction.replace(
+            "Read the complete JSON packet at /annotation/input.json.",
+            "The complete JSON packet is supplied inline below between ANNOTATION_PACKET_JSON_START and ANNOTATION_PACKET_JSON_END.")
+    instruction += "\nRegistered tools: " + ", ".join(expected_tools(spec, zg=False)) + ". Use exact identifiers."
+    if spec.name == "qodercli":
+        instruction += "\n\nANNOTATION_PACKET_JSON_START\n" + json.dumps(packet, ensure_ascii=False, separators=(",", ":")) + "\nANNOTATION_PACKET_JSON_END"
+    return instruction
+
+
+def split_annotation_packet(group: str, phase: str, packet: dict[str, Any], *,
+                            limit: int = MAX_INLINE_INSTRUCTION_BYTES) -> list[dict[str, Any]]:
+    """Split oversized Qoder batches without dropping a query, proposal or context.
+
+    A single indivisible oversized item is retained; run_session then records an
+    explicit packet_too_large result without invoking the agent. Splitting is
+    input transport preparation, not a retry after seeing a model's decision.
+    """
+    if group != "qoder-qwen38max":
+        return [packet]
+    spec = agent_spec("qodercli", "qwen3.8-max")
+    if len(annotation_instruction(spec, phase, packet).encode("utf-8")) + 1 <= limit:
+        return [packet]
+    if phase == "candidate":
+        values = packet["annotations"]
+        if len(values) < 2:
+            return [packet]
+        middle = len(values) // 2
+        pieces = [{"annotations": values[:middle]}, {"annotations": values[middle:]}]
+    else:
+        queries, proposals = packet["queries"], packet["proposals"]
+        if len(queries) > 1:
+            middle = len(queries) // 2
+            pieces = []
+            for part in (queries[:middle], queries[middle:]):
+                ids = {q["annotation_id"] for q in part}
+                pieces.append({"queries": part, "proposals": [p for p in proposals if p["annotation_id"] in ids]})
+        elif len(proposals) > 1:
+            middle = len(proposals) // 2
+            pieces = [{"queries": queries, "proposals": proposals[:middle]}, {"queries": queries, "proposals": proposals[middle:]}]
+        else:
+            return [packet]
+    return [part for piece in pieces for part in split_annotation_packet(group, phase, piece, limit=limit)]
+
+
+def print_phase_result(phase: str, group: str, batch: int, result: dict[str, Any], *, sub_batch: int = 0) -> None:
+    row = {"phase": "ground_truth_" + phase, "group": group, "batch": batch,
+           "sub_batch": sub_batch, "status": result.get("status")}
+    if result.get("status") != "completed":
+        row["error_kind"] = redact(str(result.get("error_kind") or result.get("status") or "unknown"))[:200]
+        row["error"] = redact(str(result.get("error") or result.get("required_env") or "See the preserved native session and result.json for this failed stage."))[:2000]
+    print(json.dumps(row, ensure_ascii=False), flush=True)
+
+
 def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: Path,
                 image: str, output: Path, timeout: int = 1200) -> dict[str, Any]:
     """Fresh no-zg container, native agent contract, no retries or result replacement."""
@@ -300,15 +390,21 @@ def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: 
     output.mkdir(parents=True, exist_ok=False)
     packet_dir = output / "packet"
     write_json(packet_dir / "input.json", packet)
-    instruction = CANDIDATE_INSTRUCTION if phase == "candidate" else REVIEW_INSTRUCTION
-    instruction += "\nRegistered tools: " + ", ".join(expected_tools(spec, zg=False)) + ". Use exact identifiers."
+    instruction = annotation_instruction(spec, phase, packet)
     config = annotation_config(spec)
     write_json(output / spec.config_filename, config)
     write_json(output / "instruction.json", {"text": instruction, "sha256": digest(instruction)})
     result: dict[str, Any] = {"group": group, "phase": phase, "status": "planned",
                              "started_at": datetime.now(UTC).isoformat(), "packet_sha256": sha256(packet_dir / "input.json"),
                              "agent_spec": spec.to_dict(), "controls": control_manifest(spec, max_model_turns=40),
-                             "included_in_e2e": False, "zg_available": False, "retry_count": 0}
+                             "included_in_e2e": False, "zg_available": False, "retry_count": 0,
+                             "packet_delivery": "inline_prompt_json" if spec.name == "qodercli" else "readonly_external_file",
+                             "instruction_utf8_bytes_with_nul": len(instruction.encode("utf-8")) + 1}
+    if spec.name == "qodercli" and result["instruction_utf8_bytes_with_nul"] > MAX_INLINE_INSTRUCTION_BYTES:
+        result.update(status="packet_too_large", error_kind="AnnotationPacketTooLarge",
+                      error=f"An indivisible annotation packet exceeds the {MAX_INLINE_INSTRUCTION_BYTES}-byte UTF-8 prompt limit; no agent was invoked and no context was truncated.")
+        write_json(output / "result.json", result)
+        return result
     if not os.environ.get(credential):
         result.update(status="credential_unavailable", required_env=credential)
         write_json(output / "result.json", result)
@@ -318,7 +414,9 @@ def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: 
     name = "zggold-" + digest(str(output))[:16]
     config_mount = "/run/qa/" + spec.config_filename
     command += ["--name", name, "--env", spec.credential_env]
-    command += mount(output / spec.config_filename, config_mount) + mount(packet_dir, "/annotation")
+    command += mount(output / spec.config_filename, config_mount)
+    if spec.name == "opencode":
+        command += mount(packet_dir, "/annotation")
     session = {"command": build_agent_command(spec, instruction, config_path=config_mount, max_model_turns=40),
                "env": agent_environment(spec, config_path=config_mount), "config_path": config_mount,
                "limits": {"model_requests": 40, "tool_calls": 100, "input_tokens": 600000, "wall_seconds": timeout},
@@ -356,6 +454,8 @@ def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: 
             result["status"] = "completed"
         else:
             result["status"] = "incomplete_or_contract_failure"
+            result["error_kind"] = "AnnotationSessionIncomplete"
+            result["error"] = "Native session, final answer or observed agent/model contract did not complete successfully; inspect session and contract fields."
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         result.update(status="failed", error_kind=type(error).__name__, error=redact(str(error)))
     result.update(wall_seconds=round(time.monotonic() - started, 3), finished_at=datetime.now(UTC).isoformat())
@@ -415,21 +515,37 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
     write_json(output / "catalog.json", catalog)
     candidates: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in GROUPS}
     sessions = []
+    execution = {"max_parallel_groups": 3, "within_group_batches": "serial",
+                 "phase_barrier": "All candidate groups finish before any review starts.",
+                 "merge_order": list(GROUPS), "instruction_utf8_byte_limit": MAX_INLINE_INSTRUCTION_BYTES}
+    write_json(output / "annotation-execution.json", execution)
     # Never include current search output, original benchmark gold, final answers
     # or treatment attribution. Prior feedback is needed to interpret subgoals.
     packets = [{k: u.get(k) for k in ("annotation_id", "kind", "request", "original_question", "context_id",
                "prior_turn_feedback", "prior_assistant_text", "context_capture_limitation")} for u in catalog]
-    for group in GROUPS:
+    def candidate_group(group: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        rows: dict[str, Any] = {"annotations": []}
+        group_sessions = []
         for offset in range(0, len(packets), args.batch_size):
-            print(json.dumps({"phase": "ground_truth_candidate", "group": group,
-                              "batch": offset // args.batch_size, "status": "running"}), flush=True)
-            result = session_runner(group=group, phase="candidate", packet={"annotations": packets[offset:offset + args.batch_size]},
-                                    source_root=source, image=args.image, output=output / "candidate" / group / f"batch-{offset // args.batch_size:03}", timeout=args.timeout)
-            sessions.append(result)
-            print(json.dumps({"phase": "ground_truth_candidate", "group": group,
-                              "batch": offset // args.batch_size, "status": result.get("status")}), flush=True)
-            if result.get("status") == "completed":
-                candidates[group]["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+            parts = split_annotation_packet(group, "candidate", {"annotations": packets[offset:offset + args.batch_size]})
+            for part_index, packet in enumerate(parts):
+                batch_id = offset // args.batch_size
+                name = f"batch-{batch_id:03}" + (f"-part-{part_index:03}" if len(parts) > 1 else "")
+                print(json.dumps({"phase": "ground_truth_candidate", "group": group,
+                                  "batch": batch_id, "sub_batch": part_index, "status": "running"}), flush=True)
+                result = session_runner(group=group, phase="candidate", packet=packet,
+                                        source_root=source, image=args.image, output=output / "candidate" / group / name, timeout=args.timeout)
+                group_sessions.append(result)
+                print_phase_result("candidate", group, batch_id, result, sub_batch=part_index)
+                if result.get("status") == "completed":
+                    rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+        return rows, group_sessions
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {group: pool.submit(candidate_group, group) for group in GROUPS}
+        for group in GROUPS:
+            candidates[group], group_sessions = futures[group].result()
+            sessions.extend(group_sessions)
             write_json(output / "candidate-outputs.json", candidates)
     if directory_identity(source, skip_git=True) != before:
         raise RuntimeError("Source changed during candidate annotation")
@@ -437,7 +553,9 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
     write_json(output / "source-verified-proposals.json", proposals)
     reviews: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in GROUPS}
     units = {u["annotation_id"]: p for u, p in zip(catalog, packets)}
-    for group in GROUPS:
+    def review_group(group: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        rows: dict[str, Any] = {"annotations": []}
+        group_sessions = []
         pending = [p for p in proposals if p["source_status"] == "verified" and p["proposer_group"] != group]
         # Keep a unit's proposals together so repeated source reading is bounded.
         pending_ids = sorted({p["annotation_id"] for p in pending})
@@ -446,15 +564,25 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
             ids = set(pending_ids[offset:offset + review_batch_size])
             batch = [{k: v for k, v in p.items() if k not in {"proposer_group", "source_status"}}
                      for p in pending if p["annotation_id"] in ids]
-            print(json.dumps({"phase": "ground_truth_review", "group": group, "batch": offset // review_batch_size,
-                              "proposals": len(batch), "status": "running"}), flush=True)
-            result = session_runner(group=group, phase="review", packet={"queries": [units[i] for i in sorted(ids)], "proposals": batch},
-                                    source_root=source, image=args.image, output=output / "review" / group / f"batch-{offset // review_batch_size:03}", timeout=args.timeout)
-            sessions.append(result)
-            print(json.dumps({"phase": "ground_truth_review", "group": group,
-                              "batch": offset // review_batch_size, "status": result.get("status")}), flush=True)
-            if result.get("status") == "completed":
-                reviews[group]["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+            parts = split_annotation_packet(group, "review", {"queries": [units[i] for i in sorted(ids)], "proposals": batch})
+            for part_index, packet in enumerate(parts):
+                batch_id = offset // review_batch_size
+                name = f"batch-{batch_id:03}" + (f"-part-{part_index:03}" if len(parts) > 1 else "")
+                print(json.dumps({"phase": "ground_truth_review", "group": group, "batch": batch_id,
+                                  "sub_batch": part_index, "proposals": len(packet["proposals"]), "status": "running"}), flush=True)
+                result = session_runner(group=group, phase="review", packet=packet,
+                                        source_root=source, image=args.image, output=output / "review" / group / name, timeout=args.timeout)
+                group_sessions.append(result)
+                print_phase_result("review", group, batch_id, result, sub_batch=part_index)
+                if result.get("status") == "completed":
+                    rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+        return rows, group_sessions
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {group: pool.submit(review_group, group) for group in GROUPS}
+        for group in GROUPS:
+            reviews[group], group_sessions = futures[group].result()
+            sessions.extend(group_sessions)
             write_json(output / "review-outputs.json", reviews)
     reviews = verify_review_sources(reviews, source)
     write_json(output / "review-outputs.json", reviews)
@@ -475,6 +603,7 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
                "unknown_queries": sum(q["annotation_status"] == "unknown" for q in labels["queries"]),
                "candidate_proposals": len(proposals), "accepted_proposals": sum(d["status"] == "accepted" for d in decisions),
                "sessions": sessions, "annotation_cost_included_in_e2e": False,
+               "execution": execution,
                "limitation": "Source existence is deterministic; independent semantic reviews remain fallible model-assisted labels, not human or exhaustive gold."}
     observed = [s.get("session", {}).get("observed", {}) for s in sessions]
     summary["annotation_cost"] = {"session_count": len(sessions), "failed_sessions": sum(s.get("status") != "completed" for s in sessions),
