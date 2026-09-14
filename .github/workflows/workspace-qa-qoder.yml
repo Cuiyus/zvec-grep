@@ -226,11 +226,49 @@ jobs:
     if: needs.validate.outputs.scope == 'smoke' || needs.validate.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check whether identical evaluation code already has a validated smoke
+        if: needs.validate.outputs.scope == 'full'
+        id: reuse
+        run: python benchmarks/workspace-qa/smoke_reuse.py --check-compatibility --github-output "$GITHUB_OUTPUT"
+      - name: Restore the pinned completed smoke artifact
+        if: steps.reuse.outputs.reuse_eligible == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.reuse.outputs.artifact_name }}
+          run-id: ${{ steps.reuse.outputs.recovery_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/workspace-qa-validated-smoke
+      - name: Verify original smoke evidence and current code without new rollouts
+        if: steps.reuse.outputs.reuse_eligible == 'true'
+        run: >-
+          python benchmarks/workspace-qa/smoke_reuse.py
+          --artifact-root "$RUNNER_TEMP/workspace-qa-validated-smoke"
+          --output "$RUNNER_TEMP/workspace-qa-smoke-reuse"
+      - name: Publish reused smoke validation
+        if: always() && steps.reuse.outputs.reuse_eligible == 'true'
+        run: |
+          if [ -f "$RUNNER_TEMP/workspace-qa-smoke-reuse/summary.md" ]; then
+            cat "$RUNNER_TEMP/workspace-qa-smoke-reuse/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.reuse.outputs.reuse_eligible == 'true'
+        with:
+          name: workspace-qa-smoke-reuse-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
+          path: ${{ runner.temp }}/workspace-qa-smoke-reuse/
       - uses: ./.github/actions/workspace-qa
+        if: steps.reuse.outputs.reuse_eligible != 'true'
         with:
           task-id: '3'
           repetitions: '1'
@@ -281,11 +319,19 @@ jobs:
           python benchmarks/workspace-qa/report.py --runs-dir results
           --manifest benchmarks/workspace-qa/data/lock.json --output report
           --require-complete
+      - name: Audit execution coverage and original failure evidence
+        if: always()
+        run: >-
+          python benchmarks/workspace-qa/failure_audit.py --runs-dir results
+          --manifest benchmarks/workspace-qa/data/lock.json --output report/failure-audit
       - name: Publish aggregate summary
         if: always()
         run: |
           if [ -f report/summary.md ]; then
             cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f report/failure-audit/summary.md ]; then
+            cat report/failure-audit/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         if: always()

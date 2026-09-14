@@ -153,6 +153,8 @@ CI 分为五个显式范围：普通提交仅做离线校验；`[workspace-qa-pr
 
 该次恢复了 1,950,506,687 字节的 archive 缓存块，新下载块为 0；提取约 17 秒，前一冷运行约 194 秒，缓存归档本身恢复约 18 秒。修复 bridge 导致索引身份更新，本次仍花约 71 秒重建，完成 seed 在 judge 失败后仍成功保存。独立 [probe 34832632725](https://github.com/Cuiyus/zvec-grep/actions/runs/34832632725) 的实际模型与检索检查耗时 26.117 秒，冷启动 probe job 约 95 秒，均不计入 QA 指标。
 
+恢复运行 [34833581759](https://github.com/Cuiyus/zvec-grep/actions/runs/34833581759) 仅用 17.974 秒补齐失败 judge，保留原两份回答、全部原始 attempt 和合法 baseline 评分，流程验证完整。随后首次 full [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405) 的全新 smoke 出现 with-zg budget_exhausted，导致正式矩阵尚未启动；两类准备缓存均命中，索引构建耗时为 0，SDK 校验约 31 秒。该预算失败原样保留。full 启动现在按固定 31 个评测核心代码/配置文件的 SHA 校验是否与已通过完整验证的 smoke 一致：一致时恢复指定 artifact，校验原始证据并重算 gate/report；不一致时才跑新 smoke。显式 smoke 始终执行新样本。复用只涉及流程验证，正式 200 条仍是新会话，任务、模型、预算和原题不变。
+
 固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
 
 先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session 和 home，共享该 task 准备一次的只读源工作区；with-zg 使用不可变 seed 的独立副本。固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。

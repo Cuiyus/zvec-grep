@@ -27,8 +27,9 @@ runs on this branch with five explicit scopes:
   pinned smoke artifact, preserving its original QA observations and valid scores.
 - A push whose head commit message contains `[workspace-qa-smoke]` validates,
   then runs task 3 once per arm: **two smoke trials**.
-- `[workspace-qa-full]` validates, runs smoke, then unlocks the 10-task matrix
-  only after complete smoke measurements and rubric judgments. Every formal
+- `[workspace-qa-full]` validates, reuses the pinned completed smoke when all
+  31 evaluation code/configuration files match, or runs fresh smoke when they
+  differ. The 10-task matrix requires complete validated smoke evidence. Every formal
   task runs 10 independent repetitions per arm: **200 formal trials**.
 
 Smoke observations are excluded from the formal report. Manual dispatch supports
@@ -36,6 +37,12 @@ Smoke observations are excluded from the formal report. Manual dispatch supports
 dispatch. Concurrency groups separate these scopes so a long formal run does
 not queue quick validation behind it. A push must still affect the workflow's
 listed experiment paths; an empty commit alone does not trigger it.
+Explicit `smoke` always runs a new pair. For `full`, smoke reuse restores the
+exact prior recovery artifact, verifies its recorded evidence hashes, checks
+original raw Qoder/MCP traces and candidate bytes, then recomputes integration
+validation and reporting with the current code. Missing, corrupt or incompatible
+evidence cannot unlock the matrix. No model calls or new QA observations occur
+during reuse; every formal trial remains a fresh session.
 Smoke verifies a successful real Qoder vector search using the synthetic setup
 probe's native and MCP traces, plus tool registration and integrity in the QA
 trial. Natural non-use of zg on the original question is retained as an
@@ -147,6 +154,15 @@ on the prior cold task-3 run; cache archive restore itself took about 18 seconds
 Index rebuilding still took 71 seconds because the bridge fix changed its build
 identity. That completed seed was retained even though judging failed.
 
+The first full launch [34833796405](https://github.com/Cuiyus/zvec-grep/actions/runs/34833796405)
+restored both caches: index build time was zero, with a 31-second fresh SDK
+validation. Its new random smoke pair had a completed baseline and a with-zg
+`budget_exhausted` outcome, so the old launch sequence blocked all 200 formal
+trials despite an already-complete, configuration-identical smoke. Full now
+revalidates that pinned completed smoke instead of requiring another random QA
+pair to finish. This failed smoke remains retained; budgets and formal tasks are
+unchanged, and no formal sample is selected or retried to obtain completion.
+
 Required Actions secrets:
 
 - `QODER_PERSONAL_ACCESS_TOKEN`: Qoder native model access.
@@ -198,6 +214,13 @@ Results are paired by task/repetition, averaged within task and then equally
 across tasks, with code QA and other QA reported separately. Incomplete runs
 produce a partial report and a failing completeness check rather than a claimed
 efficacy result.
+
+The final artifact also includes `failure-audit/`: execution coverage, QA
+completion, original termination reasons and budgets, separately labelled input
+token lower bounds, observed tool calls and elapsed time. A recorded budget
+failure is an attempted experiment outcome, not an unstarted trial or zero-cost
+sample. This companion audit does not replace missing final usage with a lower
+bound, retry failed model outcomes, or change the strict report completeness gate.
 
 ## Offline validation
 
