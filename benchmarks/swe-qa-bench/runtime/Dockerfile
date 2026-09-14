@@ -9,6 +9,7 @@ RUN test "$(./node_modules/.bin/qodercli --version)" = "1.1.45" && test "$(./nod
 COPY scripts/readonly-search.mjs ./readonly-search.mjs
 COPY scripts/replay-search.mjs ./replay-search.mjs
 COPY scripts/prepare-index.mjs ./prepare-index.mjs
+COPY scripts/embedding-probe.mjs ./embedding-probe.mjs
 COPY scripts/qa-session.py ./qa-session.py
 ENV PATH="/opt/qa/node_modules/.bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=true

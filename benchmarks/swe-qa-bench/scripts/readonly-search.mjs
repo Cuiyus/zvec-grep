@@ -276,11 +276,13 @@ export async function loadProduction(packageDir) {
   }
   const fromPackage = (path) =>
     import(pathToFileURL(join(directory, path)).href);
-  const [api, format, mcp, storage] = await Promise.all([
+  const [api, format, mcp, storage, authTarget, authOperation] = await Promise.all([
     fromPackage("dist/index.js"),
     fromPackage("dist/cli/format/context.js"),
     fromPackage("dist/mcp/tools.js"),
     fromPackage("dist/engine/storage/index.js"),
+    fromPackage("dist/authorization/target.js"),
+    fromPackage("dist/authorization/operation.js"),
   ]);
   const require = createRequire(join(directory, "package.json"));
   const { StdioServerTransport } = await import(
@@ -290,6 +292,11 @@ export async function loadProduction(packageDir) {
     ...api,
     ...format,
     ...mcp,
+    createRemoteEmbeddingTarget: authTarget.createRemoteEmbeddingTarget,
+    createRemoteEmbeddingOperationPermit:
+      authOperation.createRemoteEmbeddingOperationPermit,
+    withRemoteEmbeddingOperationPermit:
+      authOperation.withRemoteEmbeddingOperationPermit,
     createWorkspaceIndexStorage: storage.createWorkspaceIndexStorage,
     openNativeCollection: require("@zvec/zvec").ZVecOpen,
     StdioServerTransport,
@@ -318,6 +325,63 @@ export async function loadProduction(packageDir) {
       ),
     },
   };
+}
+
+/** Apply the user's explicit CI remote-model choice to one SDK operation.
+ *
+ * This uses the pinned package's same once permit as CLI --allow-remote.
+ * Credentials remain in the environment; no workspace/global grant is written.
+ * An existing local experiment never enters this path.
+ */
+export async function withBenchmarkRemoteEmbeddingAuthorization(
+  options,
+  production,
+  operation,
+) {
+  if (
+    options.embeddingModel?.startsWith("local/") ||
+    process.env.ZG_QA_ALLOW_REMOTE_EMBEDDING !== "1"
+  )
+    return await operation();
+  if (options.embeddingModel !== "qwen/qwen3.7-text-embedding")
+    throw new Error(
+      "CI remote authorization requires the exact qwen/qwen3.7-text-embedding model",
+    );
+  const endpoint = process.env.ZVEC_GREP_ENDPOINT?.trim();
+  let parsed;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new Error(
+      "CI remote authorization requires an explicit HTTP(S) embedding endpoint",
+    );
+  }
+  if (
+    !["https:", "http:"].includes(parsed.protocol) ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  )
+    throw new Error(
+      "CI remote embedding endpoint must not contain credentials, query or fragment",
+    );
+  if (
+    production.packageIdentity?.version !== "0.2.2" ||
+    typeof production.createRemoteEmbeddingTarget !== "function" ||
+    typeof production.createRemoteEmbeddingOperationPermit !== "function" ||
+    typeof production.withRemoteEmbeddingOperationPermit !== "function"
+  )
+    throw new Error("Pinned zg 0.2.2 SDK authorization APIs are unavailable");
+  const target = await production.createRemoteEmbeddingTarget({
+    roots: [await realpath(options.root)],
+    provider: "qwen",
+    model: "qwen3.7-text-embedding",
+    endpoint,
+  });
+  const permit = production.createRemoteEmbeddingOperationPermit(target, "once");
+  return await production.withRemoteEmbeddingOperationPermit(permit, operation);
 }
 
 // The public entity list collapses fragments and omits vectors. Audit the native
@@ -718,7 +782,11 @@ export async function createRuntime(options, production) {
       )
         throw new Error("Frozen index manifest changed");
       const contextStarted = performance.now();
-      const result = await service.context(request);
+      const result = await withBenchmarkRemoteEmbeddingAuthorization(
+        { root, embeddingModel: options.embeddingModel },
+        production,
+        () => service.context(request),
+      );
       const contextDuration = performance.now() - contextStarted;
       const text = `freshness: fresh\n${production.formatAgentContextResult(result, { preview: "short" })}`;
       const event = {

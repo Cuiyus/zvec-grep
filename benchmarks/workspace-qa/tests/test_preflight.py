@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from subprocess import CompletedProcess
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -15,6 +16,37 @@ spec.loader.exec_module(module)
 
 
 class PreflightTests(unittest.TestCase):
+    def test_sdk_probe_exercises_container_with_remote_credentials_and_cleans_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"QWEN_API_KEY": "fixture-secret"}):
+            target = Path(tmp) / "probe"
+            def complete(command, name, **kwargs):
+                (target / "runtime" / "result.json").write_text(json.dumps({
+                    "status": "completed", "vector_query_retrieved_fixture": True, "wall_seconds": 0.1,
+                }))
+                return ""
+            with patch.object(module.subprocess, "run", return_value=CompletedProcess([], 0)), \
+                    patch("runner.run_named", side_effect=complete) as run:
+                module.sdk_preflight(target)
+            command = run.call_args.args[0]
+            self.assertIn("QWEN_API_KEY", command)
+            self.assertIn("ZG_QA_ALLOW_REMOTE_EMBEDDING=1", command)
+            self.assertIn("/opt/qa/embedding-probe.mjs", command)
+            self.assertNotIn("fixture-secret", " ".join(command))
+            self.assertTrue((target / "runtime" / "result.json").is_file())
+            self.assertFalse((target / "source").exists())
+            self.assertFalse((target / "index").exists())
+
+    def test_sdk_failure_retains_diagnostics_but_removes_nonbenchmark_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"QWEN_API_KEY": "fixture-secret"}):
+            target = Path(tmp) / "probe"
+            with patch.object(module.subprocess, "run", return_value=CompletedProcess([], 0)), \
+                    patch("runner.run_named", side_effect=RuntimeError("SDK authorization failed")), \
+                    self.assertRaisesRegex(RuntimeError, "SDK authorization"):
+                module.sdk_preflight(target)
+            self.assertTrue((target / "runtime").exists())
+            self.assertFalse((target / "source").exists())
+            self.assertFalse((target / "model-cache").exists())
+
     def test_remote_probe_requests_exact_model_and_never_records_credentials(self):
         body = {"model": "qwen3.7-text-embedding", "data": [{"embedding": [0.25] * 1024}], "usage": {"prompt_tokens": 12}}
         with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"QWEN_API_KEY": "fixture-embedding-secret"}):

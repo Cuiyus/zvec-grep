@@ -210,6 +210,55 @@ test("preflight rejects missing, stale, empty or mismatched indexes", async (t) 
   assert.equal(f.requests.length, 0);
 });
 
+test("remote bridge wraps each context call separately and never grants during preflight or verify", async (t) => {
+  const f = await fixture(t);
+  const env = { ZG_QA_ALLOW_REMOTE_EMBEDDING: "1", ZVEC_GREP_ENDPOINT: "https://embedding.example.invalid/v1", QWEN_API_KEY: "offline-secret-do-not-log" };
+  for (const [name, value] of Object.entries(env)) {
+    const previous = process.env[name];
+    process.env[name] = value;
+    t.after(() => { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; });
+  }
+  f.options.embeddingModel = "qwen/qwen3.7-text-embedding";
+  Object.assign(f.info.workspaceIndex.embedding, { provider: "qwen", model: "qwen3.7-text-embedding" });
+  let active = false;
+  let entered = 0;
+  f.production.createRemoteEmbeddingTarget = async (target) => {
+    assert.deepEqual(target, { roots: [f.root], provider: "qwen", model: "qwen3.7-text-embedding", endpoint: env.ZVEC_GREP_ENDPOINT });
+    return target;
+  };
+  f.production.createRemoteEmbeddingOperationPermit = (target, scope) => {
+    assert.equal(scope, "once");
+    return { target, scope };
+  };
+  f.production.withRemoteEmbeddingOperationPermit = async (_permit, operation) => {
+    entered++;
+    active = true;
+    try { return await operation(); } finally { active = false; }
+  };
+  const create = f.production.createZvecGrep;
+  f.production.createZvecGrep = async (...args) => {
+    assert.equal(active, false);
+    const service = await create(...args);
+    const context = service.context;
+    service.context = async (request) => {
+      assert.equal(active, true, "Every SDK query must inherit its own permit");
+      return await context(request);
+    };
+    return service;
+  };
+  const preflight = await createRuntime(f.options, f.production);
+  await preflight.close();
+  assert.equal(entered, 0);
+  const runtime = await createRuntime({ ...f.options, command: "serve" }, f.production);
+  for (const query of ["first", "second"]) {
+    await runtime.search({ query });
+    assert.equal(active, false);
+  }
+  await runtime.close();
+  assert.equal(entered, 2);
+  assert.ok(!(await readFile(f.options.log, "utf8")).includes(env.QWEN_API_KEY));
+});
+
 test("normal query is read-only, target-free, and records exact visible text", async (t) => {
   const f = await fixture(t);
   const preflight = await createRuntime(f.options, f.production);

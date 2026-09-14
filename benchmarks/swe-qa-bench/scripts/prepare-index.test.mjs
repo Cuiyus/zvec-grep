@@ -201,3 +201,44 @@ test("setup does not overwrite an existing evidence report", async (t) => {
   assert.equal(await readFile(f.options.log, "utf8"), "prior report");
   assert.equal(f.calls.length, 0);
 });
+
+test("remote index runs inside one explicit SDK permit without serializing credentials", async (t) => {
+  const f = await fixture(t);
+  const env = { ZG_QA_ALLOW_REMOTE_EMBEDDING: "1", ZVEC_GREP_ENDPOINT: "https://embedding.example.invalid/v1", QWEN_API_KEY: "offline-secret-do-not-log" };
+  for (const [name, value] of Object.entries(env)) {
+    const previous = process.env[name];
+    process.env[name] = value;
+    t.after(() => { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; });
+  }
+  f.options.embeddingModel = "qwen/qwen3.7-text-embedding";
+  Object.assign(f.info.workspaceIndex.embedding, { provider: "qwen", model: "qwen3.7-text-embedding" });
+  let active = false;
+  let entered = 0;
+  f.production.createRemoteEmbeddingTarget = async (target) => {
+    assert.deepEqual(target, { roots: [f.root], provider: "qwen", model: "qwen3.7-text-embedding", endpoint: env.ZVEC_GREP_ENDPOINT });
+    return target;
+  };
+  f.production.createRemoteEmbeddingOperationPermit = (target, scope) => {
+    assert.equal(scope, "once");
+    return { target, scope };
+  };
+  f.production.withRemoteEmbeddingOperationPermit = async (_permit, operation) => {
+    entered++;
+    active = true;
+    try { return await operation(); } finally { active = false; }
+  };
+  const index = f.service.index;
+  f.service.index = async (options) => {
+    assert.equal(active, true, "SDK indexing must inherit its operation permit");
+    return await index(options);
+  };
+  const info = f.service.info;
+  f.service.info = async (options) => {
+    assert.equal(active, false, "Read-only info must not retain the indexing permit");
+    return await info(options);
+  };
+  assert.equal((await prepareIndex(f.options, f.production)).status, "completed");
+  assert.equal(entered, 1);
+  assert.equal(active, false);
+  assert.ok(!(await readFile(f.options.log, "utf8")).includes(env.QWEN_API_KEY));
+});

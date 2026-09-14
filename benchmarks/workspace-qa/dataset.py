@@ -193,7 +193,11 @@ def prepare(lock: dict, task_id: str, destination: Path, upstream: Path) -> dict
         if not matches:
             raise RuntimeError(f"Original full workspace lacks matching input: {item['filename']}")
         matched.append({"filename": item["filename"], "paths": [p.relative_to(source).as_posix() for p in matches]})
-    for argv in (["init", str(source)], ["-C", str(source), "add", "--force", "."],
+    print(json.dumps({"phase": "source_git_snapshot", "status": "starting"}), flush=True)
+    # This is an ephemeral identity snapshot. Avoid background repacking of the
+    # 15 GB corpus while index/QA containers run; content and tracked paths agree.
+    for argv in (["init", "-q", str(source)], ["-C", str(source), "config", "gc.auto", "0"],
+                 ["-C", str(source), "-c", "core.compression=1", "add", "--force", "."],
                  ["-C", str(source), "-c", "user.name=Workspace QA", "-c", "user.email=benchmark@localhost",
                   "commit", "--quiet", "-m", f"Frozen original CN persona workspace {workspace['revision']}"]):
         subprocess.run(["git", *argv], check=True, stdout=subprocess.DEVNULL)

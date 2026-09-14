@@ -6,6 +6,7 @@ import json
 import hashlib
 import math
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,31 @@ import time
 from urllib import request, error
 
 HERE = Path(__file__).resolve().parent
+
+
+def sdk_preflight(output: Path):
+    """Validate actual zg SDK authorization/index/query before the full corpus."""
+    from runner import docker_command, embedding_endpoint, run_named, with_embedding_environment
+    source, logs, cache, index = [output / name for name in ("source", "runtime", "model-cache", "index")]
+    for path in (source, logs, cache, index, source / ".zvec-grep", index / "locks"):
+        path.mkdir(parents=True, exist_ok=True)
+    (source / "probe.md").write_text("代码仓库问答：检索源代码并引用文件。 Repository code search finds source files.\n")
+    for args in (["init", "-q", str(source)], ["-C", str(source), "add", "probe.md"],
+                 ["-C", str(source), "-c", "user.name=Workspace QA", "-c", "user.email=benchmark@localhost",
+                  "-c", "gc.auto=0", "commit", "-qm", "Synthetic SDK connectivity fixture"]):
+        subprocess.run(["git", *args], check=True)
+    image = "zg-readonly-qa:0.2.2"
+    command = with_embedding_environment(docker_command(image, source, logs, cache, index=index), embedding_endpoint())
+    try:
+        run_named(command + [image, "node", "/opt/qa/embedding-probe.mjs"],
+                  "workspaceqa-sdk-probe", timeout=240, diagnostic_path=logs / "failure.json")
+        result = json.loads((logs / "result.json").read_text())
+        if result.get("status") != "completed" or result.get("vector_query_retrieved_fixture") is not True:
+            raise RuntimeError("zg SDK remote embedding probe did not complete")
+        print(json.dumps({"phase": "sdk_preflight", "status": "completed", "wall_seconds": result["wall_seconds"]}), flush=True)
+    finally:
+        for path in (source, cache, index):
+            shutil.rmtree(path)
 
 
 def embedding_preflight(output: Path):
@@ -74,8 +100,12 @@ def main():
             if not os.environ.get(name):
                 raise RuntimeError(f"Required GitHub Actions secret is missing: {name}")
         embedding_preflight(root / "embedding-preflight.json")
+        print(json.dumps({"phase": "sdk_preflight", "status": "starting"}), flush=True)
+        sdk_preflight(root / "sdk-preflight")
+        print(json.dumps({"phase": "dataset_preparation", "status": "starting"}), flush=True)
         subprocess.run([sys.executable, str(HERE / "dataset.py"), "--task-id", args.task_id,
                         "--output", str(preparation), "--upstream", str(args.upstream)], check=True)
+        print(json.dumps({"phase": "paired_trials", "status": "starting"}), flush=True)
         result = subprocess.run([sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),

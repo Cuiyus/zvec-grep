@@ -7,6 +7,8 @@ on:
       - 'benchmarks/workspace-qa/**'
       - '.github/actions/workspace-qa/**'
       - '.github/workflows/workspace-qa-qoder.yml'
+      - 'benchmarks/swe-qa-bench/scripts/**'
+      - 'benchmarks/swe-qa-bench/runtime/**'
   workflow_dispatch:
     inputs:
       scope:
@@ -37,6 +39,14 @@ jobs:
           python-version: '3.12'
       - name: Test dataset isolation, execution accounting, judge and reports
         run: python -m unittest discover -s benchmarks/workspace-qa/tests -v
+      - name: Test released SDK bridge and scoped remote authorization
+        env:
+          ZG_QA_AUTH_TEST_PACKAGE_DIR: ${{ runner.temp }}/zg-auth-package/package
+        run: |
+          mkdir -p "$RUNNER_TEMP/zg-auth-package"
+          npm pack @zvec/zvec-grep@0.2.2 --pack-destination "$RUNNER_TEMP/zg-auth-package" --silent
+          tar -xzf "$RUNNER_TEMP/zg-auth-package/"*.tgz -C "$RUNNER_TEMP/zg-auth-package"
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/remote-authorization.test.mjs
       - id: matrix
         name: Freeze matrix before any model results
         run: |

@@ -10,6 +10,7 @@ import {
   isWithin,
   loadProduction,
   sourceIdentity,
+  withBenchmarkRemoteEmbeddingAuthorization,
 } from "./readonly-search.mjs";
 
 async function exists(path) {
@@ -102,34 +103,39 @@ export async function prepareIndex(options, production) {
     try {
       // One completed production build. No custom chunks, paths, filters,
       // query hints, or reference answers are supplied to the indexing API.
-      report.result = await service.index({
-        root,
-        onProgress(progress) {
-          report.progress_events++;
-          report.last_progress = progress;
-          const current = performance.now();
-          const stage = `${progress.phase}:${progress.embedding?.stage ?? ""}`;
-          if (
-            stage === lastProgressStage &&
-            current - lastProgressAt < 1000 &&
-            progress.phase !== "done" &&
-            progress.embedding?.stage !== "warning"
-          )
-            return;
-          lastProgressAt = current;
-          lastProgressStage = stage;
-          report.progress_emitted++;
-          const event = {
-            event: "index-progress",
-            at: new Date().toISOString(),
-            ...progress,
-          };
-          (
-            options.onProgress ??
-            ((value) => process.stderr.write(`${JSON.stringify(value)}\n`))
-          )(event);
-        },
-      });
+      report.result = await withBenchmarkRemoteEmbeddingAuthorization(
+        { root, embeddingModel: options.embeddingModel },
+        production,
+        () =>
+          service.index({
+            root,
+            onProgress(progress) {
+              report.progress_events++;
+              report.last_progress = progress;
+              const current = performance.now();
+              const stage = `${progress.phase}:${progress.embedding?.stage ?? ""}`;
+              if (
+                stage === lastProgressStage &&
+                current - lastProgressAt < 1000 &&
+                progress.phase !== "done" &&
+                progress.embedding?.stage !== "warning"
+              )
+                return;
+              lastProgressAt = current;
+              lastProgressStage = stage;
+              report.progress_emitted++;
+              const event = {
+                event: "index-progress",
+                at: new Date().toISOString(),
+                ...progress,
+              };
+              (
+                options.onProgress ??
+                ((value) => process.stderr.write(`${JSON.stringify(value)}\n`))
+              )(event);
+            },
+          }),
+      );
     } finally {
       report.build_duration_ms = performance.now() - buildStarted;
     }

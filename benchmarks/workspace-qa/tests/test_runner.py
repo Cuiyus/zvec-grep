@@ -87,7 +87,8 @@ class RunnerTests(unittest.TestCase):
             endpoint = runner.embedding_endpoint()
             command = runner.with_embedding_environment(["docker", "run"], endpoint)
             self.assertEqual(command, ["docker", "run", "--env", "QWEN_API_KEY", "--env",
-                                       "ZVEC_GREP_ENDPOINT=https://proxy.example/v1/embeddings"])
+                                       "ZVEC_GREP_ENDPOINT=https://proxy.example/v1/embeddings", "--env",
+                                       "ZG_QA_ALLOW_REMOTE_EMBEDDING=1"])
         for invalid in ("", "file:///tmp/endpoint", "https://secret@example.com/embeddings", "https://example.com/?key=secret"):
             with patch.dict("os.environ", {"QWEN_EMBEDDING_ENDPOINT": invalid}):
                 with self.assertRaises(ValueError):
@@ -243,6 +244,7 @@ class RunnerTests(unittest.TestCase):
                     has_index = self.mounted(command, "/app/.zvec-grep") is not None
                     self.assertEqual("QWEN_API_KEY" in command, has_index)
                     self.assertEqual(any(x.startswith("ZVEC_GREP_ENDPOINT=") for x in command), has_index)
+                    self.assertEqual("ZG_QA_ALLOW_REMOTE_EMBEDDING=1" in command, has_index)
                 if "--embedding-model" in command:
                     self.assertEqual(command[command.index("--embedding-model") + 1], "qwen/qwen3.7-text-embedding")
 

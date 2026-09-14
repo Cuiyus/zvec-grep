@@ -45,11 +45,16 @@ Required Actions secrets:
   maps the existing workspace `GLM_API_KEY` to `QWEN_API_KEY` for the **same
   already-configured Model Studio workspace endpoint**. A bilingual embedding
   probe must return the requested 1024-dimensional model before corpus download.
+  A second probe uses released zg SDK document indexing and vector retrieval on
+  a small synthetic bilingual file. Both probes are setup, excluded from QA.
   A denied/unavailable model stops the job; it does not trigger model fallback.
 
 The endpoint is the existing `ZVEC_GREP_EMBEDDING_ENDPOINT` in
 `benchmarks/swe-qa-bench/zg_bench/settings.py`. Keys travel to Docker by environment
 variable name, never as command-line values. Baseline receives no embedding key.
+The remote-only benchmark path explicitly grants each SDK operation a temporary
+permit for the exact Qwen model and endpoint, corresponding to CLI `--allow-remote`.
+It does not persist authorization files or enable remote access in the old local protocol.
 Artifacts are scanned for all configured secret values before upload.
 
 ## Measurements and judgment

@@ -67,7 +67,8 @@ def embedding_endpoint() -> str:
 def with_embedding_environment(command: list[str], endpoint: str) -> list[str]:
     # Production config.ts reads ZVEC_GREP_ENDPOINT and QWEN_API_KEY. Docker
     # forwards only the named key; its value never enters argv or an artifact.
-    return command + ["--env", "QWEN_API_KEY", "--env", "ZVEC_GREP_ENDPOINT=" + endpoint]
+    return command + ["--env", "QWEN_API_KEY", "--env", "ZVEC_GREP_ENDPOINT=" + endpoint,
+                      "--env", "ZG_QA_ALLOW_REMOTE_EMBEDDING=1"]
 
 
 def identity_digest(files: dict[str, str]) -> str:
@@ -283,6 +284,7 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
                    "included_in_qa_tokens_or_toolcalls": False}
     write_json(logs / "preparation.json", preparation)
     started = time.monotonic()
+    print(json.dumps({"phase": "index_preparation", "status": "running"}), flush=True)
     try:
         command = with_embedding_environment(docker_command(args.image, source, logs, cache, index=index), endpoint)
         stdout = run_named(command + [args.image, "node", PREPARE_INDEX, "--root", "/app",
@@ -299,6 +301,8 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
         write_json(logs / "preparation.json", preparation)
         manifest["index_preparation"] = preparation
         write_json(output / "manifest.json", manifest)
+        print(json.dumps({"phase": "index_preparation", "status": preparation["status"],
+                          "wall_seconds": preparation["wall_seconds"]}), flush=True)
     if directory_identity(source, skip_git=True) != source_before:
         raise RuntimeError("Corpus changed during index preparation")
     seed_before = directory_identity(index)
@@ -308,13 +312,19 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
     preflight_index = working_index(index, working_root / "preflight")
     snapshot = prepared / "snapshot.json"
     command = with_embedding_environment(docker_command(args.image, source, logs, cache, index=preflight_index), endpoint)
+    preflight_started = time.monotonic()
+    preflight_status = "failed"
+    print(json.dumps({"phase": "index_preflight", "status": "running"}), flush=True)
     try:
         run_named(command + [args.image, "node", BRIDGE, "preflight", *query_flags,
                              "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"],
                   prefix + "-preflight", timeout=900, diagnostic_path=logs / "preflight-failure.json")
         shutil.copyfile(logs / "snapshot.json", snapshot)
+        preflight_status = "completed"
     finally:
         shutil.rmtree(preflight_index)
+        print(json.dumps({"phase": "index_preflight", "status": preflight_status,
+                          "wall_seconds": round(time.monotonic() - preflight_started, 3)}), flush=True)
     manifest.update(index_files=seed_before, source_snapshot_sha256=sha256(snapshot))
     write_json(output / "manifest.json", manifest)
     for trial in plan["trials"]:
@@ -344,6 +354,7 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
         command += [args.image, "python3", "/opt/qa/qa-session.py", "--spec", "/logs/session-spec.json"]
         trial["status"] = "running"
         write_json(output / "plan.json", plan)
+        print(json.dumps({"phase": "agent_trial", "trial_id": trial["trial_id"], "status": "running"}), flush=True)
         result = {**trial, "started_at": now(), "agent": SPEC.name, "agent_version": SPEC.version,
                   "model": MODEL, "candidate_output_path": None,
                   "provenance": {"manifest_path": "manifest.json", "source_git_commit": commit,
