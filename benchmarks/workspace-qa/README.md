@@ -29,6 +29,10 @@ Smoke observations are excluded from the formal report. Manual dispatch supports
 dispatch. Concurrency groups separate these scopes so a long formal run does
 not queue quick validation behind it. A push must still affect the workflow's
 listed experiment paths; an empty commit alone does not trigger it.
+Smoke also requires at least one successful zg search confirmed by both native
+Qoder and MCP traces. A terminal answer alone cannot establish that integration
+works. This gate applies only to smoke: formal trials remain valid observations
+when the agent chooses not to call zg, and those trials are not filtered out.
 
 Both arms use the same original question, read-only tools, 4 CPU/8 GiB container
 limits and 900-second agent limit. Balanced AB/BA ordering is frozen per task.
@@ -82,6 +86,15 @@ LongDA data files. The uniform cap and smaller task-3 smoke were chosen before
 any QA output or score was observed. All 10 formal tasks, including 127/128,
 remain selected. Failed setup attempts are excluded from formal QA statistics.
 
+Run [34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811)
+completed both task-3 answers and all judgments, but its only MCP query failed
+because Qoder removed the inherited embedding key. The old workflow incorrectly
+accepted terminal completion as successful integration. Those two observations
+are retained as diagnostics, **not a valid zg efficacy comparison**. Qoder's
+supported `${NAME}` MCP environment references now explicitly forward
+the three remote embedding variables without serializing their values. The
+smoke gate catches zero-success integration even when the model still answers.
+
 Required Actions secrets:
 
 - `QODER_PERSONAL_ACCESS_TOKEN`: Qoder native model access.
@@ -91,7 +104,10 @@ Required Actions secrets:
   already-configured Model Studio workspace endpoint**. A bilingual embedding
   probe must return the requested 1024-dimensional model before corpus download.
   A second probe uses released zg SDK document indexing and vector retrieval on
-  a small synthetic bilingual file. Both probes are setup, excluded from QA.
+  a small synthetic bilingual file. A third probe reuses that fixture through
+  the actual Qoder MCP subprocess and requires successful vector retrieval plus
+  observable native model usage before any large workspace download. These are
+  setup diagnostics, excluded from all benchmark trial counts and metrics.
   A denied/unavailable model stops the job; it does not trigger model fallback.
 
 The endpoint is the existing `ZVEC_GREP_EMBEDDING_ENDPOINT` in

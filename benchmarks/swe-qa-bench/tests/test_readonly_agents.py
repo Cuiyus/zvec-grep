@@ -6,11 +6,13 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from zg_bench.swe_qa.readonly_agents import (
     QODER_SEARCH_TOOL,
+    REMOTE_EMBEDDING_ENV_NAMES,
     agent_environment,
     agent_spec,
     build_agent_command,
@@ -107,6 +109,24 @@ class ReadonlyAgentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_agent_config(spec, zg=False, mcp_command=["node", "bridge"])
         self.assertEqual(build_agent_config(spec, zg=False)["mcpServers"], {})
+
+    def test_remote_mcp_environment_is_only_explicit_named_references_on_with_zg(self):
+        spec = agent_spec("qodercli", "qwen3.8-max")
+        with patch.dict(os.environ, {"QWEN_API_KEY": "must-never-enter-public-config"}):
+            cfg = build_agent_config(spec, zg=True, mcp_command=["node", "/bridge.mjs"],
+                                     mcp_env_names=REMOTE_EMBEDDING_ENV_NAMES)
+        self.assertEqual(cfg["mcpServers"]["zvec_grep"]["env"], {
+            name: "${" + name + "}" for name in REMOTE_EMBEDDING_ENV_NAMES})
+        self.assertNotIn("must-never-enter-public-config", json.dumps(cfg))
+        self.assertTrue(cfg["security"]["environmentVariableRedaction"]["enabled"])
+        local = build_agent_config(spec, zg=True, mcp_command=["node", "/bridge.mjs"])
+        self.assertNotIn("env", local["mcpServers"]["zvec_grep"])
+        self.assertEqual(build_agent_config(spec, zg=False)["mcpServers"], {})
+        with self.assertRaisesRegex(ValueError, "with-zg allowlist"):
+            build_agent_config(spec, zg=False, mcp_env_names=REMOTE_EMBEDDING_ENV_NAMES)
+        for names in (("QODER_PERSONAL_ACCESS_TOKEN",), ("QWEN_API_KEY=value",), ("QWEN_API_KEY",)):
+            with self.subTest(names=names), self.assertRaisesRegex(ValueError, "allowlist"):
+                build_agent_config(spec, zg=True, mcp_command=["node", "/bridge.mjs"], mcp_env_names=names)
 
     def test_qoder_unavailable_controls_are_not_claimed(self):
         spec = agent_spec("qodercli", "qwen3.8-max")

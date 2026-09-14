@@ -245,6 +245,13 @@ class RunnerTests(unittest.TestCase):
             rows = json.loads((args.output / "trial-results.json").read_text())["trials"]
             self.assertEqual(len(rows), 4)
             for row in rows:
+                config = json.loads((args.output / row["trial_id"] / "qoder.json").read_text())
+                if row["profile"] == "with-zg":
+                    self.assertEqual(config["mcpServers"]["zvec_grep"]["env"], {
+                        name: "${" + name + "}" for name in runner.REMOTE_EMBEDDING_ENV_NAMES})
+                else:
+                    self.assertEqual(config["mcpServers"], {})
+                self.assertNotIn("fake-embedding-secret", json.dumps(config))
                 candidate = args.output / row["candidate_output_path"]
                 self.assertEqual(candidate.read_text(), "最终完整报告")
                 self.assertFalse(candidate.is_relative_to(args.source_root))

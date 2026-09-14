@@ -14,6 +14,104 @@ import time
 from urllib import request, error
 
 HERE = Path(__file__).resolve().parent
+ZG_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"
+
+
+def _jsonl(path: Path) -> list[dict]:
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not all(isinstance(row, dict) for row in rows):
+        raise ValueError("Raw trace must contain JSON objects")
+    return rows
+
+
+def smoke_validation(runs: Path, phase: str) -> dict:
+    """Validate integration in smoke; formal trials never depend on choosing zg."""
+    result = {"schema_version": 1, "phase": phase, "status": "not_applicable" if phase == "batch" else "invalid",
+              "scope": "successful Qoder-to-zg MCP search in completed smoke candidates",
+              "trials": [], "verified_successful_searches": 0,
+              "preserves_all_trial_metrics_and_judgements": True}
+    if phase == "batch":
+        return result
+    if phase != "smoke":
+        raise ValueError("phase must be smoke or batch")
+    try:
+        ledger_path = runs / "trial-results.json"
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        result["trial_results_sha256"] = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
+        if not isinstance(ledger, dict) or not isinstance(ledger.get("trials"), list):
+            raise ValueError("Smoke ledger requires trials")
+        for trial in ledger["trials"]:
+            if trial.get("profile") != "with-zg" or trial.get("status") != "completed":
+                continue
+            trial_id = trial.get("trial_id")
+            if not isinstance(trial_id, str) or not trial_id or Path(trial_id).name != trial_id:
+                raise ValueError("Invalid smoke trial_id")
+            agent = (runs / trial_id / "agent").resolve()
+            if not agent.is_relative_to(runs.resolve()):
+                raise ValueError("Smoke trace path escapes runs")
+            native_path, bridge_path = agent / "qodercli-stream.jsonl", agent / "zg-trace.jsonl"
+            native, bridge = _jsonl(native_path), _jsonl(bridge_path)
+            calls, observations = set(), {}
+            for event in native:
+                message = event.get("message")
+                blocks = message.get("content", []) if isinstance(message, dict) else []
+                if not isinstance(blocks, list):
+                    continue
+                scope = (event.get("session_id"), event.get("parent_tool_use_id"))
+                for block in blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    if event.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("name") == ZG_SEARCH_TOOL:
+                        if not isinstance(block.get("id"), str) or not block["id"]:
+                            raise ValueError("Native zg call has no ID")
+                        calls.add((*scope, block["id"]))
+                    elif event.get("type") == "user" and block.get("type") == "tool_result":
+                        observations[(*scope, block.get("tool_use_id"))] = block.get("is_error") is not True
+            native_successes = sum(observations.get(call) is True for call in calls)
+            native_errors = sum(observations.get(call) is False for call in calls)
+            searches = [row for row in bridge if row.get("event") == "search" and row.get("origin") == "agent-mcp"]
+            bridge_successes = sum(row.get("status") == "success" for row in searches)
+            bridge_errors = sum(row.get("status") == "error" for row in searches)
+            measured = trial.get("zg_tool_calls_successful")
+            reconciles = type(measured) is int and measured == native_successes == bridge_successes
+            row = {"trial_id": trial_id, "measured_successes": measured, "native_successes": native_successes,
+                   "native_errors": native_errors, "bridge_successes": bridge_successes, "bridge_errors": bridge_errors,
+                   "success_counts_reconcile": reconciles,
+                   "native_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+                   "bridge_sha256": hashlib.sha256(bridge_path.read_bytes()).hexdigest()}
+            result["trials"].append(row)
+            if reconciles:
+                result["verified_successful_searches"] += native_successes
+        if result["trials"] and all(row["success_counts_reconcile"] for row in result["trials"]) and result["verified_successful_searches"] > 0:
+            result["status"] = "valid"
+        else:
+            result["reason"] = "Smoke requires at least one successful agent MCP search confirmed by both raw traces and metrics"
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        result.update(status="invalid", reason="Smoke search evidence is missing or invalid", error_type=type(exc).__name__)
+    return result
+
+
+def annotate_smoke_report(output: Path, validation: dict) -> None:
+    """Keep observations intact while separating their completeness from smoke validity."""
+    if validation["phase"] != "smoke":
+        return
+    summary_path, markdown_path = output / "summary.json", output / "summary.md"
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["smoke_validation"] = validation
+        summary["pipeline_validation_complete"] = validation["status"] == "valid" and summary.get("summary", {}).get("complete") is True
+        if not summary["pipeline_validation_complete"]:
+            summary["efficacy_claim_ready"] = False
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if markdown_path.is_file():
+        text = markdown_path.read_text(encoding="utf-8")
+        label = validation["status"].upper()
+        note = (f"**Smoke MCP validation: {label}.** Confirmed successful agent searches: {validation['verified_successful_searches']}. "
+                "Trial measurements and rubric scores below remain unchanged.\n\n")
+        if validation["status"] != "valid":
+            note += "**The integration smoke did not pass; these observations do not establish a working zg comparison.**\n\n"
+        text = text.replace("Coverage:", "Observation coverage:")
+        markdown_path.write_text(note + text, encoding="utf-8")
 
 
 def sdk_preflight(output: Path):
@@ -36,6 +134,8 @@ def sdk_preflight(output: Path):
         if result.get("status") != "completed" or result.get("vector_query_retrieved_fixture") is not True:
             raise RuntimeError("zg SDK remote embedding probe did not complete")
         print(json.dumps({"phase": "sdk_preflight", "status": "completed", "wall_seconds": result["wall_seconds"]}), flush=True)
+        from qoder_probe import qoder_mcp_preflight
+        qoder_mcp_preflight(source, output / "qoder", cache, index)
     finally:
         for path in (source, cache, index):
             shutil.rmtree(path)
@@ -73,13 +173,14 @@ def embedding_preflight(output: Path):
         output.write_text(json.dumps(result, indent=2) + "\n")
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task-id", required=True)
     p.add_argument("--repetitions", type=int, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--upstream", type=Path, required=True)
-    args = p.parse_args()
+    p.add_argument("--phase", choices=("smoke", "batch"), required=True)
+    args = p.parse_args(argv)
     lock = json.loads((HERE / "data/lock.json").read_text())
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     if args.repetitions < 1:
@@ -122,10 +223,15 @@ def main():
         if not (runs / "trial-results.json").exists():
             runs.mkdir(parents=True, exist_ok=True)
             collect_results(runs, plan)
+        validation = smoke_validation(runs, args.phase)
+        root.joinpath("smoke_validation.json").write_text(json.dumps(validation, ensure_ascii=False, indent=2) + "\n")
+        if validation["status"] == "invalid":
+            outcome = 1
         reported = subprocess.run([sys.executable, str(HERE / "report.py"), "--runs-dir", str(runs),
                                    "--manifest", str(root / "selection.json"), "--output", str(root / "report"), "--require-complete"])
         if reported.returncode:
             outcome = 1
+        annotate_smoke_report(root / "report", validation)
     return outcome
 
 

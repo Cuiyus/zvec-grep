@@ -23,6 +23,7 @@ QODER_VERSION = "1.1.45"
 OPENCODE_VERSION = "1.18.4"
 QODER_READ_TOOLS = ("Read", "Grep", "Glob")
 QODER_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"
+REMOTE_EMBEDDING_ENV_NAMES = ("QWEN_API_KEY", "ZVEC_GREP_ENDPOINT", "ZG_QA_ALLOW_REMOTE_EMBEDDING")
 QODER_DENY_TOOLS = (
     "Bash", "Edit", "Write", "NotebookEdit", "Agent", "Task", "Skill",
     "WebFetch", "WebSearch", "ImageGen", "ImageSearch", "Workflow",
@@ -110,6 +111,7 @@ def build_agent_config(
     *,
     zg: bool,
     mcp_command: list[str] | None = None,
+    mcp_env_names: tuple[str, ...] | None = None,
     max_model_turns: int = 30,
 ) -> dict[str, Any]:
     """Generate public configuration; the caller writes it outside the corpus."""
@@ -118,6 +120,10 @@ def build_agent_config(
         raise ValueError("zg integration requires the explicit read-only MCP command")
     if not zg and mcp_command:
         raise ValueError("Baseline must not receive an MCP command")
+    if mcp_env_names is not None and (
+        not zg or spec.name != "qodercli" or tuple(mcp_env_names) != REMOTE_EMBEDDING_ENV_NAMES
+    ):
+        raise ValueError("Remote MCP environment references require the exact Qoder with-zg allowlist")
     if spec.name == "opencode":
         config: dict[str, Any] = {
             "$schema": "https://opencode.ai/config.json", "model": spec.model,
@@ -158,6 +164,13 @@ def build_agent_config(
             "timeout": 600000, "includeTools": ["zvec_grep_search"],
             "alwaysAllow": ["zvec_grep_search"],
         }}
+        if mcp_env_names is not None:
+            # Qoder 1.1.45 sanitizes inherited stdio env, then expands these
+            # explicit references from its original process env. Never read or
+            # serialize credential values here; retain global env redaction.
+            config["mcpServers"]["zvec_grep"]["env"] = {
+                name: "${" + name + "}" for name in mcp_env_names
+            }
     return config
 
 

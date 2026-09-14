@@ -44,15 +44,22 @@ jobs:
         name: Select explicitly requested execution scope
         run: python benchmarks/workspace-qa/ci_plan.py --event-path "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
       - name: Test dataset isolation, execution accounting, judge and reports
-        run: python -m unittest discover -s benchmarks/workspace-qa/tests -v
+        run: |
+          python -m unittest discover -s benchmarks/workspace-qa/tests -v
+          PYTHONPATH=benchmarks/swe-qa-bench:benchmarks/swe-qa-bench/tests python -m unittest test_readonly_agents.ReadonlyAgentTests.test_remote_mcp_environment_is_only_explicit_named_references_on_with_zg -v
       - name: Test released SDK bridge and scoped remote authorization
         env:
           ZG_QA_AUTH_TEST_PACKAGE_DIR: ${{ runner.temp }}/zg-auth-package/package
+          QODER_MCP_TEST_BUNDLE: ${{ runner.temp }}/qoder-mcp-package/package/bundle/qodercli.js
         run: |
           mkdir -p "$RUNNER_TEMP/zg-auth-package"
           npm pack @zvec/zvec-grep@0.2.2 --pack-destination "$RUNNER_TEMP/zg-auth-package" --silent
           tar -xzf "$RUNNER_TEMP/zg-auth-package/"*.tgz -C "$RUNNER_TEMP/zg-auth-package"
           node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/remote-authorization.test.mjs
+          mkdir -p "$RUNNER_TEMP/qoder-mcp-package"
+          npm pack @qoder-ai/qodercli@1.1.45 --pack-destination "$RUNNER_TEMP/qoder-mcp-package" --silent
+          tar -xzf "$RUNNER_TEMP/qoder-mcp-package/"*.tgz -C "$RUNNER_TEMP/qoder-mcp-package"
+          node --test benchmarks/swe-qa-bench/scripts/qoder-mcp-environment.test.mjs
       - id: matrix
         name: Freeze matrix before any model results
         run: |

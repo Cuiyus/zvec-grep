@@ -33,8 +33,20 @@ runs:
     - name: Reserve disk for complete original persona workspace
       shell: bash
       run: |
-        # These are unused SDKs on an ephemeral hosted runner, not user files.
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        # Allow the largest selected corpus, Git snapshot, caches and build scratch.
+        # Avoid a minute of SDK deletion when the ephemeral runner already has room.
+        if python - <<'PY'
+        import os, shutil, sys
+        free = shutil.disk_usage(os.environ['RUNNER_TEMP']).free
+        print('Available disk bytes before cleanup:', free)
+        sys.exit(0 if free >= 48 * 1024**3 else 1)
+        PY
+        then
+          echo 'Disk budget already available; skipping unused SDK cleanup.'
+        else
+          # Unused preinstalled SDKs on this ephemeral runner, never user files.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        fi
         df -h "$RUNNER_TEMP"
     - uses: actions/checkout@v6
       with:
@@ -87,6 +99,7 @@ runs:
       env:
         TASK_ID: ${{ inputs.task-id }}
         REPETITIONS: ${{ inputs.repetitions }}
+        QA_PHASE: ${{ inputs.phase }}
         QODER_PERSONAL_ACCESS_TOKEN: ${{ inputs.qoder-token }}
         GLM_API_KEY: ${{ inputs.judge-key }}
         QWEN_API_KEY: ${{ inputs.embedding-key }}
@@ -95,7 +108,7 @@ runs:
         WORKSPACE_QA_INDEX_CACHE: ${{ steps.cache-plan.outputs.index_cache_path }}
       run: >-
         uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py
-        --task-id "$TASK_ID" --repetitions "$REPETITIONS"
+        --task-id "$TASK_ID" --repetitions "$REPETITIONS" --phase "$QA_PHASE"
         --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream"
         --output "$RUNNER_TEMP/workspace-qa"
     # Cache generations let a failed partial download grow on a later run.
@@ -191,8 +204,10 @@ runs:
         path: |
           ${{ runner.temp }}/workspace-qa/planned.json
           ${{ runner.temp }}/workspace-qa/setup-failure.json
+          ${{ runner.temp }}/workspace-qa/smoke_validation.json
           ${{ runner.temp }}/workspace-qa/embedding-preflight.json
           ${{ runner.temp }}/workspace-qa/sdk-preflight/runtime/
+          ${{ runner.temp }}/workspace-qa/sdk-preflight/qoder/
           ${{ runner.temp }}/workspace-qa/selection.json
           ${{ runner.temp }}/workspace-qa/dataset/dataset-manifest.json
           ${{ runner.temp }}/workspace-qa/dataset/range-cache-metrics.json

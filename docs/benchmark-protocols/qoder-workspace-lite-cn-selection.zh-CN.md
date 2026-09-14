@@ -147,6 +147,8 @@ CI 分为三个显式范围：普通提交仅做离线校验；提交信息带 `
 
 据此冻结全局 1 MiB 索引上限，并把 smoke 从 Research 的 128 改为工作区较小的 Backend Developer task 3，以尽早验证完整问答和评分流程。正式任务仍为原 10 题。1 MiB 等于 zg 的代码文件默认上限，同时收紧 data/text 类型；不是按已知答案选取文件。两个准备阶段失败的 smoke 不进入 200 次正式 rollout 统计，原日志和修订依据保留。
 
+随后 [CI 34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811) 完成两组回答和 judge，但原始日志显示唯一一次 zg MCP 查询因缺少 embedding key 而失败，成功检索为 0。此前只检查 agent 最终完成状态的 workflow 误判为成功；该次保留为集成诊断，不能当作有效 zg 收益比较。修复仅通过 MCP 配置中的 `${NAME}` 引用显式传递所需环境变量，不写入密钥值、不改变原题提示。新增下载前的微型真实 Qoder→MCP→远程向量检索探针，并要求 smoke 至少有一次 native 与 MCP 日志共同证实的成功检索。正式 batch 不强制调用 zg，也不筛除自主不使用 zg 的样本。
+
 固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
 
 先用 3 在两组各跑一次，验证认证、实际模型标识、只读边界、答案文件、原始 rubrics 的 judge 和四项指标完整可观测。这个烟测用于修复流程；正式集参数冻结后，每个 task 在 baseline 和 with_zg 各重复 10 次，共 200 次 rollout，烟测不混入正式统计。每次使用独立任务容器、session、home 和 workspace，固定相同资源限制；交错运行两组并记录顺序，避免服务时段差异与缓存成为单组特征。

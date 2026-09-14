@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "swe-qa-bench"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import seed_cache  # noqa: E402
 from zg_bench.swe_qa.readonly_agents import (  # noqa: E402
-    QODER_SEARCH_TOOL, agent_environment, agent_spec, build_agent_command,
+    QODER_SEARCH_TOOL, REMOTE_EMBEDDING_ENV_NAMES, agent_environment, agent_spec, build_agent_command,
     build_agent_config, control_manifest, convert_agent_trace, expected_tools,
     read_native_events,
 )
@@ -488,6 +488,7 @@ def _execute(args: argparse.Namespace, plan: dict[str, Any], source: Path, outpu
         config = trial_root / SPEC.config_filename
         mcp = ["node", BRIDGE, "serve", *query_flags, "--snapshot", "/run/qa/snapshot.json", "--log", "/logs/zg-trace.jsonl"]
         write_json(config, build_agent_config(SPEC, zg=zg, mcp_command=mcp if zg else None,
+                                             mcp_env_names=REMOTE_EMBEDDING_ENV_NAMES if zg else None,
                                              max_model_turns=limits["model_requests"]))
         trial_index = working_index(index, working_root / trial["trial_id"]) if zg else None
         before = directory_identity(trial_index) if zg else None
