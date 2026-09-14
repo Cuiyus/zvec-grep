@@ -205,7 +205,8 @@ def _query_fields(arguments: Any) -> list[dict[str, Any]]:
             if isinstance(text, str):
                 found.append({"text": text, "pointer": "/" + field + (f"/{index}" if index is not None else ""),
                               "mode": field if field in {"fts", "vector", "hybrid"} else None})
-    for index, route in enumerate(arguments.get("routes") or []):
+    routes = arguments.get("routes")
+    for index, route in enumerate(routes if isinstance(routes, list) else []):
         if isinstance(route, dict) and isinstance(route.get("query"), str):
             found.append({"text": route["query"], "pointer": f"/routes/{index}/query", "mode": route.get("mode")})
     return found

@@ -242,9 +242,20 @@ zg-bench diagnose <job-name>
 
 ## Query-aware read-only development benchmark
 
-The current [v5 protocol](../../docs/benchmark-protocols/readonly-qa-v5.zh-CN.md)
+The [v6 protocol](../../docs/benchmark-protocols/readonly-qa-v6.zh-CN.md) and
+[main workflow](../../.github/workflows/readonly-qa.yml) now make retrieval-only
+a diagnostic stage after a new E2E run. One current-run source/index/runtime
+bundle feeds all three agent/model groups, each with five baseline and five zg
+trials. The downstream job collects every query round and context, generates
+source-checked candidates with cross-group semantic reviews, freezes shared
+labels, replays complete requests five times, and joins the observations to
+actual E2E quality and costs. Unknown labels and failed trials remain explicit;
+annotation costs are separate. Standalone retrieval regression is deferred.
+The integration's first CI result is pending; offline checks are not new trials.
+
+The historical [v5 protocol](../../docs/benchmark-protocols/readonly-qa-v5.zh-CN.md)
 uses recorded complete requests as the main regression, plus the original question
-with a fixed hybrid default. The [v5 workflow](../../.github/workflows/readonly-qa-v5.yml)
+with a fixed hybrid default. The [manual-only v5 workflow](../../.github/workflows/readonly-qa-v5.yml)
 runs 65 searches by default; optional `include_mode_diagnostics` adds the
 FTS/vector/hybrid comparison for 240 searches in total. The three result groups
 are reported separately, without choosing the best mode as the benchmark score.

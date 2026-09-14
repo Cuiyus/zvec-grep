@@ -34,7 +34,8 @@ def _relative(path: Any) -> bool:
 
 def load_labels(path: Path, source_root: Path | None = None) -> dict[str, Any]:
     labels = json.loads(path.read_text(encoding="utf-8"))
-    if labels.get("schema_version") != 1 or not re.fullmatch(r"[0-9a-f]{40}", labels.get("repo", {}).get("commit", "")):
+    version = labels.get("schema_version")
+    if version not in {1, 2} or not re.fullmatch(r"[0-9a-f]{40}", labels.get("repo", {}).get("commit", "")):
         raise ValueError("Invalid query-label schema or pinned source commit")
     files = {f["path"]: f["sha256"] for f in labels["source_files"]}
     for filename, expected in files.items():
@@ -54,8 +55,8 @@ def load_labels(path: Path, source_root: Path | None = None) -> dict[str, Any]:
             if "".join(lines[e["start_line"] - 1:e["end_line"]]) != e["text"]:
                 raise ValueError("Source evidence text differs from frozen source")
     facts = {f["fact_id"] for f in labels["task_facts"]}
-    if len(facts) != 3 or any(not set(f["evidence_ids"]) <= evidence_ids for f in labels["task_facts"]):
-        raise ValueError("Expected three source-backed task facts")
+    if (version == 1 and len(facts) != 3) or any(not set(f["evidence_ids"]) <= evidence_ids for f in labels["task_facts"]):
+        raise ValueError("Invalid source-backed task facts" if version == 2 else "Expected three source-backed task facts")
     targets: set[str] = set()
     for t in labels["targets"]:
         if t["target_id"] in targets or t["path"] not in files or t["level"] not in {"class", "function"}:
@@ -64,7 +65,7 @@ def load_labels(path: Path, source_root: Path | None = None) -> dict[str, Any]:
         if not set(t["task_fact_ids"]) <= facts or not t["task_fact_ids"]:
             raise ValueError("Query target must connect to a task fact")
         definition = t["definition"]
-        prefix = "class " if t["level"] == "class" else "def "
+        prefix = "class " if t["level"] == "class" else ("async def " if definition.strip().startswith("async def ") else "def ")
         if (len(definition.splitlines()) != 1 or not definition.strip().startswith(prefix + t["symbol"].split(".")[-1])
                 or digest(definition) != t["definition_sha256"]
                 or not 1 <= t["entry_start_line"] <= t["definition_line"] <= t["entry_end_line"]):
@@ -76,7 +77,7 @@ def load_labels(path: Path, source_root: Path | None = None) -> dict[str, Any]:
     query_ids: set[str] = set()
     texts: set[str] = set()
     for q in labels["queries"]:
-        if (not isinstance(q["text"], str) or not q["text"] or q["text"] in texts or q["query_id"] in query_ids
+        if (not isinstance(q["text"], str) or not q["text"] or (version == 1 and q["text"] in texts) or q["query_id"] in query_ids
                 or q["classification"] not in CLASSIFICATIONS):
             raise ValueError("Invalid or duplicate query label")
         query_ids.add(q["query_id"])
@@ -84,13 +85,22 @@ def load_labels(path: Path, source_root: Path | None = None) -> dict[str, Any]:
         accepted, bridges = set(q["accepted_target_ids"]), set(q["bridge_target_ids"])
         if not (accepted | bridges) <= targets or accepted & bridges:
             raise ValueError("Invalid or overlapping query target roles")
-        if q["classification"] in SCORABLE and not accepted:
+        if version == 2 and (q.get("annotation_status") not in {"reviewed", "unknown"} or not isinstance(q.get("context_id"), str)):
+            raise ValueError("Context labels require explicit review status and context")
+        if q["classification"] in SCORABLE and q.get("annotation_status", "reviewed") == "reviewed" and not accepted:
             raise ValueError("Scorable query requires an accepted OR target")
         if not set(q["task_fact_ids"]) <= facts:
             raise ValueError("Unknown task fact")
     bindings: set[str] = set()
     for b in labels.get("request_bindings", []):
         key = canonical_request_key(b["request"])
+        if version == 2:
+            if not isinstance(b.get("context_id"), str):
+                raise ValueError("Context binding requires context_id")
+            key += "\n" + b["context_id"]
+            bound = next((q for q in labels["queries"] if q["query_id"] == b["query_id"]), None)
+            if bound is None or bound["context_id"] != b["context_id"]:
+                raise ValueError("Binding context differs from label")
         if key in bindings or b["query_id"] not in query_ids:
             raise ValueError("Duplicate request binding or unknown label")
         bindings.add(key)
@@ -112,8 +122,22 @@ def _request_texts(request: dict[str, Any]) -> list[str]:
 
 
 def resolve_label(labels: dict[str, Any], *, query: str | None = None,
-                  request: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
+                  request: dict[str, Any] | None = None, context_id: str | None = None) -> tuple[dict[str, Any] | None, str]:
     """Explicit query selects controlled-text view; request-only selects faithful view."""
+    if labels.get("schema_version") == 2:
+        candidates = []
+        if isinstance(request, dict):
+            key = canonical_request_key(request)
+            ids = {b["query_id"] for b in labels.get("request_bindings", [])
+                   if canonical_request_key(b["request"]) == key
+                   and (context_id is None or b["context_id"] == context_id)}
+            candidates = [q for q in labels["queries"] if q["query_id"] in ids]
+        elif isinstance(query, str):
+            candidates = [q for q in labels["queries"] if q["text"] == query
+                          and (context_id is None or q["context_id"] == context_id)]
+        if len(candidates) == 1:
+            return candidates[0], "exact_request_context" if request is not None else "exact_text_context"
+        return None, "ambiguous_context" if candidates else "unknown_request_context"
     by_text = {q["text"]: q for q in labels["queries"]}
     if query is not None:
         if not isinstance(query, str):
@@ -155,7 +179,7 @@ def _role_metrics(matches: list[dict[str, Any]], target_ids: list[str], known: b
 
 def score_query_text(public_text: str, labels: dict[str, Any], task_entries: dict[str, Any], *,
                      query: str | None = None, request: dict[str, Any] | None = None,
-                     budget: int | None = None) -> dict[str, Any]:
+                     budget: int | None = None, context_id: str | None = None) -> dict[str, Any]:
     """Score only frozen positive targets; never infer new query intent from results.
 
     Use query= for normalized controlled text replay, request= alone for a faithful
@@ -169,12 +193,12 @@ def score_query_text(public_text: str, labels: dict[str, Any], task_entries: dic
     if labels["repo"] != task_entries["repo"]:
         raise ValueError("Task and query labels must use the same pinned repository")
     task_score = _native_score(public_text, task_entries, budget)
-    label, method = resolve_label(labels, query=query, request=request)
+    label, method = resolve_label(labels, query=query, request=request, context_id=context_id)
     view = {"protocol": {"limit": 10}, "targets": [dict(t, primary=True) for t in labels["targets"]], "groups": []}
     observations = _native_score(public_text, view, budget)
     matches = observations.get("matches") or []
     known_format = observations["status"] == "scored"
-    known_goal = label is not None and label["classification"] in SCORABLE
+    known_goal = label is not None and label["classification"] in SCORABLE and label.get("annotation_status", "reviewed") == "reviewed"
     accepted = label["accepted_target_ids"] if label else []
     bridges = label["bridge_target_ids"] if label else []
     matched_ranks = {m["rank"] for m in matches if m["target_id"] in accepted + bridges} if known_goal else set()
@@ -195,6 +219,9 @@ def score_query_text(public_text: str, labels: dict[str, Any], task_entries: dic
                  "native_bytes": observations.get("native_bytes"), "visible_bytes": observations.get("visible_bytes"),
                  "public_text_sha256": observations.get("public_text_sha256"),
                  "ranking_view": observations["ranking_view"]}
+    if labels.get("schema_version") == 2:
+        relevance.update(annotation_status=label.get("annotation_status", "unknown") if label else "unknown",
+                         context_id=label.get("context_id") if label else context_id)
     if not known_goal:
         relevance["reason"] = "No reviewed scorable query intent; task-level entry observations remain separate."
     if not known_format:

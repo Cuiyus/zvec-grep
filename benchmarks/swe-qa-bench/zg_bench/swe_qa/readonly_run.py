@@ -242,6 +242,12 @@ def wire_contract(agent_dir: Path, model: str, expected: list[str]) -> dict[str,
 def execute_experiment(args: argparse.Namespace) -> int:
     case = json.loads(args.case.read_text())
     controlled = getattr(args, "controlled", False)
+    e2e_only = getattr(args, "e2e_only", False)
+    prepared_option = getattr(args, "prepared_dir", None)
+    if prepared_option and (not controlled or not e2e_only or getattr(args, "seed_dir", None)):
+        raise ValueError("--prepared-dir requires --controlled --e2e-only and cannot be combined with --seed-dir")
+    if e2e_only and not controlled:
+        raise ValueError("--e2e-only requires the controlled agent protocol")
     agent_name = getattr(args, "agent", "opencode")
     spec = None
     limits = {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": args.timeout}
@@ -261,6 +267,8 @@ def execute_experiment(args: argparse.Namespace) -> int:
                     intent="single-case development experiment; no population-level efficacy inference")
         for trial in plan["trials"]:
             trial.update(agent=spec.name, model=spec.model, block_id=trial["repetition"])
+    if e2e_only:
+        plan.update(protocol="readonly-qa-v6", e2e_only=True, retrieval_probes_before_e2e=0)
     write_json(output / "plan.json", plan)
     retrieval_output = output / "retrieval"
     retrieval_output.mkdir()
@@ -277,9 +285,15 @@ def execute_experiment(args: argparse.Namespace) -> int:
     prepared = output / "preparation"
     prepared.mkdir()
     source = prepared / "source"
-    run_checked(["git", "init", str(source)])
-    run_checked(["git", "-C", str(source), "fetch", "--depth=1", case["repo"]["url"], case["repo"]["commit"]])
-    run_checked(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
+    shared_preparation = None
+    if prepared_option:
+        from .pipeline_runtime import copy_prepared, verify_prepared_semantics, validate_prepared, PREPARED_MANIFEST
+        shared_preparation = copy_prepared(prepared_option.resolve(), prepared, args.case,
+            run_id=os.environ.get("GITHUB_RUN_ID"), commit=os.environ.get("GITHUB_SHA"))
+    else:
+        run_checked(["git", "init", str(source)])
+        run_checked(["git", "-C", str(source), "fetch", "--depth=1", case["repo"]["url"], case["repo"]["commit"]])
+        run_checked(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
     if run_checked(["git", "-C", str(source), "rev-parse", "HEAD"]) != case["repo"]["commit"]:
         raise RuntimeError("Checked out commit does not match case")
     entries_path = getattr(args, "entries", None)
@@ -296,11 +310,17 @@ def execute_experiment(args: argparse.Namespace) -> int:
     source_before = directory_identity(source, skip_git=True)
     model_cache = prepared / "model-cache"
     preparation_logs = prepared / "runtime"
-    preparation = {"mode": "existing_seed" if seed else "build_once", "started_at": datetime.now(UTC).isoformat(),
+    preparation = {"mode": "same_run_prepared" if shared_preparation else "existing_seed" if seed else "build_once", "started_at": datetime.now(UTC).isoformat(),
                    "included_in_qa_tokens_or_toolcalls": False, "cross_ci_cache": False, "status": "running"}
     write_json(preparation_logs / "preparation.json", preparation)
     preparation_start = time.monotonic()
-    if seed:
+    if shared_preparation:
+        seed = index
+        seed_identity = {"format_version": 2, "repo_commit": case["repo"]["commit"],
+            "embedding_model": EMBEDDING, "workdir": "/app", "zvec_grep_package": PACKAGE,
+            "origin": "shared_preparation_from_this_ci_run",
+            "prepared_manifest_sha256": sha256(prepared / PREPARED_MANIFEST)}
+    elif seed:
         shutil.copytree(seed, index, symlinks=True)
     else:
         index.mkdir()
@@ -340,13 +360,18 @@ def execute_experiment(args: argparse.Namespace) -> int:
     seed_before = directory_identity(seed)
     working_root = prepared / "working-indexes"
     snapshot = prepared / "snapshot.json"
-    preflight_index = working_index(index, working_root / "preflight")
-    base = docker_command(args.image, source, preparation_logs, model_cache, index=preflight_index)
     query_flags = ["--root", "/app", "--package-dir", PACKAGE_DIR, "--embedding-model", EMBEDDING,
                    "--model-cache-dir", "/models", "--working-copy"]
-    run_checked(base + [args.image, "node", BRIDGE, "preflight", *query_flags,
-                        "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"], timeout=900,
-                diagnostic_path=preparation_logs / "preflight-failure.json")
+    if shared_preparation:
+        verify_prepared_semantics(prepared, image=args.image, logs=prepared / "consumer-verification",
+                                  working=working_root / "preflight")
+        validate_prepared(prepared, args.case, run_id=os.environ.get("GITHUB_RUN_ID"), commit=os.environ.get("GITHUB_SHA"))
+    else:
+        preflight_index = working_index(index, working_root / "preflight")
+        base = docker_command(args.image, source, preparation_logs, model_cache, index=preflight_index)
+        run_checked(base + [args.image, "node", BRIDGE, "preflight", *query_flags,
+                            "--snapshot", "/logs/snapshot.json", "--log", "/logs/preflight.jsonl"], timeout=900,
+                    diagnostic_path=preparation_logs / "preflight-failure.json")
     shutil.copyfile(preparation_logs / "snapshot.json", snapshot)
     image_identity = json.loads(run_checked(["docker", "image", "inspect", args.image]))[0]
     manifest = {"protocol": "readonly-qa-v2", "created_at": datetime.now(UTC).isoformat(),
@@ -368,6 +393,10 @@ def execute_experiment(args: argparse.Namespace) -> int:
                         tool_instruction_policy="Exact registered tool identifiers listed equally for both arms; no forced tool or query strategy.")
         manifest["ci_identity"] = {key: os.environ.get(key) for key in
             ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")}
+    if e2e_only:
+        manifest.update(protocol="readonly-qa-v6", e2e_only=True, retrieval_probes_before_e2e=0,
+            prepared_manifest_sha256=sha256(prepared / PREPARED_MANIFEST) if shared_preparation else None,
+            prepared_snapshot_sha256=sha256(snapshot))
     write_json(output / "manifest.json", manifest)
     query_plan = [{"query_id": "original", "text": case["question"]}]
     if entries_path:
@@ -376,7 +405,7 @@ def execute_experiment(args: argparse.Namespace) -> int:
         write_json(output / "entries.json", entries)
         write_json(output / "manifest.json", manifest)
     retrieval_failures = []
-    for query, mode in [(query, mode) for query in query_plan for mode in ("fts", "vector", "hybrid")]:
+    for query, mode in ([] if e2e_only else [(query, mode) for query in query_plan for mode in ("fts", "vector", "hybrid")]):
         query_id = query["query_id"]
         prefix = mode if not entries_path else query_id + "-" + mode
         retrieval_index = working_index(index, working_root / f"retrieval-{prefix}")
@@ -400,6 +429,7 @@ def execute_experiment(args: argparse.Namespace) -> int:
         if directory_identity(source, skip_git=True) != source_before or directory_identity(index) != index_before or directory_identity(seed) != seed_before:
             raise RuntimeError("Corpus/original index integrity failure; remaining planned trials retained")
     manifest["embedding_weight_files_after_retrieval"] = directory_identity(model_cache)
+    manifest["embedding_weight_files_before_e2e"] = directory_identity(model_cache)
     manifest["retrieval_failures"] = retrieval_failures
     write_json(output / "manifest.json", manifest)
     # No source hints or human gold are added to the natural QA prompt.
@@ -529,11 +559,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=Path, required=True)
     parser.add_argument("--seed-dir", type=Path, help="Optional existing seed; omitted by CI to prepare a new index once per experiment")
+    parser.add_argument("--prepared-dir", type=Path, help="This CI run's portable source/index/cache/snapshot bundle; verified before use")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--model", choices=["custom-openai/glm-5.2", "custom-openai/qwen3.8-max"], default="custom-openai/glm-5.2")
     parser.add_argument("--agent", choices=["opencode", "qodercli"], default="opencode")
     parser.add_argument("--controlled", action="store_true", help="Use v3 native contracts, visible tool identifiers, observed budgets and provider tracing")
+    parser.add_argument("--e2e-only", action="store_true", help="Run only five paired E2E trials; skip all pre-E2E retrieval probes")
     parser.add_argument("--entries", type=Path, help="Frozen entry/query manifest; original question remains the E2E task")
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--order-seed", type=int, default=1729)

@@ -150,9 +150,10 @@ def score_output(text: str, texts: list[str], labels: dict, entries: dict) -> di
                        for query in texts]}
 
 
-def score_request(text: str, request: dict, labels: dict, entries: dict) -> dict:
+def score_request(text: str, request: dict, labels: dict, entries: dict, *, context_id: str | None = None) -> dict:
     from .query_relevance import score_query_text
-    return {"native": _entry_ranking_score(score_query_text(text, labels, entries, request=request))}
+    options = {"context_id": context_id} if context_id is not None else {}
+    return {"native": _entry_ranking_score(score_query_text(text, labels, entries, request=request, **options))}
 
 
 def observed_scores(analysis: dict, labels: dict, entries: dict) -> list[dict]:
@@ -187,7 +188,8 @@ def observed_scores(analysis: dict, labels: dict, entries: dict) -> list[dict]:
 def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapshot: dict) -> dict:
     rows = []
     for unit in plan["units"]:
-        directory = root / unit["unit_id"]
+        execution_id = unit.get("execution_unit_id", unit["unit_id"])
+        directory = root / execution_id
         parse_errors = []
         try:
             status = json.loads((directory / "status.json").read_text())
@@ -226,7 +228,7 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
             error = None
             if not integrity_ok: error = "unit_execution_or_integrity_incomplete"
             elif event is None: error = "missing_or_duplicate_repetition"
-            elif event.get("unit_id") != unit["unit_id"] or event.get("status") != "success": error = "query_execution_failed"
+            elif event.get("unit_id") != execution_id or event.get("status") != "success": error = "query_execution_failed"
             elif event.get("request") != unit["request"]: error = "executed_request_differs_from_frozen_plan"
             elif event.get("source_identity", {}).get("sha256") != snapshot["source"]["sha256"]: error = "source_identity_mismatch"
             elif event.get("index_identity", {}).get("documents", {}).get("sha256") != snapshot["index"]["documents"]["sha256"]: error = "index_identity_mismatch"
@@ -242,9 +244,16 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
                              "output_sha256": event.get("text_sha256") if event and not error else None,
                              "request_scores": score_request(event["text"], unit["request"], labels, entries) if not error and unit["kind"] == "faithful" else None,
                              "scores": score_output(event["text"], unit["query_texts"], labels, entries) if not error else None})
+            if "annotations" in unit:
+                repeated[-1]["context_scores"] = [{"annotation_id": annotation["annotation_id"],
+                    "context_id": annotation["context_id"], "occurrences": annotation.get("occurrences", []),
+                    "request_scores": score_request(event["text"], unit["request"], labels, entries,
+                                            context_id=annotation["context_id"]) if not error else None}
+                    for annotation in unit["annotations"]]
         known = [r for r in repeated if r["status"] == "scored"]
         latencies = [r["duration_ms"] for r in known if isinstance(r["duration_ms"], (int, float))]
         rows.append({"unit_id": unit["unit_id"], "kind": unit["kind"], "mode": unit["mode"],
+                     **({"execution_unit_id": execution_id} if "execution_unit_id" in unit else {}),
                      "query_texts": unit["query_texts"], "request": unit["request"],
                      "occurrences": unit["occurrences"],
                      "occurrence_count": len(unit["occurrences"]), "quality_observation": repeated[0],
@@ -260,7 +269,8 @@ def evaluate_replays(plan: dict, root: Path, labels: dict, entries: dict, snapsh
                 "include_mode_diagnostics": plan["include_mode_diagnostics"],
                 "comparison_policy": plan["comparison_policy"]} if "report_groups" in plan else {}),
             "planned_executions": plan["planned_executions"],
-            "scored_executions": sum(r["status"] == "scored" for u in rows for r in u["repeats"]),
+            "scored_executions": sum(r["status"] == "scored" for u in rows
+                                     if u.get("execution_unit_id", u["unit_id"]) == u["unit_id"] for r in u["repeats"]),
             "units": rows, "scope": "Repeated fixed queries estimate retrieval variation, not new agent behavior samples."}
 
 

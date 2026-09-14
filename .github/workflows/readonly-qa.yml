@@ -1,4 +1,4 @@
-name: Read-only QA evidence benchmark
+name: Read-only QA E2E and retrieval diagnosis v6
 
 on:
   push:
@@ -10,17 +10,93 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: readonly-qa-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CASE_ID: reflex-6
+  ZG_PACKAGE: "@zvec/zvec-grep@0.2.2"
+  TRIALS_PER_PROFILE: "5"
+
 jobs:
-  evidence:
-    # Retrieval-analysis changes can run the separate offline/replay workflow
-    # without replacing any of the thirty recorded model trials.
+  prepare:
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[retrieval-only]')
-    name: ${{ matrix.id }}
+    name: Validate and prepare one shared corpus, index and runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      bundle_name: ${{ steps.bundle.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install locked benchmark environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Verify analysis, source labels, replay and runtime contracts offline
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs benchmarks/swe-qa-bench/scripts/replay-search.test.mjs
+      - name: Build pinned zg 0.2.2, OpenCode and Qoder runtime
+        run: >-
+          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
+          --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Verify real OpenCode requests offline before calling a paid model
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,source="$PWD/benchmarks/swe-qa-bench",target=/qa,readonly
+          --env PYTHONPATH=/qa:/qa/tests
+          --env OPENCODE_READONLY_TEST_BINARY=/opt/qa/node_modules/.bin/opencode
+          zg-readonly-qa:0.2.2 python3 -m unittest -v
+          test_readonly_agents.OpenCodeRequestContractTests
+          test_query_ground_truth.OpenCodeAnnotationPacketContractTests
+      - name: Build this run's immutable source and index snapshot without retrieval probes
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_runtime prepare
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --output "$RUNNER_TEMP/prepared"
+          --image zg-readonly-qa:0.2.2
+          --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+      - name: Preserve the exact runtime and prepared files for every downstream job
+        id: bundle
+        run: |
+          set -euo pipefail
+          docker save zg-readonly-qa:0.2.2 | gzip -1 > "$RUNNER_TEMP/runtime-image.tar.gz"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/prepared.tar.gz" prepared
+          echo "name=readonly-qa-v6-prepared-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload current-run runtime and index bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: |
+            ${{ runner.temp }}/runtime-image.tar.gz
+            ${{ runner.temp }}/prepared.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve preparation diagnostics if an offline gate or index build fails
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: readonly-qa-v6-prepare-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prepared/runtime/
+          if-no-files-found: warn
+          retention-days: 30
+
+  evidence:
+    needs: prepare
+    name: E2E / ${{ matrix.id }} / five baseline and five zg
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -37,10 +113,6 @@ jobs:
           - id: qoder-qwen38max
             agent: qodercli
             model: custom-openai/qwen3.8-max
-    env:
-      CASE_ID: reflex-6
-      ZG_PACKAGE: "@zvec/zvec-grep@0.2.2"
-      TRIALS_PER_PROFILE: "5"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -52,24 +124,15 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Test analysis, runner, judge and source annotations
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.prepare.outputs.bundle_name }}
+          path: ${{ runner.temp }}/bundle
+      - name: Load this run's exact image and prepared snapshot
         run: |
-          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
-          node --test benchmarks/swe-qa-bench/scripts/readonly-search.test.mjs benchmarks/swe-qa-bench/scripts/prepare-index.test.mjs
-      - name: Build pinned zg 0.2.2, OpenCode and Qoder runtime
-        run: >-
-          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
-          --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
-          -t zg-readonly-qa:0.2.2 benchmarks/swe-qa-bench
-      - name: Verify real OpenCode requests offline before calling a paid model
-        run: >-
-          docker run --rm --network none
-          --mount type=bind,source="$PWD/benchmarks/swe-qa-bench",target=/qa,readonly
-          --env PYTHONPATH=/qa:/qa/tests
-          --env OPENCODE_READONLY_TEST_BINARY=/opt/qa/node_modules/.bin/opencode
-          zg-readonly-qa:0.2.2 python3 -m unittest -v
-          test_readonly_agents.OpenCodeRequestContractTests
-      - name: Fresh index, 45 retrieval probes, five paired baseline and zg sessions
+          docker load -i "$RUNNER_TEMP/bundle/runtime-image.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/bundle/prepared.tar.gz"
+      - name: Run five paired E2E trials using the shared current-run index
         id: benchmark
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -79,7 +142,8 @@ jobs:
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
           --output "$RUNNER_TEMP/readonly-qa"
           --image zg-readonly-qa:0.2.2 --model "${{ matrix.model }}"
-          --controlled --agent "${{ matrix.agent }}"
+          --controlled --e2e-only --prepared-dir "$RUNNER_TEMP/prepared"
+          --agent "${{ matrix.agent }}"
           --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
           --repetitions "$TRIALS_PER_PROFILE" --order-seed 1729
       - name: Calibrate two judges and blindly review every available final answer
@@ -92,10 +156,9 @@ jobs:
           --case benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json
           --output "$RUNNER_TEMP/readonly-qa/quality-review.json"
           --expected-per-profile "$TRIALS_PER_PROFILE"
-      - name: Attribute QA costs and failures while retaining all ten planned sessions
+      - name: Attribute costs and failures for all ten planned sessions
         if: always() && steps.benchmark.outcome != 'skipped'
         run: |
-          mkdir -p "$RUNNER_TEMP/readonly-qa"
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.e2e_analysis analyze \
             --runs-dir "$RUNNER_TEMP/readonly-qa" \
             --case benchmarks/swe-qa-bench/cases/reflex-6.json \
@@ -105,51 +168,147 @@ jobs:
           if [ -f "$RUNNER_TEMP/readonly-qa/quality-review.md" ]; then
             cat "$RUNNER_TEMP/readonly-qa/quality-review.md" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Score visible retrieval entries, output budgets and repeat stability
-        if: always() && steps.benchmark.outcome != 'skipped'
-        run: |
-          source_args=()
-          if [ -d "$RUNNER_TEMP/readonly-qa/preparation/source/reflex" ]; then
-            source_args=(--source-root "$RUNNER_TEMP/readonly-qa/preparation/source")
-          fi
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.retrieval_eval \
-            --events "$RUNNER_TEMP/readonly-qa/retrieval/events.jsonl" \
-            --manifest benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
-            "${source_args[@]}" --output "$RUNNER_TEMP/readonly-qa/entry-report.json"
-          cat "$RUNNER_TEMP/readonly-qa/entry-report.md" >> "$GITHUB_STEP_SUMMARY"
-      - name: Check artifacts contain no credential values
+      - name: Check evidence contains no credential values
         id: secret-scan
-        if: always()
+        if: always() && steps.benchmark.outcome != 'skipped'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          secrets = [os.environ[k].encode() for k in ('GLM_API_KEY', 'QODER_PERSONAL_ACCESS_TOKEN') if os.environ.get(k)]
-          root = Path(os.environ['RUNNER_TEMP']) / 'readonly-qa'
-          if secrets and root.exists():
-              for path in root.rglob('*'):
-                  if path.is_file() and not path.is_symlink():
-                      tail = b''
-                      with path.open('rb') as source:
-                          while block := source.read(1024 * 1024):
-                              chunk = tail + block
-                              if any(secret in chunk for secret in secrets):
-                                  raise SystemExit('Credential detected in artifact; upload blocked')
-                              tail = chunk[-max(len(secret)-1 for secret in secrets):]
-          PY
-      - name: Upload evidence and reproducibility manifest
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/readonly-qa"
+      - name: Upload all planned E2E sessions and their measurement status
         if: always() && steps.secret-scan.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: readonly-qa-v3-0.2.2-reflex-6-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: readonly-qa-v6-e2e-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/readonly-qa/*.json
             ${{ runner.temp }}/readonly-qa/*.md
             ${{ runner.temp }}/readonly-qa/reflex-6-*/
-            ${{ runner.temp }}/readonly-qa/retrieval/
             ${{ runner.temp }}/readonly-qa/preparation/runtime/
-          if-no-files-found: warn
+            ${{ runner.temp }}/readonly-qa/preparation/consumer-verification/
+          if-no-files-found: error
+          retention-days: 90
+
+  diagnosis:
+    needs: [prepare, evidence]
+    if: always() && needs.prepare.result == 'success' && !cancelled()
+    name: All queries, shared GroundTruth, retrieval replay and joint report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.prepare.outputs.bundle_name }}
+          path: ${{ runner.temp }}/bundle
+      - name: Load the same image and index snapshot used by E2E
+        run: |
+          docker load -i "$RUNNER_TEMP/bundle/runtime-image.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/bundle/prepared.tar.gz"
+      - name: Download all E2E evidence from this workflow run
+        uses: actions/download-artifact@v5
+        with:
+          pattern: readonly-qa-v6-e2e-*-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/downloaded-e2e
+      - name: Reject stale or duplicate groups and retain every planned trial
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts assemble
+          --downloaded "$RUNNER_TEMP/downloaded-e2e" --output "$RUNNER_TEMP/recorded-qa"
+          --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+      - name: Validate every group's source, index, runtime and planned trials before annotation
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_runtime validate
+          --recorded-runs "$RUNNER_TEMP/recorded-qa"
+          --prepared-dir "$RUNNER_TEMP/prepared"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+      - name: Collect the original question, all query rounds and prior feedback
+        id: collect
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_trajectory
+          --runs-dir "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --output "$RUNNER_TEMP/diagnostic/query-analysis.json"
+      - name: Generate independent candidate labels and source-backed cross reviews
+        id: ground-truth
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.query_ground_truth
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --source-root "$RUNNER_TEMP/prepared/source"
+          --image zg-readonly-qa:0.2.2
+          --output "$RUNNER_TEMP/diagnostic/ground-truth"
+      - name: Replay complete real requests and the fixed original question five times
+        id: replay
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_runtime replay
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --recorded-runs "$RUNNER_TEMP/recorded-qa"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --labels "$RUNNER_TEMP/diagnostic/ground-truth/query-intents.json"
+          --prepared-dir "$RUNNER_TEMP/prepared"
+          --output "$RUNNER_TEMP/diagnostic/retrieval"
+          --image zg-readonly-qa:0.2.2
+          --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+      - name: Join query variation, actual observed evidence, later actions and E2E outcomes
+        if: always() && steps.collect.outcome == 'success'
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.joint_report
+          --runs-dir "$RUNNER_TEMP/recorded-qa"
+          --analysis "$RUNNER_TEMP/diagnostic/query-analysis.json"
+          --replay-dir "$RUNNER_TEMP/diagnostic/retrieval"
+          --labels "$RUNNER_TEMP/diagnostic/ground-truth/query-intents.json"
+          --annotation-dir "$RUNNER_TEMP/diagnostic/ground-truth"
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --output "$RUNNER_TEMP/diagnostic/joint-report.json"
+      - name: Show complete or partial diagnosis without hiding failed stages
+        if: always()
+        run: |
+          for report in query-analysis ground-truth/annotation-report retrieval/replay-report joint-report; do
+            if [ -f "$RUNNER_TEMP/diagnostic/$report.md" ]; then
+              cat "$RUNNER_TEMP/diagnostic/$report.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      - name: Check diagnostic artifacts contain no credential values
+        id: secret-scan
+        if: always() && steps.collect.outcome == 'success'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/diagnostic"
+      - name: Preserve candidates, reviews, frozen labels, raw replay and the joint report
+        if: always() && steps.secret-scan.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: readonly-qa-v6-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/diagnostic/*.json
+            ${{ runner.temp }}/diagnostic/*.md
+            ${{ runner.temp }}/diagnostic/ground-truth/
+            ${{ runner.temp }}/diagnostic/retrieval/*.json
+            ${{ runner.temp }}/diagnostic/retrieval/*.md
+            ${{ runner.temp }}/diagnostic/retrieval/replay/
+            ${{ runner.temp }}/diagnostic/retrieval/preparation/runtime/
+            ${{ runner.temp }}/diagnostic/retrieval/preparation/verification/
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 90

@@ -652,6 +652,23 @@ class ControlledRunTest(unittest.TestCase):
     def plan(self, args):
         return json.loads((args.output / "plan.json").read_text())
 
+    def test_e2e_only_skips_all_retrieval_probes_but_retains_five_pairs_and_integrity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.args(Path(directory))
+            args.seed_dir = None
+            args.e2e_only = True
+            code, checked, commands = self.execute(args)
+            self.assertEqual(code, 0)
+            self.assertFalse(any("retrieve" in command for command in commands + checked))
+            self.assertEqual(sum(runner.PREPARE_INDEX in command for command in checked), 1)
+            self.assertEqual(sum("verify" in command for command in checked), 5)
+            self.assertEqual(len(self.plan(args)["trials"]), 10)
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(manifest["protocol"], "readonly-qa-v6")
+            self.assertEqual(manifest["retrieval_probes_before_e2e"], 0)
+            self.assertTrue(manifest["e2e_only"])
+            self.assertEqual(manifest["embedding_weight_files_before_e2e"], manifest["embedding_weight_files_after_e2e"])
+
     def test_five_pairs_keep_exact_tools_budgets_private_env_and_config_mounts(self):
         for agent in ("opencode", "qodercli"):
             with self.subTest(agent=agent), tempfile.TemporaryDirectory() as directory:
