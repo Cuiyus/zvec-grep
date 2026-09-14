@@ -24,22 +24,103 @@ def _jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def _mcp_evidence(agent: Path) -> dict:
+    """Reconcile actual MCP observations without treating setup calls as QA calls."""
+    native_path, bridge_path = agent / "qodercli-stream.jsonl", agent / "zg-trace.jsonl"
+    native, bridge = _jsonl(native_path), _jsonl(bridge_path)
+    calls, observations = {}, {}
+    initialized = False
+    for event in native:
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            initialized = (event.get("qodercli_version") == "1.1.45"
+                and event.get("model") == "Qwen3.8-Max"
+                and ZG_SEARCH_TOOL in event.get("tools", [])
+                and any(server.get("name") == "zvec_grep" and server.get("status") == "connected"
+                        for server in event.get("mcp_servers", []) if isinstance(server, dict)))
+        message = event.get("message")
+        blocks = message.get("content", []) if isinstance(message, dict) else []
+        if not isinstance(blocks, list):
+            continue
+        scope = (event.get("session_id"), event.get("parent_tool_use_id"))
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if event.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("name") == ZG_SEARCH_TOOL:
+                if not isinstance(block.get("id"), str) or not block["id"]:
+                    raise ValueError("Native zg call has no ID")
+                calls[(*scope, block["id"])] = block.get("input", {})
+            elif event.get("type") == "user" and block.get("type") == "tool_result":
+                observations[(*scope, block.get("tool_use_id"))] = block.get("is_error") is not True
+    searches = [row for row in bridge if row.get("event") == "search" and row.get("origin") == "agent-mcp"]
+    vector_results = [row for row in searches if row.get("status") == "success"
+        and any(route.get("mode") == "vector" for route in row.get("request", {}).get("routes", []))
+        and "probe.md" in row.get("text", "")]
+    return {"mcp_registered_and_connected": initialized,
+            "native_attempts": len(calls),
+            "native_successes": sum(observations.get(call) is True for call in calls),
+            "native_errors": sum(observations.get(call) is False for call in calls),
+            "native_vector_successes": sum(observations.get(call) is True and isinstance(args, dict)
+                and isinstance(args.get("vector"), str) and bool(args["vector"])
+                for call, args in calls.items()),
+            "bridge_attempts": len(searches),
+            "bridge_successes": sum(row.get("status") == "success" for row in searches),
+            "bridge_errors": sum(row.get("status") == "error" for row in searches),
+            "bridge_fixture_vector_successes": len(vector_results),
+            "native_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
+            "bridge_sha256": hashlib.sha256(bridge_path.read_bytes()).hexdigest()}
+
+
+def _setup_probe_evidence(runs: Path) -> dict:
+    probe = {"status": "invalid", "included_in_qa_metrics": False,
+             "path": "sdk-preflight/qoder", "verified_successful_vector_searches": 0}
+    try:
+        root = runs.parent.resolve()
+        path = (root / "sdk-preflight/qoder").resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Setup probe escapes the current run")
+        report_path = path / "result.json"
+        report = json.loads(report_path.read_text())
+        probe["result_sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+        evidence = _mcp_evidence(path / "agent")
+        probe.update(evidence)
+        measured, vectors = report.get("zg_tool_calls_successful"), report.get("successful_vector_searches")
+        valid = (report.get("status") == "completed" and report.get("phase") == "setup_qoder_mcp_probe"
+            and report.get("included_in_benchmark") is False
+            and report.get("embedding_model") == "qwen/qwen3.7-text-embedding"
+            and report.get("model") == "qwen3.8-max" and report.get("model_identity", {}).get("valid") is True
+            and evidence["mcp_registered_and_connected"]
+            and type(measured) is int and measured > 0
+            and measured == evidence["native_successes"] == evidence["bridge_successes"]
+            and type(vectors) is int and vectors > 0
+            and vectors == evidence["native_vector_successes"] == evidence["bridge_fixture_vector_successes"])
+        if valid:
+            probe.update(status="valid", verified_successful_vector_searches=vectors)
+        else:
+            probe["reason"] = "Setup report and raw Qoder vector evidence do not agree"
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        probe.update(reason="Same-run setup Qoder vector evidence is missing or invalid", error_type=type(exc).__name__)
+    return probe
+
+
 def smoke_validation(runs: Path, phase: str) -> dict:
     """Validate integration in smoke; formal trials never depend on choosing zg."""
-    result = {"schema_version": 1, "phase": phase, "status": "not_applicable" if phase == "batch" else "invalid",
-              "scope": "successful Qoder-to-zg MCP search in completed smoke candidates",
+    result = {"schema_version": 2, "phase": phase, "status": "not_applicable" if phase == "batch" else "invalid",
+              "scope": "QA MCP integrity and outcomes; natural non-use requires a verified same-run Qoder vector probe",
               "trials": [], "verified_successful_searches": 0,
               "preserves_all_trial_metrics_and_judgements": True}
     if phase == "batch":
         return result
     if phase != "smoke":
         raise ValueError("phase must be smoke or batch")
+    result["setup_probe"] = _setup_probe_evidence(runs)
     try:
         ledger_path = runs / "trial-results.json"
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         result["trial_results_sha256"] = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
         if not isinstance(ledger, dict) or not isinstance(ledger.get("trials"), list):
             raise ValueError("Smoke ledger requires trials")
+        result["qa_execution_complete"] = bool(ledger["trials"]) and all(
+            trial.get("status") == "completed" for trial in ledger["trials"])
         for trial in ledger["trials"]:
             if trial.get("profile") != "with-zg" or trial.get("status") != "completed":
                 continue
@@ -49,43 +130,29 @@ def smoke_validation(runs: Path, phase: str) -> dict:
             agent = (runs / trial_id / "agent").resolve()
             if not agent.is_relative_to(runs.resolve()):
                 raise ValueError("Smoke trace path escapes runs")
-            native_path, bridge_path = agent / "qodercli-stream.jsonl", agent / "zg-trace.jsonl"
-            native, bridge = _jsonl(native_path), _jsonl(bridge_path)
-            calls, observations = set(), {}
-            for event in native:
-                message = event.get("message")
-                blocks = message.get("content", []) if isinstance(message, dict) else []
-                if not isinstance(blocks, list):
-                    continue
-                scope = (event.get("session_id"), event.get("parent_tool_use_id"))
-                for block in blocks:
-                    if not isinstance(block, dict):
-                        continue
-                    if event.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("name") == ZG_SEARCH_TOOL:
-                        if not isinstance(block.get("id"), str) or not block["id"]:
-                            raise ValueError("Native zg call has no ID")
-                        calls.add((*scope, block["id"]))
-                    elif event.get("type") == "user" and block.get("type") == "tool_result":
-                        observations[(*scope, block.get("tool_use_id"))] = block.get("is_error") is not True
-            native_successes = sum(observations.get(call) is True for call in calls)
-            native_errors = sum(observations.get(call) is False for call in calls)
-            searches = [row for row in bridge if row.get("event") == "search" and row.get("origin") == "agent-mcp"]
-            bridge_successes = sum(row.get("status") == "success" for row in searches)
-            bridge_errors = sum(row.get("status") == "error" for row in searches)
+            evidence = _mcp_evidence(agent)
             measured = trial.get("zg_tool_calls_successful")
-            reconciles = type(measured) is int and measured == native_successes == bridge_successes
-            row = {"trial_id": trial_id, "measured_successes": measured, "native_successes": native_successes,
-                   "native_errors": native_errors, "bridge_successes": bridge_successes, "bridge_errors": bridge_errors,
-                   "success_counts_reconcile": reconciles,
-                   "native_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest(),
-                   "bridge_sha256": hashlib.sha256(bridge_path.read_bytes()).hexdigest()}
+            reconciles = type(measured) is int and measured == evidence["native_successes"] == evidence["bridge_successes"]
+            attempts = trial.get("zg_tool_calls")
+            attempts_reconcile = type(attempts) is int and attempts == evidence["native_attempts"] == evidence["bridge_attempts"]
+            integrity = all(trial.get(key) is True for key in (
+                "source_unchanged", "original_seed_unchanged", "working_index_semantic_unchanged"))
+            non_use = attempts_reconcile and attempts == 0
+            eligible = measured > 0 if reconciles else False
+            if non_use and result["setup_probe"]["status"] == "valid":
+                eligible = True
+            row = {"trial_id": trial_id, "measured_successes": measured, **evidence,
+                   "success_counts_reconcile": reconciles, "attempt_counts_reconcile": attempts_reconcile,
+                   "integrity_valid": integrity, "natural_non_use": non_use,
+                   "valid": reconciles and attempts_reconcile and integrity
+                       and evidence["mcp_registered_and_connected"] and eligible}
             result["trials"].append(row)
             if reconciles:
-                result["verified_successful_searches"] += native_successes
-        if result["trials"] and all(row["success_counts_reconcile"] for row in result["trials"]) and result["verified_successful_searches"] > 0:
+                result["verified_successful_searches"] += evidence["native_successes"]
+        if result["qa_execution_complete"] and result["trials"] and all(row["valid"] for row in result["trials"]):
             result["status"] = "valid"
         else:
-            result["reason"] = "Smoke requires at least one successful agent MCP search confirmed by both raw traces and metrics"
+            result["reason"] = "Smoke requires intact registered QA MCP and reconciled successful calls, or natural non-use with a verified same-run vector probe"
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         result.update(status="invalid", reason="Smoke search evidence is missing or invalid", error_type=type(exc).__name__)
     return result
@@ -100,14 +167,19 @@ def annotate_smoke_report(output: Path, validation: dict) -> None:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         summary["smoke_validation"] = validation
         summary["pipeline_validation_complete"] = validation["status"] == "valid" and summary.get("summary", {}).get("complete") is True
-        if not summary["pipeline_validation_complete"]:
-            summary["efficacy_claim_ready"] = False
+        summary["efficacy_claim_ready"] = False
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if markdown_path.is_file():
         text = markdown_path.read_text(encoding="utf-8")
         label = validation["status"].upper()
-        note = (f"**Smoke MCP validation: {label}.** Confirmed successful agent searches: {validation['verified_successful_searches']}. "
-                "Trial measurements and rubric scores below remain unchanged.\n\n")
+        probe = validation.get("setup_probe", {})
+        note = (f"**Smoke MCP validation: {label}.** Confirmed successful QA searches: {validation['verified_successful_searches']}. "
+                f"Same-run setup vector probe: {probe.get('status', 'unavailable')}; "
+                f"verified vector searches: {probe.get('verified_successful_vector_searches', 0)}. "
+                "Natural QA non-use is a valid observation when this separate probe passes; attempted QA calls with no success still fail validation. "
+                "Setup usage is excluded from QA metrics. "
+                "Trial measurements and rubric scores below remain unchanged.\n\n"
+                "Smoke observations validate the workflow and are excluded from formal efficacy estimates.\n\n")
         if validation["status"] != "valid":
             note += "**The integration smoke did not pass; these observations do not establish a working zg comparison.**\n\n"
         text = text.replace("Coverage:", "Observation coverage:")

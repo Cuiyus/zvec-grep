@@ -19,6 +19,7 @@ SPEC.loader.exec_module(ci_plan)
 class ScopeTests(unittest.TestCase):
     def test_push_requires_explicit_head_commit_marker(self):
         for message, expected in (("fix tests", "validate"), ("[workspace-qa-probe] fix", "probe"),
+                                  ("[workspace-qa-rejudge] resume", "rejudge"),
                                   ("[workspace-qa-smoke] fix", "smoke"),
                                   ("run [workspace-qa-full]", "full"),
                                   ("[workspace-qa-probe] [workspace-qa-smoke]", "smoke"),
@@ -31,7 +32,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(ci_plan.execution_scope({"head_commit": None}, "push"), "validate")
 
     def test_dispatch_is_exact_and_other_events_cannot_opt_in(self):
-        for scope in ("validate", "probe", "smoke", "full"):
+        for scope in ("validate", "probe", "rejudge", "smoke", "full"):
             self.assertEqual(ci_plan.execution_scope({"inputs": {"scope": scope}}, "workflow_dispatch"), scope)
         for inputs in ({}, {"scope": "full\nsecond=value"}, {"scope": "ALL"}):
             with self.subTest(inputs=inputs), self.assertRaises(ValueError):

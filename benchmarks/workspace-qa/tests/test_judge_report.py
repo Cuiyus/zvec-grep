@@ -98,12 +98,147 @@ class JudgeTests(unittest.TestCase):
                 judge.parse_assessment(json.dumps({"criteria": criteria}), 2)
         self.assertEqual(judge.parse_assessment(json.dumps({"criteria": valid[::-1]}), 2), valid)
 
-    def test_invalid_assessment_not_retried_or_zero_scored(self):
+    def test_invalid_assessment_retries_are_bounded_and_never_zero_scored(self):
         calls = []
         result = self.run_judge(lambda **_: calls.append(1) or self.response((True,)), attempts=3)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(result["trials"][0]["status"], "judge_error")
         self.assertIsNone(result["trials"][0]["score"])
+        self.assertEqual(len(result["trials"][0]["attempts"]), 3)
+
+    def test_truncated_repeated_response_retries_same_request_and_retains_raw_attempt(self):
+        raw = self.response()
+        raw["choices"][0].update(finish_reason="length", message={"content": '{"criteria":[{"id":0,"reason":"' * 20})
+        captured = []
+        def completion(**kwargs):
+            captured.append(kwargs)
+            return raw if len(captured) == 1 else self.response((False, False))
+        result = self.run_judge(completion)
+        row = result["trials"][0]
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[0], captured[1])
+        self.assertEqual(row["score"], 0)
+        self.assertEqual(row["attempts"][0]["raw_response"], raw)
+        self.assertEqual(row["attempts"][0]["finish_reason"], "length")
+        self.assertEqual(row["attempts"][0]["status"], "invalid_assessment")
+        self.assertEqual(row["attempts"][1]["status"], "judged")
+        self.assertEqual(row["attempts"][0]["prompt_sha256"], row["attempts"][1]["prompt_sha256"])
+
+    def test_valid_zero_score_is_never_retried(self):
+        calls = []
+        result = self.run_judge(lambda **_: calls.append(1) or self.response((False, False)))
+        self.assertEqual(result["trials"][0]["score"], 0)
+        self.assertEqual(len(calls), 1)
+
+    def test_duplicate_json_keys_are_invalid_even_if_json_decoder_would_accept(self):
+        raw = '{"criteria":[{"id":0,"score":false,"score":true,"reason":"duplicate"}]}'
+        with self.assertRaisesRegex(judge.InvalidAssessmentError, "duplicate JSON keys"):
+            judge.parse_assessment(raw, 1)
+
+    def test_content_filter_and_different_model_do_not_retry(self):
+        for kind in ("content_filter", "different_model"):
+            response = self.response()
+            if kind == "content_filter":
+                response["choices"][0]["finish_reason"] = "content_filter"
+            else:
+                response["model"] = "another-model"
+            calls = []
+            result = self.run_judge(lambda **_: calls.append(1) or response)
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(result["trials"][0]["score"])
+
+    def test_resume_skips_existing_valid_low_score_without_altering_raw_attempt(self):
+        original = self.run_judge(lambda **_: self.response((False, False)))
+        calls = []
+        resumed = self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+        self.assertEqual(calls, [])
+        self.assertEqual(original["trials"], resumed["trials"])
+
+    def test_resume_preserves_failed_attempt_and_uses_remaining_total_budget(self):
+        invalid = self.response()
+        invalid["choices"][0]["finish_reason"] = "length"
+        original = self.run_judge(lambda **_: invalid)
+        # An interrupted old run had saved one failed attempt, as in the real smoke.
+        row = original["trials"][0]
+        row["attempts"] = row["attempts"][:1]
+        row["judge_latency_seconds"] = row["attempts"][0]["latency_seconds"]
+        # Exercise backward compatibility with the pre-retry-policy artifact.
+        original.pop("retry_policy")
+        dump(self.runs / "judgements.json", original)
+        prior_attempt = json.loads(json.dumps(row["attempts"][0]))
+        calls = []
+        resumed = self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(resumed["trials"][0]["attempts"][0], prior_attempt)
+        self.assertEqual(resumed["trials"][0]["attempts"][1]["attempt"], 2)
+        self.assertEqual(resumed["trials"][0]["status"], "judged")
+
+    def test_resume_does_not_reset_exhausted_budget(self):
+        original = self.run_judge(lambda **_: self.response((True,)))
+        calls = []
+        resumed = self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+        self.assertEqual(calls, [])
+        self.assertEqual(resumed["trials"], original["trials"])
+        self.assertIsNone(resumed["trials"][0]["score"])
+
+    def test_resume_identity_mismatch_fails_before_call_or_artifact_change(self):
+        original = self.run_judge()
+        for key, value in (("judge_model", "different-model"), ("answer_sha256", "bad-answer"),
+                           ("prompt_sha256", "bad-prompt"), ("source_hashes", []),
+                           ("trial_results_sha256", "bad-ledger"), ("metadata_sha256", "bad-metadata")):
+            modified = json.loads(json.dumps(original))
+            (modified["trials"][0] if key in ("answer_sha256", "prompt_sha256") else modified)[key] = value
+            path = self.runs / "judgements.json"
+            dump(path, modified)
+            before = path.read_bytes()
+            calls = []
+            with self.subTest(key=key), self.assertRaises(judge.JudgeError):
+                self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+            self.assertEqual(calls, [])
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_resume_cannot_increase_original_attempt_budget(self):
+        self.run_judge()
+        before = (self.runs / "judgements.json").read_bytes()
+        with self.assertRaisesRegex(judge.JudgeError, "attempt budget"):
+            self.run_judge(resume=True, attempts=4)
+        self.assertEqual((self.runs / "judgements.json").read_bytes(), before)
+
+    def test_resume_rejects_limit_and_attempt_parameter_drift_before_writing(self):
+        original = self.run_judge()
+        for location, key, value in (("limits", "max_completion_tokens", 4096),
+                                     ("limits", "max_source_bytes", 512001),
+                                     ("limits", "max_prompt_bytes", 750001),
+                                     ("attempt", "temperature", 0.5),
+                                     ("attempt", "max_completion_tokens", 4096)):
+            modified = json.loads(json.dumps(original))
+            target = modified["limits"] if location == "limits" else modified["trials"][0]["attempts"][0]
+            target[key] = value
+            path = self.runs / "judgements.json"
+            dump(path, modified)
+            before = path.read_bytes()
+            calls = []
+            with self.subTest(location=location, key=key), self.assertRaises(judge.JudgeError):
+                self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+            self.assertEqual(calls, [])
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_resume_authentication_failure_and_content_filter_are_not_retryable(self):
+        for cause in ("unauthorized", "content_filter", "different_model"):
+            response = self.response()
+            if cause == "content_filter":
+                response["choices"][0]["finish_reason"] = "content_filter"
+            if cause == "different_model":
+                response["model"] = "another-model"
+            def failure(**_):
+                if cause == "unauthorized":
+                    raise HTTPError("https://example.invalid", 401, "unauthorized", {}, None)
+                return response
+            original = self.run_judge(failure)
+            calls = []
+            resumed = self.run_judge(lambda **_: calls.append(1) or self.response(), resume=True)
+            self.assertEqual(calls, [])
+            self.assertEqual(original["trials"], resumed["trials"])
 
     def test_bounded_retry_only_for_operational_error(self):
         calls = []

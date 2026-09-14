@@ -15,12 +15,16 @@ code or documents; this run does not add the separate English task split.
 ## CI execution
 
 [Qoder Qwen3.8-Max Workspace QA](../../.github/workflows/workspace-qa-qoder.yml)
-runs on this branch with four explicit scopes:
+runs on this branch with five explicit scopes:
 
 - An ordinary push affecting this experiment runs offline validation only.
 - `[workspace-qa-probe]` validates and checks the actual remote embedding,
   released SDK and Qoder MCP chain on one synthetic file. It prepares no full
   workspace and runs no benchmark trials or judge; use it for integration fixes.
+  The [first verified probe](data/probe-validation.json) completed its model and
+  retrieval checks in 26.117 seconds (about 95 seconds for the cold probe job).
+- `[workspace-qa-rejudge]` resumes only invalid or missing judgments on the
+  pinned smoke artifact, preserving its original QA observations and valid scores.
 - A push whose head commit message contains `[workspace-qa-smoke]` validates,
   then runs task 3 once per arm: **two smoke trials**.
 - `[workspace-qa-full]` validates, runs smoke, then unlocks the 10-task matrix
@@ -28,14 +32,27 @@ runs on this branch with four explicit scopes:
   task runs 10 independent repetitions per arm: **200 formal trials**.
 
 Smoke observations are excluded from the formal report. Manual dispatch supports
-`validate`, `probe`, `smoke` (default) and `full` once GitHub exposes the workflow for
+`validate`, `probe`, `rejudge`, `smoke` (default) and `full` once GitHub exposes the workflow for
 dispatch. Concurrency groups separate these scopes so a long formal run does
 not queue quick validation behind it. A push must still affect the workflow's
 listed experiment paths; an empty commit alone does not trigger it.
-Smoke also requires at least one successful zg search confirmed by both native
-Qoder and MCP traces. A terminal answer alone cannot establish that integration
-works. This gate applies only to smoke: formal trials remain valid observations
-when the agent chooses not to call zg, and those trials are not filtered out.
+Smoke verifies a successful real Qoder vector search using the synthetic setup
+probe's native and MCP traces, plus tool registration and integrity in the QA
+trial. Natural non-use of zg on the original question is retained as an
+observation; it does not cause another rollout. If the QA agent does attempt zg
+but every search fails, the smoke still fails. A terminal answer alone cannot
+establish that integration works. All rubric judgments and required measurements
+must also be complete. Formal trials retain natural non-use without filtering.
+
+For a failed judge after completed QA, `[workspace-qa-rejudge]` (or dispatch
+`rejudge`) restores the exact artifact frozen in [judge-recovery.json](data/judge-recovery.json).
+Every artifact file is checked against its recorded hash. Only the small original
+judge evidence files are downloaded; source extraction, indexing and Qoder
+rollouts are not repeated. Explicit judge resume preserves valid scores and all
+prior attempts, checks candidate/prompt/model/evidence identity, and uses only the
+remaining retry budget. The original validation and judgments are retained along
+with new recovery provenance. This recovery artifact is excluded from formal
+batch aggregation.
 
 Both arms use the same original question, read-only tools, 4 CPU/8 GiB container
 limits and 900-second agent limit. Balanced AB/BA ordering is frozen per task.
@@ -106,6 +123,21 @@ supported `${NAME}` MCP environment references now explicitly forward
 the three remote embedding variables without serializing their values. The
 smoke gate catches zero-success integration even when the model still answers.
 
+Run [34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904)
+then passed the real setup search and completed both QA answers. The QA agent
+naturally made zero zg calls; the first gate incorrectly treated this as an
+integration failure. Gate v2 separates the successful integration probe from
+natural tool uptake. Independently, one judge response repeated text until its
+8192-token limit and was correctly rejected, leaving its score null. Recovery
+retains both original answers and the already-valid judgment, then resumes only
+the invalid assessment. No QA reroll is used to obtain a zg call.
+
+That run restored 1,950,506,687 bytes of workspace archive blocks with zero new
+archive block downloads. Extraction took about 17 seconds, versus 194 seconds
+on the prior cold task-3 run; cache archive restore itself took about 18 seconds.
+Index rebuilding still took 71 seconds because the bridge fix changed its build
+identity. That completed seed was retained even though judging failed.
+
 Required Actions secrets:
 
 - `QODER_PERSONAL_ACCESS_TOKEN`: Qoder native model access.
@@ -146,6 +178,9 @@ candidate report, blind to arm and cost metrics. This is a **custom rubric judge
 adapter**, not the official ClaudeCode filesystem judge. Source-rubric grounding
 defects are retained and disclosed; scores are descriptive, not a statistical
 non-inferiority claim. No automatic best-of selection or retry of low scores.
+Transient transport failures and invalid/truncated judge responses may use a
+fixed total of three attempts with the same model, candidate and prompt. Every
+attempt is retained; the first valid assessment is final regardless of score.
 
 Per-task artifacts contain `runs/trial-results.json`, `runs/judgements.json`,
 native JSONL/trajectory, candidate files and setup provenance. The final artifact

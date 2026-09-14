@@ -24,6 +24,7 @@ PROFILES = ("baseline", "with-zg")
 SUCCESS_STATUSES = {"completed", "success", "succeeded"}
 MAX_SOURCE_BYTES = 512_000
 MAX_PROMPT_BYTES = 750_000
+MAX_COMPLETION_TOKENS = 8192
 TEXT_SUFFIXES = {".py", ".md", ".csv", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".log", ".conf", ".xml", ".html", ".sh", ".rst", ".tsv"}
 SYSTEM_PROMPT = """You are a strict Chinese-language Workspace-Bench QA evaluator.
 This is a custom Qoder QA rubric adapter, not the official ClaudeCode judge.
@@ -52,6 +53,14 @@ integer id, a JSON boolean score, and a nonempty reason. No additional keys.
 
 class JudgeError(ValueError):
     pass
+
+
+class InvalidAssessmentError(JudgeError):
+    """A response that cannot be scored, independently of its proposed quality."""
+
+    def __init__(self, message: str, *, raw_response_text: str | None = None):
+        super().__init__(message)
+        self.raw_response_text = raw_response_text
 
 
 def sha256(data: bytes) -> str:
@@ -143,46 +152,79 @@ def build_messages(evidence: dict[str, Any], answer: str, candidate_outputs: lis
 
 
 def parse_assessment(content: str, rubric_count: int) -> list[dict[str, Any]]:
+    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise InvalidAssessmentError("judge response contains duplicate JSON keys")
+            result[key] = value
+        return result
     try:
-        value = json.loads(content)
+        value = json.loads(content, object_pairs_hook=unique_keys)
     except (TypeError, json.JSONDecodeError) as exc:
-        raise JudgeError("judge response is not strict JSON") from exc
+        raise InvalidAssessmentError("judge response is not strict JSON") from exc
     if not isinstance(value, dict) or set(value) != {"criteria"}:
-        raise JudgeError("judge response requires exactly the criteria key")
+        raise InvalidAssessmentError("judge response requires exactly the criteria key")
     rows = value["criteria"]
     if not isinstance(rows, list) or len(rows) != rubric_count:
-        raise JudgeError("judge omitted or added rubric rows")
+        raise InvalidAssessmentError("judge omitted or added rubric rows")
     seen = set()
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"id", "score", "reason"}:
-            raise JudgeError("invalid criterion schema")
+            raise InvalidAssessmentError("invalid criterion schema")
         index = row["id"]
         if type(index) is not int or not 0 <= index < rubric_count or index in seen:
-            raise JudgeError("criterion IDs must be unique original zero-based integers")
+            raise InvalidAssessmentError("criterion IDs must be unique original zero-based integers")
         seen.add(index)
         if type(row["score"]) is not bool:
-            raise JudgeError("criterion score must be a JSON boolean")
+            raise InvalidAssessmentError("criterion score must be a JSON boolean")
         if not isinstance(row["reason"], str) or not row["reason"].strip():
-            raise JudgeError("criterion reason must be nonempty")
+            raise InvalidAssessmentError("criterion reason must be nonempty")
     return sorted(rows, key=lambda r: r["id"])
+
+
+def assess_response(response: Any, rubric_count: int, model: str) -> list[dict[str, Any]]:
+    if not isinstance(response, dict):
+        raise InvalidAssessmentError("API response must be an object")
+    if response.get("model") not in (None, model):
+        raise JudgeError("API returned a different judge model; no model fallback permitted")
+    choices = response.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise InvalidAssessmentError("API response must contain exactly one choice")
+    choice = choices[0]
+    finish = choice.get("finish_reason")
+    if finish == "content_filter":
+        raise JudgeError("judge response was content filtered; no retry permitted")
+    if finish != "stop":
+        raise InvalidAssessmentError("judge response did not finish normally; no partial rubric scoring")
+    message = choice.get("message")
+    if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+        raise InvalidAssessmentError("judge response requires text message content")
+    return parse_assessment(message["content"], rubric_count)
 
 
 def http_completion(*, api_key: str, base_url: str, model: str, messages: list[dict[str, str]], timeout: float) -> dict[str, Any]:
     body = {"model": model, "messages": messages, "temperature": 0,
-            "response_format": {"type": "json_object"}, "max_tokens": 8192,
+            "response_format": {"type": "json_object"}, "max_tokens": MAX_COMPLETION_TOKENS,
             "enable_thinking": False}
     req = request.Request(base_url.rstrip("/") + "/chat/completions",
                           data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                           headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
                           method="POST")
     with request.urlopen(req, timeout=timeout) as response:
-        value = json.loads(response.read().decode("utf-8"))
+        raw = response.read().decode("utf-8")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise InvalidAssessmentError("API response body is not valid JSON", raw_response_text=raw) from exc
     if not isinstance(value, dict):
-        raise JudgeError("API response must be an object")
+        raise InvalidAssessmentError("API response must be an object", raw_response_text=raw)
     return value
 
 
 def retryable(exc: Exception) -> bool:
+    if isinstance(exc, InvalidAssessmentError):
+        return True
     if isinstance(exc, error.HTTPError):
         return exc.code in {408, 429, 500, 502, 503, 504}
     return isinstance(exc, (error.URLError, TimeoutError, socket.timeout, ConnectionError))
@@ -214,11 +256,88 @@ def candidate_outputs(trial: dict[str, Any], runs_dir: Path, answer: str) -> lis
     return [{"filename": path.name, "text": content, "materialized_by": "harness"}]
 
 
+def validate_resume(previous: dict[str, Any], current: dict[str, Any], trials: list[dict[str, Any]],
+                    evidence: dict[str, Any], runs_dir: Path, max_prompt_bytes: int, attempts: int) -> None:
+    """Validate every identity before changing the existing artifact or calling API."""
+    for key in ("adapter", "task_id", "judge_model", "temperature", "order_seed", "expected_trials",
+                "repetitions_per_profile", "trial_results_sha256", "metadata_sha256", "source_hashes",
+                "rubrics", "rubric_types"):
+        if previous.get(key) != current.get(key):
+            raise JudgeError(f"resume identity mismatch: {key}")
+    old_budget = previous.get("retry_policy", {}).get("max_total_attempts", 3)
+    if old_budget != attempts:
+        raise JudgeError("resume cannot change the original total attempt budget")
+    if previous.get("limits", {}).get("max_completion_tokens", 8192) != MAX_COMPLETION_TOKENS:
+        raise JudgeError("resume cannot change the original completion token limit")
+    for key in ("max_source_bytes", "max_prompt_bytes"):
+        if previous.get("limits", {}).get(key) != current["limits"][key]:
+            raise JudgeError(f"resume cannot change the original input limit: {key}")
+    previous_rows = previous.get("trials")
+    if not isinstance(previous_rows, list) or len(previous_rows) != len(trials):
+        raise JudgeError("resume trial set differs")
+    by_id = {}
+    for old in previous_rows:
+        if not isinstance(old, dict) or old.get("trial_id") in by_id:
+            raise JudgeError("resume has invalid or duplicate trial rows")
+        by_id[old.get("trial_id")] = old
+    for trial in trials:
+        old = by_id.get(trial["trial_id"])
+        if old is None or any(old.get(key) != trial.get(key) for key in ("task_id", "profile", "repetition")):
+            raise JudgeError("resume trial identity differs")
+        prior_attempts = old.get("attempts")
+        if not isinstance(prior_attempts, list) or len(prior_attempts) > attempts:
+            raise JudgeError("resume attempt history exceeds the original budget")
+        for number, attempt in enumerate(prior_attempts, 1):
+            if not isinstance(attempt, dict) or attempt.get("attempt") != number or attempt.get("requested_model") != current["judge_model"]:
+                raise JudgeError("resume attempt identity differs")
+            if attempt.get("temperature", 0) != 0 or attempt.get("max_completion_tokens", 8192) != MAX_COMPLETION_TOKENS:
+                raise JudgeError("resume attempt parameters differ")
+        answer = trial.get("answer")
+        if trial.get("status") not in SUCCESS_STATUSES or not isinstance(answer, str) or not answer.strip():
+            if old.get("status") == "judged":
+                raise JudgeError("resume scored an ineligible candidate")
+            continue
+        outputs = candidate_outputs(trial, runs_dir, answer)
+        messages = build_messages(evidence, answer, outputs, max_prompt_bytes=max_prompt_bytes)
+        expected = {"answer_sha256": sha256(answer.encode("utf-8")),
+                    "prompt_sha256": sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode("utf-8"))}
+        for key, value in expected.items():
+            if old.get(key) != value:
+                raise JudgeError(f"resume candidate identity mismatch: {key}")
+            if any(key in attempt and attempt[key] != value for attempt in prior_attempts):
+                raise JudgeError(f"resume attempt identity mismatch: {key}")
+        if old.get("status") == "judged":
+            if not prior_attempts or prior_attempts[-1].get("status") != "judged":
+                raise JudgeError("resume scored trial has no successful raw attempt")
+            assessment = assess_response(prior_attempts[-1].get("raw_response"), len(current["rubrics"]), current["judge_model"])
+            if assessment != old.get("criteria") or old.get("score") != sum(c["score"] for c in assessment) / len(assessment):
+                raise JudgeError("resume score differs from its raw assessment")
+
+
+def can_resume_attempt(row: dict[str, Any], model: str, rubric_count: int) -> bool:
+    if not row["attempts"]:
+        return True
+    last = row["attempts"][-1]
+    if "http_status" in last and last["http_status"] not in {408, 429, 500, 502, 503, 504}:
+        return False
+    if "raw_response" in last:
+        try:
+            assess_response(last["raw_response"], rubric_count, model)
+        except InvalidAssessmentError:
+            return True
+        except JudgeError:
+            return False
+        return False
+    # Includes the pre-retry-policy artifact's transient transport status.
+    return last.get("status") == "transport_error" or (
+        last.get("status") == "invalid_assessment" and last.get("retryable") is True)
+
+
 def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: Path | None = None,
                model: str | None = None, attempts: int = 3, seed: int = 0,
                max_source_bytes: int = MAX_SOURCE_BYTES, max_prompt_bytes: int = MAX_PROMPT_BYTES,
                completion_fn: Callable[..., dict[str, Any]] = http_completion,
-               sleep_fn: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+               sleep_fn: Callable[[float], None] = time.sleep, resume: bool = False) -> dict[str, Any]:
     if not 1 <= attempts <= 5:
         raise JudgeError("attempts must be between 1 and 5")
     base, default_model = settings()
@@ -239,13 +358,19 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
             raise JudgeError("trial IDs must be nonempty and unique")
         seen.add(trial_id)
     output = output or runs_dir / "judgements.json"
+    previous = read_object(output) if resume else None
     report: dict[str, Any] = {"schema_version": 1, "adapter": ADAPTER,
         "score_label": "original-rubric boolean mean (custom adapter)",
         "official_judge": False, "leaderboard_comparable": False,
         "task_id": task_id, "repetitions_per_profile": repetitions, "expected_trials": repetitions * 2,
         "judge_model": model, "temperature": 0, "order_seed": seed,
+        "retry_policy": {"max_total_attempts": attempts,
+            "retry_on": ["transient transport error", "invalid response JSON/schema", "truncated response"],
+            "never_retry_on": ["valid assessment regardless of score", "authentication/client error", "content filter", "different returned model"],
+            "same_model_candidate_prompt_and_parameters": True},
         "trial_results_sha256": sha256(ledger_path.read_bytes()),
-        "limits": {"max_source_bytes": max_source_bytes, "max_prompt_bytes": max_prompt_bytes},
+        "limits": {"max_source_bytes": max_source_bytes, "max_prompt_bytes": max_prompt_bytes,
+                   "max_completion_tokens": MAX_COMPLETION_TOKENS},
         "trials": [], "limitations": ["Model judging requires human calibration.",
             "Original rubric grounding defects are retained; no audited rows are dropped.",
             "No agent trace is supplied; process rubrics cannot establish actual tool behavior.",
@@ -258,10 +383,13 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
             "profile": trial["profile"], "repetition": trial.get("repetition"),
             "candidate_id": f"candidate-{index + 1:03}", "status": "pending", "score": None, "attempts": []})
     save = lambda: write_json(output, report, secret=api_key)
-    save()
+    if previous is None:
+        save()
     try:
         evidence = load_evidence(metadata_path, task_dir, max_source_bytes=max_source_bytes)
     except (JudgeError, OSError, ValueError) as exc:
+        if previous is not None:
+            raise JudgeError("resume evidence could not be validated; original artifact unchanged") from exc
         report["evidence_error"] = str(exc)
         for row in report["trials"]:
             row["status"] = "evidence_error"
@@ -270,7 +398,14 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     report.update(metadata_sha256=evidence["metadata_sha256"], source_bytes=evidence["source_bytes"],
                   source_hashes=[{k: s[k] for k in ("stored_relpath", "sha256", "bytes")} for s in evidence["sources"]],
                   rubrics=evidence["metadata"]["rubrics"], rubric_types=evidence["metadata"]["rubric_types"])
+    if previous is not None:
+        validate_resume(previous, report, ordered, evidence, runs_dir, max_prompt_bytes, attempts)
+        by_id = {row["trial_id"]: row for row in previous["trials"]}
+        report["trials"] = [by_id[trial["trial_id"]] for trial in ordered]
+        report["resumed"] = True
     for row, trial in zip(report["trials"], ordered):
+        if row["status"] == "judged":
+            continue
         answer = trial.get("answer")
         if trial.get("status") not in SUCCESS_STATUSES:
             row["status"] = "execution_not_completed"
@@ -293,30 +428,37 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
             row["status"] = "judge_unavailable"
             save()
             continue
-        for number in range(1, attempts + 1):
+        if not can_resume_attempt(row, model, len(report["rubrics"])):
+            continue
+        for number in range(len(row["attempts"]) + 1, attempts + 1):
             started = time.monotonic()
-            attempt: dict[str, Any] = {"attempt": number, "requested_model": model}
+            attempt: dict[str, Any] = {"attempt": number, "requested_model": model,
+                "prompt_sha256": row["prompt_sha256"], "answer_sha256": row["answer_sha256"],
+                "temperature": 0, "max_completion_tokens": MAX_COMPLETION_TOKENS}
             row["attempts"].append(attempt)
             retry = False
             try:
                 response = completion_fn(api_key=api_key, base_url=base, model=model,
                                          messages=messages, timeout=180)
                 attempt["raw_response"] = response
-                attempt["resolved_model"] = response.get("model")
-                attempt["usage"] = response.get("usage")
-                choice = response["choices"][0]
-                if choice.get("finish_reason") != "stop":
-                    raise JudgeError("judge response did not finish normally; no partial rubric scoring")
-                assessment = parse_assessment(choice["message"]["content"], len(report["rubrics"]))
+                if isinstance(response, dict):
+                    attempt["resolved_model"] = response.get("model")
+                    attempt["usage"] = response.get("usage")
+                    choices = response.get("choices")
+                    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                        attempt["finish_reason"] = choices[0].get("finish_reason")
+                assessment = assess_response(response, len(report["rubrics"]), model)
                 row.update(status="judged", criteria=assessment,
                            score=sum(c["score"] for c in assessment) / len(assessment))
                 attempt["status"] = "judged"
             except Exception as exc:
                 retry = retryable(exc)
-                attempt.update(status="transport_error" if retry else "invalid_assessment_or_request",
-                               error_type=type(exc).__name__)
+                attempt.update(status="invalid_assessment" if isinstance(exc, InvalidAssessmentError) else "transport_error" if retry else "invalid_assessment_or_request",
+                               error_type=type(exc).__name__, retryable=retry)
                 if isinstance(exc, JudgeError):
                     attempt["error"] = str(exc)
+                if isinstance(exc, InvalidAssessmentError) and exc.raw_response_text is not None:
+                    attempt["raw_response_text"] = exc.raw_response_text
                 if isinstance(exc, error.HTTPError):
                     attempt["http_status"] = exc.code
                 row["status"] = "judge_error"
@@ -340,6 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--judge-model", dest="model")
     parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--resume", action="store_true", help="preserve existing attempts and valid scores; retry only unscored eligible failures within their original total budget")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-source-bytes", type=int, default=MAX_SOURCE_BYTES)
     parser.add_argument("--max-prompt-bytes", type=int, default=MAX_PROMPT_BYTES)

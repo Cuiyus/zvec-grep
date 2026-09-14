@@ -50,8 +50,8 @@ def execution_scope(event: dict[str, Any], event_name: str | None = None) -> str
         event_name = "workflow_dispatch" if "inputs" in event else "push" if "head_commit" in event else "unknown"
     if event_name == "workflow_dispatch":
         inputs = event.get("inputs")
-        if not isinstance(inputs, dict) or inputs.get("scope") not in {"validate", "probe", "smoke", "full"}:
-            raise ValueError("workflow_dispatch requires scope validate, probe, smoke, or full")
+        if not isinstance(inputs, dict) or inputs.get("scope") not in {"validate", "probe", "rejudge", "smoke", "full"}:
+            raise ValueError("workflow_dispatch requires scope validate, probe, rejudge, smoke, or full")
         return inputs["scope"]
     if event_name != "push":
         return "validate"
@@ -66,6 +66,8 @@ def execution_scope(event: dict[str, Any], event_name: str | None = None) -> str
         return "smoke"
     if "[workspace-qa-probe]" in message:
         return "probe"
+    if "[workspace-qa-rejudge]" in message:
+        return "rejudge"
     return "validate"
 
 

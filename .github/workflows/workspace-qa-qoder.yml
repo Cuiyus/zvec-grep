@@ -1,5 +1,5 @@
 name: Qoder Qwen3.8-Max Workspace QA
-run-name: "Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || 'validate') }} · ${{ github.ref_name }}"
+run-name: "Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || contains(github.event.head_commit.message, '[workspace-qa-rejudge]') && 'rejudge' || 'validate') }} · ${{ github.ref_name }}"
 
 on:
   push:
@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Offline validation, tiny integration probe, one-task smoke, or 200 formal trials
+        description: Validate, probe, recover failed judging, one-task smoke, or 200 formal trials
         type: choice
-        options: [validate, probe, smoke, full]
+        options: [validate, probe, rejudge, smoke, full]
         default: smoke
 
 permissions:
@@ -27,7 +27,7 @@ permissions:
 
 concurrency:
   # A long formal run must not queue unrelated fast validation behind it.
-  group: workspace-qa-qoder-${{ github.ref }}-${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || 'validate') }}
+  group: workspace-qa-qoder-${{ github.ref }}-${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || contains(github.event.head_commit.message, '[workspace-qa-rejudge]') && 'rejudge' || 'validate') }}
   cancel-in-progress: false
 
 jobs:
@@ -151,6 +151,76 @@ jobs:
             ${{ runner.temp }}/workspace-qa-probe/embedding-preflight.json
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/runtime/
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/
+  rejudge:
+    needs: validate
+    if: needs.validate.outputs.scope == 'rejudge'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Read frozen recovery source
+        id: recovery
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          recovery = json.loads(Path('benchmarks/workspace-qa/data/judge-recovery.json').read_text())
+          assert type(recovery['source_run_id']) is int and recovery['source_run_id'] > 0
+          assert re.fullmatch(r'workspace-qa-smoke-[0-9]+-[0-9]+-[0-9]+', recovery['artifact_name'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('run_id=' + str(recovery['source_run_id']) + '\n')
+              output.write('artifact_name=' + recovery['artifact_name'] + '\n')
+          PY
+      - name: Restore exact completed QA observations
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.recovery.outputs.artifact_name }}
+          run-id: ${{ steps.recovery.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/workspace-qa-recovery-input
+      - name: Resume invalid judgments without rerunning QA or valid scores
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: >-
+          python benchmarks/workspace-qa/run_rejudge.py
+          --artifact-root "$RUNNER_TEMP/workspace-qa-recovery-input"
+          --output "$RUNNER_TEMP/workspace-qa-rejudge"
+      - name: Publish recovered smoke summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/workspace-qa-rejudge/report/summary.md" ]; then
+            cat "$RUNNER_TEMP/workspace-qa-rejudge/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Verify recovered artifacts contain no judge credential
+        if: always()
+        id: artifact-safety
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          secret = os.environ.get('GLM_API_KEY', '').encode()
+          root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-rejudge'
+          for path in root.rglob('*'):
+              if path.is_file() and secret and secret in path.read_bytes():
+                  raise SystemExit('Credential found in artifact; upload blocked')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.artifact-safety.outcome == 'success'
+        with:
+          name: workspace-qa-rejudge-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 30
+          if-no-files-found: error
+          path: ${{ runner.temp }}/workspace-qa-rejudge/
   smoke:
     needs: validate
     if: needs.validate.outputs.scope == 'smoke' || needs.validate.outputs.scope == 'full'

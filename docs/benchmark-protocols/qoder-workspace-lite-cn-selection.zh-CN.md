@@ -135,7 +135,7 @@
 
 ## 执行与观测口径
 
-CI 分为四个显式范围：普通提交仅做离线校验；`[workspace-qa-probe]` 只用一个合成小文件验证真实 embedding、SDK 和 Qoder MCP 链路，不下载完整工作区、不运行 benchmark QA 或 judge；`[workspace-qa-smoke]` 运行 1 题 × 2 组 × 1 次；`[workspace-qa-full]` 先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；probe 和 smoke 不混入正式统计。
+CI 分为五个显式范围：普通提交仅做离线校验；`[workspace-qa-probe]` 只用一个合成小文件验证真实 embedding、SDK 和 Qoder MCP 链路，不下载完整工作区、不运行 benchmark QA 或 judge；`[workspace-qa-rejudge]` 复用冻结 smoke artifact，仅恢复未合法的评分；`[workspace-qa-smoke]` 运行 1 题 × 2 组 × 1 次；`[workspace-qa-full]` 先通过 smoke，再运行 10 题 × 2 组 × 10 次。手动入口支持相同范围，默认 smoke。各范围使用独立并发组，正式评测不阻塞快速校验；probe、smoke 和评分恢复不混入正式统计。
 
 准备阶段增加两类缓存。按固定 archive 版本和 persona 缓存已校验的 16 MiB 下载块，每 persona 最多 4 GiB；Research 工作区超过此上限，因此只承诺部分下载复用。索引缓存只保存成功构建并通过 preflight 的不可变 seed，按完整源文件内容、运行时版本、embedding 模型与 endpoint、索引配置和构建代码身份核验，命中后仍重新执行当前工作区 preflight。每个 with-zg trial 继续使用独立副本，不缓存问答、judge、session 或被查询修改过的副本。
 
@@ -148,6 +148,10 @@ CI 分为四个显式范围：普通提交仅做离线校验；`[workspace-qa-pr
 据此冻结全局 1 MiB 索引上限，并把 smoke 从 Research 的 128 改为工作区较小的 Backend Developer task 3，以尽早验证完整问答和评分流程。正式任务仍为原 10 题。1 MiB 等于 zg 的代码文件默认上限，同时收紧 data/text 类型；不是按已知答案选取文件。两个准备阶段失败的 smoke 不进入 200 次正式 rollout 统计，原日志和修订依据保留。
 
 随后 [CI 34828583811](https://github.com/Cuiyus/zvec-grep/actions/runs/34828583811) 完成两组回答和 judge，但原始日志显示唯一一次 zg MCP 查询因缺少 embedding key 而失败，成功检索为 0。此前只检查 agent 最终完成状态的 workflow 误判为成功；该次保留为集成诊断，不能当作有效 zg 收益比较。修复仅通过 MCP 配置中的 `${NAME}` 引用显式传递所需环境变量，不写入密钥值、不改变原题提示。新增下载前的微型真实 Qoder→MCP→远程向量检索探针，并要求 smoke 至少有一次 native 与 MCP 日志共同证实的成功检索。正式 batch 不强制调用 zg，也不筛除自主不使用 zg 的样本。
+
+[CI 34831451904](https://github.com/Cuiyus/zvec-grep/actions/runs/34831451904) 的同 job 真实探针已成功检索，两组原题回答也完整，with-zg 工具已注册并 connected、各项完整性检查通过，但模型自主未调用 zg。原 smoke 门槛将自然不使用误判为接入失败；门槛 v2 改为分别核验真实探针、QA 工具注册与完整性、完整评分和指标。自然 0 次调用保留，不重抽问答；若原题中尝试 zg 却全部失败，仍不能通过 smoke。同时，with-zg 的 judge 输出重复至 8192-token 上限而截断，评分保留 null。新增 `[workspace-qa-rejudge]` 恢复入口，按冻结 artifact 的逐文件 SHA 复用原回答、轨迹和已合法评分，仅下载小体积的原始评分依据并补未合法的 judge；不重复完整工作区准备或 Qoder rollout。原始失败评分和验证文件另行保留。无效格式与瞬时传输异常共享固定最多 3 次尝试，恢复不重置预算；模型、问题、候选和 prompt 不变，首个合法评分立即接受，低分不重试。
+
+该次恢复了 1,950,506,687 字节的 archive 缓存块，新下载块为 0；提取约 17 秒，前一冷运行约 194 秒，缓存归档本身恢复约 18 秒。修复 bridge 导致索引身份更新，本次仍花约 71 秒重建，完成 seed 在 judge 失败后仍成功保存。独立 [probe 34832632725](https://github.com/Cuiyus/zvec-grep/actions/runs/34832632725) 的实际模型与检索检查耗时 26.117 秒，冷启动 probe job 约 95 秒，均不计入 QA 指标。
 
 固定 Qoder 版本、请求与实际解析的 Qwen3.8-Max 模型标识、zg `0.2.2`；按用户最新要求，embedding 使用 **远程 `qwen/qwen3.7-text-embedding`**。禁止静默回退到本地 embedding 或其他模型。记录实际 endpoint/provider、请求及解析模型标识、索引配置，以及 embedding 调用与索引准备耗时；凭据通过 CI secret 注入，不能写入快照或日志。不要把 zg 当前分支源码冒充 npm `0.2.2`。冷启动总时长、索引准备时长与 agent 执行时长分别报告；远程 embedding 的 usage 和耗时不能混入 Qoder 模型输入 token。
 
