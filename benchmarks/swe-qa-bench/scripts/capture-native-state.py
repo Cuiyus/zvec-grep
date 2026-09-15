@@ -74,6 +74,10 @@ def capture(spec: dict) -> int:
     if hashlib.sha256(raw).hexdigest() != first["request_sha256"]:
         raise ValueError("Native request bytes differ from transport capture")
     body = json.loads(raw)
+    expected_temperature = spec.get("base_config", {}).get("agent", {}).get("build", {}).get("temperature")
+    expected_seed = spec.get("model_seed")
+    if body.get("temperature") != expected_temperature or body.get("seed") != expected_seed:
+        raise ValueError("Native request did not preserve the configured temperature and model seed")
     installed = json.loads((destination / "install-manifest.json").read_text())
     guidance = installed.get("guidance_text") or installed.get("installed_guidance_text")
     if not guidance or not any(guidance.strip() in text for text in runtime.instruction_texts(body)):
@@ -82,6 +86,8 @@ def capture(spec: dict) -> int:
                 "agent": "opencode", "model": body["model"], "intended_endpoint": intended,
                 "actual_endpoint": captured_spec["tap_upstream"], "paid_model_calls": 0,
                 "first_request": first, "installed_guidance_verified": True,
+                "sampling_controls_verified": True,
+                "temperature": body.get("temperature"), "model_seed": body.get("seed"),
                 "not_an_e2e_sample": True, "native_exit_code": result,
                 "limitation": "Real installed agent request construction; the responder was local and fake."}
     (destination / "capture-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

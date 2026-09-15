@@ -82,6 +82,16 @@ class ReadonlyAgentTests(unittest.TestCase):
         self.assertNotIn("mcp", cfg)
         self.assertEqual(cfg["permission"]["*"], "deny")
 
+    def test_opencode_model_seed_is_forwarded_and_declared_for_wire_verification(self):
+        spec = agent_spec("opencode", "glm-5.2", base_url="https://example.com/v1")
+        cfg = build_agent_config(spec, zg=False, max_model_turns=30, model_seed=20260915)
+        self.assertEqual(cfg["agent"]["build"]["options"], {"seed": 20260915})
+        controls = control_manifest(spec, max_model_turns=30, model_seed=20260915)
+        self.assertEqual(controls["model_seed"], 20260915)
+        self.assertTrue(controls["seed_wire_verification_required"])
+        with self.assertRaises(ValueError):
+            build_agent_config(agent_spec("qodercli", "qwen3.8-max"), zg=False, model_seed=1)
+
     def test_qoder_config_and_argv_remove_write_and_external_tools(self):
         spec = agent_spec("qodercli", "qwen3.8-max")
         cfg = build_agent_config(spec, zg=True, mcp_command=["node", "/bridge.mjs", "serve"])
@@ -239,7 +249,7 @@ class ReadonlyAgentTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("OPENCODE_READONLY_TEST_BINARY"), "requires pinned OpenCode binary; uses only a local fake provider")
 class OpenCodeRequestContractTests(unittest.TestCase):
-    def test_actual_task_requests_include_zero_temperature_for_both_models(self):
+    def test_actual_task_requests_include_fixed_temperature_and_seed_for_both_models(self):
         """Catch capability gating that a config-dict assertion cannot detect."""
         binary = os.environ["OPENCODE_READONLY_TEST_BINARY"]
         self.assertEqual(subprocess.check_output([binary, "--version"], text=True, timeout=10).strip(), "1.18.4")
@@ -288,7 +298,8 @@ class OpenCodeRequestContractTests(unittest.TestCase):
                 try:
                     spec = agent_spec("opencode", model, base_url=f"http://127.0.0.1:{server.server_port}/v1")
                     cfg_path = root / "opencode.json"
-                    cfg_path.write_text(json.dumps(build_agent_config(spec, zg=False, max_model_turns=3)))
+                    cfg_path.write_text(json.dumps(build_agent_config(spec, zg=False, max_model_turns=3,
+                                                                      model_seed=20260915)))
                     env = {"PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
                            "OPENAI_API_KEY": "offline-fixture-not-a-real-key", "OPENCODE_DISABLE_MODELS_FETCH": "true",
                            "XDG_CONFIG_HOME": str(root / "config"), "XDG_DATA_HOME": str(root / "data"),
@@ -301,6 +312,8 @@ class OpenCodeRequestContractTests(unittest.TestCase):
                     tasks = [body for body in requests if body.get("tools")]
                     self.assertEqual(len(tasks), 2, "Expected read request then final-answer request")
                     self.assertTrue(all(body.get("temperature") == 0 for body in tasks), [(body.get("model"), body.get("temperature")) for body in tasks])
+                    self.assertTrue(all(body.get("seed") == 20260915 for body in tasks),
+                                    [(body.get("model"), body.get("seed")) for body in tasks])
                     self.assertTrue(all(body["model"] == model for body in tasks))
                     self.assertTrue(all({tool["function"]["name"] for tool in body["tools"]} == {"read", "grep", "glob"} for body in tasks))
                 finally:

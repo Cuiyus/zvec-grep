@@ -23,26 +23,32 @@ from typing import Any
 
 PROFILES = {"B": "baseline", "C": "zvec-grep-current", "N": "zvec-grep-candidate"}
 METRICS = ("input_tokens", "tool_calls_attempted")
-T95_DF4 = 2.7764451051977987
+REPETITIONS = 10
+ORDER_SEED = 1729
+MODEL_SEED = 20260915
+T95_DF9 = 2.2621571627409915
 T_ASSUMPTIONS = ("Auxiliary two-sided 95% t interval for the mean paired difference; "
-                 "n=5, df=4, independent approximately normal block differences. "
-                 "Five repetitions do not prove stable benefit or quality equivalence.")
+                 "n=10, df=9, independent approximately normal block differences. "
+                 "Ten repetitions do not prove stable benefit or quality equivalence.")
 
 
-def make_plan(case_id: str, repetitions: int = 5, seed: int = 1729,
-              candidate: str | None = "Pxx") -> dict[str, Any]:
-    """Freeze five blocks, each containing each arm once in balanced positions.
+def make_plan(case_id: str, repetitions: int = REPETITIONS, seed: int = ORDER_SEED,
+              model_seed: int = MODEL_SEED, candidate: str | None = "Pxx") -> dict[str, Any]:
+    """Freeze ten blocks, each containing each arm once in balanced positions.
 
     ``candidate=None`` explicitly means no promotion: run only B and C. Pxx is
     a draft placeholder and must be replaced before a confirming experiment.
-    ``order_seed`` controls execution order, never the model's sampling seed.
+    ``order_seed`` controls execution order. ``model_seed`` is fixed across
+    arms and repetitions and must be verified from captured provider requests.
     """
     if not isinstance(case_id, str) or not case_id.strip() or any(c in case_id for c in "/\\"):
         raise ValueError("case_id must be a non-empty path-safe identifier")
-    if type(repetitions) is not int or repetitions != 5:
-        raise ValueError("this confirmation protocol requires exactly five repetitions")
+    if type(repetitions) is not int or repetitions != REPETITIONS:
+        raise ValueError("this confirmation protocol requires exactly ten repetitions")
     if type(seed) is not int:
         raise ValueError("order seed must be an integer")
+    if type(model_seed) is not int or not 0 <= model_seed <= 2**31 - 1:
+        raise ValueError("model seed must be a 32-bit non-negative integer")
     if candidate is not None and (not isinstance(candidate, str) or not candidate.strip() or candidate == "P00"):
         raise ValueError("candidate must identify a distinct frozen version, or be None for no promotion")
     arms = list(PROFILES) if candidate is not None else ["B", "C"]
@@ -64,11 +70,12 @@ def make_plan(case_id: str, repetitions: int = 5, seed: int = 1729,
             trials.append({"trial_id": trial_id, "case_id": case_id, "arm": arm,
                            "profile": PROFILES[arm], "prompt_version": None if arm == "B" else "P00" if arm == "C" else candidate,
                            "block": block, "repetition": block, "order": len(trials) + 1,
+                           "model_seed": model_seed,
                            "position": position, "trajectory_path": f"{trial_id}/agent/trajectory.json",
                            "status": "planned"})
     return {"schema_version": 1, "protocol": "e2e-prompt-stability-v1", "case_id": case_id,
             "repetitions": repetitions, "repetitions_per_profile": repetitions,
-            "order_seed": seed, "model_seed": None, "candidate": candidate,
+            "order_seed": seed, "model_seed": model_seed, "candidate": candidate,
             "candidate_status": "no_promotion" if candidate is None else "placeholder" if candidate == "Pxx" else "selected_requires_manifest_hash",
             "planned_trials": len(trials), "trials": trials}
 
@@ -132,18 +139,19 @@ def _repetition(values: list[Any], planned: int) -> dict[str, Any]:
 
 def _validate_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
     rows = list(_records(plan, "plan").values())
-    if not rows or plan.get("repetitions_per_profile", plan.get("repetitions")) != 5:
-        raise ValueError("plan must contain five predeclared blocks")
+    repetitions = plan.get("repetitions_per_profile", plan.get("repetitions"))
+    if not rows or repetitions != REPETITIONS:
+        raise ValueError("plan must contain ten predeclared blocks")
     arms = {row.get("arm") for row in rows}
     if arms not in ({"B", "C"}, {"B", "C", "N"}):
         raise ValueError("plan requires B/C or B/C/N arms")
-    for block in range(1, 6):
+    for block in range(1, repetitions + 1):
         members = [row for row in rows if row.get("block") == block]
         if len(members) != len(arms) or {row["arm"] for row in members} != arms:
             raise ValueError("each block must have exactly one trial per arm")
         if {row.get("position") for row in members} != set(range(1, len(arms) + 1)):
             raise ValueError("each block requires unique execution positions")
-    if len(rows) != 5 * len(arms) or {r.get("order") for r in rows} != set(range(1, len(rows) + 1)):
+    if len(rows) != repetitions * len(arms) or {r.get("order") for r in rows} != set(range(1, len(rows) + 1)):
         raise ValueError("plan order must cover exactly the scheduled trials")
     for row in rows:
         if row.get("profile") != PROFILES[row["arm"]]:
@@ -226,11 +234,11 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
         if left not in arm_reports:
             continue
         comparison = {"left": left, "right": right, "direction": "left minus right; negative cost difference means lower observed cost",
-                      "planned_pairs": 5, "metrics": {}}
+                      "planned_pairs": REPETITIONS, "metrics": {}}
         for metric in METRICS:
             flag = "usage_complete" if metric == "input_tokens" else "tools_complete"
             entries = []
-            for block in range(1, 6):
+            for block in range(1, REPETITIONS + 1):
                 a, b = by_block_arm[block, left], by_block_arm[block, right]
                 av, bv = a["metrics"][metric], b["metrics"][metric]
                 reasons = []
@@ -249,24 +257,24 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
             eligible = [e["observed_delta"] for e in entries if e["benefit_eligible"]]
             summary = _description(eligible)
             interval = None
-            if len(eligible) == 5:
-                radius = T95_DF4 * statistics.stdev(eligible) / math.sqrt(5)
+            if len(eligible) == REPETITIONS:
+                radius = T95_DF9 * statistics.stdev(eligible) / math.sqrt(REPETITIONS)
                 interval = {"lower": summary["mean"] - radius, "upper": summary["mean"] + radius,
-                            "n": 5, "df": 4, "assumptions": T_ASSUMPTIONS}
+                            "n": REPETITIONS, "df": REPETITIONS - 1, "assumptions": T_ASSUMPTIONS}
             comparison["metrics"][metric] = {"pairs": entries, "eligible_pairs": len(eligible),
-                "complete_five_pair_estimate": len(eligible) == 5,
+                "complete_planned_pair_estimate": len(eligible) == REPETITIONS,
                 "qualified_difference_summary": summary, "auxiliary_t95": interval,
-                "status": "five_qualified_pairs" if len(eligible) == 5 else "insufficient_complete_quality_qualified_pairs"}
+                "status": "ten_qualified_pairs" if len(eligible) == REPETITIONS else "insufficient_complete_quality_qualified_pairs"}
         pairs[f"{left}-{right}"] = comparison
     controls = copy.deepcopy(controls) if controls is not None else {}
     unknown_controls = [key for key, value in controls.items() if value is None or value == "unknown" or
                         isinstance(value, dict) and value.get("status") in ("unknown", "unverified", "not_observable")]
     return {"schema_version": 1, "protocol": plan.get("protocol"), "case_id": plan.get("case_id"),
-            "candidate": plan.get("candidate"), "order_seed": plan.get("order_seed"),
+            "candidate": plan.get("candidate"), "order_seed": plan.get("order_seed"), "model_seed": plan.get("model_seed"),
             "plan": copy.deepcopy(plan), "source_reference": copy.deepcopy(source_reference),
             "controls": controls, "unknown_controls": unknown_controls,
             "controls_record_status": "provided" if controls else "unknown",
-            "scope": "Single development QA, five independent sessions per arm; no population or quality-equivalence claim.",
+            "scope": "Single development QA, ten independent sessions per arm with a fixed requested model seed; no population or quality-equivalence claim.",
             "input_token_convention": "Use the native adapter's reported input convention, including cached input where that adapter specifies it; billing cost is separate.",
             "planned_trials": len(rows), "observed_trials": sum(r["execution_status"] != "missing" for r in rows),
             "execution_counts": dict(Counter(r["execution_status"] for r in rows)),
@@ -312,13 +320,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
     lines += ["", "Only completed, quality-passed pairs with verified metric completeness enter the qualified summaries.",
               "C−B compares current integration; N−B candidate integration; N−C the prompt change. Negative deltas indicate lower cost.", "",
-              "| Comparison | Metric | Five observed block deltas | Qualified pairs | Qualified mean | Median | Range | Auxiliary t95 |",
+              "| Comparison | Metric | Ten observed block deltas | Qualified pairs | Qualified mean | Median | Range | Auxiliary t95 |",
               "|---|---|---|---:|---:|---:|---|---|"]
     for name, comparison in report["comparisons"].items():
         for metric, data in comparison["metrics"].items():
             stats, interval = data["qualified_difference_summary"], data["auxiliary_t95"]
             deltas = ", ".join(_cell(p["observed_delta"]) + ("*" if not p["benefit_eligible"] else "") for p in data["pairs"])
-            values = [name, metric, deltas, f"{data['eligible_pairs']}/5", stats["mean"], stats["median"],
+            values = [name, metric, deltas, f"{data['eligible_pairs']}/{comparison['planned_pairs']}", stats["mean"], stats["median"],
                       f"{_cell(stats['minimum'])} … {_cell(stats['maximum'])}",
                       f"{_cell(interval['lower'])} … {_cell(interval['upper'])}" if interval else "unavailable"]
             lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
@@ -340,7 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     plan_parser = sub.add_parser("plan")
     plan_parser.add_argument("--case-id", required=True)
-    plan_parser.add_argument("--seed", type=int, default=1729)
+    plan_parser.add_argument("--seed", type=int, default=ORDER_SEED)
+    plan_parser.add_argument("--model-seed", type=int, default=MODEL_SEED)
     plan_parser.add_argument("--candidate", default="Pxx")
     plan_parser.add_argument("--no-promotion", action="store_true")
     plan_parser.add_argument("--output", type=Path, required=True)
@@ -352,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.output.exists() or args.command == "report" and args.output.with_suffix(".md").exists():
         parser.error("output already exists; preserve prior plans and reports")
     if args.command == "plan":
-        value = make_plan(args.case_id, seed=args.seed, candidate=None if args.no_promotion else args.candidate)
+        value = make_plan(args.case_id, seed=args.seed, model_seed=args.model_seed,
+                          candidate=None if args.no_promotion else args.candidate)
     else:
         def read(path: Path | None) -> Any:
             return json.loads(path.read_text(encoding="utf-8")) if path is not None else None

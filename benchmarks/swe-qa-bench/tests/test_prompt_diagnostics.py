@@ -125,11 +125,11 @@ class PromptDiagnosticsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             variant_request(state(), {**config(), "description_overrides": {"unavailable_rg": "desc"}}, "P01")
 
-    def test_plan_exactly_five_each_immutable_and_order_seed_only(self):
+    def test_plan_exactly_ten_each_immutable_and_fixed_model_seed(self):
         plan = self.make_plan()
-        self.assertEqual(len(plan["samples"]), 20)
+        self.assertEqual(len(plan["samples"]), 40)
         for variant in VARIANTS:
-            self.assertEqual(sum(s["variant"] == variant for s in plan["samples"]), 5)
+            self.assertEqual(sum(s["variant"] == variant for s in plan["samples"]), 10)
         self.assertNotIn("seed", plan["requests"]["group-original-P00"]["request"])
         with self.assertRaises(ValueError):
             build_plan({"states": [state()]}, config(), self.root, repeats=4)
@@ -174,10 +174,10 @@ class PromptDiagnosticsTests(unittest.TestCase):
             return 200, {"Content-Type": "application/json"}, json.dumps(response()).encode()
         with patch.dict(os.environ, {"DIAGNOSTIC_KEY": "secret-token"}):
             report = run_plan(self.root / "plan.json", credential_env="DIAGNOSTIC_KEY", endpoint=ENDPOINT, transport=fake)
-            self.assertEqual(report["completed"], 19)
-            self.assertEqual(report["planned"], 20)
+            self.assertEqual(report["completed"], 39)
+            self.assertEqual(report["planned"], 40)
             run_plan(self.root / "plan.json", credential_env="DIAGNOSTIC_KEY", endpoint=ENDPOINT, transport=fake)
-            self.assertEqual(len(count), 20)
+            self.assertEqual(len(count), 40)
         files = list((self.root / "samples").rglob("*.json")) + list((self.root / "samples").rglob("*.txt"))
         self.assertFalse(any("secret-token" in p.read_text() for p in files))
         self.assertEqual(report["selection"]["variant"], "P00")
@@ -199,7 +199,7 @@ class PromptDiagnosticsTests(unittest.TestCase):
         self.assertEqual(report["completed"], 0)
         self.assertEqual(report["samples"][0]["status"], "incomplete_transport")
         self.assertEqual(report["samples"][0]["response"]["usage"]["prompt_tokens"], 10)
-        self.assertEqual(len(list((self.root / "samples").rglob("response.txt"))), 20)
+        self.assertEqual(len(list((self.root / "samples").rglob("response.txt"))), 40)
 
     def test_interrupted_sample_not_resubmitted(self):
         plan = self.make_plan()
@@ -211,7 +211,7 @@ class PromptDiagnosticsTests(unittest.TestCase):
             return 200, {}, json.dumps(response()).encode()
         with patch.dict(os.environ, {"DIAGNOSTIC_KEY": "key"}):
             report = run_plan(self.root / "plan.json", credential_env="DIAGNOSTIC_KEY", endpoint=ENDPOINT, transport=fake)
-        self.assertEqual(len(count), 19)
+        self.assertEqual(len(count), 39)
         self.assertEqual(report["samples"][0]["status"], "interrupted_or_unknown")
 
     def test_selection_requires_reviewed_improvement_not_adoption_or_repetition(self):

@@ -208,7 +208,7 @@ def convert_trace(agent_dir: Path, model: str, instruction: str) -> dict[str, An
             "final_metrics": trajectory.final_metrics.model_dump(mode="json", exclude_none=True)}
 
 
-def wire_contract(agent_dir: Path, model: str, expected: list[str]) -> dict[str, Any]:
+def wire_contract(agent_dir: Path, model: str, expected: list[str], *, expected_seed: int | None = None) -> dict[str, Any]:
     """Check effective task request settings, not just the intended config."""
     path = agent_dir / "wire.jsonl"
     if not path.is_file():
@@ -219,23 +219,28 @@ def wire_contract(agent_dir: Path, model: str, expected: list[str]) -> dict[str,
     task_requests = [e for e in requests if e.get("tool_names")]
     observed_models = sorted({e.get("model") for e in responses.values() if e.get("model")})
     temperatures = [e.get("temperature") for e in task_requests]
+    seeds = [e.get("seed") for e in task_requests]
     catalogs = [sorted(e["tool_names"]) for e in task_requests]
     identity_ok = bool(requests) and all(
         responses.get(e["request_id"], {}).get("model", "").lower() == model.lower()
         and responses.get(e["request_id"], {}).get("status") == 200 for e in requests)
     catalog_ok = bool(task_requests) and all(set(catalog) == set(expected) for catalog in catalogs)
     temperature_ok = bool(temperatures) and all(t == 0 for t in temperatures)
+    seed_ok = expected_seed is None or bool(seeds) and all(value == expected_seed for value in seeds)
     # A transport interruption is an experimental failure, not evidence that
     # the whole agent/model combination has a deterministically wrong setup.
     model_mismatch = any(value.lower() != model.lower() for value in observed_models)
     configuration_mismatch = (model_mismatch or any(set(c) != set(expected) for c in catalogs)
-                              or any(t != 0 for t in temperatures))
-    return {"valid": identity_ok and catalog_ok and temperature_ok,
+                              or any(t != 0 for t in temperatures)
+                              or expected_seed is not None and not seed_ok)
+    return {"valid": identity_ok and catalog_ok and temperature_ok and seed_ok,
             "configuration_mismatch": configuration_mismatch,
             "provider_model_valid": identity_ok, "requested_model": model,
             "observed_models": observed_models, "tool_catalog_valid": catalog_ok,
             "expected_tools": sorted(expected), "observed_catalogs": catalogs,
             "temperature_zero_verified": temperature_ok, "observed_task_temperatures": temperatures,
+            "requested_seed": expected_seed, "seed_verified": seed_ok,
+            "observed_task_seeds": seeds,
             "provider_request_count": len(requests), "task_requests_with_tools": len(task_requests),
             "limitation": "Provider-reported model alias is verified; exact hosted weight revision is not exposed."}
 

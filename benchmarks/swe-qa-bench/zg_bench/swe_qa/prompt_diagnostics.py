@@ -27,7 +27,7 @@ import urllib.request
 VARIANTS = ("P00", "P10", "P01", "P11")
 CATEGORIES = ("original_question", "exact_search_no_result", "relevant_zg_entry",
               "parameter_error", "sufficient_evidence")
-REPETITIONS = 5
+REPETITIONS = 10
 
 
 def render_candidate_prompts(*, search_tool: str, rg_tool: str = "native grep",
@@ -305,13 +305,13 @@ def variant_request(state: dict[str, Any], config: dict[str, Any], variant: str)
 
 def build_plan(states: dict[str, Any], prompt_config: dict[str, Any], output_dir: Path,
                *, repeats: int = REPETITIONS, order_seed: int = 1729) -> dict[str, Any]:
-    """Freeze four variants and exactly five next-decision draws per state.
+    """Freeze four variants and exactly ten next-decision draws per state.
 
     prompt_config may be a common config or {groups: {group_id: config}}.
     This order seed never becomes a model seed.
     """
     if repeats != REPETITIONS:
-        raise ValueError("Protocol requires exactly five observations per variant/state")
+        raise ValueError("Protocol requires exactly ten observations per variant/state")
     output_dir = Path(output_dir)
     requests, samples = {}, []
     rng = random.Random(order_seed)

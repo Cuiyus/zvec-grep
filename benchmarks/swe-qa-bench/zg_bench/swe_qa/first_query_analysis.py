@@ -306,8 +306,9 @@ def _initial_request(agent_dir: Path, sources: _Sources) -> dict[str, Any]:
             "source": sources.ref(path, line), "body_source": sources.ref(body_path) if body else None,
             "model": body.get("model") if body else event.get("model"),
             "temperature": body.get("temperature") if body else event.get("temperature"),
+            "seed": body.get("seed") if body else event.get("seed"),
             "top_p": body.get("top_p") if body else event.get("top_p"),
-            "parameter_presence": {key: key in body for key in ("model", "temperature", "top_p")} if body else None,
+            "parameter_presence": {key: key in body for key in ("model", "temperature", "seed", "top_p")} if body else None,
             "tool_names": event.get("tool_names"), "schema_sha256": event.get("schema_sha256"),
             "computed_schema_sha256": schema_hash,
             "schema_sha256_verified": schema_hash == event.get("schema_sha256") if schema_hash else None,
@@ -315,7 +316,7 @@ def _initial_request(agent_dir: Path, sources: _Sources) -> dict[str, Any]:
             "request_sha256": captured_hash, "reconstructed_request_sha256": reconstructed_hash,
             "request_sha256_verified": reconstructed_hash == captured_hash if reconstructed_hash and captured_hash else None,
             "canonical_body_sha256": _sha(_canonical(body).encode()) if body else None,
-            "metadata_matches_body": all(event.get(k) == body.get(k) for k in ("model", "temperature", "top_p")) if body else None,
+            "metadata_matches_body": all(event.get(k) == body.get(k) for k in ("model", "temperature", "seed", "top_p")) if body else None,
             "scope": "First nonempty-tool-catalogue request only; does not establish equality of later first-ZG prompts",
             "diagnostics": errors}
 

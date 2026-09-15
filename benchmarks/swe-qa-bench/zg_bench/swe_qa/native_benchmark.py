@@ -30,10 +30,10 @@ from .readonly_run import (EMBEDDING, PACKAGE, directory_identity, docker_comman
 GROUPS = {
     "opencode-glm52": ("opencode", "glm-5.2"),
     "opencode-qwen38max": ("opencode", "qwen3.8-max"),
-    "qoder-qwen38max": ("qodercli", "qwen3.8-max"),
 }
 PROTOCOL = "native-install-e2e-prompt-v1"
 LIMITS = {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": 900}
+MODEL_SEED = e2e_stability.MODEL_SEED
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -64,20 +64,25 @@ def instruction(case: dict) -> str:
 
 
 def native_tools(agent: str, zg: bool) -> list[str]:
-    common = ["read", "grep", "glob"] if agent == "opencode" else ["Read", "Grep", "Glob"]
-    search = "zvec_grep_zvec_grep_search" if agent == "opencode" else "mcp__zvec_grep__zvec_grep_search"
+    if agent != "opencode":
+        raise ValueError("This native benchmark cohort only supports OpenCode")
+    common = ["read", "grep", "glob"]
+    search = "zvec_grep_zvec_grep_search"
     return [*common, *([search] if zg else [])]
 
 
-def runtime_spec(group: str, case: dict, *, zg: bool, variant: str = "P00") -> tuple[Any, dict]:
+def runtime_spec(group: str, case: dict, *, zg: bool, variant: str = "P00",
+                 model_seed: int = MODEL_SEED) -> tuple[Any, dict]:
     from .prompt_diagnostics import render_candidate_prompts
     if variant not in {"P00", "P10", "P01", "P11"} or (not zg and variant != "P00"):
         raise ValueError("Invalid native prompt variant")
     agent, model = GROUPS[group]
     spec = agent_spec(agent, model, base_url=OPENCODE_CUSTOM_BASE_URL if agent == "opencode" else None)
-    config = build_agent_config(spec, zg=False, max_model_turns=LIMITS["model_requests"])
+    config = build_agent_config(spec, zg=False, max_model_turns=LIMITS["model_requests"],
+                                model_seed=model_seed)
     value = {"agent": agent, "model": model, "arm": "zg" if zg else "baseline",
              "prompt_variant": variant, "instruction": instruction(case), "workspace": "/app",
+             "model_seed": model_seed,
              "log_dir": "/logs", "model_cache": "/models", "limits": dict(LIMITS),
              "base_config": config, "tap_upstream": spec.base_url}
     if variant != "P00":
@@ -131,9 +136,8 @@ def launch(*, image: str, source: Path, logs: Path, cache: Path, workspace: Path
     if credential:
         if not os.environ.get(credential):
             raise ValueError(f"Missing required environment variable: {credential}")
-        target = "OPENAI_API_KEY" if spec["agent"] == "opencode" else "QODER_PERSONAL_ACCESS_TOKEN"
-        command += ["--env", target]
-        env[target] = os.environ[credential]
+        command += ["--env", "OPENAI_API_KEY"]
+        env["OPENAI_API_KEY"] = os.environ[credential]
     command += [image, "python3", "/opt/qa/" + script, "--spec", "/logs/native-session-spec.json"]
     started = time.monotonic()
     with (logs / "launcher.stdout.txt").open("w") as stdout, (logs / "launcher.stderr.txt").open("w") as stderr:
@@ -183,7 +187,8 @@ def trial_result(trial: dict, agent_dir: Path, spec: Any, text: str, code: int, 
             row["execution_status"] = "contract_failure"
         row["tools_complete"] = row["tools_complete"] and not conversion.get("parse", {}).get("invalid_json_lines")
         if spec.name == "opencode":
-            contract = wire_contract(agent_dir, spec.provider_model, native_tools(spec.name, zg))
+            contract = wire_contract(agent_dir, spec.provider_model, native_tools(spec.name, zg),
+                                     expected_seed=trial["model_seed"])
             row["wire_contract"] = contract
             if not contract["valid"]:
                 row["usage_complete"] = False
@@ -234,13 +239,16 @@ def run_group(args: argparse.Namespace) -> int:
         raise ValueError("Current prompt text differs from frozen screening selection")
     if selection.get("case_sha256") != sha256(args.case):
         raise ValueError("Prompt selection belongs to a different case")
-    plan = e2e_stability.make_plan(case["case_id"], candidate=candidate, seed=1729)
+    plan = e2e_stability.make_plan(case["case_id"], repetitions=e2e_stability.REPETITIONS,
+                                   candidate=candidate, seed=e2e_stability.ORDER_SEED,
+                                   model_seed=MODEL_SEED)
     plan.update(protocol=PROTOCOL, group=args.group, selection_sha256=sha256(args.selection))
     write_json(output / "plan.json", plan)
     spec, _ = runtime_spec(args.group, case, zg=False)
     manifest = {"protocol": PROTOCOL, "group": args.group, "case_id": case["case_id"],
                 "case_sha256": sha256(args.case), "source": case["repo"], "package": PACKAGE,
-                "embedding": EMBEDDING, "agent": spec.to_dict(), "controls": control_manifest(spec, max_model_turns=30),
+                "embedding": EMBEDDING, "agent": spec.to_dict(),
+                "controls": control_manifest(spec, max_model_turns=30, model_seed=MODEL_SEED),
                 "index_policy": "fresh independent index for each zg trial; no frozen identity requirement",
                 "prompt_selection": selection, "started_at": datetime.now(UTC).isoformat(),
                 "ci": {k: os.environ.get(k) for k in ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_RUN_ATTEMPT")}}
@@ -251,13 +259,15 @@ def run_group(args: argparse.Namespace) -> int:
     for trial in plan["trials"]:
         trial_dir = output / trial["trial_id"]
         agent_dir = trial_dir / "agent"
-        spec, runtime = runtime_spec(args.group, case, zg=trial["arm"] != "B", variant=trial.get("prompt_version") or "P00")
+        spec, runtime = runtime_spec(args.group, case, zg=trial["arm"] != "B",
+                                     variant=trial.get("prompt_version") or "P00",
+                                     model_seed=trial["model_seed"])
         trial["status"] = "running"
         write_json(output / "plan.json", plan)
         print(json.dumps({"phase": "native_e2e", "group": args.group, "trial": trial["trial_id"], "status": "running"}), flush=True)
         code = launch(image=args.image, source=source, logs=agent_dir, cache=output / "model-cache",
                       workspace=output / "workspaces" / trial["trial_id"], spec=runtime,
-                      credential="GLM_API_KEY" if spec.name == "opencode" else "QODER_PERSONAL_ACCESS_TOKEN")
+                      credential="GLM_API_KEY")
         integrity = read_json(agent_dir / "source-integrity.json", {"status": "unchanged"})
         row = trial_result(trial, agent_dir, spec, instruction(case), code,
                            directory_identity(source, skip_git=True) == source_before
@@ -370,18 +380,6 @@ def screen(args: argparse.Namespace) -> int:
         traces.append({"group_id": group, "trial_id": "initial-native-capture", "agent_dir": str(agent_dir),
                        "agent": "opencode", "model": spec.provider_model, "capture_only": True,
                        "intended_endpoint": spec.base_url, "native_request_builder_verified": True})
-    traces.append({"group_id": "qoder-qwen38max", "trial_id": "unavailable", "agent_dir": "",
-                   "agent": "qodercli", "model": "qwen3.8-max"})
-    # Installation/registration can still be verified without claiming that
-    # Qoder exposes its complete model wire or permits faithful state replay.
-    _, qoder_runtime = runtime_spec("qoder-qwen38max", case, zg=True)
-    qoder_runtime["prepare_only"] = True
-    qoder_logs = output / "capture" / "qoder-qwen38max"
-    code = launch(image=args.image, source=source, logs=qoder_logs, cache=output / "model-cache",
-                  workspace=output / "capture-indexes" / "qoder-qwen38max", spec=qoder_runtime,
-                  credential=None)
-    if code or read_json(qoder_logs / "preparation.json", {}).get("status") != "prepared":
-        raise ValueError("Native Qoder installation preflight failed; no paid screening started")
     states = pd.extract_states(traces, output / "states")
     config = pd.default_prompt_config(captures)
     write_json(output / "prompt-config.json", config)
@@ -423,11 +421,12 @@ def screen(args: argparse.Namespace) -> int:
                  "decision_sampling_complete": complete,
                  "screening": selected, "screening_plan_sha256": sha256(plan_path),
                  "screening_evidence_sha256": sha256(evidence_path), "candidate_policy_sha256": sha256(output / "candidate-policy.json"),
-                 "frozen_at": datetime.now(UTC).isoformat(), "confirmation_trials_per_arm": 5,
+                 "frozen_at": datetime.now(UTC).isoformat(),
+                 "confirmation_trials_per_arm": e2e_stability.REPETITIONS,
                  "case_sha256": sha256(args.case),
                  "prompt_runtime_overrides": frozen_overrides(candidate if promoted else None, case),
                  "unavailable": states["unavailable"], "missing_categories": states["missing_categories"],
-                 "scope": "One native initial state per OpenCode combination; Qoder and later states not represented."}
+                 "scope": "One native initial state per registered OpenCode model combination; later states are not represented."}
     write_json(output / "selection.json", selection)
     return 0
 
@@ -439,7 +438,7 @@ def diagnose(args: argparse.Namespace) -> int:
     case = read_json(args.case)
     runs = [args.runs_dir / group for group in GROUPS]
     if any(not (directory / "plan.json").is_file() for directory in runs):
-        raise ValueError("All three planned group artifacts are required")
+        raise ValueError("All registered group artifacts are required")
     source = source_checkout(case, output / "corpus")
     analysis = nq.build_catalog(runs, case)
     path = output / "query-analysis.json"

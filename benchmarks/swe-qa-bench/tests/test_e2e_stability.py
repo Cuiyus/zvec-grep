@@ -31,9 +31,10 @@ class E2EStabilityTests(unittest.TestCase):
             for seed in range(40):
                 plan = make_plan("reflex-6", seed=seed, candidate=candidate)
                 self.assertEqual(plan, make_plan("reflex-6", seed=seed, candidate=candidate))
-                self.assertEqual(len(plan["trials"]), 5 * len(arms))
-                self.assertIsNone(plan["model_seed"])
-                for block in range(1, 6):
+                self.assertEqual(len(plan["trials"]), 10 * len(arms))
+                self.assertEqual(plan["model_seed"], 20260915)
+                self.assertEqual({t["model_seed"] for t in plan["trials"]}, {20260915})
+                for block in range(1, 11):
                     trials = [t for t in plan["trials"] if t["block"] == block]
                     self.assertEqual({t["arm"] for t in trials}, arms)
                     self.assertEqual({t["repetition"] for t in trials}, {block})
@@ -52,27 +53,27 @@ class E2EStabilityTests(unittest.TestCase):
         for candidate in ("P00", "", 1):
             with self.assertRaises(ValueError):
                 make_plan("case", candidate=candidate)
-        for repetitions in (0, 4, 6, True):
+        for repetitions in (0, 5, 9, 11, True):
             with self.assertRaises(ValueError):
                 make_plan("case", repetitions=repetitions)
 
-    def test_complete_native_costs_form_three_distinct_five_pair_comparisons(self):
+    def test_complete_native_costs_form_three_distinct_ten_pair_comparisons(self):
         plan = make_plan("case", candidate="P10")
         results, quality = observations(plan)
         report = summarize(plan, {"trials": results}, {"trials": quality},
                            source_reference={"commit": "abc", "qa_gold_sha256": "def"},
-                           controls={"qoder_temperature": {"status": "unverified"}, "model_seed": None, "temperature": 0})
-        self.assertEqual(report["execution_counts"], {"completed": 15})
+                           controls={"temperature": 0, "model_seed": 20260915})
+        self.assertEqual(report["execution_counts"], {"completed": 30})
         self.assertEqual(report["source_reference"]["commit"], "abc")
-        self.assertEqual(set(report["unknown_controls"]), {"qoder_temperature", "model_seed"})
+        self.assertEqual(report["unknown_controls"], [])
         for name, expected in (("C-B", -100), ("N-B", -200), ("N-C", -100)):
             metric = report["comparisons"][name]["metrics"]["input_tokens"]
-            self.assertEqual(metric["qualified_difference_summary"]["values"], [expected] * 5)
+            self.assertEqual(metric["qualified_difference_summary"]["values"], [expected] * 10)
             self.assertEqual(metric["qualified_difference_summary"]["mean"], expected)
-            self.assertTrue(metric["complete_five_pair_estimate"])
+            self.assertTrue(metric["complete_planned_pair_estimate"])
             self.assertEqual(metric["auxiliary_t95"]["lower"], expected)
-            self.assertEqual(metric["auxiliary_t95"]["n"], 5)
-        self.assertEqual(report["arms"]["N"]["cost"]["input_tokens"]["observed_all_statuses"]["mean"], 830)
+            self.assertEqual(metric["auxiliary_t95"]["n"], 10)
+        self.assertEqual(report["arms"]["N"]["cost"]["input_tokens"]["observed_all_statuses"]["mean"], 855)
 
     def test_failed_cheap_run_stays_visible_but_cannot_be_a_benefit(self):
         plan = make_plan("case", candidate="P10")
@@ -87,9 +88,9 @@ class E2EStabilityTests(unittest.TestCase):
         self.assertFalse(pair["benefit_eligible"])
         self.assertIn("N:execution_timeout", pair["exclusions"])
         self.assertIsNone(metric["auxiliary_t95"])
-        self.assertEqual(metric["eligible_pairs"], 4)
-        self.assertEqual(report["arms"]["N"]["planned"], 5)
-        self.assertEqual(report["arms"]["N"]["completed_quality_passed"], 4)
+        self.assertEqual(metric["eligible_pairs"], 9)
+        self.assertEqual(report["arms"]["N"]["planned"], 10)
+        self.assertEqual(report["arms"]["N"]["completed_quality_passed"], 9)
         preserved = next(r for r in report["trials"] if r["trial_id"] == failed["trial_id"])
         self.assertEqual(preserved["observation"]["error"], "time budget exhausted")
         self.assertEqual(preserved["observation"]["retries"], 2)
@@ -104,9 +105,9 @@ class E2EStabilityTests(unittest.TestCase):
         tokens = report["comparisons"]["N-C"]["metrics"]["input_tokens"]
         tools = report["comparisons"]["N-C"]["metrics"]["tool_calls_attempted"]
         self.assertIsNone(tokens["pairs"][1]["observed_delta"])
-        self.assertEqual(tokens["eligible_pairs"], 4)
-        self.assertEqual(tools["eligible_pairs"], 5)
-        self.assertEqual(report["arms"]["N"]["cost"]["input_tokens"]["observed_all_statuses"]["n"], 4)
+        self.assertEqual(tokens["eligible_pairs"], 9)
+        self.assertEqual(tools["eligible_pairs"], 10)
+        self.assertEqual(report["arms"]["N"]["cost"]["input_tokens"]["observed_all_statuses"]["n"], 9)
 
     def test_unknown_completeness_and_missing_quality_never_become_passed(self):
         plan = make_plan("case", candidate="P10")
@@ -114,7 +115,7 @@ class E2EStabilityTests(unittest.TestCase):
         results[0].pop("usage_complete")
         results[0]["tools_complete"] = "true"
         report = summarize(plan, results, [])
-        self.assertEqual(report["quality_counts"], {"unscored": 15})
+        self.assertEqual(report["quality_counts"], {"unscored": 30})
         self.assertIsNone(report["trials"][0]["usage_completeness"])
         self.assertIsNone(report["trials"][0]["tools_completeness"])
         self.assertEqual(report["comparisons"]["N-B"]["metrics"]["input_tokens"]["eligible_pairs"], 0)
@@ -125,9 +126,9 @@ class E2EStabilityTests(unittest.TestCase):
         results, quality = observations(plan)
         next(q for q in quality if q["trial_id"] == "case-b03-N")["consensus_status"] = "fail"
         report = summarize(plan, results, quality)
-        self.assertEqual(report["comparisons"]["N-B"]["metrics"]["input_tokens"]["eligible_pairs"], 4)
-        self.assertEqual(report["comparisons"]["C-B"]["metrics"]["input_tokens"]["eligible_pairs"], 5)
-        self.assertEqual(report["arms"]["N"]["quality_counts"], {"pass": 4, "fail": 1})
+        self.assertEqual(report["comparisons"]["N-B"]["metrics"]["input_tokens"]["eligible_pairs"], 9)
+        self.assertEqual(report["comparisons"]["C-B"]["metrics"]["input_tokens"]["eligible_pairs"], 10)
+        self.assertEqual(report["arms"]["N"]["quality_counts"], {"pass": 9, "fail": 1})
 
     def test_missing_planned_trials_and_unplanned_observations_are_preserved(self):
         plan = make_plan("case", candidate="P10")
@@ -136,7 +137,7 @@ class E2EStabilityTests(unittest.TestCase):
         plan["trials"][-1]["status"] = "completed"
         results.append({"trial_id": "unplanned", "status": "completed", "metrics": {"input_tokens": 1}})
         report = summarize(plan, results, quality)
-        self.assertEqual(report["observed_trials"], 14)
+        self.assertEqual(report["observed_trials"], 29)
         self.assertEqual(report["execution_counts"]["missing"], 1)
         self.assertEqual(report["trials"][-1]["trial_id"], removed["trial_id"])
         self.assertEqual(report["trials"][-1]["execution_status"], "missing")
@@ -152,9 +153,9 @@ class E2EStabilityTests(unittest.TestCase):
         rows[4]["behavior"] = {}
         report = summarize(plan, results, quality)
         summary = report["arms"]["N"]
-        self.assertEqual(summary["zg_adoption"], {"yes": 3, "no": 1, "unknown": 1, "planned": 5})
+        self.assertEqual(summary["zg_adoption"], {"yes": 8, "no": 1, "unknown": 1, "planned": 10})
         self.assertEqual(summary["first_complete_request_repetition"]["unique"], 2)
-        self.assertEqual(summary["first_complete_request_repetition"]["modal_count"], 2)
+        self.assertEqual(summary["first_complete_request_repetition"]["modal_count"], 7)
         self.assertEqual(summary["first_complete_request_repetition"]["missing"], 2)
         self.assertEqual(summary["first_query_repetition"]["unique"], 1)
 

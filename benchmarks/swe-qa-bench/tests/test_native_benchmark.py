@@ -75,9 +75,8 @@ class NativeBenchmarkTests(unittest.TestCase):
                 self.assertNotIn("zvec_grep_rg", " ".join(nb.native_tools(agent, True)))
                 if agent == "opencode":
                     self.assertEqual(runtime["base_config"]["agent"]["build"]["temperature"], 0)
-                else:
-                    self.assertIsNone(runtime["tap_upstream"])
-                    self.assertNotIn("temperature", runtime["base_config"])
+                    self.assertEqual(runtime["base_config"]["agent"]["build"]["options"]["seed"], nb.MODEL_SEED)
+                    self.assertEqual(runtime["model_seed"], nb.MODEL_SEED)
             _, baseline = nb.runtime_spec(group, CASE, zg=False)
             self.assertEqual(baseline["arm"], "baseline")
             self.assertNotIn("guidance_override", baseline)
@@ -87,7 +86,25 @@ class NativeBenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             nb.runtime_spec("opencode-glm52", CASE, zg=True, variant="Pxx")
 
-    def test_no_promotion_runs_five_each_baseline_current_and_fresh_workspaces(self):
+    def test_wire_contract_requires_the_fixed_seed_on_every_task_request(self):
+        directory = self.root / "wire"
+        directory.mkdir()
+        expected = nb.native_tools("opencode", False)
+        rows = [
+            {"event": "request", "request_id": 1, "model": "glm-5.2", "temperature": 0,
+             "seed": nb.MODEL_SEED, "tool_names": expected},
+            {"event": "response", "request_id": 1, "model": "glm-5.2", "status": 200},
+        ]
+        (directory / "wire.jsonl").write_text("\n".join(map(json.dumps, rows)) + "\n")
+        contract = nb.wire_contract(directory, "glm-5.2", expected, expected_seed=nb.MODEL_SEED)
+        self.assertTrue(contract["valid"])
+        rows[0].pop("seed")
+        (directory / "wire.jsonl").write_text("\n".join(map(json.dumps, rows)) + "\n")
+        contract = nb.wire_contract(directory, "glm-5.2", expected, expected_seed=nb.MODEL_SEED)
+        self.assertFalse(contract["valid"])
+        self.assertTrue(contract["configuration_mismatch"])
+
+    def test_no_promotion_runs_ten_each_baseline_current_and_fresh_workspaces(self):
         calls = []
         def launch(**kwargs):
             calls.append(kwargs)
@@ -97,14 +114,15 @@ class NativeBenchmarkTests(unittest.TestCase):
              patch("sys.stdout", new=io.StringIO()):
             self.assertEqual(nb.run_group(self.args), 0)
         report = json.loads((self.args.output / "e2e-stability.json").read_text())
-        self.assertEqual(report["planned_trials"], 10)
-        self.assertEqual(report["observed_trials"], 10)
+        self.assertEqual(report["planned_trials"], 20)
+        self.assertEqual(report["observed_trials"], 20)
         self.assertEqual(set(report["arms"]), {"B", "C"})
-        self.assertEqual(len({str(call["workspace"]) for call in calls}), 10)
-        self.assertEqual(sum(call["spec"]["arm"] == "zg" for call in calls), 5)
+        self.assertEqual(len({str(call["workspace"]) for call in calls}), 20)
+        self.assertEqual(sum(call["spec"]["arm"] == "zg" for call in calls), 10)
+        self.assertEqual({call["spec"]["model_seed"] for call in calls}, {nb.MODEL_SEED})
         self.assertTrue(all(call["spec"]["prompt_variant"] == "P00" for call in calls))
         self.assertEqual(report["comparisons"]["C-B"]["metrics"]["input_tokens"]["eligible_pairs"], 0)
-        self.assertEqual(report["arms"]["C"]["cost"]["input_tokens"]["observed_all_statuses"]["values"], [123] * 5)
+        self.assertEqual(report["arms"]["C"]["cost"]["input_tokens"]["observed_all_statuses"]["values"], [123] * 10)
         manifest = json.loads((self.args.output / "manifest.json").read_text())
         self.assertEqual(manifest["package"], "@zvec/zvec-grep@0.2.2")
         self.assertEqual(manifest["embedding"], "local/potion-code-16m-v2")
@@ -120,9 +138,9 @@ class NativeBenchmarkTests(unittest.TestCase):
             self.assertEqual(nb.run_group(self.args), 1)
         self.assertEqual(launch.call_count, 1)
         report = json.loads((self.args.output / "e2e-stability.json").read_text())
-        self.assertEqual(report["planned_trials"], 10)
+        self.assertEqual(report["planned_trials"], 20)
         self.assertEqual(report["observed_trials"], 1)
-        self.assertEqual(report["execution_counts"]["missing"], 9)
+        self.assertEqual(report["execution_counts"]["missing"], 19)
 
     def test_selection_must_be_ready_before_any_external_work(self):
         dump(self.selection_path, {"ready": False, "candidate": "P10"})
@@ -247,7 +265,7 @@ class NativeBenchmarkTests(unittest.TestCase):
         self.assertEqual(original, plan)
         report = json.loads((self.args.output / "e2e-stability.json").read_text())
         self.assertEqual(set(report["arms"]), {"B", "C", "N"})
-        self.assertEqual(report["comparisons"]["N-C"]["metrics"]["input_tokens"]["eligible_pairs"], 5)
+        self.assertEqual(report["comparisons"]["N-C"]["metrics"]["input_tokens"]["eligible_pairs"], 10)
 
     def test_quality_view_rejects_path_escape_before_copy_or_judge(self):
         plan = self.quality_fixture(candidate=None)
@@ -273,22 +291,18 @@ class NativeBenchmarkTests(unittest.TestCase):
         model.assert_not_called()
         annotate.assert_not_called()
 
-    def test_screen_empty_decisions_retains_current_and_records_qoder_unavailability(self):
+    def test_screen_empty_decisions_retains_current_with_only_opencode_groups(self):
         def capture(**kwargs):
             directory, runtime = kwargs["logs"], kwargs["spec"]
-            if runtime["agent"] == "qodercli":
-                self.assertTrue(runtime["prepare_only"])
-                self.assertIsNone(kwargs["credential"])
-                dump(directory / "preparation.json", {"status": "prepared"})
-                return 0
             name = nb.native_tools("opencode", True)[-1]
-            body = {"model": runtime["model"], "temperature": 0, "stream": True,
+            body = {"model": runtime["model"], "temperature": 0, "seed": nb.MODEL_SEED, "stream": True,
                     "messages": [{"role": "system", "content": "ORIGINAL GUIDANCE"}, {"role": "user", "content": CASE["question"]}],
                     "tools": [{"type": "function", "function": {"name": name, "description": "native search", "parameters": {"type": "object"}}}]}
             raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
             dump(directory / "wire-requests/request-001.json", body)
             (directory / "wire-requests/request-001.raw.json").write_bytes(raw)
-            event = {"event": "request", "request_id": 1, "model": runtime["model"], "tool_names": [name], "request_sha256": hashlib.sha256(raw).hexdigest()}
+            event = {"event": "request", "request_id": 1, "model": runtime["model"], "temperature": 0,
+                     "seed": nb.MODEL_SEED, "tool_names": [name], "request_sha256": hashlib.sha256(raw).hexdigest()}
             (directory / "wire.jsonl").write_text(json.dumps(event) + "\n")
             dump(directory / "session-spec.json", {"tap_upstream": runtime["tap_upstream"]})
             dump(directory / "native-install.json", {"installed_guidance_text": "ORIGINAL GUIDANCE"})
@@ -308,12 +322,13 @@ class NativeBenchmarkTests(unittest.TestCase):
             self.assertEqual(nb.screen(self.args), 0)
         self.assertEqual(model.call_count, 2)
         plan = pd.load_plan(self.args.output / "decisions/plan.json")
-        self.assertEqual(len(plan["samples"]), 40)
+        self.assertEqual(len(plan["samples"]), 80)
         selected = json.loads((self.args.output / "selection.json").read_text())
         self.assertIsNone(selected["candidate"])
         self.assertEqual(selected["status"], "retain_current_insufficient_evidence")
         self.assertFalse(selected["decision_sampling_complete"])
-        self.assertTrue(any(r["group_id"] == "qoder-qwen38max" for r in selected["unavailable"]))
+        self.assertEqual(selected["unavailable"], [])
+        self.assertEqual(selected["confirmation_trials_per_arm"], 10)
 
     def capture_module(self):
         path = Path(__file__).resolve().parents[1] / "scripts/capture-native-state.py"
@@ -326,7 +341,8 @@ class NativeBenchmarkTests(unittest.TestCase):
         module = self.capture_module()
         runtime = SimpleNamespace(run=lambda spec: 4)
         loader = SimpleNamespace(exec_module=lambda module: None)
-        values = {"agent": "opencode", "log_dir": str(self.root / "capture"), "tap_upstream": "https://intended.example/v1"}
+        values = {"agent": "opencode", "log_dir": str(self.root / "capture"), "tap_upstream": "https://intended.example/v1",
+                  "model_seed": nb.MODEL_SEED, "base_config": {"agent": {"build": {"temperature": 0}}}}
         with patch.dict(os.environ, {"OPENAI_API_KEY": "existing-credential"}), \
              patch.object(module.importlib.util, "spec_from_file_location", return_value=SimpleNamespace(loader=loader)), \
              patch.object(module.importlib.util, "module_from_spec", return_value=runtime):
@@ -342,13 +358,15 @@ class NativeBenchmarkTests(unittest.TestCase):
         def fake_native(spec):
             native_specs.append(spec)
             self.assertEqual(os.environ["OPENAI_API_KEY"], "offline-native-capture")
-            body = {"model": "glm-5.2", "messages": [{"role": "system", "content": "installed guidance"}],
+            body = {"model": "glm-5.2", "temperature": 0, "seed": nb.MODEL_SEED,
+                    "messages": [{"role": "system", "content": "installed guidance"}],
                     "tools": [{"type": "function", "function": {"name": "zvec_grep_zvec_grep_search"}}]}
             raw = json.dumps(body).encode()
             path = directory / "wire-requests/request-002.raw.json"
             path.parent.mkdir(parents=True)
             path.write_bytes(raw)
-            event = {"event": "request", "request_id": 2, "tool_names": ["zvec_grep_zvec_grep_search"],
+            event = {"event": "request", "request_id": 2, "temperature": 0, "seed": nb.MODEL_SEED,
+                     "tool_names": ["zvec_grep_zvec_grep_search"],
                      "raw_body_path": "wire-requests/request-002.raw.json", "raw_body_redacted": False,
                      "request_sha256": hashlib.sha256(raw).hexdigest()}
             (directory / "wire.jsonl").write_text(json.dumps(event) + "\n")
@@ -356,7 +374,8 @@ class NativeBenchmarkTests(unittest.TestCase):
             return 0
         runtime = SimpleNamespace(run=fake_native, instruction_texts=lambda body: [m["content"] for m in body["messages"]])
         loader = SimpleNamespace(exec_module=lambda module: None)
-        values = {"agent": "opencode", "log_dir": str(directory), "tap_upstream": "https://intended.example/v1"}
+        values = {"agent": "opencode", "log_dir": str(directory), "tap_upstream": "https://intended.example/v1",
+                  "model_seed": nb.MODEL_SEED, "base_config": {"agent": {"build": {"temperature": 0}}}}
         with patch.object(module.importlib.util, "spec_from_file_location", return_value=SimpleNamespace(loader=loader)), \
              patch.object(module.importlib.util, "module_from_spec", return_value=runtime):
             self.assertEqual(module.capture(values), 0)
@@ -367,6 +386,7 @@ class NativeBenchmarkTests(unittest.TestCase):
         self.assertEqual(manifest["paid_model_calls"], 0)
         self.assertTrue(manifest["not_an_e2e_sample"])
         self.assertTrue(manifest["installed_guidance_verified"])
+        self.assertTrue(manifest["sampling_controls_verified"])
 
 
 if __name__ == "__main__":

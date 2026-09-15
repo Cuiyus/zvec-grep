@@ -31,6 +31,7 @@ from ..settings import OPENCODE_CUSTOM_BASE_URL
 
 
 GROUPS = ("opencode-glm52", "opencode-qwen38max", "qoder-qwen38max")
+MODEL_SEED = 20260915
 PROTOCOL = "query-ground-truth-v6"
 # Linux limits each execve argv string to 32 pages (typically 128 KiB).
 # Keep a conservative UTF-8 ceiling, including the terminal NUL, for Qoder's
@@ -151,11 +152,11 @@ def source_anchor(source_root: Path, proposal: dict[str, Any]) -> tuple[dict[str
 
 
 def verify_candidates(catalog: list[dict[str, Any]], outputs: dict[str, dict[str, Any]],
-                      source_root: Path) -> list[dict[str, Any]]:
+                      source_root: Path, *, groups: tuple[str, ...] = GROUPS) -> list[dict[str, Any]]:
     """Keep every nomination and failure; existence verification is not relevance."""
     units = {r["annotation_id"]: r for r in catalog}
     verified = []
-    for group in GROUPS:
+    for group in groups:
         rows = outputs.get(group, {}).get("annotations", [])
         ids = [r.get("annotation_id") for r in rows if isinstance(r, dict)]
         for row in rows:
@@ -190,8 +191,8 @@ def verify_candidates(catalog: list[dict[str, Any]], outputs: dict[str, dict[str
 
 
 def reconcile(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]],
-              reviews: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Two independent source-backed endorsements, not a majority of generators."""
+              reviews: dict[str, dict[str, Any]], *, groups: tuple[str, ...] = GROUPS) -> list[dict[str, Any]]:
+    """Require source-backed endorsement from every independent peer group."""
     decisions = []
     for proposal in proposals:
         row = {"proposal_id": proposal["proposal_id"], "annotation_id": proposal["annotation_id"],
@@ -199,7 +200,7 @@ def reconcile(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]],
         if proposal["source_status"] != "verified":
             decisions.append(row)
             continue
-        expected = [g for g in GROUPS if g != proposal["proposer_group"]]
+        expected = [g for g in groups if g != proposal["proposer_group"]]
         for group in expected:
             matching = [r for r in reviews.get(group, {}).get("annotations", [])
                         if isinstance(r, dict) and r.get("proposal_id") == proposal["proposal_id"]]
@@ -212,7 +213,7 @@ def reconcile(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]],
                      and all(v.get("status") == "verified" for v in validations))
             row["reviews"].append({"reviewer_group": group, "valid": valid, "raw_review": review})
         if all(r["valid"] and r["raw_review"]["decision"] == "accept" for r in row["reviews"]):
-            row.update(status="accepted", reason="source_verified_and_two_independent_semantic_endorsements")
+            row.update(status="accepted", reason="source_verified_and_all_independent_peer_endorsements")
         else:
             row["reason"] = "unresolved_semantic_review_or_disagreement"
         decisions.append(row)
@@ -221,7 +222,8 @@ def reconcile(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]],
 
 def freeze_labels(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]],
                   decisions: list[dict[str, Any]], case: dict[str, Any], *,
-                  analysis_sha256: str, case_sha256: str, entries_sha256: str) -> dict[str, Any]:
+                  analysis_sha256: str, case_sha256: str, entries_sha256: str,
+                  groups: tuple[str, ...] = GROUPS) -> dict[str, Any]:
     """Build shared context-specific positive anchors; omissions stay unknown."""
     resolved = {d["proposal_id"] for d in decisions if d["status"] == "accepted"}
     targets: dict[str, dict[str, Any]] = {}
@@ -276,10 +278,10 @@ def freeze_labels(catalog: list[dict[str, Any]], proposals: list[dict[str, Any]]
             "source_evidence": list(evidence.values()), "task_facts": facts,
             "targets": list(targets.values()), "queries": queries, "request_bindings": bindings,
             "annotation_provenance": {"independent_human_gold": False, "kind": "model_assisted_source_verified_cross_review",
-                "groups": list(GROUPS), "same_context_shared_labels": True, "current_zg_output_visible": False,
+                "groups": list(groups), "same_context_shared_labels": True, "current_zg_output_visible": False,
                 "e2e_final_answer_visible": False, "prior_tool_feedback_may_include_earlier_zg_output": True,
                 "semantic_review_is_model_judgment_not_formal_proof": True,
-                "selection_policy": "Each source-verified nomination needs reasoned endorsements from both other groups; unresolved nominations stay unknown. Different valid alternatives may coexist.",
+                "selection_policy": "Each source-verified nomination needs reasoned endorsements from every other registered group; unresolved nominations stay unknown. Different valid alternatives may coexist.",
                 "annotation_cost_included_in_e2e": False},
             "protocol": {"metric_profile": "entry-ranking-v1", "query_match": "exact complete request and observed context",
                 "unknown_policy": "No accepted independently reviewed anchor means unknown, not zero.",
@@ -313,7 +315,8 @@ Return one JSON object only. Do not modify files. Do not infer that repeated nom
 
 
 def annotation_config(spec: Any, *, packet_directory: str = "/annotation") -> dict[str, Any]:
-    config = build_agent_config(spec, zg=False, max_model_turns=40)
+    config = build_agent_config(spec, zg=False, max_model_turns=40,
+                                model_seed=MODEL_SEED if spec.name == "opencode" else None)
     if spec.name == "opencode":
         # OpenCode checks the containing directory separately from read access.
         # Match both the mount itself and its descendants, not unrelated files.
@@ -396,7 +399,9 @@ def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: 
     write_json(output / "instruction.json", {"text": instruction, "sha256": digest(instruction)})
     result: dict[str, Any] = {"group": group, "phase": phase, "status": "planned",
                              "started_at": datetime.now(UTC).isoformat(), "packet_sha256": sha256(packet_dir / "input.json"),
-                             "agent_spec": spec.to_dict(), "controls": control_manifest(spec, max_model_turns=40),
+                             "agent_spec": spec.to_dict(),
+                             "controls": control_manifest(spec, max_model_turns=40,
+                                                          model_seed=MODEL_SEED if spec.name == "opencode" else None),
                              "included_in_e2e": False, "zg_available": False, "retry_count": 0,
                              "packet_delivery": "inline_prompt_json" if spec.name == "qodercli" else "readonly_external_file",
                              "instruction_utf8_bytes_with_nul": len(instruction.encode("utf-8")) + 1}
@@ -444,7 +449,8 @@ def run_session(*, group: str, phase: str, packet: dict[str, Any], source_root: 
                  and result.get("has_final_answer") and result.get("error_event_count") == 0
                  and result.get("contract_error_count") == 0)
         if spec.name == "opencode":
-            result["wire_contract"] = wire_contract(logs, spec.provider_model, expected_tools(spec, zg=False))
+            result["wire_contract"] = wire_contract(logs, spec.provider_model, expected_tools(spec, zg=False),
+                                                     expected_seed=MODEL_SEED)
             valid = valid and result["wire_contract"]["valid"]
         final = extract_final_answer(json.loads((logs / "trajectory.json").read_text()))
         if final is not None:
@@ -497,6 +503,11 @@ def verify_review_sources(reviews: dict[str, dict[str, Any]], source_root: Path)
 def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str, Any]] = run_session) -> dict[str, Any]:
     case = json.loads(args.case.read_text())
     analysis = json.loads(args.analysis.read_text())
+    declared = [row.get("group") for row in analysis.get("groups", []) if isinstance(row, dict)]
+    declared += [row.get("group_id") for row in analysis.get("samples", []) if isinstance(row, dict)]
+    groups = tuple(dict.fromkeys(group for group in declared if isinstance(group, str))) or GROUPS
+    if not groups or len(set(groups)) != len(groups) or any(group not in GROUPS for group in groups):
+        raise ValueError("Analysis must declare distinct supported annotation groups")
     catalog = annotation_catalog(analysis, case)
     output = args.output.resolve()
     if output.exists():
@@ -513,11 +524,11 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
     before = directory_identity(source, skip_git=True)
     output.mkdir(parents=True)
     write_json(output / "catalog.json", catalog)
-    candidates: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in GROUPS}
+    candidates: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in groups}
     sessions = []
-    execution = {"max_parallel_groups": 3, "within_group_batches": "serial",
+    execution = {"max_parallel_groups": len(groups), "within_group_batches": "serial",
                  "phase_barrier": "All candidate groups finish before any review starts.",
-                 "merge_order": list(GROUPS), "instruction_utf8_byte_limit": MAX_INLINE_INSTRUCTION_BYTES}
+                 "merge_order": list(groups), "instruction_utf8_byte_limit": MAX_INLINE_INSTRUCTION_BYTES}
     write_json(output / "annotation-execution.json", execution)
     # Never include current search output, original benchmark gold, final answers
     # or treatment attribution. Prior feedback is needed to interpret subgoals.
@@ -541,17 +552,17 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
                     rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
         return rows, group_sessions
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {group: pool.submit(candidate_group, group) for group in GROUPS}
-        for group in GROUPS:
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        futures = {group: pool.submit(candidate_group, group) for group in groups}
+        for group in groups:
             candidates[group], group_sessions = futures[group].result()
             sessions.extend(group_sessions)
             write_json(output / "candidate-outputs.json", candidates)
     if directory_identity(source, skip_git=True) != before:
         raise RuntimeError("Source changed during candidate annotation")
-    proposals = verify_candidates(catalog, candidates, source)
+    proposals = verify_candidates(catalog, candidates, source, groups=groups)
     write_json(output / "source-verified-proposals.json", proposals)
-    reviews: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in GROUPS}
+    reviews: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in groups}
     units = {u["annotation_id"]: p for u, p in zip(catalog, packets)}
     def review_group(group: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows: dict[str, Any] = {"annotations": []}
@@ -578,20 +589,20 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
                     rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
         return rows, group_sessions
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {group: pool.submit(review_group, group) for group in GROUPS}
-        for group in GROUPS:
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        futures = {group: pool.submit(review_group, group) for group in groups}
+        for group in groups:
             reviews[group], group_sessions = futures[group].result()
             sessions.extend(group_sessions)
             write_json(output / "review-outputs.json", reviews)
     reviews = verify_review_sources(reviews, source)
     write_json(output / "review-outputs.json", reviews)
-    decisions = reconcile(catalog, proposals, reviews)
+    decisions = reconcile(catalog, proposals, reviews, groups=groups)
     write_json(output / "decisions.json", decisions)
     if directory_identity(source, skip_git=True) != before:
         raise RuntimeError("Source changed during semantic review")
     labels = freeze_labels(catalog, proposals, decisions, case, analysis_sha256=sha256(args.analysis),
-                           case_sha256=sha256(args.case), entries_sha256=sha256(args.entries))
+                           case_sha256=sha256(args.case), entries_sha256=sha256(args.entries), groups=groups)
     label_path = output / "query-intents.json"
     write_json(label_path, labels)
     load_labels(label_path, source)

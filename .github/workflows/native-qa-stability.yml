@@ -88,7 +88,6 @@ jobs:
         id: experiment
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark screen
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
@@ -99,7 +98,6 @@ jobs:
         if: always() && steps.experiment.outcome != 'skipped'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
           --root "$RUNNER_TEMP/screen"
@@ -122,14 +120,14 @@ jobs:
 
   e2e:
     needs: [validate, screen]
-    name: Native E2E / ${{ matrix.group }} / five trials per arm
+    name: Native E2E / ${{ matrix.group }} / ten trials per arm
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
-        group: [opencode-glm52, opencode-qwen38max, qoder-qwen38max]
+        group: [opencode-glm52, opencode-qwen38max]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -157,7 +155,6 @@ jobs:
         id: benchmark
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark run
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
@@ -178,7 +175,6 @@ jobs:
         if: always() && steps.benchmark.outcome != 'skipped'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
           --root "$RUNNER_TEMP/${{ matrix.group }}"
@@ -226,14 +222,13 @@ jobs:
         run: |
           docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
           mkdir "$RUNNER_TEMP/recorded"
-          for group in opencode-glm52 opencode-qwen38max qoder-qwen38max; do
+          for group in opencode-glm52 opencode-qwen38max; do
             tar -C "$RUNNER_TEMP/recorded" -xzf "$RUNNER_TEMP/evidence/$group.tar.gz"
           done
       - name: Source-reviewed targets and five native replays per observed request
         id: diagnosis
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: |
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark diagnose \
             --case benchmarks/swe-qa-bench/cases/reflex-6.json \
@@ -245,7 +240,6 @@ jobs:
         if: always() && steps.diagnosis.outcome != 'skipped'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
           --root "$RUNNER_TEMP/diagnosis"
