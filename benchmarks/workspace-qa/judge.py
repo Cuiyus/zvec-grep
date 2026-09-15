@@ -13,10 +13,13 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import random
+import re
 import socket
 import time
 from typing import Any, Callable
 from urllib import error, request
+import xml.etree.ElementTree as ET
+import zipfile
 
 
 ADAPTER = "custom-qoder-qa-rubric-adapter-v1"
@@ -26,6 +29,7 @@ MAX_SOURCE_BYTES = 512_000
 MAX_PROMPT_BYTES = 750_000
 MAX_COMPLETION_TOKENS = 8192
 TEXT_SUFFIXES = {".py", ".md", ".csv", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".log", ".conf", ".xml", ".html", ".sh", ".rst", ".tsv"}
+OOXML_SUFFIXES = {".docx", ".pptx"}
 SYSTEM_PROMPT = """You are a strict Chinese-language Workspace-Bench QA evaluator.
 This is a custom Qoder QA rubric adapter, not the official ClaudeCode judge.
 The JSON input contains the ORIGINAL task, all original rubrics and their types,
@@ -84,6 +88,48 @@ def settings() -> tuple[str, str]:
     return module.OPENCODE_CUSTOM_GLM_BASE_URL, module.OPENCODE_CUSTOM_GLM_MODEL_ID
 
 
+def source_text(source: Path, raw: bytes) -> str:
+    suffix = source.suffix.lower()
+    if suffix in TEXT_SUFFIXES:
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise JudgeError(f"source is not UTF-8: {source.name}") from exc
+        if "\x00" in content:
+            raise JudgeError(f"source contains binary NUL: {source.name}")
+        return content
+    if suffix not in OOXML_SUFFIXES:
+        raise JudgeError(f"unsupported source format, no source skipped: {source.name}")
+    try:
+        with zipfile.ZipFile(source) as archive:
+            if suffix == ".docx":
+                names = [name for name in archive.namelist()
+                         if name == "word/document.xml" or name.startswith("word/header")
+                         or name.startswith("word/footer")]
+            else:
+                names = [name for name in archive.namelist()
+                         if name.startswith("ppt/slides/slide") and name.endswith(".xml")]
+                def slide_number(name: str) -> int:
+                    match = re.search(r"/slide(\d+)\.xml$", name)
+                    return int(match.group(1)) if match else 0
+                names.sort(key=slide_number)
+            if not names:
+                raise JudgeError(f"OOXML source has no readable document text: {source.name}")
+            sections = []
+            for name in names:
+                xml = archive.read(name)
+                root = ET.fromstring(xml)
+                text = "\n".join(node.text or "" for node in root.iter()
+                                 if node.tag.rsplit("}", 1)[-1] == "t")
+                if text.strip():
+                    sections.append(text)
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, OSError) as exc:
+        raise JudgeError(f"invalid OOXML source: {source.name}") from exc
+    if not sections:
+        raise JudgeError(f"OOXML source contains no readable text: {source.name}")
+    return "\n\n".join(sections)
+
+
 def load_evidence(metadata_path: Path, task_dir: Path, *, max_source_bytes: int = MAX_SOURCE_BYTES) -> dict[str, Any]:
     """Read every listed source in manifest order; never truncate or skip a file."""
     metadata = read_object(metadata_path)
@@ -113,25 +159,19 @@ def load_evidence(metadata_path: Path, task_dir: Path, *, max_source_bytes: int 
         if not source.is_relative_to(root) or source in seen:
             raise JudgeError("source path escapes task directory or is duplicated")
         seen.add(source)
-        if source.suffix.lower() not in TEXT_SUFFIXES:
-            raise JudgeError(f"unsupported source format, no source skipped: {relative}")
         raw = source.read_bytes()
-        total += len(raw)
+        content = source_text(source, raw)
+        text_bytes = len(content.encode("utf-8"))
+        total += text_bytes
         if total > max_source_bytes:
             raise JudgeError(f"complete sources exceed {max_source_bytes} byte ceiling; no truncation performed")
-        try:
-            content = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise JudgeError(f"source is not UTF-8: {relative}") from exc
-        if "\x00" in content:
-            raise JudgeError(f"source contains binary NUL: {relative}")
         digest = sha256(raw)
         if item.get("sha256") and item["sha256"] != digest:
             raise JudgeError(f"source SHA-256 mismatch: {relative}")
         sources.append({"id": len(sources), "stored_relpath": relative,
                         "filename": item.get("filename", source.name),
                         "target_path": item.get("target_path"), "sha256": digest,
-                        "bytes": len(raw), "text": content})
+                        "bytes": len(raw), "text_bytes": text_bytes, "text": content})
     return {"metadata": metadata, "metadata_sha256": sha256(metadata_path.read_bytes()),
             "sources": sources, "source_bytes": total}
 

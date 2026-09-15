@@ -10,6 +10,7 @@ import sys
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,28 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(payload["source_files"][0]["text"], (self.task / "data/a.py").read_text())
         self.assertNotIn("NEVER SEND", json.dumps(messages))
         self.assertEqual(set(payload), {"task", "rubrics", "source_files", "candidate_answer", "candidate_outputs"})
+
+    def test_official_docx_and_pptx_sources_are_extracted_without_skipping(self):
+        docx = self.task / "data/report.docx"
+        pptx = self.task / "data/slides.pptx"
+        with zipfile.ZipFile(docx, "w") as archive:
+            archive.writestr("word/document.xml",
+                '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>行政部 172 人</w:t></w:r></w:p></w:body></w:document>')
+        with zipfile.ZipFile(pptx, "w") as archive:
+            archive.writestr("ppt/slides/slide2.xml",
+                '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:t>招聘周期 19 天</a:t></p:sld>')
+            archive.writestr("ppt/slides/slide1.xml",
+                '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:t>前台文员</a:t></p:sld>')
+        self.metadata["data_manifest"] = [
+            {"stored_relpath": "data/report.docx", "filename": "report.docx"},
+            {"stored_relpath": "data/slides.pptx", "filename": "slides.pptx"},
+        ]
+        dump(self.metadata_path, self.metadata)
+        evidence = judge.load_evidence(self.metadata_path, self.task)
+        self.assertEqual([source["filename"] for source in evidence["sources"]], ["report.docx", "slides.pptx"])
+        self.assertIn("行政部 172 人", evidence["sources"][0]["text"])
+        self.assertLess(evidence["sources"][1]["text"].index("前台文员"),
+                        evidence["sources"][1]["text"].index("招聘周期 19 天"))
 
     def test_full_boolean_mean_hashes_raw_model_latency_and_harness_output(self):
         captured = []
