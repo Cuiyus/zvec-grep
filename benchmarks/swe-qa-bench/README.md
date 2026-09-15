@@ -251,6 +251,12 @@ source-checked candidates with cross-group semantic reviews, freezes shared
 labels, replays complete requests five times, and joins the observations to
 actual E2E quality and costs. Unknown labels and failed trials remain explicit;
 annotation costs are separate. Standalone retrieval regression is deferred.
+The [official-install rerun protocol](../../docs/benchmark-protocols/official-install-qa-v1.zh-CN.md)
+uses `zg install --target opencode|qoder --yes`, the unchanged installed MCP
+command, and native guidance discovery for a new 30-trial cohort. It is implemented
+by `official-install-qa.yml`; historical bridge execution is retired. New runtime
+results must be verified before this rerun is described as completed.
+
 **Integration correction:** v6 did not execute `zg install`. It used the custom
 `readonly-search.mjs` bridge, omitted installer-managed Agent guidance, and
 bypassed the native daemon while forcing `autoUpdate=false`. These results

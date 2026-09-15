@@ -1,0 +1,225 @@
+name: Official zg install single-case QA
+
+on:
+  push:
+    branches: [dev/benchmark-readonly-qa]
+    paths:
+      - "benchmarks/swe-qa-bench/**"
+      - ".github/workflows/official-install-qa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: official-install-qa-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[official-install]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Validate official installation, collection, scoring and legacy compatibility
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/official-replay.test.mjs
+      - name: Build published zg 0.2.2 and pinned clients
+        run: >-
+          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile.official
+          --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+          -t zg-official-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Verify real installed SDK stdio contract without a model
+        run: >-
+          docker run --rm -e ZG_TEST_SDK_ROOT=/opt/qa/node_modules/@zvec/zvec-grep
+          --mount "type=bind,source=$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/scripts,target=/tests,readonly"
+          zg-official-qa:0.2.2 node --test /tests/official-replay.test.mjs
+      - name: Verify pinned OpenCode automatic global guidance loading offline
+        run: >-
+          docker run --rm --network none
+          --mount "type=bind,source=$GITHUB_WORKSPACE/benchmarks/swe-qa-bench,target=/qa,readonly"
+          -e PYTHONPATH=/qa:/qa/tests
+          -e OPENCODE_READONLY_TEST_BINARY=/opt/qa/node_modules/.bin/opencode
+          zg-official-qa:0.2.2 python3 -m unittest -v
+          test_official_install_session.OpenCodeOfficialDiscoveryContractTests
+      - name: Verify both official installs without model calls
+        id: contract
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.official_install_benchmark preflight
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --output "$RUNNER_TEMP/install-preflight"
+      - name: Package exact runtime and installation contracts
+        if: always()
+        run: |
+          if [ '${{ steps.contract.outcome }}' = 'success' ]; then
+            docker save zg-official-qa:0.2.2 | gzip -1 > "$RUNNER_TEMP/official-runtime.tar.gz"
+          fi
+          if [ -d "$RUNNER_TEMP/install-preflight" ]; then
+            tar --exclude=model-cache --exclude=corpus --exclude=workspaces -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/install-preflight.tar.gz" install-preflight
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: official-install-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/official-runtime.tar.gz
+            ${{ runner.temp }}/install-preflight.tar.gz
+            ${{ runner.temp }}/install-preflight/*/preparation.json
+            ${{ runner.temp }}/install-preflight/*/install.*
+            ${{ runner.temp }}/install-preflight/*/official-failure.json
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: warn
+
+  e2e:
+    needs: validate
+    name: Official install / ${{ matrix.group }} / baseline 5 + zg 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        group: [opencode-glm52, opencode-qwen38max, qoder-qwen38max]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: official-install-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+      - run: docker load -i "$RUNNER_TEMP/runtime/official-runtime.tar.gz"
+      - name: Run new independent sessions using unchanged installed guidance
+        id: experiment
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.official_install_benchmark run
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --group "${{ matrix.group }}" --output "$RUNNER_TEMP/${{ matrix.group }}"
+      - name: Review every planned answer with frozen source and calibration
+        if: always() && steps.experiment.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.official_install_benchmark review \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --judge-case benchmarks/swe-qa-bench/cases/reflex-6.judge-official-v1.json \
+            --output "$RUNNER_TEMP/${{ matrix.group }}"
+          cat "$RUNNER_TEMP/${{ matrix.group }}/official-report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check retained evidence for credentials
+        id: scan
+        if: always() && steps.experiment.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/${{ matrix.group }}"
+      - name: Preserve all planned outcomes
+        if: always() && steps.scan.outcome == 'success'
+        run: >-
+          tar --exclude=model-cache --exclude=corpus --exclude=workspaces
+          -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/${{ matrix.group }}.tar.gz" "${{ matrix.group }}"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: official-e2e-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ matrix.group }}.tar.gz
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+
+  diagnosis:
+    needs: [validate, e2e]
+    if: always() && needs.validate.result == 'success' && !cancelled()
+    name: Original and observed queries / shared labels / official MCP replay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: official-install-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: official-e2e-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/evidence
+      - name: Load exact runtime and the three current groups
+        run: |
+          docker load -i "$RUNNER_TEMP/runtime/official-runtime.tar.gz"
+          mkdir "$RUNNER_TEMP/recorded"
+          for group in opencode-glm52 opencode-qwen38max qoder-qwen38max; do
+            tar -C "$RUNNER_TEMP/recorded" -xzf "$RUNNER_TEMP/evidence/$group.tar.gz"
+          done
+      - name: Generate shared source labels, replay requests five times and join results
+        id: diagnosis
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.official_install_benchmark diagnose \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            --runs-dir "$RUNNER_TEMP/recorded" --output "$RUNNER_TEMP/diagnosis"
+          cat "$RUNNER_TEMP/diagnosis/joint-report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check retained diagnosis for credentials
+        id: scan
+        if: always() && steps.diagnosis.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/diagnosis"
+      - name: Preserve labels, all replay observations and joint report
+        if: always() && steps.scan.outcome == 'success'
+        run: >-
+          tar --exclude=model-cache --exclude=corpus --exclude=replay-workspace
+          -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diagnosis.tar.gz" diagnosis
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: official-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnosis.tar.gz
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error

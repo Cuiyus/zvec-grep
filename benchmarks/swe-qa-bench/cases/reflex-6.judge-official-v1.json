@@ -1,0 +1,290 @@
+{
+  "case_id": "reflex-6",
+  "question": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+  "repo": {
+    "url": "https://github.com/reflex-dev/reflex.git",
+    "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78"
+  },
+  "evidence": [
+    {
+      "id": "getter_accessor",
+      "path": "reflex/vars/base.py",
+      "start_line": 2524,
+      "end_line": 2531,
+      "text": "    @property\n    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "cae1b1800fa57c96a5aa0f55a1d5a7230d8cd99eadf66b2aa3963491bd45eec8"
+    },
+    {
+      "id": "getter_dependency_input",
+      "path": "reflex/vars/base.py",
+      "start_line": 2440,
+      "end_line": 2453,
+      "text": "        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n",
+      "sha256": "b4e89b0ea6f6ad3d791bf24d94eda5593b270006edd332f231011a88ac2a5d4e"
+    },
+    {
+      "id": "bytecode_attribute_dispatch",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 296,
+      "end_line": 321,
+      "text": "    def _populate_dependencies(self) -> None:\n        \"\"\"Update self.dependencies based on the disassembly of self.func.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n        \"\"\"\n        for instruction in dis.get_instructions(self.func):\n            if self.scan_status == ScanStatus.GETTING_STATE:\n                self.handle_getting_state(instruction)\n            elif self.scan_status == ScanStatus.GETTING_VAR:\n                self.handle_getting_var(instruction)\n            elif (\n                instruction.opname in (\"LOAD_FAST\", \"LOAD_DEREF\", \"LOAD_FAST_BORROW\")\n                and instruction.argval in self.tracked_locals\n            ):\n                # bytecode loaded the class instance to the top of stack, next load instruction\n                # is referencing an attribute on self\n                self.top_of_stack = instruction.argval\n                self.scan_status = ScanStatus.GETTING_ATTR\n            elif self.scan_status == ScanStatus.GETTING_ATTR and instruction.opname in (\n                \"LOAD_ATTR\",\n                \"LOAD_METHOD\",\n            ):\n                self.load_attr_or_method(instruction)\n",
+      "sha256": "c437d03ba6543872a30886d1c77336b699bf4a378ab7cbe4ac257bf225b17343"
+    },
+    {
+      "id": "record_state_variable",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 140,
+      "end_line": 148,
+      "text": "        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n\n",
+      "sha256": "43971a458a3ff79e3414a6e31b32feaebee0a0660f5bf7ea9e8e98bab5de8430"
+    },
+    {
+      "id": "register_reverse_dependencies",
+      "path": "reflex/state.py",
+      "start_line": 783,
+      "end_line": 797,
+      "text": "            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n",
+      "sha256": "a397f67781e0577aec4ca40b243e8b0a90df2de3d97937026b1035b66e0cad1e"
+    },
+    {
+      "id": "lookup_dependents",
+      "path": "reflex/state.py",
+      "start_line": 1998,
+      "end_line": 2003,
+      "text": "        return {\n            (state_name, cvar)\n            for dirty_var in from_vars or self.dirty_vars\n            for state_name, cvar in self._var_dependencies.get(dirty_var, set())\n            if include_backend or not self.computed_vars[cvar]._backend\n        }\n",
+      "sha256": "a2b6100b1c641582d229c26d9cc4a1aea05de55f448b12aeaca4e3e7ac4d7a88"
+    },
+    {
+      "id": "invalidate_dependent_values",
+      "path": "reflex/state.py",
+      "start_line": 1954,
+      "end_line": 1967,
+      "text": "        dirty_vars = self.dirty_vars\n        while dirty_vars:\n            calc_vars, dirty_vars = dirty_vars, set()\n            for state_name, cvar in self._dirty_computed_vars(from_vars=calc_vars):\n                if state_name == self.get_full_name():\n                    defining_state = self\n                else:\n                    defining_state = self._get_root_state().get_substate(\n                        tuple(state_name.split(\".\"))\n                    )\n                defining_state.dirty_vars.add(cvar)\n                actual_var = defining_state.computed_vars.get(cvar)\n                if actual_var is not None:\n                    actual_var.mark_dirty(instance=defining_state)\n",
+      "sha256": "3e0ac1d734cbfb4b9db28c54b67fa798df82b7be12c40065c1c3d8de8345ea32"
+    },
+    {
+      "id": "remove_cached_value",
+      "path": "reflex/vars/base.py",
+      "start_line": 2462,
+      "end_line": 2469,
+      "text": "    def mark_dirty(self, instance: BaseState) -> None:\n        \"\"\"Mark this ComputedVar as dirty.\n\n        Args:\n            instance: the state instance that needs to recompute the value.\n        \"\"\"\n        with contextlib.suppress(AttributeError):\n            delattr(instance, self._cache_attr)\n",
+      "sha256": "e869987cf8e0e218fbea72f189d433135ab782afc4df70855ffd263347df5c52"
+    },
+    {
+      "id": "evaluate_or_reuse_value",
+      "path": "reflex/vars/base.py",
+      "start_line": 2387,
+      "end_line": 2398,
+      "text": "        if not self._cache:\n            value = self.fget(instance)\n        else:\n            # handle caching\n            if not hasattr(instance, self._cache_attr) or self.needs_update(instance):\n                # Set cache attr on state instance.\n                setattr(instance, self._cache_attr, self.fget(instance))\n                # Ensure the computed var gets serialized to redis.\n                instance._was_touched = True\n                # Set the last updated timestamp on the state instance.\n                setattr(instance, self._last_updated_attr, datetime.datetime.now())\n            value = getattr(instance, self._cache_attr)\n",
+      "sha256": "f52284f6b899d0056d98f94b1ad28a5071335be3514307285f78f46aa8e3259e"
+    }
+  ],
+  "sufficient_sets": [
+    [
+      "getter_accessor",
+      "getter_dependency_input",
+      "bytecode_attribute_dispatch",
+      "record_state_variable",
+      "register_reverse_dependencies",
+      "lookup_dependents",
+      "invalidate_dependent_values",
+      "remove_cached_value",
+      "evaluate_or_reuse_value"
+    ]
+  ],
+  "reference_answer": "ComputedVar.fget returns the user-supplied getter stored in _fget. With automatic dependencies enabled, ComputedVar._deps uses that getter as the default function passed to DependencyTracker. The tracker inspects its bytecode and records state-variable accesses in a map from state names to variable names; calling the getter to compute a value is not the mechanism used for this scan. BaseState._init_var_dependency_dicts turns that map into reverse dependencies. When source variables become dirty, _dirty_computed_vars identifies dependent computed variables, _mark_dirty_computed_vars calls their mark_dirty methods, and mark_dirty deletes the cached value. ComputedVar.__get__ invokes fget directly for uncached values, or to populate a missing/expired cache. Thus the getter is both the subject of dependency discovery and the function that computes the selectively refreshed value. needs_update separately checks the update interval and timestamp; it does not directly detect dependency changes. Explicit static dependencies are copied into the dependency map before automatic getter analysis; enabling auto_deps does not discard them. _var_dependencies stores dependency-variable to (state name, computed variable name) pairs, whereas _potentially_dirty_states stores only consuming state names. Interval expiry and uncached values provide additional recomputation paths.",
+  "required_facts": [
+    "Identify the accessor as ComputedVar.fget returning the user getter _fget, which computes the derived value when invoked.",
+    "Explain that automatic dependency discovery analyzes the getter function/bytecode to identify accessed state variables and form dependencies, rather than discovering them by computing the getter value.",
+    "Connect those dependencies to selective invalidation/recomputation: dependent cached values are invalidated when source variables change and the getter recomputes values on access; uncached access invokes it directly. Exact internal helper names are not required for a correct explanation."
+  ],
+  "reference_provenance": {
+    "kind": "source_corrected_reference",
+    "source_commit": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+    "original_reference_file": "zg_bench/swe_qa/data/references.json",
+    "original_task_id": "reflex:6",
+    "correction": "The inherited reference says needs_update detects dependency changes. At this commit it checks the update interval and last-updated time; dependency changes use reverse dependency lookup and cache invalidation.",
+    "citations": [
+      "reflex/vars/base.py:2524-2531",
+      "reflex/vars/base.py:2440-2453",
+      "reflex/vars/dep_tracking.py:296-321",
+      "reflex/vars/dep_tracking.py:140-148",
+      "reflex/state.py:783-797",
+      "reflex/state.py:1954-1967",
+      "reflex/state.py:1998-2003",
+      "reflex/vars/base.py:2462-2469",
+      "reflex/vars/base.py:2387-2398",
+      "reflex/vars/base.py:2272-2286"
+    ]
+  },
+  "judge_only_evidence": [
+    {
+      "id": "interval_refresh_is_separate",
+      "path": "reflex/vars/base.py",
+      "start_line": 2272,
+      "end_line": 2286,
+      "text": "    def needs_update(self, instance: BaseState) -> bool:\n        \"\"\"Check if the computed var needs to be updated.\n\n        Args:\n            instance: The state instance that the computed var is attached to.\n\n        Returns:\n            True if the computed var needs to be updated, False otherwise.\n        \"\"\"\n        if self._update_interval is None:\n            return False\n        last_updated = getattr(instance, self._last_updated_attr, None)\n        if last_updated is None:\n            return True\n        return datetime.datetime.now() - last_updated > self._update_interval\n",
+      "sha256": "35a4b627e796f97ca4b58fb49010c23e91c249bf0d5024656ccc97193d07f0bd"
+    },
+    {
+      "id": "static_and_automatic_dependencies",
+      "path": "reflex/vars/base.py",
+      "start_line": 2433,
+      "end_line": 2453,
+      "text": "        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n",
+      "sha256": "4df605a5dc6e8e9604a1138afe59eb23cb9deb7a0475f16a5710b43122e0cbca",
+      "reason": "Static dependencies are merged before automatic analysis and passed into DependencyTracker."
+    },
+    {
+      "id": "potentially_dirty_state_names",
+      "path": "reflex/state.py",
+      "start_line": 794,
+      "end_line": 800,
+      "text": "                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n",
+      "sha256": "1930b9fac143a11dd6ddfc7ce73d74c640d184d3683121bf1a708f833d69875f",
+      "reason": "Reverse dependency tuples and potentially dirty state names are distinct data structures."
+    },
+    {
+      "id": "expired_and_uncached_dirty_paths",
+      "path": "reflex/state.py",
+      "start_line": 1947,
+      "end_line": 1952,
+      "text": "    def _mark_dirty_computed_vars(self) -> None:\n        \"\"\"Mark ComputedVars that need to be recalculated based on dirty_vars.\"\"\"\n        # Append expired computed vars to dirty_vars to trigger recalculation\n        self.dirty_vars.update(self._expired_computed_vars())\n        # Append always dirty computed vars to dirty_vars to trigger recalculation\n        self.dirty_vars.update(self._always_dirty_computed_vars)\n",
+      "sha256": "bb9c3b188115d7591031c8c6fd1f55b32f789dde828dca879155a4a109596662",
+      "reason": "Dependency changes are not the only dirty/recomputation trigger."
+    },
+    {
+      "id": "cached_only_dependency_registration",
+      "path": "reflex/state.py",
+      "start_line": 769,
+      "end_line": 822,
+      "text": "    @classmethod\n    def _init_var_dependency_dicts(cls):\n        \"\"\"Initialize the var dependency tracking dicts.\n\n        Allows the state to know which vars each ComputedVar depends on and\n        whether a ComputedVar depends on a var in its parent state.\n\n        Additional updates tracking dicts for vars and substates that always\n        need to be recomputed.\n        \"\"\"\n        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n\n        # ComputedVar with cache=False always need to be recomputed\n        cls._always_dirty_computed_vars = {\n            cvar_name\n            for cvar_name, cvar in cls.computed_vars.items()\n            if not cvar._cache\n        }\n\n        # Any substate containing a ComputedVar with cache=False always needs to be recomputed\n        if cls._always_dirty_computed_vars:\n            # Tell parent classes that this substate has always dirty computed vars\n            state_name = cls.get_name()\n            parent_state = cls.get_parent_state()\n            while parent_state is not None:\n                parent_state._always_dirty_substates.add(state_name)\n                state_name, parent_state = (\n                    parent_state.get_name(),\n                    parent_state.get_parent_state(),\n                )\n\n        # Reset cached schema value\n        cls._to_schema.cache_clear()\n",
+      "sha256": "a2861ab439e48c25a2623faf965ca59a515a70b881617dda7e50030b4c9bdff3",
+      "reason": "Complete state dependency-registration method, including cache=False early continue and the separate always-dirty set. A generic description of cached dependency invalidation is valid; an explicit assertion that this loop calls _deps for every ComputedVar, including uncached ones, is false."
+    },
+    {
+      "id": "attribute_kind_filter",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 125,
+      "end_line": 147,
+      "text": "        target_state = self.tracked_locals[self.top_of_stack]\n        try:\n            ref_obj = getattr(target_state, instruction.argval)\n        except AttributeError:\n            # Not found on this state class, maybe it is a dynamic attribute that will be picked up later.\n            ref_obj = None\n\n        if isinstance(ref_obj, property) and not isinstance(ref_obj, ComputedVar):\n            # recurse into property fget functions\n            ref_obj = ref_obj.fget\n        if callable(ref_obj):\n            # recurse into callable attributes\n            self._merge_deps(\n                type(self)(func=cast(FunctionType, ref_obj), state_cls=target_state)\n            )\n        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n",
+      "sha256": "b07a821f2e913c485794c8f38e0df42fb60376629f52302cf3e162e6acfb76e3",
+      "reason": "Only state vars are directly recorded; callable attributes trigger recursive analysis."
+    },
+    {
+      "id": "automatic_dependency_failure_preserves_current_map",
+      "path": "reflex/vars/base.py",
+      "start_line": 2411,
+      "end_line": 2460,
+      "text": "    def _deps(\n        self,\n        objclass: type[BaseState],\n        obj: FunctionType | CodeType | None = None,\n    ) -> dict[str, set[str]]:\n        \"\"\"Determine var dependencies of this ComputedVar.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n\n        Args:\n            objclass: the class obj this ComputedVar is attached to.\n            obj: the object to disassemble (defaults to the fget function).\n\n        Returns:\n            A dictionary mapping state names to the set of variable names\n            accessed by the given obj.\n        \"\"\"\n        from .dep_tracking import DependencyTracker\n\n        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n        except Exception as e:\n            console.warn(\n                \"Failed to automatically determine dependencies for computed var \"\n                f\"{objclass.__name__}.{self._name}: {e}. \"\n                \"Provide static_deps and set auto_deps=False to suppress this warning.\"\n            )\n            return d\n",
+      "sha256": "d82ed9067b0e7a73520245106c2287c30be89e8855d659b1e921d14af47f3366",
+      "reason": "Complete _deps method: d starts with static dependencies, is supplied directly as dependencies=d to the tracker, and the exception handler returns that same d without restoring its initial contents. The handler may therefore return already accumulated automatic dependencies. It does not guarantee a static-only rollback; it also does not guarantee that automatic entries were accumulated before every error."
+    },
+    {
+      "id": "tracker_dependency_map_and_initial_scan",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 49,
+      "end_line": 91,
+      "text": "@dataclasses.dataclass\nclass DependencyTracker:\n    \"\"\"State machine for identifying state attributes that are accessed by a function.\"\"\"\n\n    func: FunctionType | CodeType = dataclasses.field()\n    state_cls: type[BaseState] = dataclasses.field()\n\n    dependencies: dict[str, set[str]] = dataclasses.field(default_factory=dict)\n\n    scan_status: ScanStatus = dataclasses.field(default=ScanStatus.SCANNING)\n    top_of_stack: str | None = dataclasses.field(default=None)\n\n    tracked_locals: dict[str, type[BaseState]] = dataclasses.field(default_factory=dict)\n\n    _getting_state_class: type[BaseState] | None = dataclasses.field(default=None)\n    _get_var_value_positions: dis.Positions | None = dataclasses.field(default=None)\n\n    INVALID_NAMES: ClassVar[list[str]] = [\"parent_state\", \"substates\", \"get_substate\"]\n\n    def __post_init__(self):\n        \"\"\"After initializing, populate the dependencies dict.\"\"\"\n        with contextlib.suppress(AttributeError):\n            # unbox functools.partial\n            self.func = cast(FunctionType, self.func.func)  # pyright: ignore[reportAttributeAccessIssue]\n        with contextlib.suppress(AttributeError):\n            # unbox EventHandler\n            self.func = cast(FunctionType, self.func.fn)  # pyright: ignore[reportAttributeAccessIssue,reportFunctionMemberAccess]\n\n        if isinstance(self.func, FunctionType):\n            with contextlib.suppress(AttributeError, IndexError):\n                # the first argument to the function is the name of \"self\" arg\n                self.tracked_locals[self.func.__code__.co_varnames[0]] = self.state_cls\n\n        self._populate_dependencies()\n\n    def _merge_deps(self, tracker: DependencyTracker) -> None:\n        \"\"\"Merge dependencies from another DependencyTracker.\n\n        Args:\n            tracker: The DependencyTracker to merge dependencies from.\n        \"\"\"\n        for state_name, dep_name in tracker.dependencies.items():\n            self.dependencies.setdefault(state_name, set()).update(dep_name)\n",
+      "sha256": "83c200aaabc1ce5e848e5a6e05ac0ef6ace08ebfe03baa611e8857f04c542322",
+      "reason": "The dataclass dependencies field accepts the supplied dictionary directly. __post_init__ calls _populate_dependencies; _merge_deps updates self.dependencies in place. These statements establish shared-map mutation rather than a transactional copy."
+    },
+    {
+      "id": "tracker_attribute_scan_mutates_same_map",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 93,
+      "end_line": 147,
+      "text": "    def load_attr_or_method(self, instruction: dis.Instruction) -> None:\n        \"\"\"Handle loading an attribute or method from the object on top of the stack.\n\n        This method directly tracks attributes and recursively merges\n        dependencies from analyzing the dependencies of any methods called.\n\n        Args:\n            instruction: The dis instruction to process.\n\n        Raises:\n            VarValueError: if the attribute is an disallowed name.\n        \"\"\"\n        from .base import ComputedVar\n\n        if instruction.argval in self.INVALID_NAMES:\n            msg = f\"Cached var {self!s} cannot access arbitrary state via `{instruction.argval}`.\"\n            raise VarValueError(msg)\n        if instruction.argval == \"get_state\":\n            # Special case: arbitrary state access requested.\n            self.scan_status = ScanStatus.GETTING_STATE\n            return\n        if instruction.argval == \"get_var_value\":\n            # Special case: arbitrary var access requested.\n            if sys.version_info >= (3, 11):\n                self._get_var_value_positions = instruction.positions\n            self.scan_status = ScanStatus.GETTING_VAR\n            return\n\n        # Reset status back to SCANNING after attribute is accessed.\n        self.scan_status = ScanStatus.SCANNING\n        if not self.top_of_stack:\n            return\n        target_state = self.tracked_locals[self.top_of_stack]\n        try:\n            ref_obj = getattr(target_state, instruction.argval)\n        except AttributeError:\n            # Not found on this state class, maybe it is a dynamic attribute that will be picked up later.\n            ref_obj = None\n\n        if isinstance(ref_obj, property) and not isinstance(ref_obj, ComputedVar):\n            # recurse into property fget functions\n            ref_obj = ref_obj.fget\n        if callable(ref_obj):\n            # recurse into callable attributes\n            self._merge_deps(\n                type(self)(func=cast(FunctionType, ref_obj), state_cls=target_state)\n            )\n        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n",
+      "sha256": "8e2dae6f3e0fa0fb8311a1a8b2392421bd8c1f19bcbc3524d0dabd2e028065e4",
+      "reason": "Complete attribute-scan method. A state-variable read inserts into self.dependencies in place, while a later invalid attribute can raise VarValueError. This supports the possibility of a partially populated automatic-dependency map surviving a later failure, not a claim that every failure has partial results."
+    },
+    {
+      "id": "tracker_sequential_scan_complete",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 296,
+      "end_line": 334,
+      "text": "    def _populate_dependencies(self) -> None:\n        \"\"\"Update self.dependencies based on the disassembly of self.func.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n        \"\"\"\n        for instruction in dis.get_instructions(self.func):\n            if self.scan_status == ScanStatus.GETTING_STATE:\n                self.handle_getting_state(instruction)\n            elif self.scan_status == ScanStatus.GETTING_VAR:\n                self.handle_getting_var(instruction)\n            elif (\n                instruction.opname in (\"LOAD_FAST\", \"LOAD_DEREF\", \"LOAD_FAST_BORROW\")\n                and instruction.argval in self.tracked_locals\n            ):\n                # bytecode loaded the class instance to the top of stack, next load instruction\n                # is referencing an attribute on self\n                self.top_of_stack = instruction.argval\n                self.scan_status = ScanStatus.GETTING_ATTR\n            elif self.scan_status == ScanStatus.GETTING_ATTR and instruction.opname in (\n                \"LOAD_ATTR\",\n                \"LOAD_METHOD\",\n            ):\n                self.load_attr_or_method(instruction)\n                self.top_of_stack = None\n            elif instruction.opname == \"LOAD_CONST\" and isinstance(\n                instruction.argval, CodeType\n            ):\n                # recurse into nested functions / comprehensions, which can reference\n                # instance attributes from the outer scope\n                self._merge_deps(\n                    type(self)(\n                        func=instruction.argval,\n                        state_cls=self.state_cls,\n                        tracked_locals=self.tracked_locals,\n                    )\n                )\n",
+      "sha256": "cc8f73261230321e4fce1673b0e560f080c87196c184082a8237721412f96ec1",
+      "reason": "Complete sequential bytecode scan. Earlier recorded attributes can precede a later failing instruction; no rollback wraps the scan. The getter function is inspected via dis.get_instructions, not executed to collect state reads."
+    }
+  ],
+  "judge_protocol": {
+    "version": "readonly-source-qa-v2-calibrated",
+    "models": [
+      "openai/glm-5.2",
+      "openai/qwen3.8-max"
+    ],
+    "temperature": 0,
+    "max_attempts": 2,
+    "candidate_valid_judgments_per_model": 1,
+    "source_case": "reflex-6.json",
+    "source_case_sha256": "7bd11e3bccd1b28085aead62ce59b617bded5c769c41b9cfa9961a71a9e576d1",
+    "prior_artifact_inspected": "34831000387",
+    "scope": "Single-case development rubric revised using fixed-source audits of the earlier manually integrated E2E cohort. The forthcoming official-install answers were not used to create this revision. This is not a held-out judge-validation set, and its scores are not directly interchangeable with the previous judge-v2 scores.",
+    "guidance": "Check each material claim, including restrictive words such as only, always and every. Do not silently repair an incorrect mechanism or data-structure claim because the overall explanation sounds plausible. Distinguish _fget direct field access from invoking the fget accessor. Static dependency merging, interval-based refresh and dirty-state-name storage are supplied for evaluating claims about them; answers need not volunteer those optional details. Necessary completeness must reflect what the candidate actually says, not what the reference says. A source-consistent answer does not prove that the candidate retrieved that source. Evaluate only the candidate answer actually supplied: never borrow missing claims from the reference, source excerpts, a likely intended meaning, or another answer. Keep exactly the three original required facts; correct high-level wording and equivalent helper names may satisfy them. Do not require candidates to volunteer cache=False registration details, exception-handling details, interval policy, or exhaustive bytecode/call-graph coverage. Optional details that the candidate does assert must still be source-consistent. Distinguish a generic scoped description of cached computed-variable dependencies from an explicit universal statement: _init_var_dependency_dicts skips _deps when cache=False, so a claim that it registers every ComputedVar including uncached ones is incorrect. On dependency-tracker exceptions, _deps returns the current dictionary d supplied to the tracker; automatic entries already inserted can survive because there is no rollback. Reject an asserted guarantee that this always returns only the original static dependencies, but do not demand that every error preserve automatic entries. Words such as full call graph or all dependencies should be interpreted in context; do not equate a vague breadth claim with explicitly executing the getter. Judge mechanism and scope against the actual cited statements, and mark unresolved claims uncertain rather than inventing support.",
+    "rubric_revision": "reflex-6-official-install-v1",
+    "diagnostic_artifact_inspected": "34836195367",
+    "derived_from_judge_file": "reflex-6.judge-v2.json",
+    "derived_from_judge_sha256": "37007ae97267c88420484511a30afe705c95236edce73979612212460eb5a9bb",
+    "freeze_policy": "Freeze this complete file and record its SHA256 before the first official-install E2E model call. Do not amend the rubric or calibration after seeing those answers; a later correction requires a new disclosed revision and cannot silently replace this result.",
+    "source_audit": {
+      "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+      "all_evidence_verified_against_source": true,
+      "verification": "Exact line-slice text and UTF-8 SHA256 for all evidence and judge-only evidence, before new official-install E2E.",
+      "source_files": [
+        {
+          "path": "reflex/state.py",
+          "sha256": "213e08c5fa4a7efbaa29e197e9aaa3d4385f2569d1241f1d814218c5ef639cf9"
+        },
+        {
+          "path": "reflex/vars/base.py",
+          "sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d"
+        },
+        {
+          "path": "reflex/vars/dep_tracking.py",
+          "sha256": "c46169329c396669871c80477a80d145e13b926c517d2248f88a91bbf2b04910"
+        }
+      ]
+    }
+  },
+  "calibration_examples": [
+    {
+      "calibration_id": "required-facts-source-consistent",
+      "answer": "The accessor is ComputedVar.fget: it returns the stored user function _fget, which computes the derived value when invoked. With automatic dependencies enabled, _deps passes the getter function to DependencyTracker, which inspects its bytecode to record state-variable reads; it does not discover those reads by executing the getter to compute its value. For cached computed variables, BaseState builds reverse dependencies so changing a source variable marks dependent values dirty and removes their cached values. The next access invokes the getter to recompute a missing cached value. Uncached accesses invoke the getter directly.",
+      "expected_quality": "pass",
+      "expected_scores": {
+        "factual_correctness": 1,
+        "necessary_completeness": 1,
+        "evidence_support": 1
+      },
+      "rationale": "All three original required facts are present. Exception handling, interval checks and exhaustive internals are deliberately omitted to show that these optional details are not required."
+    },
+    {
+      "calibration_id": "executes-getter-to-discover",
+      "answer": "The accessor is ComputedVar.fget: it returns the stored user function _fget, which computes the derived value when invoked. With automatic dependencies enabled, _deps passes the getter function to DependencyTracker, which executes the getter against the current state and discovers dependencies by computing its value instead of inspecting bytecode. For cached computed variables, BaseState builds reverse dependencies so changing a source variable marks dependent values dirty and removes their cached values. The next access invokes the getter to recompute a missing cached value. Uncached accesses invoke the getter directly.",
+      "expected_quality": "fail",
+      "expected_scores": {
+        "factual_correctness": 0
+      },
+      "rationale": "The core discovery mechanism is wrong: the tracker inspects bytecode rather than computing the getter value to discover reads."
+    },
+    {
+      "calibration_id": "registers-every-computedvar-including-uncached",
+      "answer": "The accessor is ComputedVar.fget: it returns the stored user function _fget, which computes the derived value when invoked. With automatic dependencies enabled, _deps passes the getter function to DependencyTracker, which inspects its bytecode to record state-variable reads; it does not discover those reads by executing the getter to compute its value. For cached computed variables, BaseState builds reverse dependencies so changing a source variable marks dependent values dirty and removes their cached values. The next access invokes the getter to recompute a missing cached value. Uncached accesses invoke the getter directly. During state dependency registration, _init_var_dependency_dicts calls _deps for every ComputedVar, including those with cache=False, and registers all of them in the reverse-dependency map.",
+      "expected_quality": "fail",
+      "expected_scores": {
+        "factual_correctness": 0
+      },
+      "rationale": "The explicit every/include-uncached claim contradicts the cache=False early continue. The other correct sentences do not repair that statement."
+    },
+    {
+      "calibration_id": "exception-rolls-back-to-static-only",
+      "answer": "The accessor is ComputedVar.fget: it returns the stored user function _fget, which computes the derived value when invoked. With automatic dependencies enabled, _deps passes the getter function to DependencyTracker, which inspects its bytecode to record state-variable reads; it does not discover those reads by executing the getter to compute its value. For cached computed variables, BaseState builds reverse dependencies so changing a source variable marks dependent values dirty and removes their cached values. The next access invokes the getter to recompute a missing cached value. Uncached accesses invoke the getter directly. If automatic tracking raises an exception, _deps discards all automatic discoveries and always returns only the original static dependencies, because the tracker works on a separate dictionary that is rolled back on failure.",
+      "expected_quality": "fail",
+      "expected_scores": {
+        "factual_correctness": 0
+      },
+      "rationale": "This optional extra claim is factually wrong: dependencies=d shares the same dictionary, mutation is in place, and the handler returns the current d without rollback. The answer was not required to discuss exceptions, but an asserted false guarantee must be checked."
+    }
+  ]
+}
