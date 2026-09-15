@@ -461,6 +461,60 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.ReportError, "repetitions"):
             report.load_rows(self.runs, repetitions=10)
 
+    def test_execution_complete_preserves_failed_outcome_and_does_not_claim_full_quality(self):
+        self.write_task("128")
+        self.write_task("76")
+        path = self.runs / "128/trial-results.json"
+        ledger = report.read_object(path)
+        failed = ledger["trials"][0]
+        failed.update(status="contract_failure", input_tokens=None, error="Original provider timeout")
+        dump(path, ledger)
+        old_bytes = path.read_bytes()
+        judgments = report.read_object(path.parent / "judgements.json")
+        judgments["trials"][0].update(status="execution_not_completed", score=None, criteria=[])
+        dump(path.parent / "judgements.json", judgments)
+        result = report.write_report(runs_dir=self.runs, manifest_path=self.manifest, output=self.root / "report")
+        execution = result["summary"]["execution"]
+        self.assertEqual((execution["planned"], execution["attempted"], execution["terminal_recorded"],
+                          execution["qa_completed"], execution["qa_judged"]), (8, 8, 8, 7, 7))
+        self.assertTrue(result["execution_complete"])
+        self.assertFalse(result["efficacy_claim_ready"])
+        self.assertFalse(result["summary"]["complete"])
+        args = ["--runs-dir", str(self.runs), "--manifest", str(self.manifest), "--output", str(self.root / "report")]
+        self.assertEqual(report.main([*args, "--require-executed"]), 0)
+        self.assertEqual(report.main([*args, "--require-complete"]), 1)
+        self.assertEqual(path.read_bytes(), old_bytes)
+        rows = json.loads((self.root / "report/rows.json").read_text())
+        self.assertEqual(rows[0]["execution_status"], "contract_failure")
+        self.assertEqual(rows[0]["error"], "Original provider timeout")
+        self.assertIsNone(rows[0]["input_tokens"])
+        self.assertIn("does not mean every answer succeeded", (self.root / "report/summary.md").read_text())
+
+    def test_require_executed_rejects_unstarted_unknown_and_unjudged_completed_answers(self):
+        self.write_task("128")
+        args = ["--runs-dir", str(self.runs), "--manifest", str(self.manifest), "--output", str(self.root / "report")]
+        self.assertEqual(report.main([*args, "--require-executed"]), 1)
+        summary = json.loads((self.root / "report/summary.json").read_text())["summary"]["execution"]
+        self.assertEqual(summary["attempt_status_unknown"], 4)
+        self.write_task("76")
+        path = self.runs / "76/trial-results.json"
+        ledger = report.read_object(path)
+        original = ledger["trials"][0].copy()
+        ledger["trials"][0].update(status="planned", answer=None, input_tokens=None, tool_calls=None, wall_seconds=None)
+        dump(path, ledger)
+        judgments = report.read_object(path.parent / "judgements.json")
+        judgments["trials"][0].update(status="execution_not_completed", score=None, criteria=[])
+        dump(path.parent / "judgements.json", judgments)
+        self.assertEqual(report.main([*args, "--require-executed"]), 1)
+        ledger["trials"][0] = original
+        dump(path, ledger)
+        judgments["trials"][0]["status"] = "judge_error"
+        dump(path.parent / "judgements.json", judgments)
+        self.assertEqual(report.main([*args, "--require-executed"]), 1)
+        summary = json.loads((self.root / "report/summary.json").read_text())["summary"]["execution"]
+        self.assertTrue(summary["all_trials_attempted"])
+        self.assertFalse(summary["all_successful_answers_judged"])
+
     def test_failed_judge_is_unknown_instead_of_zero_and_raw_execution_metrics_are_retained(self):
         self.write_task("128")
         path = self.runs / "128/judgements.json"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 import json
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CalledProcessError, CompletedProcess
 import sys
 import tempfile
 import unittest
@@ -179,6 +181,105 @@ class SmokeGateTests(unittest.TestCase):
         summary = json.loads((self.root / "report/summary.json").read_text())
         self.assertTrue(summary["efficacy_claim_ready"])
         self.assertNotIn("smoke_validation", summary)
+
+
+class ContinuationTaskTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.code = self.root / "code"
+        self.output = self.root / "output"
+        self.prior = self.root / "original-artifact"
+        self.review = self.root / "code-review.json"
+        self.commands = []
+        dump(self.code / "data/lock.json", {"experiment": {"protocol": PROTOCOL},
+            "tasks": [{"task_id": "3", "answer_filename": "answer.md"}]})
+        dump(self.review, {"status": "verified"})
+
+    def run_main(self, *, runner_status=1, judge_status=1, report_status=0, dataset_failure=False):
+        from runner import collect_results, make_plan
+        def invoke(command, **kwargs):
+            name = Path(command[1]).name
+            self.commands.append((name, list(command), kwargs))
+            if name == "dataset.py" and dataset_failure:
+                raise CalledProcessError(1, command)
+            if name == "runner.py":
+                runs = self.output / "runs"
+                runs.mkdir()
+                plan = make_plan("3", 10)
+                for i, trial in enumerate(plan["trials"]):
+                    trial["status"] = "contract_failure" if i == 3 else "completed"
+                collect_results(runs, plan)
+                return CompletedProcess(command, runner_status)
+            if name == "judge.py":
+                return CompletedProcess(command, judge_status)
+            if name == "report.py":
+                output = self.output / "report"
+                dump(output / "summary.json", {"summary": {"complete": False,
+                    "execution_complete": report_status == 0}})
+                (output / "summary.md").write_text("Original failure retained.\n")
+                return CompletedProcess(command, report_status)
+            return CompletedProcess(command, 0)
+        with patch.object(module, "HERE", self.code), patch.object(module, "embedding_preflight"), \
+                patch.object(module, "sdk_preflight"), patch.object(module.subprocess, "run", side_effect=invoke), \
+                patch.dict("os.environ", {"QODER_PERSONAL_ACCESS_TOKEN": "fixture", "GLM_API_KEY": "fixture", "QWEN_API_KEY": "fixture"}), \
+                redirect_stdout(io.StringIO()):
+            return module.main(["--task-id", "3", "--repetitions", "10", "--phase", "batch",
+                "--output", str(self.output), "--upstream", str(self.root / "upstream"),
+                "--continue-from", str(self.prior), "--continuation-code-review", str(self.review)])
+
+    def test_report_execution_gate_decides_completion_with_preserved_runner_and_judge_failure(self):
+        self.assertEqual(self.run_main(), 0)
+        commands = {name: (command, kwargs) for name, command, kwargs in self.commands}
+        self.assertEqual(list(commands), ["dataset.py", "runner.py", "judge.py", "report.py"])
+        runner_command = commands["runner.py"][0]
+        self.assertEqual(runner_command[runner_command.index("--continue-from") + 1], str(self.prior))
+        self.assertEqual(runner_command[runner_command.index("--continuation-code-review") + 1], str(self.review))
+        self.assertEqual(runner_command[runner_command.index("--repetitions") + 1], "10")
+        self.assertEqual(runner_command[runner_command.index("--timeout") + 1], "900")
+        judge = commands["judge.py"][0]
+        for option, name in (("--continue-from-ledger", "prior-ledger.json"),
+                             ("--continue-from-judgements", "prior-judgements.json")):
+            self.assertEqual(judge[judge.index(option) + 1], str(self.output.resolve() / "runs/continuation-evidence" / name))
+        self.assertIn("--require-executed", commands["report.py"][0])
+        self.assertNotIn("--require-complete", commands["report.py"][0])
+        ledger = json.loads((self.output / "runs/trial-results.json").read_text())
+        self.assertEqual(len(ledger["trials"]), 20)
+        self.assertEqual(ledger["trials"][3]["status"], "contract_failure")
+        validation = json.loads((self.output / "smoke_validation.json").read_text())
+        self.assertEqual(validation["status"], "not_applicable")
+
+    def test_incomplete_report_fails_even_if_all_subprocesses_return_zero(self):
+        self.assertEqual(self.run_main(runner_status=0, judge_status=0, report_status=1), 1)
+
+    def test_abnormal_process_exit_cannot_be_masked_by_successful_report(self):
+        for runner_status, judge_status in ((-15, 1), (2, 1), (1, -9), (1, 2)):
+            with self.subTest(runner_status=runner_status, judge_status=judge_status):
+                self.output = self.root / f"output-{runner_status}-{judge_status}"
+                self.commands.clear()
+                with self.assertRaisesRegex(RuntimeError, "Continuation process failed abnormally"):
+                    self.run_main(runner_status=runner_status, judge_status=judge_status)
+                self.assertEqual(self.commands[-1][0], "report.py")
+                self.assertTrue((self.output / "setup-failure.json").is_file())
+                self.assertEqual(json.loads((self.output / "runs/trial-results.json").read_text())["trials"][3]["status"], "contract_failure")
+
+    def test_setup_exception_keeps_all_planned_slots_and_cannot_be_masked_by_report(self):
+        with self.assertRaises(CalledProcessError):
+            self.run_main(dataset_failure=True)
+        self.assertEqual([name for name, _, _ in self.commands], ["dataset.py", "report.py"])
+        rows = json.loads((self.output / "runs/trial-results.json").read_text())["trials"]
+        self.assertEqual(len(rows), 20)
+        self.assertTrue(all(row["status"] == "planned" for row in rows))
+
+    def test_continuation_rejects_changed_repetition_count_before_setup(self):
+        with patch.object(module, "embedding_preflight") as preflight, \
+                self.assertRaisesRegex(ValueError, "original 10 repetitions"):
+            module.main(["--task-id", "3", "--repetitions", "1", "--phase", "batch",
+                "--output", str(self.output), "--upstream", str(self.root / "upstream"),
+                "--continue-from", str(self.prior), "--continuation-code-review", str(self.review)])
+        preflight.assert_not_called()
+        self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ class NativeRunnerTests(unittest.TestCase):
             dry_run=False, answer_filename="报告/分析.md")
 
     def execute(self, args, *, cache=None, statuses=(), mutate=None, prepare_error=None,
-                mutate_preparation=False, commit="fixture-commit"):
+                mutate_preparation=False, commit="fixture-commit", runtime=RUNTIME, extra_env=None):
         calls, builds = [], []
 
         def prepare(source, index, logs, model_cache, *, image, check_only=False):
@@ -68,10 +68,11 @@ class NativeRunnerTests(unittest.TestCase):
                     "installation_wall_seconds": 2.0, "container_total_wall_seconds": 11.0}
 
         env = {runner.SPEC.credential_env: "fake-qoder-secret", "QWEN_API_KEY": "fake-embedding-secret"}
+        env.update(extra_env or {})
         if cache:
             env["WORKSPACE_QA_INDEX_CACHE"] = str(cache)
         with patch.dict("os.environ", env, clear=True), \
-                patch.object(runner, "runtime_identity", return_value=RUNTIME), \
+                patch.object(runner, "runtime_identity", return_value=runtime), \
                 patch.object(runner, "run_checked", side_effect=lambda cmd, **kw: commit if cmd[-1] == "HEAD" else "资料.md"), \
                 patch.object(seed_cache, "build_identity", return_value={"fixture_runtime": RUNTIME}), \
                 patch.object(native_runner, "native_index", side_effect=prepare), \
@@ -127,6 +128,99 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertEqual(rows[0]["status"], failure)
                 self.assertEqual(rows[0]["input_tokens"], 120)
                 self.assertEqual([r["status"] for r in rows[1:]], ["completed"] * 3)
+
+    def continuation_fixture(self, root):
+        from test_continuation import fixture, QUESTION, FILENAME, NEW_COMMIT
+        from native_fixtures import dump
+        args = self.args(root, repetitions=10)
+        (args.source_root / "资料.md").write_bytes(b"frozen")
+        args.question_file.write_text(QUESTION)
+        args.answer_filename = FILENAME
+        prior, plan, ledger, current = fixture(root)
+        # The helper's compact fixture abbreviates explanatory manifest text;
+        # exercise the real runner's full runtime compatibility check too.
+        manifest_path = prior / "runs/manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(
+            index_policy="native CLI seed; separate writable copy per with-zg trial; normal native refresh allowed",
+            wall_seconds_scope="qa-session agent interval including native MCP startup/search; native install, index preparation and host integrity checks are recorded separately",
+            answer_delivery="Harness saves terminal response verbatim outside corpus to requested report path")
+        dump(manifest_path, manifest)
+        args.continue_from = prior
+        args.continuation_code_review = root / "code-review.json"
+        dump(args.continuation_code_review, current["continuation_code_review"])
+        runtime = {k: current[k] for k in ("image_id", "installed_versions", "os", "architecture")}
+        return args, prior, plan, ledger, {"runtime": runtime,
+            "extra_env": {"GITHUB_SHA": NEW_COMMIT, "GITHUB_RUN_ID": "continuation-run"}}
+
+    def test_continuation_executes_only_original_sixteen_slots_and_preserves_four_observations(self):
+        import continuation
+        from native_fixtures import installation_stub
+        with tempfile.TemporaryDirectory() as tmp:
+            args, prior, plan, ledger, kwargs = self.continuation_fixture(Path(tmp))
+            original_hashes = continuation.file_hashes(prior)
+            with patch.object(continuation, "validate_installation", side_effect=installation_stub):
+                status, calls, builds = self.execute(args, **kwargs)
+            self.assertEqual(status, 1)  # The original failure is still a failure.
+            expected = [t["trial_id"] for t in plan["trials"][4:]]
+            self.assertEqual([call["agent"].parent.name for call in calls], expected)
+            self.assertEqual(len(calls), 16)
+            self.assertEqual(len(builds), 1)
+            self.assertEqual(self.rows(args)[:4], ledger["trials"][:4])
+            self.assertEqual(self.rows(args)[3]["status"], "contract_failure")
+            self.assertTrue(all(row["status"] == "completed" for row in self.rows(args)[4:]))
+            self.assertEqual(continuation.file_hashes(prior), original_hashes)
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(manifest["continuation"]["pending_trial_ids"], expected)
+            for relative, digest in manifest["continuation"]["preserved_files_sha256"].items():
+                self.assertEqual(runner.sha256(args.output / relative), digest)
+            proof = continuation.validate_continuation_evidence(args.output)
+            self.assertTrue(proof["no_resampling"])
+            self.assertEqual(len(proof["preserved_trial_ids"]), 4)
+
+    def test_continuation_rejects_ambiguous_original_status_before_import_or_new_trials(self):
+        import continuation
+        from native_fixtures import dump, installation_stub
+        for status in ("running", "unrecognized"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                args, prior, _, ledger, kwargs = self.continuation_fixture(Path(tmp))
+                row = ledger["trials"][3]
+                row.update(status=status, partial_usage_observed=9104)
+                trial = prior / "runs" / row["trial_id"]
+                if status == "running":
+                    (trial / "result.json").unlink()
+                else:
+                    dump(trial / "result.json", row)
+                dump(prior / "runs/trial-results.json", ledger)
+                old_plan = json.loads((prior / "runs/plan.json").read_text())
+                old_plan["trials"][3]["status"] = status
+                dump(prior / "runs/plan.json", old_plan)
+                judged = json.loads((prior / "runs/judgements.json").read_text())
+                judged["trial_results_sha256"] = runner.sha256(prior / "runs/trial-results.json")
+                dump(prior / "runs/judgements.json", judged)
+                before = continuation.file_hashes(prior)
+                with patch.object(continuation, "validate_installation", side_effect=installation_stub), \
+                        self.assertRaisesRegex(ValueError, rf"terminal original result: {row['trial_id']}.*{status}"):
+                    self.execute(args, prepare_error="Index must not start", **kwargs)
+                self.assertEqual(continuation.file_hashes(prior), before)
+                self.assertFalse((args.output / "continuation-evidence").exists())
+                self.assertFalse(any(args.output.glob("3-r*")))
+                self.assertFalse((args.output / "preparation/runtime/preparation.json").exists())
+                self.assertTrue((args.output / "failure.json").is_file())
+
+    def test_continuation_preparation_failure_retains_imported_old_rows_without_retry(self):
+        import continuation
+        from native_fixtures import installation_stub
+        with tempfile.TemporaryDirectory() as tmp:
+            args, prior, _, ledger, kwargs = self.continuation_fixture(Path(tmp))
+            before = continuation.file_hashes(prior)
+            with patch.object(continuation, "validate_installation", side_effect=installation_stub), \
+                    self.assertRaisesRegex(RuntimeError, "native preparation failed"):
+                self.execute(args, prepare_error="native preparation failed", **kwargs)
+            self.assertEqual(self.rows(args)[:4], ledger["trials"][:4])
+            self.assertTrue(all(row["status"] == "planned" for row in self.rows(args)[4:]))
+            self.assertEqual(continuation.file_hashes(prior), before)
+            self.assertEqual(len(list(args.output.glob("3-r*"))), 4)
 
     def test_contract_or_launch_failure_keeps_unexecuted_denominator(self):
         for failure in ("contract_failure", "launch_failure"):

@@ -136,6 +136,7 @@ class Counters:
         self.usage_by_turn = {}
         self.cache_write_by_turn = {}
         self.native_models = set()
+        self.synthetic_notifications = set()
         self.invalid_usage_events = 0
 
     @staticmethod
@@ -183,7 +184,14 @@ class Counters:
                 self.cache_write_by_turn[identity] = numeric["cache_creation_input_tokens"]
             if any(usage.get(key) is not None and numeric[key] is None for key in numeric):
                 self.invalid_usage_events += 1
-            if isinstance(message.get("model"), str) and message["model"]:
+            synthetic = message.get("model") == "<synthetic>" and all(
+                type(usage.get(key)) is int and usage[key] == 0 for key in (
+                    "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            if synthetic:
+                # Keep the failed/unknown usage observation and budget counters,
+                # but do not claim Qoder's local API-error marker is a model.
+                self.synthetic_notifications.add(identity)
+            elif isinstance(message.get("model"), str) and message["model"]:
                 self.native_models.add(message["model"])
             for block in message.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
@@ -200,6 +208,7 @@ class Counters:
                 "input_usage_missing_turns": missing, "invalid_usage_events": self.invalid_usage_events,
                 "cache_write_tokens": sum(writes) if writes and all(value is not None for value in writes) else None,
                 "native_models": sorted(self.native_models),
+                "synthetic_notifications": len(self.synthetic_notifications),
                 "input_convention": "OpenCode native input + cache.read; Qoder native inclusive input. Repeated message snapshots replace, not sum. Cache writes are not added."}
 
     def exceeded(self, limits):

@@ -19,6 +19,18 @@ inputs:
   embedding-key:
     required: true
     description: Model Studio workspace key for remote Qwen3.7 text embedding
+  continue-from:
+    required: false
+    default: ''
+    description: Validated original task artifact; only originally unstarted trials may run
+  continuation-code-review:
+    required: false
+    default: ''
+    description: CI audit of permitted code changes relative to the original experiment
+  artifact-prefix:
+    required: false
+    default: workspace-qa
+    description: Separate artifact namespace for original and continued series
 runs:
   using: composite
   steps:
@@ -106,11 +118,18 @@ runs:
         WORKSPACE_QA_RANGE_CACHE: ${{ steps.cache-plan.outputs.range_cache_path }}
         WORKSPACE_QA_RANGE_CACHE_BYTES: ${{ steps.cache-plan.outputs.range_cache_bytes }}
         WORKSPACE_QA_INDEX_CACHE: ${{ steps.cache-plan.outputs.index_cache_path }}
-      run: >-
-        uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py
-        --task-id "$TASK_ID" --repetitions "$REPETITIONS" --phase "$QA_PHASE"
-        --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream"
-        --output "$RUNNER_TEMP/workspace-qa"
+        CONTINUE_FROM: ${{ inputs.continue-from }}
+        CONTINUATION_CODE_REVIEW: ${{ inputs.continuation-code-review }}
+      run: |
+        continuation_args=()
+        if [ -n "$CONTINUE_FROM" ]; then
+          test -n "$CONTINUATION_CODE_REVIEW"
+          continuation_args+=(--continue-from "$CONTINUE_FROM" --continuation-code-review "$CONTINUATION_CODE_REVIEW")
+        fi
+        uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py \
+          --task-id "$TASK_ID" --repetitions "$REPETITIONS" --phase "$QA_PHASE" \
+          --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream" \
+          --output "$RUNNER_TEMP/workspace-qa" "${continuation_args[@]}"
     # Cache generations let a failed partial download grow on a later run.
     # Restore prefixes include the COMPLETE compatibility hash; no cross-config fallback.
     - name: Check whether preparation produced new reusable cache content
@@ -198,7 +217,7 @@ runs:
     - uses: actions/upload-artifact@v4
       if: always() && steps.artifact-safety.outcome == 'success'
       with:
-        name: workspace-qa-${{ inputs.phase }}-${{ inputs.task-id }}-${{ github.run_id }}-${{ github.run_attempt }}
+        name: ${{ inputs.artifact-prefix }}-${{ inputs.phase }}-${{ inputs.task-id }}-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 30
         if-no-files-found: error
         path: |
@@ -216,5 +235,6 @@ runs:
           ${{ runner.temp }}/workspace-qa/report/
           ${{ runner.temp }}/workspace-qa/runs/*.json
           ${{ runner.temp }}/workspace-qa/runs/judge/
+          ${{ runner.temp }}/workspace-qa/runs/continuation-evidence/
           ${{ runner.temp }}/workspace-qa/runs/*-r*/
           ${{ runner.temp }}/workspace-qa/runs/preparation/runtime/

@@ -314,6 +314,76 @@ def validate_resume(previous: dict[str, Any], current: dict[str, Any], trials: l
                 raise JudgeError("resume score differs from its raw assessment")
 
 
+def validate_judgement_continuation(document: dict[str, Any], runs_dir: Path) -> set[str]:
+    """Verify imported scores against immutable originals without judging again."""
+    details = document.get("judgement_continuation")
+    if details is None:
+        return set()
+    if not isinstance(details, dict) or details.get("schema_version") != 1:
+        raise JudgeError("invalid judgement continuation provenance")
+    from continuation import validate_continuation_evidence
+    validate_continuation_evidence(runs_dir)
+    provenance = read_object(runs_dir / "manifest.json")["continuation"]
+    prior_path = runs_dir / provenance["prior_judgements_path"]
+    prior = read_object(prior_path)
+    old_ledger_hash = provenance["prior_ledger_sha256"]
+    if prior.get("trial_results_sha256") != old_ledger_hash:
+        raise JudgeError("original judgements are bound to a different original ledger")
+    for key in ("adapter", "task_id", "judge_model", "temperature", "order_seed", "expected_trials",
+                "repetitions_per_profile", "metadata_sha256", "source_hashes", "rubrics", "rubric_types", "limits", "retry_policy"):
+        if prior.get(key) != document.get(key):
+            raise JudgeError(f"continued judgement identity differs: {key}")
+    for key in ("prior_ledger_path", "prior_ledger_sha256", "prior_manifest_path", "prior_manifest_sha256",
+                "prior_judgements_path", "prior_judgements_sha256", "preserved_trial_ids"):
+        if details.get(key) != provenance.get(key):
+            raise JudgeError(f"continued judgement provenance differs: {key}")
+    if document.get("trial_results_sha256") != sha256((runs_dir / "trial-results.json").read_bytes()):
+        raise JudgeError("continued judgements refer to another current ledger")
+    old_rows = {row["trial_id"]: row for row in prior["trials"]}
+    rows = {row["trial_id"]: row for row in document["trials"]}
+    if len(old_rows) != len(prior["trials"]) or len(rows) != len(document["trials"]) or set(rows) != set(old_rows):
+        raise JudgeError("continued judgement trial set differs")
+    locked = set(provenance["preserved_trial_ids"])
+    if any(rows.get(trial_id) != old_rows.get(trial_id) for trial_id in locked):
+        raise JudgeError("an original attempted trial judgement was changed")
+    imported = sorted(trial_id for trial_id in locked if old_rows[trial_id].get("status") == "judged")
+    if details.get("imported_judged_trial_ids") != imported:
+        raise JudgeError("imported judged trial identities differ")
+    return locked
+
+
+def import_continued_judgements(previous: dict[str, Any], report: dict[str, Any], ledger: dict[str, Any],
+                               previous_ledger_path: Path, previous_judgements_path: Path,
+                               evidence: dict[str, Any], runs_dir: Path, max_prompt_bytes: int, attempts: int) -> set[str]:
+    from continuation import validate_continuation_evidence, validate_transition
+    validate_continuation_evidence(runs_dir)
+    provenance = read_object(runs_dir / "manifest.json")["continuation"]
+    if (sha256(previous_ledger_path.read_bytes()) != provenance["prior_ledger_sha256"]
+            or sha256(previous_judgements_path.read_bytes()) != provenance["prior_judgements_sha256"]):
+        raise JudgeError("continuation input files differ from the verified archived originals")
+    previous_ledger = read_object(previous_ledger_path)
+    transition = validate_transition(previous_ledger, ledger)
+    locked = set(transition["preserved_trial_ids"])
+    if locked != set(provenance["preserved_trial_ids"]):
+        raise JudgeError("continued ledger preserved-trial set differs")
+    # The old ledger is deliberately validated as old; never relax --resume's
+    # normal exact-ledger identity check to accommodate newly executed trials.
+    original_identity = {**report, "trial_results_sha256": provenance["prior_ledger_sha256"]}
+    validate_resume(previous, original_identity, previous_ledger["trials"], evidence, runs_dir, max_prompt_bytes, attempts)
+    by_id = {row["trial_id"]: row for row in previous["trials"]}
+    if any(by_id[trial_id].get("attempts") or by_id[trial_id].get("status") == "judged"
+           for trial_id in transition["pending_trial_ids"]):
+        raise JudgeError("an originally unstarted trial already had judging attempts")
+    report["trials"] = [by_id[row["trial_id"]] if row["trial_id"] in locked else row for row in report["trials"]]
+    report["judgement_continuation"] = {"schema_version": 1,
+        **{key: provenance[key] for key in ("prior_ledger_path", "prior_ledger_sha256", "prior_manifest_path", "prior_manifest_sha256",
+            "prior_judgements_path", "prior_judgements_sha256", "preserved_trial_ids")},
+        "imported_judged_trial_ids": sorted(trial_id for trial_id in locked if by_id[trial_id]["status"] == "judged"),
+        "policy": "Original attempted QA and their judgement rows remain unchanged; only originally unstarted QA receives new judging."}
+    validate_judgement_continuation(report, runs_dir)
+    return locked
+
+
 def can_resume_attempt(row: dict[str, Any], model: str, rubric_count: int) -> bool:
     if not row["attempts"]:
         return True
@@ -337,7 +407,13 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
                model: str | None = None, attempts: int = 3, seed: int = 0,
                max_source_bytes: int = MAX_SOURCE_BYTES, max_prompt_bytes: int = MAX_PROMPT_BYTES,
                completion_fn: Callable[..., dict[str, Any]] = http_completion,
-               sleep_fn: Callable[[float], None] = time.sleep, resume: bool = False) -> dict[str, Any]:
+               sleep_fn: Callable[[float], None] = time.sleep, resume: bool = False,
+               continue_from_ledger: Path | None = None, continue_from_judgements: Path | None = None) -> dict[str, Any]:
+    if bool(continue_from_ledger) != bool(continue_from_judgements):
+        raise JudgeError("continuation requires both original ledger and original judgements")
+    continuing = continue_from_ledger is not None
+    if resume and continuing:
+        raise JudgeError("--resume and continuation import are mutually exclusive")
     if not 1 <= attempts <= 5:
         raise JudgeError("attempts must be between 1 and 5")
     base, default_model = settings()
@@ -358,7 +434,14 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
             raise JudgeError("trial IDs must be nonempty and unique")
         seen.add(trial_id)
     output = output or runs_dir / "judgements.json"
-    previous = read_object(output) if resume else None
+    if continuing:
+        if (output.resolve().is_relative_to((runs_dir / "continuation-evidence").resolve())
+                or output.resolve() in {continue_from_ledger.resolve(), continue_from_judgements.resolve()}):
+            raise JudgeError("continuation cannot overwrite original evidence")
+        if output.is_file() and output.read_bytes() != continue_from_judgements.read_bytes():
+            raise JudgeError("continued judging already has progress; use --resume without importing again")
+    previous = read_object(continue_from_judgements) if continuing else read_object(output) if resume else None
+    locked = set()
     report: dict[str, Any] = {"schema_version": 1, "adapter": ADAPTER,
         "score_label": "original-rubric boolean mean (custom adapter)",
         "official_judge": False, "leaderboard_comparable": False,
@@ -398,13 +481,19 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     report.update(metadata_sha256=evidence["metadata_sha256"], source_bytes=evidence["source_bytes"],
                   source_hashes=[{k: s[k] for k in ("stored_relpath", "sha256", "bytes")} for s in evidence["sources"]],
                   rubrics=evidence["metadata"]["rubrics"], rubric_types=evidence["metadata"]["rubric_types"])
-    if previous is not None:
+    if continuing:
+        locked = import_continued_judgements(previous, report, ledger, continue_from_ledger,
+            continue_from_judgements, evidence, runs_dir, max_prompt_bytes, attempts)
+    elif previous is not None:
         validate_resume(previous, report, ordered, evidence, runs_dir, max_prompt_bytes, attempts)
         by_id = {row["trial_id"]: row for row in previous["trials"]}
         report["trials"] = [by_id[trial["trial_id"]] for trial in ordered]
         report["resumed"] = True
+        if previous.get("judgement_continuation") is not None:
+            report["judgement_continuation"] = previous["judgement_continuation"]
+            locked = validate_judgement_continuation(report, runs_dir)
     for row, trial in zip(report["trials"], ordered):
-        if row["status"] == "judged":
+        if row["trial_id"] in locked or row["status"] == "judged":
             continue
         answer = trial.get("answer")
         if trial.get("status") not in SUCCESS_STATUSES:
@@ -483,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--judge-model", dest="model")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--resume", action="store_true", help="preserve existing attempts and valid scores; retry only unscored eligible failures within their original total budget")
+    parser.add_argument("--continue-from-ledger", type=Path, help="verified original ledger for continuation of unstarted QA only")
+    parser.add_argument("--continue-from-judgements", type=Path, help="verified original judgements to preserve without rejudging")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-source-bytes", type=int, default=MAX_SOURCE_BYTES)
     parser.add_argument("--max-prompt-bytes", type=int, default=MAX_PROMPT_BYTES)

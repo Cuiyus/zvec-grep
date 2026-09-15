@@ -319,6 +319,27 @@ class QoderCLITests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(context.cost_usd)
         self.assertTrue((self.logs_dir / "trajectory.json").is_file())
 
+    def test_failed_result_usage_is_retained_only_as_an_observed_lower_bound(self) -> None:
+        usage = {"input_tokens": 9104, "output_tokens": 149, "cache_read_input_tokens": 0}
+        self._write_events([
+            {"type": "assistant", "message": {"id": "real", "model": "Qwen3.8-Max",
+             "content": [{"type": "text", "text": "Checking source files."}], "usage": usage}},
+            {"type": "assistant", "message": {"id": "notification", "model": "<synthetic>",
+             "content": [{"type": "text", "text": "Model stream timed out before response headers after 60s"}]}},
+            {"type": "result", "subtype": "error_during_execution", "is_error": True, "error_code": 10408,
+             "usage": usage, "modelUsage": {"qmodel_38max": {"inputTokens": 9104}, "<synthetic>": {"inputTokens": 0}}},
+        ])
+        context = AgentContext()
+        self.agent.populate_context_post_run(context)
+        self.assertIsNone(context.n_input_tokens)
+        self.assertIsNone(context.n_output_tokens)
+        self.assertIsNone(context.n_cache_tokens)
+        self.assertEqual(context.metadata["qoder_usage"], usage)
+        self.assertEqual(context.metadata["input_tokens_observed_lower_bound"], 9104)
+        self.assertFalse(context.metadata["token_usage_complete"])
+        self.assertFalse(context.metadata["token_usage_available"])
+        self.assertIn("lower_bound", context.metadata["token_usage_unavailable_reason"])
+
     def test_native_zeroed_usage_is_unavailable_not_zero_consumption(self) -> None:
         self._write_events(
             [

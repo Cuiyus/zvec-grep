@@ -181,7 +181,13 @@ def main(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--upstream", type=Path, required=True)
     p.add_argument("--phase", choices=("smoke", "batch"), required=True)
+    p.add_argument("--continue-from", type=Path)
+    p.add_argument("--continuation-code-review", type=Path)
     args = p.parse_args(argv)
+    if args.continue_from and (args.phase != "batch" or not args.continuation_code_review):
+        raise ValueError("Continuation requires batch phase and a verified code review")
+    if args.continue_from and args.repetitions != 10:
+        raise ValueError("Continuation requires the original 10 repetitions per profile")
     lock = json.loads((HERE / "data/lock.json").read_text())
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     if args.repetitions < 1:
@@ -208,14 +214,26 @@ def main(argv=None):
         subprocess.run([sys.executable, str(HERE / "dataset.py"), "--task-id", args.task_id,
                         "--output", str(preparation), "--upstream", str(args.upstream)], check=True)
         print(json.dumps({"phase": "paired_trials", "status": "starting"}), flush=True)
-        result = subprocess.run([sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
+        runner_command = [sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
-                                 "--repetitions", str(args.repetitions), "--timeout", "900"])
+                                 "--repetitions", str(args.repetitions), "--timeout", "900"]
+        if args.continue_from:
+            runner_command += ["--continue-from", str(args.continue_from),
+                               "--continuation-code-review", str(args.continuation_code_review)]
+        result = subprocess.run(runner_command)
         # Retain and judge completed candidates even if a different trial failed.
-        judged = subprocess.run([sys.executable, str(HERE / "judge.py"), "--metadata",
+        judge_command = [sys.executable, str(HERE / "judge.py"), "--metadata",
                                  str(preparation / "tasks" / args.task_id / "metadata.json"), "--task-dir",
-                                 str(preparation / "tasks" / args.task_id), "--runs-dir", str(runs)])
+                                 str(preparation / "tasks" / args.task_id), "--runs-dir", str(runs)]
+        if args.continue_from:
+            judge_command += ["--continue-from-ledger", str(runs / "continuation-evidence/prior-ledger.json"),
+                              "--continue-from-judgements", str(runs / "continuation-evidence/prior-judgements.json")]
+        judged = subprocess.run(judge_command)
+        if args.continue_from and (result.returncode not in (0, 1) or judged.returncode not in (0, 1)):
+            # Exit 1 can describe a preserved failed observation. Signals and
+            # CLI/process failures cannot be excused by a complete report.
+            raise RuntimeError(f"Continuation process failed abnormally: runner={result.returncode}, judge={judged.returncode}")
         outcome = 0 if result.returncode == 0 and judged.returncode == 0 else 1
     except Exception as error:
         root.joinpath("setup-failure.json").write_text(json.dumps({"status": "failed", "error_type": type(error).__name__}) + "\n")
@@ -229,8 +247,13 @@ def main(argv=None):
         if validation["status"] == "invalid":
             outcome = 1
         reported = subprocess.run([sys.executable, str(HERE / "report.py"), "--runs-dir", str(runs),
-                                   "--manifest", str(root / "selection.json"), "--output", str(root / "report"), "--require-complete"])
-        if reported.returncode:
+                                   "--manifest", str(root / "selection.json"), "--output", str(root / "report"),
+                                   "--require-executed" if args.continue_from else "--require-complete"])
+        if args.continue_from:
+            # Original failures remain failures; completion means every original
+            # slot was attempted and every completed answer has its judgement.
+            outcome = reported.returncode
+        elif reported.returncode:
             outcome = 1
         annotate_smoke_report(root / "report", validation)
     return outcome

@@ -227,20 +227,41 @@ def read_native_events(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
 def _qoder_identity(events: list[dict[str, Any]], spec: AgentSpec) -> dict[str, Any]:
     observed: set[str] = set()
     sources: set[str] = set()
+    synthetic_notifications: set[tuple[str, str]] = set()
+    synthetic_summaries = 0
     for event in events:
         if event.get("parent_tool_use_id"):
             continue
         if event.get("type") == "assistant" and isinstance(event.get("message"), dict):
-            model = event["message"].get("model")
+            message = event["message"]
+            model = message.get("model")
+            usage = message.get("usage")
+            # Published Qoder 1.1.45 Sne() emits local API-error text with this
+            # exact sentinel; its SDK serializer fills an all-zero usage. It
+            # is neither a provider response nor evidence of model fallback.
+            if model == "<synthetic>" and _zero_synthetic_usage(usage):
+                synthetic_notifications.add((str(event.get("session_id") or ""), str(message.get("id") or event.get("uuid"))))
+                continue
             if isinstance(model, str) and model:
                 observed.add(_QODER_MODEL_ALIASES.get(model.lower(), model.lower()))
                 sources.add("assistant.message.model")
         if event.get("type") == "result" and isinstance(event.get("modelUsage"), dict):
-            for model in event["modelUsage"]:
+            for model, usage in event["modelUsage"].items():
+                if model == "<synthetic>" and _zero_synthetic_usage(usage, summary=True):
+                    synthetic_summaries += 1
+                    continue
                 observed.add(_QODER_MODEL_ALIASES.get(model.lower(), model.lower()))
                 sources.add("result.modelUsage")
     return {"requested": spec.provider_model, "observed": sorted(observed),
-            "sources": sorted(sources), "valid": observed == {spec.provider_model}}
+            "sources": sorted(sources), "valid": observed == {spec.provider_model},
+            "synthetic_notifications": len(synthetic_notifications),
+            "synthetic_model_usage_entries": synthetic_summaries}
+
+
+def _zero_synthetic_usage(usage: Any, *, summary: bool = False) -> bool:
+    fields = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens") if summary else (
+        "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    return isinstance(usage, dict) and all(type(usage.get(key)) is int and usage[key] == 0 for key in fields)
 
 
 def qoder_contract(events: list[dict[str, Any]], *, zg: bool) -> dict[str, Any]:
@@ -283,6 +304,8 @@ def _annotate_qoder_messages(data: dict[str, Any], events: list[dict[str, Any]])
             if message_id:
                 positions[key] = position
         group = groups[position]
+        if message.get("model") == "<synthetic>" and _zero_synthetic_usage(message.get("usage")):
+            group["synthetic_notification"] = True
         usage = message.get("usage")
         if isinstance(usage, dict) and usage not in group["usage_snapshots"]:
             group["usage_snapshots"].append(usage)
@@ -307,6 +330,8 @@ def _annotate_qoder_messages(data: dict[str, Any], events: list[dict[str, Any]])
         available = any(v is not None and v > 0 for v in tokens.values())
         step["extra"] = {**step.get("extra", {}), "qoder_message_id": group["message_id"],
                          "qoder_session_id": group["session_id"], "qoder_parent_tool_use_id": group["parent_tool_use_id"]}
+        if group.get("synthetic_notification"):
+            step["extra"]["qoder_local_api_error_notification"] = True
         metrics: dict[str, Any] = {"extra": {"qoder_usage_snapshots": usages,
                                             "token_usage_available": available,
                                             "usage_aggregation": "last_nonzero_message_snapshot_not_sum"}}

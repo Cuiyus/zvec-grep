@@ -191,6 +191,47 @@ termination reasons, budgets and explicitly labelled usage lower bounds without
 substituting them for missing final usage or rerunning failed model outcomes.
 No automatic recovery of the legacy bridge run may fill the new experiment.
 
+### Native continuation without replacing attempted samples
+
+The original native formal run is
+[34919707888](https://github.com/Cuiyus/zvec-grep/actions/runs/34919707888),
+at `f33b0dac3b99bb6bba74d0f50c1596b5fddf3112`. Its task-3 second
+with-zg trial hit Qoder's 60-second response-header timeout. Qoder 1.1.45
+emits a local zero-usage `<synthetic>` notice for that error; the original
+parser treated the notice as a different model and stopped the remaining 16
+slots. The failed trial, three earlier answers, and their judge results are
+retained exactly as originally recorded.
+
+The parser now distinguishes this released local notice from real model
+identity changes. A failed request remains failed, its request count stays in
+the budget, and any observed usage is a labelled lower bound. Missing final
+input tokens remain null. This correction does not rewrite earlier records.
+
+The [continuation workflow](../../.github/workflows/workspace-qa-continue.yml)
+is staged on this branch. It can start only after the original full run has
+finished and a `data/continuation-dispatch.json` record matching
+[continuation-source.json](data/continuation-source.json) is committed. The
+dispatch record is deliberately absent while the original run remains active.
+It selects only original `planned` slots with no execution evidence. Completed,
+failed, budget-exhausted, or ambiguous running slots cannot be resampled.
+The full 10-task × 2-arm × 10-repetition denominator and original order stay fixed.
+
+Before any new QA trial, CI verifies the exact source run and artifact identities,
+records hashes of the permitted code changes, and rechecks the original source
+files, prompt, Node/Qoder/zg versions, model, embedding, limits and install
+configuration. Each new with-zg trial still uses standard `zg install`.
+Original trial files and the original ledger, manifest and judgements are
+retained under `runs/continuation-evidence` and checked again during aggregation.
+Only new answers are judged. The aggregate chooses exactly one merged ledger
+per task, so old and new artifacts cannot double-count observations.
+
+`--require-executed` means all 200 planned slots have terminal execution records
+and every completed answer has been judged. It can pass with honestly recorded
+failed samples. The separate `--require-complete` efficacy gate remains strict;
+the report continues to show missing pairs and failures and cannot claim a
+complete quality or token comparison from partial outcomes. Workflow reruns and
+duplicate continuation runs are rejected to prevent accidental replacements.
+
 ## Offline validation
 
 ```bash

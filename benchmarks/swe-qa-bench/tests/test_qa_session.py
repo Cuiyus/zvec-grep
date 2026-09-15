@@ -68,6 +68,25 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(counter.snapshot()["input_usage_missing_turns"], 1)
         self.assertEqual(counter.exceeded({"input_tokens": 100}), "input_tokens")
 
+    def test_synthetic_timeout_is_unknown_usage_but_not_a_second_provider_model(self):
+        counter = session.Counters()
+        counter.observe({"type": "assistant", "session_id": "s", "message": {"id": "real", "model": "Qwen3.8-Max",
+            "usage": {"input_tokens": 9104, "output_tokens": 149, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}})
+        event = {"type": "assistant", "session_id": "s", "message": {"id": "notification", "model": "<synthetic>",
+            "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+            "content": [{"type": "text", "text": "Model stream timed out before response headers after 60s"}]}}
+        counter.observe(event)
+        counter.observe(event)
+        observed = counter.snapshot()
+        self.assertEqual(observed["native_models"], ["Qwen3.8-Max"])
+        self.assertEqual(observed["synthetic_notifications"], 1)
+        self.assertEqual(observed["model_requests"], 2)
+        self.assertIsNone(observed["input_tokens"])
+        self.assertEqual(observed["input_tokens_observed_lower_bound"], 9104)
+        self.assertEqual(observed["input_usage_missing_turns"], 1)
+        self.assertIsNone(counter.exceeded({"input_tokens": 10000}))
+        self.assertEqual(counter.exceeded({"input_tokens": 9000}), "input_tokens")
+
     def test_parent_child_message_and_tool_ids_do_not_collide(self):
         counter = session.Counters()
         for parent in (None, "child"):

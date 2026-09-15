@@ -12,6 +12,7 @@ from pathlib import Path
 
 from zg_bench.swe_qa.readonly_agents import (
     QODER_SEARCH_TOOL,
+    _qoder_identity,
     REMOTE_EMBEDDING_ENV_NAMES,
     agent_environment,
     agent_spec,
@@ -156,6 +157,56 @@ class ReadonlyAgentTests(unittest.TestCase):
         self.assertEqual(summary["error_event_count"], 0)
         self.assertNotIn("total_prompt_tokens", data["final_metrics"])
         self.assertFalse(data["final_metrics"]["extra"]["token_usage_available"])
+
+    def test_native_timeout_notification_is_not_model_fallback_or_exact_usage(self):
+        known = {"input_tokens": 9104, "output_tokens": 149, "cache_read_input_tokens": 0,
+                 "cache_creation_input_tokens": 0}
+        zero = {key: 0 for key in known}
+        events = qoder_events(zg=True, usage=known)
+        events[1]["message"]["usage"] = known
+        events[-2]["message"].update(model="<synthetic>", usage=zero, content=[{
+            "type": "text", "text": "Model stream timed out before response headers after 60s"}])
+        events[-1].update(subtype="error_during_execution", is_error=True, error_code=10408,
+                          errors=["Model stream timed out before response headers after 60s"])
+        events[-1].pop("result")
+        events[-1]["modelUsage"]["<synthetic>"] = {"inputTokens": 0, "outputTokens": 0,
+            "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
+        summary, data = self.convert(events, zg=True)
+        self.assertEqual(summary["contract_error_count"], 0)
+        self.assertTrue(summary["model_identity"]["valid"])
+        self.assertEqual(summary["model_identity"]["observed"], ["qwen3.8-max"])
+        self.assertEqual(summary["model_identity"]["synthetic_notifications"], 1)
+        self.assertEqual(summary["model_identity"]["synthetic_model_usage_entries"], 1)
+        self.assertTrue(summary["tool_contract"]["valid"])
+        self.assertGreater(summary["error_event_count"], 0)
+        self.assertFalse(summary["has_final_answer"])
+        self.assertNotIn("total_prompt_tokens", summary["final_metrics"])
+        extra = summary["final_metrics"]["extra"]
+        self.assertEqual(extra["qoder_usage"], known)
+        self.assertEqual(extra["input_tokens_observed_lower_bound"], 9104)
+        self.assertFalse(extra["token_usage_available"])
+        self.assertFalse(extra["token_usage_complete"])
+        self.assertEqual(extra["input_usage_incomplete_reason"], "unsuccessful_native_result_usage_is_lower_bound")
+        notifications = [step for step in data["steps"] if step.get("extra", {}).get("qoder_local_api_error_notification")]
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("timed out", notifications[0]["message"])
+
+    def test_only_exact_zero_usage_synthetic_marker_is_excluded_from_identity(self):
+        spec = agent_spec("qodercli", "qwen3.8-max")
+        zero = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        real = {"type": "assistant", "message": {"id": "real", "model": "Qwen3.8-Max", "usage": zero}}
+        synthetic = {"type": "assistant", "message": {"id": "notice", "model": "<synthetic>", "usage": zero}}
+        identity = _qoder_identity([real, synthetic, synthetic], spec)
+        self.assertTrue(identity["valid"])
+        self.assertEqual(identity["synthetic_notifications"], 1)
+        self.assertEqual(_qoder_identity([synthetic], spec)["observed"], [])
+        for model, usage in (("Other-Actual-Model", zero), ("<synthetic>", {**zero, "input_tokens": 1}),
+                             ("<synthetic>", {**zero, "input_tokens": False}), ("<synthetic>", {})):
+            with self.subTest(model=model, usage=usage):
+                event = {"type": "assistant", "message": {"id": "notice", "model": model, "usage": usage}}
+                identity = _qoder_identity([real, event], spec)
+                self.assertFalse(identity["valid"])
+                self.assertIn(model.lower(), identity["observed"])
 
     def test_conflicting_executed_model_cannot_pass_via_alias_or_init(self):
         for kwargs in ({"model": "auto"}, {"result_model": "auto"}, {"model": "Qwen3.7-Max"}):

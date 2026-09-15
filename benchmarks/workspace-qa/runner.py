@@ -134,6 +134,10 @@ def trial_metrics(agent_dir: Path, conversion: dict[str, Any]) -> dict[str, Any]
                "tool_calls": None, "zg_tool_calls": None, "tool_calls_successful": None,
                "zg_tool_calls_successful": None, "model_requests": None,
                "answer": None, "native_turn_input_tokens": None}
+    extra = final.get("extra") or {}
+    metrics["input_usage_complete"] = extra.get("token_usage_complete")
+    metrics["input_tokens_observed_lower_bound"] = number(extra.get("input_tokens_observed_lower_bound"))
+    metrics["input_usage_incomplete_reason"] = extra.get("input_usage_incomplete_reason")
     path = agent_dir / SPEC.stream_filename
     if path.is_file():
         events, parse = read_native_events(path)
@@ -355,6 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--order-seed", type=int, default=1729)
+    parser.add_argument("--continue-from", type=Path,
+                        help="Verified prior task artifact; execute only its unstarted trials")
+    parser.add_argument("--continuation-code-review", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     return execute(parser.parse_args(argv))
 

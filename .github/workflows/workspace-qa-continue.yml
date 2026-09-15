@@ -1,0 +1,215 @@
+name: Continue frozen Workspace QA trials
+run-name: "Workspace QA · continue unstarted trials · ${{ github.ref_name }}"
+
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths: ['benchmarks/workspace-qa/data/continuation-dispatch.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: workspace-qa-native-continuation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_pending: ${{ steps.plan.outputs.has_pending }}
+      source_run_id: ${{ steps.source.outputs.source_run_id }}
+      source_run_attempt: ${{ steps.source.outputs.source_run_attempt }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate explicit dispatch and prevent automatic retries
+        id: source
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          folder = Path('benchmarks/workspace-qa/data')
+          source = json.loads((folder / 'continuation-source.json').read_text())
+          dispatch = json.loads((folder / 'continuation-dispatch.json').read_text())
+          if int(os.environ['GITHUB_RUN_ATTEMPT']) != 1:
+              raise SystemExit('Do not rerun this workflow: already attempted samples must be preserved.')
+          if dispatch.get('source_run_id') != source['source_run_id'] or dispatch.get('source_commit') != source['source_commit']:
+              raise SystemExit('Dispatch does not match the reviewed original experiment.')
+          if os.environ['GITHUB_REF_NAME'] != source['branch']:
+              raise SystemExit('Unexpected continuation branch.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('source_run_id=' + str(source['source_run_id']) + '\n')
+              out.write('source_run_attempt=' + str(source['source_run_attempt']) + '\n')
+          PY
+      - name: Check original execution is over and no continuation already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+        run: |
+          curl --fail --silent --show-error -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            -o "$RUNNER_TEMP/source-run.json"
+          curl --fail --silent --show-error -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/workspace-qa-continue.yml/runs?per_page=100" \
+            -o "$RUNNER_TEMP/continuation-runs.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          original = json.loads((root / 'source-run.json').read_text())
+          if original.get('status') != 'completed':
+              raise SystemExit('Original execution is still active; no overlapping continuation is allowed.')
+          runs = json.loads((root / 'continuation-runs.json').read_text())
+          if runs.get('total_count', 0) > 100:
+              raise SystemExit('Continuation history needs explicit review.')
+          others = [run['id'] for run in runs['workflow_runs']
+                    if run['id'] != int(os.environ['GITHUB_RUN_ID'])
+                    and run.get('head_branch') == os.environ['GITHUB_REF_NAME']]
+          if others:
+              raise SystemExit('Existing continuation runs require artifact review before any further execution: ' + str(others))
+          PY
+      - name: Audit permitted code changes against original execution
+        run: >-
+          python benchmarks/workspace-qa/continuation_code_review.py
+          --source-config benchmarks/workspace-qa/data/continuation-source.json
+          --output "$RUNNER_TEMP/continuation-code-review.json"
+      - name: Run offline regression tests
+        run: python -m unittest discover -s benchmarks/workspace-qa/tests -v
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.source_run_id }}
+          pattern: workspace-qa-batch-*
+          path: original
+      - name: Freeze only never-started slots from original artifacts
+        id: plan
+        run: |
+          python benchmarks/workspace-qa/continue_ci.py plan \
+            --artifacts original --source-run-json "$RUNNER_TEMP/source-run.json" \
+            --source-config benchmarks/workspace-qa/data/continuation-source.json \
+            --output "$RUNNER_TEMP/continuation-plan.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan = json.loads((Path(os.environ['RUNNER_TEMP']) / 'continuation-plan.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('matrix=' + json.dumps(plan['matrix']) + '\n')
+              out.write('has_pending=' + str(plan['has_pending']).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Only original planned slots can execute. Original attempts and judge results remain fixed.\n\n```json\n')
+              out.write(json.dumps(plan['counts'], indent=2) + '\n```\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-qa-continuation-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source-run.json
+            ${{ runner.temp }}/continuation-code-review.json
+            ${{ runner.temp }}/continuation-plan.json
+          if-no-files-found: error
+
+  continue:
+    needs: plan
+    if: needs.plan.outputs.has_pending == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Reverify checked-out code before model execution
+        run: >-
+          python benchmarks/workspace-qa/continuation_code_review.py
+          --source-config benchmarks/workspace-qa/data/continuation-source.json
+          --output "$RUNNER_TEMP/continuation-code-review.json"
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.plan.outputs.source_run_id }}
+          name: workspace-qa-batch-${{ matrix.task }}-${{ needs.plan.outputs.source_run_id }}-${{ needs.plan.outputs.source_run_attempt }}
+          path: ${{ runner.temp }}/original-task
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: ${{ matrix.task }}
+          repetitions: '10'
+          phase: batch
+          continue-from: ${{ runner.temp }}/original-task
+          continuation-code-review: ${{ runner.temp }}/continuation-code-review.json
+          artifact-prefix: workspace-qa-continuation
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+
+  report:
+    needs: [plan, continue]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.plan.outputs.source_run_id }}
+          pattern: workspace-qa-batch-*
+          path: original
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.has_pending == 'true'
+        with:
+          pattern: workspace-qa-continuation-batch-*
+          path: continued
+      - name: Validate preserved evidence and choose one ledger per original task
+        run: >-
+          python benchmarks/workspace-qa/continue_ci.py assemble
+          --original original --continued continued --output canonical
+          --source-config benchmarks/workspace-qa/data/continuation-source.json
+      - name: Report all 200 slots with original failures retained
+        run: >-
+          python benchmarks/workspace-qa/report.py --runs-dir canonical
+          --manifest benchmarks/workspace-qa/data/lock.json --output report
+          --require-executed
+      - name: Audit original failures and execution coverage
+        if: always()
+        run: >-
+          python benchmarks/workspace-qa/failure_audit.py --runs-dir canonical
+          --manifest benchmarks/workspace-qa/data/lock.json --output report/failure-audit
+      - name: Publish execution coverage and quality separately
+        if: always()
+        run: |
+          for summary in report/summary.md report/failure-audit/summary.md; do
+            if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-qa-continuation-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            report/
+            canonical/assembly.json
+          if-no-files-found: error

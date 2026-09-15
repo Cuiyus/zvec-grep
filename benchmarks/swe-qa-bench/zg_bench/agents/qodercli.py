@@ -377,9 +377,19 @@ class QoderCLI(BaseInstalledAgent):
         }
         # Native account responses in Qoder 1.1.45 can mask every token field
         # to zero. Such a completed model response did not consume zero tokens.
-        token_usage_available = any(
+        native_usage_observed = any(
             value and value > 0 for value in token_counts.values()
         )
+        successful_result = result.get("subtype") == "success" and not result.get("is_error")
+        # A provider timeout can follow valid billed turns. Qoder's final usage
+        # then aggregates only those observed turns; it cannot establish the
+        # unknown request's usage. Retain raw values as a lower bound, never as
+        # an exact total for the failed session.
+        token_usage_complete = native_usage_observed and successful_result
+        token_usage_available = token_usage_complete
+        incomplete_reason = None if token_usage_complete else (
+            "unsuccessful_native_result_usage_is_lower_bound" if not successful_result
+            else "native_usage_masked_or_missing")
         return Trajectory(
             schema_version="ATIF-v1.7",
             session_id=session_id,
@@ -410,6 +420,9 @@ class QoderCLI(BaseInstalledAgent):
                     "qoder_model_usage": model_usage,
                     "qoder_total_credits": _number(result.get("total_credits")),
                     "token_usage_available": token_usage_available,
+                    "token_usage_complete": token_usage_complete,
+                    "input_tokens_observed_lower_bound": token_counts["input_tokens"] if native_usage_observed else None,
+                    "input_usage_incomplete_reason": incomplete_reason,
                 },
             ),
         )
@@ -432,5 +445,6 @@ class QoderCLI(BaseInstalledAgent):
             context.metadata = {**(context.metadata or {}), **(metrics.extra or {})}
             if not context.metadata.get("token_usage_available"):
                 context.metadata["token_usage_unavailable_reason"] = (
-                    "Qoder native account output does not expose token counts"
+                    "Qoder native account output does not expose complete token counts; "
+                    + str(context.metadata.get("input_usage_incomplete_reason") or "native_usage_masked_or_missing")
                 )

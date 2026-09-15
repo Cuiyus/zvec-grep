@@ -89,6 +89,31 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     runner.embedding_endpoint()
 
+    def test_failed_native_result_exposes_usage_lower_bound_not_an_exact_total(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = [
+                {"type": "assistant", "session_id": "s", "message": {"id": "real", "model": "Qwen3.8-Max",
+                    "usage": {"input_tokens": 9104, "output_tokens": 149, "cache_read_input_tokens": 0}, "content": []}},
+                {"type": "assistant", "session_id": "s", "message": {"id": "local-error", "model": "<synthetic>",
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0},
+                    "content": [{"type": "text", "text": "Model stream timed out before response headers after 60s"}]}},
+                {"type": "result", "subtype": "error_during_execution", "is_error": True, "error_code": 10408},
+            ]
+            (root / runner.SPEC.stream_filename).write_text("\n".join(map(json.dumps, events)) + "\n")
+            metrics = runner.trial_metrics(root, {"has_final_answer": False, "final_metrics": {"extra": {
+                "token_usage_available": False, "token_usage_complete": False,
+                "input_tokens_observed_lower_bound": 9104,
+                "input_usage_incomplete_reason": "unsuccessful_native_result_usage_is_lower_bound",
+                "qoder_usage": {"input_tokens": 9104}}}})
+            self.assertIsNone(metrics["input_tokens"])
+            self.assertIsNone(metrics["answer"])
+            self.assertIsNone(metrics["input_usage_reconciles"])
+            self.assertEqual(metrics["input_tokens_observed_lower_bound"], 9104)
+            self.assertFalse(metrics["input_usage_complete"])
+            self.assertEqual(metrics["input_usage_incomplete_reason"], "unsuccessful_native_result_usage_is_lower_bound")
+            self.assertEqual(metrics["model_requests"], 2)
+
     def test_missing_remote_embedding_credential_stops_before_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp))
