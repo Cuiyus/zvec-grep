@@ -1,4 +1,6 @@
-# reflex-6 v6：完整链路实测与诊断
+# reflex-6 v6：自定义只读桥接链路实测与诊断
+
+**评测身份更正：本轮未执行 `zg install`，不能作为原生安装集成收益的验证。** Benchmark 自行配置 `readonly-search.mjs`，虽复用发布包的 MCP schema、工具说明和检索 API，但没有加载安装器写入的 Agent guidance，并绕过原生 daemon、强制 `autoUpdate=false`。安装 guidance 包含检索路由、避免宽泛读取及如何使用返回片段等策略，会影响采用率、token 与 tool call；因此“检索引擎和工具 schema 来自发布包”不足以证明集成等价。以下原始数据和诊断只适用于这套自定义桥接实验。此前将其交付为用户所需的完整 zg 集成评测，是评测设计与范围声明错误。
 
 **完整链路已执行：30 次 E2E、13 个查询上下文标注、65 次检索回放及联合审计。** 本 case 中，OpenCode＋GLM 的平均 input token 下降 16.97%，Qoder＋Qwen 下降 29.94%，OpenCode＋Qwen 则上升 18.43%；三组平均 tool call 均下降。全部答案源码审计发现双评审漏检的机制错误，因此这些成本变化不能直接表述为“质量不下降的稳定收益”。
 

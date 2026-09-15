@@ -251,6 +251,11 @@ source-checked candidates with cross-group semantic reviews, freezes shared
 labels, replays complete requests five times, and joins the observations to
 actual E2E quality and costs. Unknown labels and failed trials remain explicit;
 annotation costs are separate. Standalone retrieval regression is deferred.
+**Integration correction:** v6 did not execute `zg install`. It used the custom
+`readonly-search.mjs` bridge, omitted installer-managed Agent guidance, and
+bypassed the native daemon while forcing `autoUpdate=false`. These results
+therefore do not validate the efficacy of the native installed integration.
+Published schemas and retrieval APIs alone do not establish integration equivalence.
 The [reflex-6 result](../../docs/benchmark-results/readonly-qa-v6-reflex-6.zh-CN.md)
 now records all 30 E2E trials and 65 successful retrieval executions. Every fixed
 request produced identical output in its five replays, and all 15 actual zg
