@@ -166,12 +166,13 @@ def mount(source: Path, target: str, *, readonly: bool = True) -> list[str]:
 
 
 def docker_command(image: str, source: Path, output: Path, cache: Path,
-                   *, index: Path | None = None, snapshot: Path | None = None) -> list[str]:
+                   *, index: Path | None = None, snapshot: Path | None = None,
+                   source_readonly: bool = True) -> list[str]:
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     command = ["docker", "run", "--rm", "--cpus", "4", "--memory", "8g", "--pids-limit", "512",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--workdir", "/app"]
-    command += mount(source, "/app") + mount(output, "/logs", readonly=False)
+    command += mount(source, "/app", readonly=source_readonly) + mount(output, "/logs", readonly=False)
     command += mount(cache, "/models", readonly=False)
     command += ["--env", "ZVEC_GREP_MODEL_CACHE=/models"]
     if index:

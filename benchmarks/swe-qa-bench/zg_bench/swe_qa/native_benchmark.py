@@ -1,8 +1,10 @@
 """E2E prompt experiment using released zg install and fresh potionv2 indexes.
 
-Source QA files remain read-only. Native model/tool behavior is not repaired or
-routed by this harness. Setup, decision diagnostics, QA, grading and retrieval
-are separate ledgers. Index copies/hashes are not a cross-run prerequisite.
+Each session receives an isolated writable copy because released zg validates
+that its repository root is writable. Source hashes before and after the run
+prove that neither the Agent nor zg changed QA files outside `.zvec-grep`.
+Native model/tool behavior is not repaired or routed by this harness. Setup,
+decision diagnostics, QA, grading and retrieval are separate ledgers.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -104,6 +107,14 @@ def launch(*, image: str, source: Path, logs: Path, cache: Path, workspace: Path
            spec: dict, script: str = "native-agent-session.py", credential: str | None = None,
            timeout: int = 3000) -> int:
     logs.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    session_source = workspace / "source"
+    if session_source.exists():
+        raise ValueError("Native session workspace must be new")
+    shutil.copytree(source, session_source, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", ".zvec-grep"))
+    (session_source / ".zvec-grep").mkdir()
+    source_before = directory_identity(session_source)
     index = None
     if spec["arm"] == "zg":
         index = workspace / "index"
@@ -113,7 +124,7 @@ def launch(*, image: str, source: Path, logs: Path, cache: Path, workspace: Path
     # saves its effective argv/env separately, never credentials.
     write_json(logs / "session-spec.json", {"tap_upstream": spec.get("tap_upstream"),
                                            "protocol": PROTOCOL})
-    command = docker_command(image, source, logs, cache, index=index)
+    command = docker_command(image, session_source, logs, cache, index=index, source_readonly=False)
     name = "zg-native-" + hashlib.sha256(str(logs.resolve()).encode()).hexdigest()[:16]
     command += ["--name", name]
     env = dict(os.environ)
@@ -134,6 +145,15 @@ def launch(*, image: str, source: Path, logs: Path, cache: Path, workspace: Path
             process.kill()
             process.wait()
             code = 124
+    unchanged = directory_identity(session_source) == source_before
+    write_json(logs / "source-integrity.json", {
+        "status": "unchanged" if unchanged else "changed",
+        "scope": "isolated session source excluding .git and .zvec-grep",
+        "source_files_before": len(source_before),
+        "source_files_after": len(directory_identity(session_source)),
+    })
+    if not unchanged and code == 0:
+        code = 86
     write_json(logs / "launcher.json", {"returncode": code, "wall_seconds_including_preparation": time.monotonic() - started,
                                         "qa_wall_seconds_source": "session.json", "script": script})
     return code
@@ -238,8 +258,10 @@ def run_group(args: argparse.Namespace) -> int:
         code = launch(image=args.image, source=source, logs=agent_dir, cache=output / "model-cache",
                       workspace=output / "workspaces" / trial["trial_id"], spec=runtime,
                       credential="GLM_API_KEY" if spec.name == "opencode" else "QODER_PERSONAL_ACCESS_TOKEN")
+        integrity = read_json(agent_dir / "source-integrity.json", {"status": "unchanged"})
         row = trial_result(trial, agent_dir, spec, instruction(case), code,
-                           directory_identity(source, skip_git=True) == source_before)
+                           directory_identity(source, skip_git=True) == source_before
+                           and integrity.get("status") == "unchanged")
         rows.append(row)
         trial["status"] = row["execution_status"]
         write_json(trial_dir / "result.json", row)

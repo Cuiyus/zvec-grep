@@ -149,7 +149,7 @@ class NativeBenchmarkTests(unittest.TestCase):
                 checkout.assert_not_called()
                 launch.assert_not_called()
 
-    def test_launcher_passes_credential_by_environment_name_and_source_readonly(self):
+    def test_launcher_uses_isolated_writable_copy_and_preserves_source(self):
         source = self.checkout(CASE, self.root / "corpus")
         _, runtime = nb.runtime_spec("opencode-glm52", CASE, zg=True)
         process = Mock()
@@ -163,11 +163,30 @@ class NativeBenchmarkTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps(command))
         self.assertIn("OPENAI_API_KEY", command)
         self.assertEqual(popen.call_args.kwargs["env"]["OPENAI_API_KEY"], secret)
-        source_mount = next(value for value in command if "target=/app," in value or value.endswith("target=/app,readonly"))
-        self.assertIn("readonly", source_mount)
+        source_mount = next(value for value in command if "target=/app" in value)
+        self.assertNotIn("readonly", source_mount)
+        self.assertIn("workspace/source", source_mount)
         self.assertTrue((self.root / "workspace/index").is_dir())
+        self.assertEqual((source / "source.py").read_text(), "def evidence(): pass\n")
+        self.assertEqual(json.loads((self.root / "logs/source-integrity.json").read_text())["status"], "unchanged")
         for file in (self.root / "logs").glob("*.json"):
             self.assertNotIn(secret, file.read_text())
+
+    def test_launcher_fails_a_session_that_changes_qa_source(self):
+        source = self.checkout(CASE, self.root / "corpus")
+        _, runtime = nb.runtime_spec("opencode-glm52", CASE, zg=False)
+        process = Mock()
+        def mutate(*, timeout):
+            self.assertEqual(timeout, 3000)
+            (self.root / "workspace/source/source.py").write_text("changed\n")
+            return 0
+        process.wait.side_effect = mutate
+        with patch.object(nb.subprocess, "Popen", return_value=process):
+            code = nb.launch(image="native:test", source=source, logs=self.root / "logs", cache=self.root / "cache",
+                             workspace=self.root / "workspace", spec=runtime)
+        self.assertEqual(code, 86)
+        self.assertEqual((source / "source.py").read_text(), "def evidence(): pass\n")
+        self.assertEqual(json.loads((self.root / "logs/source-integrity.json").read_text())["status"], "changed")
 
     def test_trial_result_uses_metrics_expected_by_pair_analysis_and_preserves_unknown_usage(self):
         trial = es.make_plan("case", candidate=None)["trials"][0]
