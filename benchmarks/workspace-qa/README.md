@@ -1,8 +1,9 @@
 # Qoder + Qwen3.8-Max Workspace QA
 
-**Current status: the experiment is being corrected to use the documented
-`zg install` integration. Standard installation has not yet passed its new
-end-to-end validation, and no standard-installation efficacy result is available.**
+**Current status: the documented `zg install` integration passed its fresh
+[native probe](https://github.com/Cuiyus/zvec-grep/actions/runs/34919506961).
+The new task-3 smoke and 200-trial formal matrix remain pending; no
+standard-installation efficacy result is available.**
 
 The earlier implementation used released zg 0.2.2 through a benchmark-managed
 MCP bridge and manually assembled Qoder configuration. That did not satisfy the
@@ -99,7 +100,10 @@ All actual installation checks, dataset preparation and model calls run through
 [GitHub Actions](../../.github/workflows/workspace-qa-qoder.yml). The corrected
 sequence is offline validation, a tiny probe of the **standard-installed** path,
 a fresh task-3 smoke pair, and then the 10-task / 200-trial formal matrix.
-Until the new installation and smoke evidence pass, this sequence is pending.
+The native probe passed with one successful vector retrieval; its original
+artifact hashes and installation evidence are recorded in
+[native-probe-validation.json](data/native-probe-validation.json). The new smoke
+pair must also pass before formal trials start.
 An old bridge probe or smoke cannot unlock the corrected formal run, even when
 its old code hashes match or its bridge retrieval succeeded.
 
@@ -187,5 +191,5 @@ No automatic recovery of the legacy bridge run may fill the new experiment.
 python3.12 -m unittest discover -s benchmarks/workspace-qa/tests -v
 ```
 
-The standard-installation implementation and its GitHub Actions validation are
-in progress. No standard-installation smoke or 200-trial result is claimed here.
+The standard-installation probe passed and 164 offline checks passed. No
+standard-installation smoke or 200-trial result is claimed here.
