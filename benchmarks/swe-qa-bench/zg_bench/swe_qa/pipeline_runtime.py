@@ -1,4 +1,4 @@
-"""Same-CI preparation and post-E2E retrieval diagnostics for read-only QA v6.
+"""Shared E2E preparation and post-E2E retrieval diagnostics for read-only QA v6.
 
 The portable preparation is built once, before E2E, and copied to each consumer.
 Every consumer checks both byte identities and the runtime's semantic snapshot.
@@ -56,6 +56,25 @@ def _identity(run_id: str | None, commit: str | None, *, allow_evidence_origin: 
 def _flags() -> list[str]:
     return ["--root", "/app", "--package-dir", PACKAGE_DIR, "--embedding-model", EMBEDDING,
             "--model-cache-dir", "/models", "--working-copy"]
+
+
+def _replay_provenance(shared: dict, prepared_manifest_sha256: str) -> dict:
+    """Describe a validated E2E cohort independently of the CI running diagnostics.
+
+    Explicit CLI run/commit arguments identify the evidence, not the executing CI.
+    An absent execution identity therefore remains unknown even with those args.
+    """
+    keys = ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_RUN_ATTEMPT")
+    evidence = {key: shared["ci_identity"].get(key) for key in keys}
+    analysis = {key: os.environ.get(key) or None for key in keys}
+    execution_keys = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
+    known = all(identity.get(key) for identity in (evidence, analysis) for key in execution_keys)
+    cross_ci = any(str(evidence[key]) != str(analysis[key]) for key in execution_keys) if known else None
+    return {"source_run": evidence["GITHUB_RUN_ID"], "source_commit": evidence["GITHUB_SHA"],
+        "prepared_manifest_sha256": prepared_manifest_sha256,
+        "evidence_ci_identity": evidence, "analysis_ci_identity": analysis,
+        "cross_ci_index_reuse": cross_ci, "same_e2e_cohort": True,
+        "index_reuse_between_e2e_cohorts": False, "index_reuse_scope": "same_e2e_cohort"}
 
 
 def _snapshot_identity(snapshot: dict, case: dict) -> None:
@@ -271,7 +290,7 @@ def build_v6_plan(analysis: dict, question: str, *, source_run: str, source_comm
         "report_groups": {"primary": {"enabled": True, "unit_ids": [u["unit_id"] for u in units[:-1]]},
             "original": {"enabled": True, "unit_ids": ["original-hybrid"]},
             "diagnostic": {"enabled": False, "unit_ids": []}},
-        "comparison_policy": "Same-CI full requests, all contexts retained. Original hybrid separate; no best-of-repeat selection.",
+        "comparison_policy": "Same-E2E-cohort full requests, all contexts retained. Original hybrid separate; no best-of-repeat selection.",
         "units": units}
 
 
@@ -340,10 +359,11 @@ def execute_from_prepared(plan: dict, args: argparse.Namespace, labels: dict, en
     validate_prepared(prepared, args.case, run_id=args.run_id, commit=args.commit)
     snapshot_file = prepared / "runtime" / "snapshot.json"
     snapshot = json.loads(snapshot_file.read_text())
+    provenance = _replay_provenance(shared, plan["prepared_manifest_sha256"])
     write(output / "runtime-manifest.json", {"protocol": PROTOCOL, "metric_profile": METRIC_PROFILE,
         "package": PACKAGE, "embedding_model": EMBEDDING, "source_identity": snapshot["source"],
-        "prepared_manifest_sha256": plan["prepared_manifest_sha256"], "snapshot_sha256": sha256(snapshot_file),
-        "ci_identity": _identity(args.run_id, args.commit, allow_evidence_origin=True), "cross_ci_index_reuse": False,
+        **provenance, "snapshot_sha256": sha256(snapshot_file),
+        "ci_identity": _identity(args.run_id, args.commit, allow_evidence_origin=True),
         "new_index_builds": 0, "new_model_calls": 0, "new_e2e_trials": 0,
         "image": json.loads(run_checked(["docker", "image", "inspect", args.image]))[0]["Id"]})
     for position, unit in enumerate(plan["units"], 1):
@@ -384,8 +404,11 @@ def execute_from_prepared(plan: dict, args: argparse.Namespace, labels: dict, en
         "embedding_integrity": embedding_check}
     write(output / "final-integrity.json", final)
     report["prepared_runtime_integrity"] = final
+    report["evidence_provenance"] = provenance
     report["same_run_provenance"] = {"source_run": args.run_id, "source_commit": args.commit,
-        "prepared_manifest_sha256": plan["prepared_manifest_sha256"]}
+        "prepared_manifest_sha256": plan["prepared_manifest_sha256"],
+        "deprecated": True, "replacement": "evidence_provenance",
+        "note": "Legacy name identifies one E2E cohort, not necessarily one CI execution."}
     return report
 
 

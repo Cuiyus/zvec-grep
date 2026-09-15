@@ -1,4 +1,4 @@
-"""Same-run provenance, portable seed identity, and contextual replay safeguards."""
+"""E2E cohort provenance, portable seed identity, and contextual replay safeguards."""
 from __future__ import annotations
 
 import copy
@@ -166,6 +166,62 @@ class PreparedRuntimeTests(unittest.TestCase):
             self.assertEqual(execute.call_count, 1)
             self.assertFalse((root / "working").exists())
 
+    def test_replay_reports_ci_execution_separately_from_the_frozen_e2e_cohort(self):
+        cases = (
+            ("original-ci", "run-new", "1", "1", False),
+            ("resumed-ci", "analysis-run", "1", "1", True),
+            ("retried-ci", "run-new", "2", "1", True),
+            ("cli-without-ci-environment", None, None, "1", None),
+            ("unknown-analysis-attempt", "run-new", None, "1", None),
+            ("unknown-evidence-attempt", "run-new", "1", None, None),
+        )
+        for name, analysis_run, analysis_attempt, evidence_attempt, expected_cross_ci in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); case, prepared, shared, _ = prepared_fixture(root)
+                shared["ci_identity"]["GITHUB_RUN_ATTEMPT"] = evidence_attempt
+                runner.write_json(prepared / runtime.PREPARED_MANIFEST, shared)
+                manifest_hash = runner.sha256(prepared / runtime.PREPARED_MANIFEST)
+                environment = {}
+                if analysis_run:
+                    environment.update(GITHUB_RUN_ID=analysis_run, GITHUB_SHA="commit-new")
+                    if analysis_attempt:
+                        environment["GITHUB_RUN_ATTEMPT"] = analysis_attempt
+                    if analysis_run != "run-new":
+                        environment.update(GITHUB_SHA="diagnostic-code-commit", QA_EVIDENCE_RUN_ID="run-new",
+                                           QA_EVIDENCE_COMMIT="commit-new", QA_EVIDENCE_ATTEMPT="1")
+                args = SimpleNamespace(output=root / "replay-result", prepared_dir=prepared, case=case,
+                    run_id="run-new", commit="commit-new", image="pinned-image",
+                    entries=root / "entries.json", labels=root / "labels.json")
+                # Exercise the real portable copy and integrity checks, without running
+                # a retrieval or Docker. The empty plan isolates persisted provenance.
+                plan = {"prepared_manifest_sha256": manifest_hash, "units": []}
+                with patch.dict(os.environ, environment, clear=True), \
+                        patch("zg_bench.swe_qa.retrieval_eval.load_manifest"), \
+                        patch("zg_bench.swe_qa.query_relevance.load_labels"), \
+                        patch.object(runtime, "verify_prepared_semantics"), \
+                        patch.object(runtime, "run_checked", return_value='[{"Id":"pinned-image"}]'), \
+                        patch.object(runtime, "evaluate_replays", return_value={}), \
+                        patch.object(runtime.subprocess, "run") as process:
+                    report = runtime.execute_from_prepared(plan, args, {}, {})
+                process.assert_not_called()
+                manifest = json.loads((args.output / "runtime-manifest.json").read_text())
+                provenance = report["evidence_provenance"]
+                self.assertIs(manifest["cross_ci_index_reuse"], expected_cross_ci)
+                self.assertIs(provenance["cross_ci_index_reuse"], expected_cross_ci)
+                for key, value in provenance.items():
+                    self.assertEqual(manifest[key], value)
+                self.assertEqual(provenance["evidence_ci_identity"], shared["ci_identity"])
+                self.assertEqual(provenance["analysis_ci_identity"]["GITHUB_RUN_ID"], analysis_run)
+                self.assertEqual(provenance["analysis_ci_identity"]["GITHUB_RUN_ATTEMPT"], analysis_attempt)
+                self.assertTrue(provenance["same_e2e_cohort"])
+                self.assertFalse(provenance["index_reuse_between_e2e_cohorts"])
+                self.assertEqual(provenance["index_reuse_scope"], "same_e2e_cohort")
+                self.assertEqual(provenance["prepared_manifest_sha256"], manifest_hash)
+                self.assertEqual(runner.sha256(prepared / runtime.PREPARED_MANIFEST), manifest_hash)
+                self.assertTrue(report["same_run_provenance"]["deprecated"])
+                self.assertEqual(report["same_run_provenance"]["replacement"], "evidence_provenance")
+                self.assertEqual(report["same_run_provenance"]["source_run"], "run-new")
+
     def test_all_three_groups_must_share_current_preparation_and_integrity(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True):
             root = Path(folder); case, prepared, shared, _ = prepared_fixture(root)
@@ -228,6 +284,7 @@ class PreparedRuntimeTests(unittest.TestCase):
             self.assertEqual(sum(runner.PREPARE_INDEX in c for c in calls), 1)
             self.assertFalse(any("retrieve" in c or "serve" in c for c in calls))
             self.assertEqual(manifest["retrieval_probes_before_e2e"], 0)
+            self.assertIs(manifest["cross_ci_index_reuse"], False)
             self.assertFalse((output / "preflight-working-index").exists())
             runtime.validate_prepared(output, case, run_id="run-new", commit="commit-new")
 

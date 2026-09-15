@@ -251,7 +251,16 @@ source-checked candidates with cross-group semantic reviews, freezes shared
 labels, replays complete requests five times, and joins the observations to
 actual E2E quality and costs. Unknown labels and failed trials remain explicit;
 annotation costs are separate. Standalone retrieval regression is deferred.
-The integration's first CI result is pending; offline checks are not new trials.
+The [reflex-6 result](../../docs/benchmark-results/readonly-qa-v6-reflex-6.zh-CN.md)
+now records all 30 E2E trials and 65 successful retrieval executions. Every fixed
+request produced identical output in its five replays, and all 15 actual zg
+returns matched replay. Costs vary by agent/model group; source audits also
+found answer-judge false positives, so this is not a quality non-inferiority or
+general stable-savings claim. The report preserves failed annotations and adds
+a supplementary common-anchor comparison where partial label sets differ.
+Diagnostic recovery retains the same E2E cohort's exact index across CI runs;
+new E2E cohorts still build new indexes. Offline checks and report recomputation
+are not new trials.
 
 The historical [v5 protocol](../../docs/benchmark-protocols/readonly-qa-v5.zh-CN.md)
 uses recorded complete requests as the main regression, plus the original question

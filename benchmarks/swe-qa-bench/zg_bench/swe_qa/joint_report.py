@@ -15,6 +15,7 @@ from typing import Any
 
 from . import e2e_analysis as e2e
 from . import first_query_analysis as first
+from .shared_anchor_diagnostic import build_diagnostic
 
 PROTOCOL = "readonly-e2e-retrieval-joint-v6"
 
@@ -239,6 +240,7 @@ def build_report(runs_dir: Path, analysis: dict[str, Any], replay_plan: dict[str
             "actual_replay_differences": sum(c["actual_and_replay_output_identical"] is False for c in chains),
             "actual_replay_comparison_unknown": sum(c["actual_and_replay_output_identical"] is None for c in chains)},
         "original_reference": [unit for unit in replay.get("units", []) if unit.get("kind") == "original"],
+        "shared_anchor_diagnostic": build_diagnostic(labels, groups, replay),
         "limitations": limitations + ["Query consistency is measured within each agent/model group. Different groups are not repeated samples of one policy.",
             "No independent QA sample is added by multiple calls, contexts, or repeated retrieval executions.",
             "Positive entry labels are not exhaustive relevance judgments; unknown is not a retrieval miss.",
@@ -298,6 +300,19 @@ def render_markdown(report: dict[str, Any]) -> str:
                 values = (group["group"] + " / " + trial["trial_id"] + " / " + str(chain["call_id"]), chain["zg_decision_round_index"], rank(actual), rank(replay), chain["actual_and_replay_output_identical"],
                     cell(following["search_calls"]) + " / " + cell(following["tool_calls"]), following["read_of_returned_target_definition"]["status"])
                 lines.append("| " + " | ".join(cell(x) for x in values) + " |")
+    lines += ["", "## 同一已审查入口的补充对照", "",
+              "不同查询的部分正例集合可能不同，不能直接把各自首个命中排名的差异归因于检索。以下仅取同上下文原题及所有等价改写已接受入口的交集；不改主分数，不含合法子目标。", ""]
+    for context in report.get("shared_anchor_diagnostic", {}).get("contexts", []):
+        symbols = ", ".join(t.get("symbol") or t["target_id"] for t in context["common_targets"]) or "unknown"
+        lines += [f"上下文 `{context['context_id']}`；接受集合种数 {context['accepted_target_set_variants']}；共同入口：`{symbols}`。", "",
+                  "| 请求 | 原主排名 | 共同入口排名 | 共同入口 RR@10 |", "|---|---:|---:|---:|"]
+        for observation in context["observations"]:
+            if observation["kind"] != "replay":
+                continue
+            score = observation["common_anchor_score"]
+            rank_value = score["first_hit_rank"] if score["first_hit_rank"] is not None else "miss" if score["status"] == "scored" else "unknown"
+            lines.append("| " + " | ".join(cell(v) for v in (observation["unit_id"], observation["primary_first_hit_rank"], rank_value, score["rr_at_10"])) + " |")
+        lines.append("")
     lines += ["", "原题参照单列保存在 JSON；实际请求的第 1 次回放承担质量观察，其余重复只检查检索一致性。", "", "限制：", ""]
     lines.extend("- " + value for value in report["limitations"])
     if report["missing_stages"]:

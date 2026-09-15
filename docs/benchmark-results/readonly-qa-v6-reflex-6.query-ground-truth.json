@@ -1,0 +1,1914 @@
+{
+  "schema_version": 2,
+  "labels_id": "query-ground-truth-v6-e0f5c5fde777589c",
+  "original_question": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+  "repo": {
+    "url": "https://github.com/reflex-dev/reflex.git",
+    "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78"
+  },
+  "source_case_sha256": "7bd11e3bccd1b28085aead62ce59b617bded5c769c41b9cfa9961a71a9e576d1",
+  "legacy_task_entries_sha256": "e7c44b993aaadc2d13b04db7dceb7bf5161c2840320d60451fc6ccfa8e4e0773",
+  "analysis_sha256": "e0f5c5fde777589ca791c9564afcb9f4ea6215a9ffd4881eb6259534dae5b16a",
+  "source_files": [
+    {
+      "path": "reflex/app.py",
+      "sha256": "b371abaedde9fcbb24f48d603a111ac72323d198f422099f14ece6aa5414dc83"
+    },
+    {
+      "path": "reflex/state.py",
+      "sha256": "213e08c5fa4a7efbaa29e197e9aaa3d4385f2569d1241f1d814218c5ef639cf9"
+    },
+    {
+      "path": "reflex/vars/base.py",
+      "sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d"
+    },
+    {
+      "path": "reflex/vars/dep_tracking.py",
+      "sha256": "c46169329c396669871c80477a80d145e13b926c517d2248f88a91bbf2b04910"
+    }
+  ],
+  "source_evidence": [
+    {
+      "id": "evidence-c47b9062f320e00f8ccc",
+      "path": "reflex/vars/base.py",
+      "start_line": 2524,
+      "end_line": 2531,
+      "text": "    @property\n    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "cae1b1800fa57c96a5aa0f55a1d5a7230d8cd99eadf66b2aa3963491bd45eec8"
+    },
+    {
+      "id": "evidence-e610b29c122a9efddf21",
+      "path": "reflex/vars/base.py",
+      "start_line": 2411,
+      "end_line": 2460,
+      "text": "    def _deps(\n        self,\n        objclass: type[BaseState],\n        obj: FunctionType | CodeType | None = None,\n    ) -> dict[str, set[str]]:\n        \"\"\"Determine var dependencies of this ComputedVar.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n\n        Args:\n            objclass: the class obj this ComputedVar is attached to.\n            obj: the object to disassemble (defaults to the fget function).\n\n        Returns:\n            A dictionary mapping state names to the set of variable names\n            accessed by the given obj.\n        \"\"\"\n        from .dep_tracking import DependencyTracker\n\n        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n        except Exception as e:\n            console.warn(\n                \"Failed to automatically determine dependencies for computed var \"\n                f\"{objclass.__name__}.{self._name}: {e}. \"\n                \"Provide static_deps and set auto_deps=False to suppress this warning.\"\n            )\n            return d\n",
+      "sha256": "d82ed9067b0e7a73520245106c2287c30be89e8855d659b1e921d14af47f3366"
+    },
+    {
+      "id": "evidence-a8e61063bea83cc5f486",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 296,
+      "end_line": 334,
+      "text": "    def _populate_dependencies(self) -> None:\n        \"\"\"Update self.dependencies based on the disassembly of self.func.\n\n        Save references to attributes accessed on \"self\" or other fetched states.\n\n        Recursively called when the function makes a method call on \"self\" or\n        define comprehensions or nested functions that may reference \"self\".\n        \"\"\"\n        for instruction in dis.get_instructions(self.func):\n            if self.scan_status == ScanStatus.GETTING_STATE:\n                self.handle_getting_state(instruction)\n            elif self.scan_status == ScanStatus.GETTING_VAR:\n                self.handle_getting_var(instruction)\n            elif (\n                instruction.opname in (\"LOAD_FAST\", \"LOAD_DEREF\", \"LOAD_FAST_BORROW\")\n                and instruction.argval in self.tracked_locals\n            ):\n                # bytecode loaded the class instance to the top of stack, next load instruction\n                # is referencing an attribute on self\n                self.top_of_stack = instruction.argval\n                self.scan_status = ScanStatus.GETTING_ATTR\n            elif self.scan_status == ScanStatus.GETTING_ATTR and instruction.opname in (\n                \"LOAD_ATTR\",\n                \"LOAD_METHOD\",\n            ):\n                self.load_attr_or_method(instruction)\n                self.top_of_stack = None\n            elif instruction.opname == \"LOAD_CONST\" and isinstance(\n                instruction.argval, CodeType\n            ):\n                # recurse into nested functions / comprehensions, which can reference\n                # instance attributes from the outer scope\n                self._merge_deps(\n                    type(self)(\n                        func=instruction.argval,\n                        state_cls=self.state_cls,\n                        tracked_locals=self.tracked_locals,\n                    )\n                )\n",
+      "sha256": "cc8f73261230321e4fce1673b0e560f080c87196c184082a8237721412f96ec1"
+    },
+    {
+      "id": "evidence-5fba656746eab33d2b1d",
+      "path": "reflex/state.py",
+      "start_line": 1986,
+      "end_line": 2003,
+      "text": "    def _dirty_computed_vars(\n        self, from_vars: set[str] | None = None, include_backend: bool = True\n    ) -> set[tuple[str, str]]:\n        \"\"\"Determine ComputedVars that need to be recalculated based on the given vars.\n\n        Args:\n            from_vars: find ComputedVar that depend on this set of vars. If unspecified, will use the dirty_vars.\n            include_backend: whether to include backend vars in the calculation.\n\n        Returns:\n            Set of computed vars to include in the delta.\n        \"\"\"\n        return {\n            (state_name, cvar)\n            for dirty_var in from_vars or self.dirty_vars\n            for state_name, cvar in self._var_dependencies.get(dirty_var, set())\n            if include_backend or not self.computed_vars[cvar]._backend\n        }\n",
+      "sha256": "e4b35463eed222659d6f998222854fc55bd11887af846a1c80ee813bb3a1bc0a"
+    },
+    {
+      "id": "evidence-607cfd7daba2d1af5bce",
+      "path": "reflex/vars/base.py",
+      "start_line": 2525,
+      "end_line": 2531,
+      "text": "    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "f56ab1061d6a5d5ab6146f23fdb3e7df58ccd42f63954b9853cfebad59eb18a8"
+    },
+    {
+      "id": "evidence-21acec87343260b1d4a7",
+      "path": "reflex/vars/base.py",
+      "start_line": 2431,
+      "end_line": 2460,
+      "text": "        from .dep_tracking import DependencyTracker\n\n        d = {}\n        if self._static_deps:\n            d.update(self._static_deps)\n            # None is a placeholder for the current state class.\n            if None in d:\n                d[objclass.get_full_name()] = d.pop(None)\n\n        if not self._auto_deps:\n            return d\n\n        if obj is None:\n            fget = self._fget\n            if fget is not None:\n                obj = cast(FunctionType, fget)\n            else:\n                return d\n\n        try:\n            return DependencyTracker(\n                func=obj, state_cls=objclass, dependencies=d\n            ).dependencies\n        except Exception as e:\n            console.warn(\n                \"Failed to automatically determine dependencies for computed var \"\n                f\"{objclass.__name__}.{self._name}: {e}. \"\n                \"Provide static_deps and set auto_deps=False to suppress this warning.\"\n            )\n            return d\n",
+      "sha256": "e7ae47561eb60bb086e86485c3b642d1495451f4a24c1a368890ab863644bb88"
+    },
+    {
+      "id": "evidence-58bbc73ec0b8ef019692",
+      "path": "reflex/state.py",
+      "start_line": 1947,
+      "end_line": 1972,
+      "text": "    def _mark_dirty_computed_vars(self) -> None:\n        \"\"\"Mark ComputedVars that need to be recalculated based on dirty_vars.\"\"\"\n        # Append expired computed vars to dirty_vars to trigger recalculation\n        self.dirty_vars.update(self._expired_computed_vars())\n        # Append always dirty computed vars to dirty_vars to trigger recalculation\n        self.dirty_vars.update(self._always_dirty_computed_vars)\n\n        dirty_vars = self.dirty_vars\n        while dirty_vars:\n            calc_vars, dirty_vars = dirty_vars, set()\n            for state_name, cvar in self._dirty_computed_vars(from_vars=calc_vars):\n                if state_name == self.get_full_name():\n                    defining_state = self\n                else:\n                    defining_state = self._get_root_state().get_substate(\n                        tuple(state_name.split(\".\"))\n                    )\n                defining_state.dirty_vars.add(cvar)\n                actual_var = defining_state.computed_vars.get(cvar)\n                if actual_var is not None:\n                    actual_var.mark_dirty(instance=defining_state)\n                if defining_state is self:\n                    dirty_vars.add(cvar)\n                else:\n                    # mark dirty where this var is defined\n                    defining_state._mark_dirty()\n",
+      "sha256": "b118b6283176fcff30b71a279768502fb7738cb25f540e860767f66a8452427c"
+    },
+    {
+      "id": "evidence-f3295c716d639c895f3d",
+      "path": "reflex/vars/base.py",
+      "start_line": 2357,
+      "end_line": 2402,
+      "text": "    def __get__(self, instance: BaseState | None, owner: type):\n        \"\"\"Get the ComputedVar value.\n\n        If the value is already cached on the instance, return the cached value.\n\n        Args:\n            instance: the instance of the class accessing this computed var.\n            owner: the class that this descriptor is attached to.\n\n        Returns:\n            The value of the var for the given instance.\n        \"\"\"\n        if instance is None:\n            state_where_defined = owner\n            while self._name in state_where_defined.inherited_vars:\n                state_where_defined = state_where_defined.get_parent_state()\n\n            field_name = (\n                format_state_name(state_where_defined.get_full_name())\n                + \".\"\n                + self._js_expr\n            )\n\n            return dispatch(\n                field_name,\n                var_data=VarData.from_state(state_where_defined, self._name),\n                result_var_type=self._var_type,\n                existing_var=self,\n            )\n\n        if not self._cache:\n            value = self.fget(instance)\n        else:\n            # handle caching\n            if not hasattr(instance, self._cache_attr) or self.needs_update(instance):\n                # Set cache attr on state instance.\n                setattr(instance, self._cache_attr, self.fget(instance))\n                # Ensure the computed var gets serialized to redis.\n                instance._was_touched = True\n                # Set the last updated timestamp on the state instance.\n                setattr(instance, self._last_updated_attr, datetime.datetime.now())\n            value = getattr(instance, self._cache_attr)\n\n        self._check_deprecated_return_type(instance, value)\n\n        return value\n",
+      "sha256": "d87e4d7c8218ac877f1331aada4a2194fa69bde74e2f47920a0e4c145638fb4f"
+    },
+    {
+      "id": "evidence-a01a81d980cecda89f58",
+      "path": "reflex/state.py",
+      "start_line": 769,
+      "end_line": 822,
+      "text": "    @classmethod\n    def _init_var_dependency_dicts(cls):\n        \"\"\"Initialize the var dependency tracking dicts.\n\n        Allows the state to know which vars each ComputedVar depends on and\n        whether a ComputedVar depends on a var in its parent state.\n\n        Additional updates tracking dicts for vars and substates that always\n        need to be recomputed.\n        \"\"\"\n        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n\n        # ComputedVar with cache=False always need to be recomputed\n        cls._always_dirty_computed_vars = {\n            cvar_name\n            for cvar_name, cvar in cls.computed_vars.items()\n            if not cvar._cache\n        }\n\n        # Any substate containing a ComputedVar with cache=False always needs to be recomputed\n        if cls._always_dirty_computed_vars:\n            # Tell parent classes that this substate has always dirty computed vars\n            state_name = cls.get_name()\n            parent_state = cls.get_parent_state()\n            while parent_state is not None:\n                parent_state._always_dirty_substates.add(state_name)\n                state_name, parent_state = (\n                    parent_state.get_name(),\n                    parent_state.get_parent_state(),\n                )\n\n        # Reset cached schema value\n        cls._to_schema.cache_clear()\n",
+      "sha256": "a2861ab439e48c25a2623faf965ca59a515a70b881617dda7e50030b4c9bdff3"
+    },
+    {
+      "id": "evidence-cf83e3c38c8057dfc322",
+      "path": "reflex/vars/base.py",
+      "start_line": 2387,
+      "end_line": 2402,
+      "text": "        if not self._cache:\n            value = self.fget(instance)\n        else:\n            # handle caching\n            if not hasattr(instance, self._cache_attr) or self.needs_update(instance):\n                # Set cache attr on state instance.\n                setattr(instance, self._cache_attr, self.fget(instance))\n                # Ensure the computed var gets serialized to redis.\n                instance._was_touched = True\n                # Set the last updated timestamp on the state instance.\n                setattr(instance, self._last_updated_attr, datetime.datetime.now())\n            value = getattr(instance, self._cache_attr)\n\n        self._check_deprecated_return_type(instance, value)\n\n        return value\n",
+      "sha256": "ea6fc0362b2db05c3fae7fa20a4b86cac3c6eaec7563fe33781de4f2a91b4fde"
+    },
+    {
+      "id": "evidence-7c97b093bde057ff0d94",
+      "path": "reflex/vars/base.py",
+      "start_line": 2771,
+      "end_line": 2797,
+      "text": "    if cache is False and interval is not None:\n        msg = \"Cannot set update interval without caching.\"\n        raise ValueError(msg)\n\n    if cache is False and (deps is not None or auto_deps is False):\n        msg = \"Cannot track dependencies without caching.\"\n        raise VarDependencyError(msg)\n\n    if fget is not None:\n        sign = inspect.signature(fget)\n        if len(sign.parameters) != 1:\n            raise ComputedVarSignatureError(fget.__name__, signature=str(sign))\n\n        if inspect.iscoroutinefunction(fget):\n            computed_var_cls = AsyncComputedVar\n        else:\n            computed_var_cls = ComputedVar\n        return computed_var_cls(\n            fget,\n            initial_value=initial_value,\n            cache=cache,\n            deps=deps,\n            auto_deps=auto_deps,\n            interval=interval,\n            backend=backend,\n            **kwargs,\n        )\n",
+      "sha256": "e9ea9acc343b68abe57435e01900525ef9761e83849a7ebac441bce02a626c48"
+    },
+    {
+      "id": "evidence-57b46a8284e9e4400ff9",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 68,
+      "end_line": 82,
+      "text": "    def __post_init__(self):\n        \"\"\"After initializing, populate the dependencies dict.\"\"\"\n        with contextlib.suppress(AttributeError):\n            # unbox functools.partial\n            self.func = cast(FunctionType, self.func.func)  # pyright: ignore[reportAttributeAccessIssue]\n        with contextlib.suppress(AttributeError):\n            # unbox EventHandler\n            self.func = cast(FunctionType, self.func.fn)  # pyright: ignore[reportAttributeAccessIssue,reportFunctionMemberAccess]\n\n        if isinstance(self.func, FunctionType):\n            with contextlib.suppress(AttributeError, IndexError):\n                # the first argument to the function is the name of \"self\" arg\n                self.tracked_locals[self.func.__code__.co_varnames[0]] = self.state_cls\n\n        self._populate_dependencies()\n",
+      "sha256": "14af3fc2d908d820820eb0399a7bdecd66721de7fcd9363daef7705d7411d2f2"
+    },
+    {
+      "id": "evidence-fff06384ee28b388bef8",
+      "path": "reflex/state.py",
+      "start_line": 770,
+      "end_line": 800,
+      "text": "    def _init_var_dependency_dicts(cls):\n        \"\"\"Initialize the var dependency tracking dicts.\n\n        Allows the state to know which vars each ComputedVar depends on and\n        whether a ComputedVar depends on a var in its parent state.\n\n        Additional updates tracking dicts for vars and substates that always\n        need to be recomputed.\n        \"\"\"\n        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n",
+      "sha256": "c32c41fe709038a367e5b242316f2ec14e3d32a330363cda53ff1e26caecda5e"
+    },
+    {
+      "id": "evidence-10fe917354fa51934bd8",
+      "path": "reflex/vars/base.py",
+      "start_line": 2082,
+      "end_line": 2153,
+      "text": "    def __init__(\n        self,\n        fget: Callable[[BASE_STATE], RETURN_TYPE],\n        initial_value: RETURN_TYPE | types.Unset = types.Unset(),\n        cache: bool = True,\n        deps: list[str | Var] | None = None,\n        auto_deps: bool = True,\n        interval: int | datetime.timedelta | None = None,\n        backend: bool | None = None,\n        **kwargs,\n    ):\n        \"\"\"Initialize a ComputedVar.\n\n        Args:\n            fget: The getter function.\n            initial_value: The initial value of the computed var.\n            cache: Whether to cache the computed value.\n            deps: Explicit var dependencies to track.\n            auto_deps: Whether var dependencies should be auto-determined.\n            interval: Interval at which the computed var should be updated.\n            backend: Whether the computed var is a backend var.\n            **kwargs: additional attributes to set on the instance\n\n        Raises:\n            TypeError: If the computed var dependencies are not Var instances or var names.\n            UntypedComputedVarError: If the computed var is untyped.\n        \"\"\"\n        hint = kwargs.pop(\"return_type\", None) or get_type_hints(fget).get(\n            \"return\", Any\n        )\n\n        if hint is Any:\n            raise UntypedComputedVarError(var_name=fget.__name__)\n        is_using_fget_name = \"_js_expr\" not in kwargs\n        js_expr = kwargs.pop(\"_js_expr\", fget.__name__ + FIELD_MARKER)\n        kwargs.setdefault(\"_var_type\", hint)\n\n        Var.__init__(\n            self,\n            _js_expr=js_expr,\n            _var_type=kwargs.pop(\"_var_type\"),\n            _var_data=kwargs.pop(\n                \"_var_data\",\n                VarData(field_name=fget.__name__) if is_using_fget_name else None,\n            ),\n        )\n\n        if kwargs:\n            msg = f\"Unexpected keyword arguments: {tuple(kwargs)}\"\n            raise TypeError(msg)\n\n        if backend is None:\n            backend = fget.__name__.startswith(\"_\")\n\n        object.__setattr__(self, \"_backend\", backend)\n        object.__setattr__(self, \"_initial_value\", initial_value)\n        object.__setattr__(self, \"_cache\", cache)\n        object.__setattr__(self, \"_name\", fget.__name__)\n\n        if isinstance(interval, int):\n            interval = datetime.timedelta(seconds=interval)\n\n        object.__setattr__(self, \"_update_interval\", interval)\n\n        object.__setattr__(\n            self,\n            \"_static_deps\",\n            self._calculate_static_deps(deps),\n        )\n        object.__setattr__(self, \"_auto_deps\", auto_deps)\n\n        object.__setattr__(self, \"_fget\", fget)\n",
+      "sha256": "1ad827c8d955cee90f7642a812624f863e250223f4d41fb13f7c9487384d3324"
+    },
+    {
+      "id": "evidence-a6c3afe73574096f0682",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 93,
+      "end_line": 147,
+      "text": "    def load_attr_or_method(self, instruction: dis.Instruction) -> None:\n        \"\"\"Handle loading an attribute or method from the object on top of the stack.\n\n        This method directly tracks attributes and recursively merges\n        dependencies from analyzing the dependencies of any methods called.\n\n        Args:\n            instruction: The dis instruction to process.\n\n        Raises:\n            VarValueError: if the attribute is an disallowed name.\n        \"\"\"\n        from .base import ComputedVar\n\n        if instruction.argval in self.INVALID_NAMES:\n            msg = f\"Cached var {self!s} cannot access arbitrary state via `{instruction.argval}`.\"\n            raise VarValueError(msg)\n        if instruction.argval == \"get_state\":\n            # Special case: arbitrary state access requested.\n            self.scan_status = ScanStatus.GETTING_STATE\n            return\n        if instruction.argval == \"get_var_value\":\n            # Special case: arbitrary var access requested.\n            if sys.version_info >= (3, 11):\n                self._get_var_value_positions = instruction.positions\n            self.scan_status = ScanStatus.GETTING_VAR\n            return\n\n        # Reset status back to SCANNING after attribute is accessed.\n        self.scan_status = ScanStatus.SCANNING\n        if not self.top_of_stack:\n            return\n        target_state = self.tracked_locals[self.top_of_stack]\n        try:\n            ref_obj = getattr(target_state, instruction.argval)\n        except AttributeError:\n            # Not found on this state class, maybe it is a dynamic attribute that will be picked up later.\n            ref_obj = None\n\n        if isinstance(ref_obj, property) and not isinstance(ref_obj, ComputedVar):\n            # recurse into property fget functions\n            ref_obj = ref_obj.fget\n        if callable(ref_obj):\n            # recurse into callable attributes\n            self._merge_deps(\n                type(self)(func=cast(FunctionType, ref_obj), state_cls=target_state)\n            )\n        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n",
+      "sha256": "8e2dae6f3e0fa0fb8311a1a8b2392421bd8c1f19bcbc3524d0dabd2e028065e4"
+    },
+    {
+      "id": "evidence-cf3482966fd6efec4035",
+      "path": "reflex/vars/base.py",
+      "start_line": 2668,
+      "end_line": 2674,
+      "text": "    def fget(self) -> Callable[[BaseState], Coroutine[None, None, RETURN_TYPE]]:\n        \"\"\"Get the getter function.\n\n        Returns:\n            The getter function.\n        \"\"\"\n        return self._fget\n",
+      "sha256": "edfa20fda51d729aa75032c072d63e29461e895fad4283d8514bee3c2e5227f2"
+    },
+    {
+      "id": "evidence-814c6659e5653da41c12",
+      "path": "reflex/app.py",
+      "start_line": 1104,
+      "end_line": 1135,
+      "text": "    def _validate_var_dependencies(self, state: type[BaseState] | None = None) -> None:\n        \"\"\"Validate the dependencies of the vars in the app.\n\n        Args:\n            state: The state to validate the dependencies for.\n\n        Raises:\n            VarDependencyError: When a computed var has an invalid dependency.\n        \"\"\"\n        if not self._state:\n            return\n\n        if not state:\n            state = self._state\n\n        for var in state.computed_vars.values():\n            if not var._cache:\n                continue\n            deps = var._deps(objclass=state)\n            for state_name, dep_set in deps.items():\n                state_cls = (\n                    state.get_root_state().get_class_substate(state_name)\n                    if state_name != state.get_full_name()\n                    else state\n                )\n                for dep in dep_set:\n                    if dep not in state_cls.vars and dep not in state_cls.backend_vars:\n                        msg = f\"ComputedVar {var._name} on state {state.__name__} has an invalid dependency {state_name}.{dep}\"\n                        raise exceptions.VarDependencyError(msg)\n\n        for substate in state.class_subclasses:\n            self._validate_var_dependencies(substate)\n",
+      "sha256": "bc027dd3431234f9a4d6ab57865e545de89fcca7814a8b31bbebc602904f583e"
+    },
+    {
+      "id": "evidence-48db8ccdeca826aed4c0",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 50,
+      "end_line": 82,
+      "text": "class DependencyTracker:\n    \"\"\"State machine for identifying state attributes that are accessed by a function.\"\"\"\n\n    func: FunctionType | CodeType = dataclasses.field()\n    state_cls: type[BaseState] = dataclasses.field()\n\n    dependencies: dict[str, set[str]] = dataclasses.field(default_factory=dict)\n\n    scan_status: ScanStatus = dataclasses.field(default=ScanStatus.SCANNING)\n    top_of_stack: str | None = dataclasses.field(default=None)\n\n    tracked_locals: dict[str, type[BaseState]] = dataclasses.field(default_factory=dict)\n\n    _getting_state_class: type[BaseState] | None = dataclasses.field(default=None)\n    _get_var_value_positions: dis.Positions | None = dataclasses.field(default=None)\n\n    INVALID_NAMES: ClassVar[list[str]] = [\"parent_state\", \"substates\", \"get_substate\"]\n\n    def __post_init__(self):\n        \"\"\"After initializing, populate the dependencies dict.\"\"\"\n        with contextlib.suppress(AttributeError):\n            # unbox functools.partial\n            self.func = cast(FunctionType, self.func.func)  # pyright: ignore[reportAttributeAccessIssue]\n        with contextlib.suppress(AttributeError):\n            # unbox EventHandler\n            self.func = cast(FunctionType, self.func.fn)  # pyright: ignore[reportAttributeAccessIssue,reportFunctionMemberAccess]\n\n        if isinstance(self.func, FunctionType):\n            with contextlib.suppress(AttributeError, IndexError):\n                # the first argument to the function is the name of \"self\" arg\n                self.tracked_locals[self.func.__code__.co_varnames[0]] = self.state_cls\n\n        self._populate_dependencies()\n",
+      "sha256": "caeaab34469754c518b77e0dfbda81a4fd5b1ca59ca5d93f4d012a630d85d2d5"
+    },
+    {
+      "id": "evidence-d62a5bd9c05527bdd1ba",
+      "path": "reflex/vars/base.py",
+      "start_line": 2462,
+      "end_line": 2469,
+      "text": "    def mark_dirty(self, instance: BaseState) -> None:\n        \"\"\"Mark this ComputedVar as dirty.\n\n        Args:\n            instance: the state instance that needs to recompute the value.\n        \"\"\"\n        with contextlib.suppress(AttributeError):\n            delattr(instance, self._cache_attr)\n",
+      "sha256": "e869987cf8e0e218fbea72f189d433135ab782afc4df70855ffd263347df5c52"
+    },
+    {
+      "id": "evidence-2327eba330cc22e348d6",
+      "path": "reflex/state.py",
+      "start_line": 779,
+      "end_line": 800,
+      "text": "        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n",
+      "sha256": "8fae6d616f878862a835185d3f1b33c8faeb0a841bfde11a6df2d9d28dcd4f8c"
+    },
+    {
+      "id": "evidence-63e6c23c0867aa52df9b",
+      "path": "reflex/state.py",
+      "start_line": 769,
+      "end_line": 807,
+      "text": "    @classmethod\n    def _init_var_dependency_dicts(cls):\n        \"\"\"Initialize the var dependency tracking dicts.\n\n        Allows the state to know which vars each ComputedVar depends on and\n        whether a ComputedVar depends on a var in its parent state.\n\n        Additional updates tracking dicts for vars and substates that always\n        need to be recomputed.\n        \"\"\"\n        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n\n        # ComputedVar with cache=False always need to be recomputed\n        cls._always_dirty_computed_vars = {\n            cvar_name\n            for cvar_name, cvar in cls.computed_vars.items()\n            if not cvar._cache\n        }\n",
+      "sha256": "57ef4f1abe5120fcf2f4dfb57cec55ebf126e46793800e82deb86166a0a90774"
+    },
+    {
+      "id": "evidence-77174b5d54976795d863",
+      "path": "reflex/vars/dep_tracking.py",
+      "start_line": 105,
+      "end_line": 147,
+      "text": "        from .base import ComputedVar\n\n        if instruction.argval in self.INVALID_NAMES:\n            msg = f\"Cached var {self!s} cannot access arbitrary state via `{instruction.argval}`.\"\n            raise VarValueError(msg)\n        if instruction.argval == \"get_state\":\n            # Special case: arbitrary state access requested.\n            self.scan_status = ScanStatus.GETTING_STATE\n            return\n        if instruction.argval == \"get_var_value\":\n            # Special case: arbitrary var access requested.\n            if sys.version_info >= (3, 11):\n                self._get_var_value_positions = instruction.positions\n            self.scan_status = ScanStatus.GETTING_VAR\n            return\n\n        # Reset status back to SCANNING after attribute is accessed.\n        self.scan_status = ScanStatus.SCANNING\n        if not self.top_of_stack:\n            return\n        target_state = self.tracked_locals[self.top_of_stack]\n        try:\n            ref_obj = getattr(target_state, instruction.argval)\n        except AttributeError:\n            # Not found on this state class, maybe it is a dynamic attribute that will be picked up later.\n            ref_obj = None\n\n        if isinstance(ref_obj, property) and not isinstance(ref_obj, ComputedVar):\n            # recurse into property fget functions\n            ref_obj = ref_obj.fget\n        if callable(ref_obj):\n            # recurse into callable attributes\n            self._merge_deps(\n                type(self)(func=cast(FunctionType, ref_obj), state_cls=target_state)\n            )\n        elif (\n            instruction.argval in target_state.backend_vars\n            or instruction.argval in target_state.vars\n        ):\n            # var access\n            self.dependencies.setdefault(target_state.get_full_name(), set()).add(\n                instruction.argval\n            )\n",
+      "sha256": "6751c848830796be9bc73e50e2d3681cbb18da2a483e75fad21c7a31c6579561"
+    },
+    {
+      "id": "evidence-715b5af393645f38de37",
+      "path": "reflex/state.py",
+      "start_line": 779,
+      "end_line": 807,
+      "text": "        for cvar_name, cvar in cls.computed_vars.items():\n            if not cvar._cache:\n                # Do not perform dep calculation when cache=False (these are always dirty).\n                continue\n            for state_name, dvar_set in cvar._deps(objclass=cls).items():\n                state_cls = cls.get_root_state().get_class_substate(state_name)\n                for dvar in dvar_set:\n                    defining_state_cls = state_cls\n                    while dvar in {\n                        *defining_state_cls.inherited_vars,\n                        *defining_state_cls.inherited_backend_vars,\n                    }:\n                        parent_state = defining_state_cls.get_parent_state()\n                        if parent_state is not None:\n                            defining_state_cls = parent_state\n                    defining_state_cls._var_dependencies.setdefault(dvar, set()).add((\n                        cls.get_full_name(),\n                        cvar_name,\n                    ))\n                    defining_state_cls._potentially_dirty_states.add(\n                        cls.get_full_name()\n                    )\n\n        # ComputedVar with cache=False always need to be recomputed\n        cls._always_dirty_computed_vars = {\n            cvar_name\n            for cvar_name, cvar in cls.computed_vars.items()\n            if not cvar._cache\n        }\n",
+      "sha256": "1ddb3a9a60376a57f4e41815c7254acda09bee6801ba217760472a859e432179"
+    }
+  ],
+  "task_facts": [
+    {
+      "fact_id": "query-fact-d0f44c8cb14a701a",
+      "statement": "Explain the role of the computation function (the getter `_fget`) returned by ComputedVar.fget in Reflex's automatic dependency tracking and in deciding when a derived var must be recomputed. | Explain what the getter function exposed by ComputedVar.fget is used for in Reflex dependency tracking and recomputation of cached computed vars. | Understand the role of the computation function returned by ComputedVar's fget accessor in the framework's dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-58bbc73ec0b8ef019692",
+        "evidence-5fba656746eab33d2b1d",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    },
+    {
+      "fact_id": "query-fact-f2a433cb18524e5f",
+      "statement": "Find ComputedVar's computation function accessor property (fget) and any cached wrapper around the computed function | Keyword-style restatement of the original question: locate ComputedVar's fget accessor property, how the wrapped/cached computation function is invoked, and how it feeds dependency tracking. | Locate ComputedVar's computation-function accessor property and see how the wrapped/cached getter function is invoked and scanned for dependency tracking.",
+      "evidence_ids": [
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-7c97b093bde057ff0d94",
+        "evidence-a01a81d980cecda89f58",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-cf83e3c38c8057dfc322",
+        "evidence-f3295c716d639c895f3d"
+      ]
+    },
+    {
+      "fact_id": "query-fact-71d454984dfb13f6",
+      "statement": "Identify the derived state variable's computation-function accessor and the dependency-tracking/recomputation path that consumes the function it returns. | Retrieve the code showing how ComputedVar's computation-function accessor participates in dependency tracking and recomputation, via semantic query plus fts terms computed/derived/compute/dependencies. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    },
+    {
+      "fact_id": "query-fact-bb7da37f874fa9cc",
+      "statement": "Explain how the function returned by the computed-var accessor drives dependency tracking and subsequent state recomputation. | Same intent as the original question, phrased for semantic search: role of ComputedVar's computation-function accessor in dependency tracking and state recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-57b46a8284e9e4400ff9",
+        "evidence-58bbc73ec0b8ef019692",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a01a81d980cecda89f58",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-fff06384ee28b388bef8"
+      ]
+    },
+    {
+      "fact_id": "query-fact-ebea0fe12f1ebbc5",
+      "statement": "Find the derived state variable class's computation-function accessor and how the returned function participates in dependency tracking. | Same original intent with fts terms computed/computedFn/derive/StateVariable: find the computed-var class, its computation-function getter, and the dependency tracking built from it. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-10fe917354fa51934bd8",
+        "evidence-21acec87343260b1d4a7",
+        "evidence-57b46a8284e9e4400ff9",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a6c3afe73574096f0682",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-cf3482966fd6efec4035",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    },
+    {
+      "fact_id": "query-fact-b29f76e03e546bf6",
+      "statement": "Locate the computed/derived var getter accessor and the dependency-tracking machinery that analyzes the function it returns. | Same intent, fts-flavoured with computed/derived/compute_fn/getter: identify ComputedVar's getter property and how the returned function drives dependency tracking and recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-814c6659e5653da41c12",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    },
+    {
+      "fact_id": "query-fact-91d5231cfe4343ff",
+      "statement": "Retrieve the computed-var getter/accessor that returns the computation function and the dependency-tracking code that uses it to decide recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation | Vector-route phrasing of the same question: a computed/signal-like getter that returns the computation function used for dependency tracking and recomputation.",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-58bbc73ec0b8ef019692",
+        "evidence-5fba656746eab33d2b1d",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-fff06384ee28b388bef8"
+      ]
+    },
+    {
+      "fact_id": "query-fact-d0f3b518cb49eabe",
+      "statement": "Answer how the computation function exposed by the derived state variable's accessor is used for dependency tracking and recomputation of state. | Fused semantic retrieval of the same question: role of the ComputedVar computation-function accessor in dependency tracking and state recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "evidence_ids": [
+        "evidence-21acec87343260b1d4a7",
+        "evidence-5fba656746eab33d2b1d",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    },
+    {
+      "fact_id": "query-fact-f1fff8b4b26f4370",
+      "statement": "Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework. | Locate the derived-state (computed) variable class's computation-function accessor in this Reflex repo and show how the returned function drives static dependency discovery and value recomputation. | Locate the derived-state var class (Reflex ComputedVar), its computation-function accessor (fget), and the code showing how that returned function drives dependency tracking and recomputation.",
+      "evidence_ids": [
+        "evidence-2327eba330cc22e348d6",
+        "evidence-48db8ccdeca826aed4c0",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-63e6c23c0867aa52df9b",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-cf83e3c38c8057dfc322",
+        "evidence-d62a5bd9c05527bdd1ba",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-f3295c716d639c895f3d"
+      ]
+    },
+    {
+      "fact_id": "query-fact-7bc8b31bf6b41eaa",
+      "statement": "Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework. | Identify the computation function returned by ComputedVar's fget accessor and explain its part in dependency tracking and state recomputation. | Same intent without a route hint: find ComputedVar's fget accessor and the dependency-tracking/recompute machinery built on the function it returns.",
+      "evidence_ids": [
+        "evidence-2327eba330cc22e348d6",
+        "evidence-48db8ccdeca826aed4c0",
+        "evidence-58bbc73ec0b8ef019692",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-63e6c23c0867aa52df9b",
+        "evidence-77174b5d54976795d863",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-d62a5bd9c05527bdd1ba",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-f3295c716d639c895f3d"
+      ]
+    },
+    {
+      "fact_id": "query-fact-330269e72b889e8b",
+      "statement": "Fuse two phrasings of the same lookup: the computed/derived var class's getter accessor and how computed-property dependency tracking drives recompute of dependencies. | Fused two-part query: (a) the derived state var class's computation-function accessor/getter, and (b) computed-property dependency tracking and recompute of dependencies; jointly they target ComputedVar.fget plus the dep-tracking and dirty-var recomputation path. | Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework.",
+      "evidence_ids": [
+        "evidence-48db8ccdeca826aed4c0",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-63e6c23c0867aa52df9b",
+        "evidence-a8e61063bea83cc5f486",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-cf83e3c38c8057dfc322",
+        "evidence-d62a5bd9c05527bdd1ba",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-f3295c716d639c895f3d"
+      ]
+    },
+    {
+      "fact_id": "query-fact-30ba059a87bf58c2",
+      "statement": "Find the computed/derived var getter function and trace its role in dependency tracking and recomputation of dependent state. | Find the derived state variable class's computation-function getter and how the returned function participates in dependency tracking and recompute triggering. | Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework.",
+      "evidence_ids": [
+        "evidence-48db8ccdeca826aed4c0",
+        "evidence-58bbc73ec0b8ef019692",
+        "evidence-607cfd7daba2d1af5bce",
+        "evidence-63e6c23c0867aa52df9b",
+        "evidence-715b5af393645f38de37",
+        "evidence-c47b9062f320e00f8ccc",
+        "evidence-d62a5bd9c05527bdd1ba",
+        "evidence-e610b29c122a9efddf21",
+        "evidence-f3295c716d639c895f3d"
+      ]
+    },
+    {
+      "fact_id": "query-fact-07d6d0aa006186e1",
+      "statement": "Broader phrasing of the same lookup: the derived state variable's computation function and the dependency tracking built from it.",
+      "evidence_ids": [
+        "evidence-57b46a8284e9e4400ff9",
+        "evidence-a6c3afe73574096f0682",
+        "evidence-e610b29c122a9efddf21"
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "target_id": "target-8f20a1a4db9e33ef68c3",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.fget",
+      "original_symbol": "reflex.vars.base.ComputedVar.fget",
+      "level": "function",
+      "definition": "    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:\n",
+      "definition_line": 2525,
+      "definition_sha256": "db9fba982e5812136f8fd235e05be987674f6a12a4cf09570a2e251ff95d183d",
+      "entry_start_line": 2524,
+      "entry_end_line": 2531,
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a",
+        "query-fact-f2a433cb18524e5f",
+        "query-fact-71d454984dfb13f6",
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-ebea0fe12f1ebbc5",
+        "query-fact-b29f76e03e546bf6",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-d0f3b518cb49eabe",
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    },
+    {
+      "target_id": "target-7628c52a63ffe1ed0ec5",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar._deps",
+      "original_symbol": "reflex.vars.base.ComputedVar._deps",
+      "level": "function",
+      "definition": "    def _deps(\n",
+      "definition_line": 2411,
+      "definition_sha256": "4103ef710d0660fd7bbbd6ad1555fd16f7e879fd1adc1cd75a823c81e213f6ef",
+      "entry_start_line": 2411,
+      "entry_end_line": 2460,
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a",
+        "query-fact-71d454984dfb13f6",
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-ebea0fe12f1ebbc5",
+        "query-fact-b29f76e03e546bf6",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-d0f3b518cb49eabe",
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2",
+        "query-fact-07d6d0aa006186e1"
+      ]
+    },
+    {
+      "target_id": "target-9b72a90712bd927e84a6",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker._populate_dependencies",
+      "original_symbol": "reflex.vars.dep_tracking.DependencyTracker._populate_dependencies",
+      "level": "function",
+      "definition": "    def _populate_dependencies(self) -> None:\n",
+      "definition_line": 296,
+      "definition_sha256": "3ebac411c42c59509746397394e5f64cd195c19b17d99483341dbda8763f3835",
+      "entry_start_line": 296,
+      "entry_end_line": 334,
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a",
+        "query-fact-71d454984dfb13f6",
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-ebea0fe12f1ebbc5",
+        "query-fact-b29f76e03e546bf6",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-d0f3b518cb49eabe",
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-330269e72b889e8b"
+      ]
+    },
+    {
+      "target_id": "target-039a06d3d8db5fd591b4",
+      "path": "reflex/state.py",
+      "symbol": "BaseState._dirty_computed_vars",
+      "original_symbol": "BaseState._dirty_computed_vars",
+      "level": "function",
+      "definition": "    def _dirty_computed_vars(\n",
+      "definition_line": 1986,
+      "definition_sha256": "b4c355b00fc10b7475ace129b048b1ff5d973f6fa83d89841f4d5537abd0925c",
+      "entry_start_line": 1986,
+      "entry_end_line": 2003,
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-d0f3b518cb49eabe"
+      ]
+    },
+    {
+      "target_id": "target-9c48d8c9173904b0ae3d",
+      "path": "reflex/state.py",
+      "symbol": "BaseState._mark_dirty_computed_vars",
+      "original_symbol": "BaseState._mark_dirty_computed_vars",
+      "level": "function",
+      "definition": "    def _mark_dirty_computed_vars(self) -> None:\n",
+      "definition_line": 1947,
+      "definition_sha256": "515633eb2823cab84ee4f3e55a23fb854d1924318c651f113dffdf9032813463",
+      "entry_start_line": 1947,
+      "entry_end_line": 1972,
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a",
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    },
+    {
+      "target_id": "target-400683c984a17d349570",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.__get__",
+      "original_symbol": "ComputedVar.__get__",
+      "level": "function",
+      "definition": "    def __get__(self, instance: BaseState | None, owner: type):\n",
+      "definition_line": 2357,
+      "definition_sha256": "63dca2e037562ce61b6321d8f16af75d65a08c05f1a4a503d1534a3d4298a2a7",
+      "entry_start_line": 2357,
+      "entry_end_line": 2402,
+      "task_fact_ids": [
+        "query-fact-f2a433cb18524e5f",
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    },
+    {
+      "target_id": "target-f213cb2a0bf485da8d09",
+      "path": "reflex/state.py",
+      "symbol": "BaseState._init_var_dependency_dicts",
+      "original_symbol": "BaseState._init_var_dependency_dicts",
+      "level": "function",
+      "definition": "    def _init_var_dependency_dicts(cls):\n",
+      "definition_line": 770,
+      "definition_sha256": "7058e5dc0cdedcf25604b1d154a06237f94e8da59ea3b2103fc2ac95f80574bd",
+      "entry_start_line": 769,
+      "entry_end_line": 822,
+      "task_fact_ids": [
+        "query-fact-f2a433cb18524e5f",
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-91d5231cfe4343ff",
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    },
+    {
+      "target_id": "target-6aa61f76b3ba8c77bd4b",
+      "path": "reflex/vars/base.py",
+      "symbol": "computed_var",
+      "original_symbol": "computed_var",
+      "level": "function",
+      "definition": "def computed_var(\n",
+      "definition_line": 2741,
+      "definition_sha256": "6da9354d7dd62b10b72a917236a06ee0b0cccb854b4e899a45f16cf9e52f8b5f",
+      "entry_start_line": 2741,
+      "entry_end_line": 2815,
+      "task_fact_ids": [
+        "query-fact-f2a433cb18524e5f"
+      ]
+    },
+    {
+      "target_id": "target-f748c73c63a0a771a9d8",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker.__post_init__",
+      "original_symbol": "DependencyTracker.__post_init__",
+      "level": "function",
+      "definition": "    def __post_init__(self):\n",
+      "definition_line": 68,
+      "definition_sha256": "e0a6c884a0c9e039a7860257cb5fb4b46b428f2ae8786d22d1763fea7535c9d7",
+      "entry_start_line": 68,
+      "entry_end_line": 82,
+      "task_fact_ids": [
+        "query-fact-bb7da37f874fa9cc",
+        "query-fact-ebea0fe12f1ebbc5",
+        "query-fact-07d6d0aa006186e1"
+      ]
+    },
+    {
+      "target_id": "target-381584cd1fd3c7b5e660",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.__init__",
+      "original_symbol": "ComputedVar.__init__",
+      "level": "function",
+      "definition": "    def __init__(\n",
+      "definition_line": 2082,
+      "definition_sha256": "9fd7a07a83dd1996fb51684b42aecaf4e90fb78ba7230e542ed7bd01d42301be",
+      "entry_start_line": 2082,
+      "entry_end_line": 2153,
+      "task_fact_ids": [
+        "query-fact-ebea0fe12f1ebbc5"
+      ]
+    },
+    {
+      "target_id": "target-032de42bf0bde3972871",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker.load_attr_or_method",
+      "original_symbol": "DependencyTracker.load_attr_or_method",
+      "level": "function",
+      "definition": "    def load_attr_or_method(self, instruction: dis.Instruction) -> None:\n",
+      "definition_line": 93,
+      "definition_sha256": "9b73c3bce95fc312146aeab1c6db92205f2d3bbb7ce75a96f7ee09a639c8e17b",
+      "entry_start_line": 93,
+      "entry_end_line": 147,
+      "task_fact_ids": [
+        "query-fact-ebea0fe12f1ebbc5",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-07d6d0aa006186e1"
+      ]
+    },
+    {
+      "target_id": "target-d812bf93d34755b4bbed",
+      "path": "reflex/vars/base.py",
+      "symbol": "AsyncComputedVar.fget",
+      "original_symbol": "AsyncComputedVar.fget",
+      "level": "function",
+      "definition": "    def fget(self) -> Callable[[BaseState], Coroutine[None, None, RETURN_TYPE]]:\n",
+      "definition_line": 2668,
+      "definition_sha256": "4c6f444bf6e89061da298014c66281e51fab620f8ac4c8ee92cc6592ad076b09",
+      "entry_start_line": 2667,
+      "entry_end_line": 2674,
+      "task_fact_ids": [
+        "query-fact-ebea0fe12f1ebbc5"
+      ]
+    },
+    {
+      "target_id": "target-6c60f80ae2b8427f6b18",
+      "path": "reflex/app.py",
+      "symbol": "App._validate_var_dependencies",
+      "original_symbol": "App._validate_var_dependencies",
+      "level": "function",
+      "definition": "    def _validate_var_dependencies(self, state: type[BaseState] | None = None) -> None:\n",
+      "definition_line": 1104,
+      "definition_sha256": "f254be078664ddf1d1e7cba4160d904572b9485bb6e5796a3ed80af513409c0c",
+      "entry_start_line": 1104,
+      "entry_end_line": 1135,
+      "task_fact_ids": [
+        "query-fact-b29f76e03e546bf6"
+      ]
+    },
+    {
+      "target_id": "target-1ec162b9f2ff67a1d66e",
+      "path": "reflex/vars/dep_tracking.py",
+      "symbol": "DependencyTracker",
+      "original_symbol": "reflex.vars.dep_tracking.DependencyTracker",
+      "level": "class",
+      "definition": "class DependencyTracker:\n",
+      "definition_line": 50,
+      "definition_sha256": "b0a464882ba9e411aa920747570b89ecb681b00b10866abc39aec6abe3c5b158",
+      "entry_start_line": 49,
+      "entry_end_line": 334,
+      "task_fact_ids": [
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    },
+    {
+      "target_id": "target-b9a59d2b880cb294540e",
+      "path": "reflex/vars/base.py",
+      "symbol": "ComputedVar.mark_dirty",
+      "original_symbol": "reflex.vars.base.ComputedVar.mark_dirty",
+      "level": "function",
+      "definition": "    def mark_dirty(self, instance: BaseState) -> None:\n",
+      "definition_line": 2462,
+      "definition_sha256": "b5e72d8e2a8dd0fffb51e0d8ae5231d218137ad216c68ad6685c46225ad491ed",
+      "entry_start_line": 2462,
+      "entry_end_line": 2469,
+      "task_fact_ids": [
+        "query-fact-f1fff8b4b26f4370",
+        "query-fact-7bc8b31bf6b41eaa",
+        "query-fact-330269e72b889e8b",
+        "query-fact-30ba059a87bf58c2"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "annotation-ef503ec497303a9b",
+      "text": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "original",
+      "annotation_status": "reviewed",
+      "goal": "Explain the role of the computation function (the getter `_fget`) returned by ComputedVar.fget in Reflex's automatic dependency tracking and in deciding when a derived var must be recomputed. | Explain what the getter function exposed by ComputedVar.fget is used for in Reflex dependency tracking and recomputation of cached computed vars. | Understand the role of the computation function returned by ComputedVar's fget accessor in the framework's dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-039a06d3d8db5fd591b4",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6"
+      ],
+      "bridge_target_ids": [
+        "target-9c48d8c9173904b0ae3d"
+      ],
+      "task_fact_ids": [
+        "query-fact-d0f44c8cb14a701a"
+      ],
+      "observed_at": [],
+      "reviewed_proposal_ids": [
+        "proposal-1840e79ae2a7834a5656",
+        "proposal-32bd5a6f2cd341ac2b89",
+        "proposal-3e5773be4b2da9114bb6",
+        "proposal-5ea31878ebe0339f68bf",
+        "proposal-72b94fc634f4414cfc27",
+        "proposal-77091f48638111e2453b",
+        "proposal-7776792740fb13427cd5",
+        "proposal-7b385c13afe0f289b84b",
+        "proposal-8082c2a0babbc4eecb98",
+        "proposal-de40bb28f5f9feaddc63",
+        "proposal-e05d6a370ba133fb3a28"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-8f82d554a52617e992dd",
+        "proposal-fe75794f4ea221e71b6c"
+      ],
+      "role_disagreements": [
+        "target-f213cb2a0bf485da8d09"
+      ]
+    },
+    {
+      "query_id": "annotation-0e14ae745eeddd63",
+      "text": "ComputedVar computation function accessor property cached computed_fn wrapper",
+      "context_id": "context-750017df89320add",
+      "classification": "legitimate_subgoal",
+      "annotation_status": "reviewed",
+      "goal": "Find ComputedVar's computation function accessor property (fget) and any cached wrapper around the computed function | Keyword-style restatement of the original question: locate ComputedVar's fget accessor property, how the wrapped/cached computation function is invoked, and how it feeds dependency tracking. | Locate ComputedVar's computation-function accessor property and see how the wrapped/cached getter function is invoked and scanned for dependency tracking.",
+      "accepted_target_ids": [
+        "target-400683c984a17d349570",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-6aa61f76b3ba8c77bd4b"
+      ],
+      "task_fact_ids": [
+        "query-fact-f2a433cb18524e5f"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_d148b6d87e8940c4acb656b3",
+          "native_call_id": "ses_f60953908ffes7ROBgJahkIduN:root:call_d148b6d87e8940c4acb656b3",
+          "message_id": "msg_09f6af283001bVnn7OBrZAfBJU",
+          "model_turn_id": "ses_f60953908ffes7ROBgJahkIduN:root:msg_09f6af283001bVnn7OBrZAfBJU",
+          "model_turn_index": 2,
+          "zg_decision_round_index": 2,
+          "context_id": "context-750017df89320add",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "1635623c0716c5f2f6ee5a1317805d1a4f549d99ee528a3ee84b403025511908",
+            "bytes": 124659,
+            "line": 11,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r05-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "d4a9cf52c187c8491ea06b154cecb10d7d59e2e82cd5b0420a4d252a1992285e",
+            "bytes": 144894,
+            "line": 4,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-7e21d2c7f484a874",
+          "annotation_id": "annotation-0e14ae745eeddd63"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-29ede85d21527351fbf3",
+        "proposal-2bd36d4da606ce0ff736",
+        "proposal-4aad38a71bbaeb86c34d",
+        "proposal-7398f0f962fa79a2cab4",
+        "proposal-9a0bd54996052348d88e",
+        "proposal-c29331eea3e61bea8df4",
+        "proposal-dee2051cdbe7145a5fac"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-069887e935579f8e620a",
+        "proposal-1c9f08fe2fd5c3641a09",
+        "proposal-2fe8a65d0d18dc9db81d",
+        "proposal-2ff0460ba879bbefa4e0",
+        "proposal-392f0975cab7286aed10"
+      ],
+      "role_disagreements": [
+        "target-7628c52a63ffe1ed0ec5",
+        "target-f748c73c63a0a771a9d8"
+      ]
+    },
+    {
+      "query_id": "annotation-2295c8d7e3d8224e",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation\n[\"computed\", \"derived\", \"compute\", \"dependencies\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Identify the derived state variable's computation-function accessor and the dependency-tracking/recomputation path that consumes the function it returns. | Retrieve the code showing how ComputedVar's computation-function accessor participates in dependency tracking and recomputation, via semantic query plus fts terms computed/derived/compute/dependencies. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6"
+      ],
+      "bridge_target_ids": [],
+      "task_fact_ids": [
+        "query-fact-71d454984dfb13f6"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_2be02c2578d5470aa3adbb0e",
+          "native_call_id": "ses_f60946cd7ffeZTXKGYxFBX688k:root:call_2be02c2578d5470aa3adbb0e",
+          "message_id": "msg_09f6b94d3001r525A6X5KlFE02",
+          "model_turn_id": "ses_f60946cd7ffeZTXKGYxFBX688k:root:msg_09f6b94d3001r525A6X5KlFE02",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "d9b413d240aaca94e9acf74bb3a19acb87be6b958b540c87e19fdd90ed67ed1a",
+            "bytes": 164507,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-qwen38max/reflex-6-r05-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "9e38a53910d70a9457a6992a8340ce6f91366f0721a06085cb0f195b2a1f7ea8",
+            "bytes": 122123,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-50a9cadaee5bccb6",
+          "annotation_id": "annotation-2295c8d7e3d8224e"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-1a7356e4d9a5b6369f44",
+        "proposal-1db986073f7d64130c2c",
+        "proposal-55b95a2f6e8fbac092c5",
+        "proposal-5c7336d2b0e52549e6a3",
+        "proposal-66300e06e91b1b75df2e",
+        "proposal-7ccb41b910abb375ed5a",
+        "proposal-ba04a9545f8a059456d7",
+        "proposal-bbf77ad054fb656c0d70",
+        "proposal-f1c92186f0f8d1c4af0e"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-3cccc74adeda4f2ec3ce",
+        "proposal-66f86fc313d3c8bf3a28",
+        "proposal-b9d9fed0827e4b43bf17",
+        "proposal-f13a1571382826e14465"
+      ],
+      "role_disagreements": [
+        "target-9c48d8c9173904b0ae3d",
+        "target-f213cb2a0bf485da8d09"
+      ]
+    },
+    {
+      "query_id": "annotation-25da688fd61f9856",
+      "text": "derived state variable class computation function accessor dependency tracking state recomputation",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Explain how the function returned by the computed-var accessor drives dependency tracking and subsequent state recomputation. | Same intent as the original question, phrased for semantic search: role of ComputedVar's computation-function accessor in dependency tracking and state recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-9c48d8c9173904b0ae3d",
+        "target-f748c73c63a0a771a9d8"
+      ],
+      "task_fact_ids": [
+        "query-fact-bb7da37f874fa9cc"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_947015ee6c644229b0417f21",
+          "native_call_id": "ses_f609830b9ffesoQWK5uFLfw3Xy:root:call_947015ee6c644229b0417f21",
+          "message_id": "msg_09f67d1c4001AbqXNxd4FGERgX",
+          "model_turn_id": "ses_f609830b9ffesoQWK5uFLfw3Xy:root:msg_09f67d1c4001AbqXNxd4FGERgX",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "1df0f61d7af38d2ff6d947dae4e4ba9ea3d8335a02e66d8a9ed6491a09e887fc",
+            "bytes": 135884,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r03-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "df7e9c7e9d91f9c0930a5c3dfb65a0ab985383cd512ca00d66e3f44f794f4b8f",
+            "bytes": 81181,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-97f92894f62288a0",
+          "annotation_id": "annotation-25da688fd61f9856"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-010664ce674510101aa6",
+        "proposal-14f1d9a2d166ca9fa6f5",
+        "proposal-27c5f36b69e81658a1bc",
+        "proposal-2de1aea8f17e53be2371",
+        "proposal-311ba6b3191fad0eb1e3",
+        "proposal-64233096db8316a87a1a",
+        "proposal-64fe5d35c12003b789d6",
+        "proposal-828e4e0e17e6bbbbb16b",
+        "proposal-8895f246a23166901423",
+        "proposal-c1de1c56cf9189dd5c8b",
+        "proposal-d3b29c8961a6ce955de0"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-00a2e4a6699a29a6f303",
+        "proposal-a28f35571d9fd2f07bc2"
+      ],
+      "role_disagreements": [
+        "target-039a06d3d8db5fd591b4"
+      ]
+    },
+    {
+      "query_id": "annotation-2f0a822e87e7d14c",
+      "text": "derived state variable class computation function accessor dependency tracking\n[\"computed\", \"computedFn\", \"derive\", \"StateVariable\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Find the derived state variable class's computation-function accessor and how the returned function participates in dependency tracking. | Same original intent with fts terms computed/computedFn/derive/StateVariable: find the computed-var class, its computation-function getter, and the dependency tracking built from it. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-032de42bf0bde3972871",
+        "target-381584cd1fd3c7b5e660",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6",
+        "target-d812bf93d34755b4bbed",
+        "target-f748c73c63a0a771a9d8"
+      ],
+      "bridge_target_ids": [],
+      "task_fact_ids": [
+        "query-fact-ebea0fe12f1ebbc5"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_b590703cd2c844efb1a28655",
+          "native_call_id": "ses_f609a906dffeFwZCZDLAUSMW6n:root:call_b590703cd2c844efb1a28655",
+          "message_id": "msg_09f657157001StEe8INxXIVzGE",
+          "model_turn_id": "ses_f609a906dffeFwZCZDLAUSMW6n:root:msg_09f657157001StEe8INxXIVzGE",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "49f886fd68caae9758c92767e98e539fc1d35846743775d334deea7ce48ecdf8",
+            "bytes": 153068,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-qwen38max/reflex-6-r02-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "8735f7c3dc205a2c072f649f3f6d25b6944cb69e8bb7dbb0ca1788516f6f9d4e",
+            "bytes": 127758,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-42239c27cccd5844",
+          "annotation_id": "annotation-2f0a822e87e7d14c"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-045ea782e637dceefdcc",
+        "proposal-3b0896b2b5817f50345f",
+        "proposal-614b298a8576f2fd4564",
+        "proposal-6e6a2a324ce4b7f7646f",
+        "proposal-73f79d877b8c4b89445e",
+        "proposal-75b2fbdeb6bac390adae",
+        "proposal-84544ae0b5f304c622fc",
+        "proposal-8505be7dd04e9fa4d65c",
+        "proposal-98f8c74fdcfeb6809c8c",
+        "proposal-9bbd13bf56a0c3c8a40b",
+        "proposal-d00f876ec009c1d08726"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-133984a3e49810963822",
+        "proposal-668186298f24d1c8c0a3"
+      ],
+      "role_disagreements": [
+        "target-f213cb2a0bf485da8d09"
+      ]
+    },
+    {
+      "query_id": "annotation-560ffc8d30019fca",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation\n[\"computed\", \"derived\", \"compute_fn\", \"getter\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Locate the computed/derived var getter accessor and the dependency-tracking machinery that analyzes the function it returns. | Same intent, fts-flavoured with computed/derived/compute_fn/getter: identify ComputedVar's getter property and how the returned function drives dependency tracking and recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6"
+      ],
+      "bridge_target_ids": [
+        "target-6c60f80ae2b8427f6b18"
+      ],
+      "task_fact_ids": [
+        "query-fact-b29f76e03e546bf6"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_cf204f712e634ab88450fe75",
+          "native_call_id": "ses_f60969e46ffeeBisZGoISro6nB:root:call_cf204f712e634ab88450fe75",
+          "message_id": "msg_09f6963a6001Q1s9sK7rWxEIu4",
+          "model_turn_id": "ses_f60969e46ffeeBisZGoISro6nB:root:msg_09f6963a6001Q1s9sK7rWxEIu4",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "09c336bfe47c854f9b24eb45a06985cc2344d87b62b6ecc05314f7fe948df365",
+            "bytes": 118810,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-qwen38max/reflex-6-r04-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "c43f484028cc8136dc929fc07a104ade54910672343b8323d26bbdf78ae2d43e",
+            "bytes": 130339,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-699beb3ae8132d42",
+          "annotation_id": "annotation-560ffc8d30019fca"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-125a293ffb2cceb4a899",
+        "proposal-371133f4aaec60af7442",
+        "proposal-45aefa3c6d24ac669110",
+        "proposal-4e1557870a02960dde64",
+        "proposal-64153ec97a9967888831",
+        "proposal-98bbdfb1134a0c9b8ba6",
+        "proposal-cb3f2bdfd7ade0cac073",
+        "proposal-f158c8fa971e94b33c54",
+        "proposal-f41b9862fc6775c8374c",
+        "proposal-f429d38065cd19ee5178"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-1d37d1e3cfaab6a6881b",
+        "proposal-9d1e247a8051bbd9ae58",
+        "proposal-e8ed69b1772f5af24538"
+      ],
+      "role_disagreements": [
+        "target-f213cb2a0bf485da8d09"
+      ]
+    },
+    {
+      "query_id": "annotation-6182a6d6d1579eec",
+      "text": "derived state variable class computation function accessor getter dependency tracking recomputation\n[\"computed signal getter returns computation function dependency tracking\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Retrieve the computed-var getter/accessor that returns the computation function and the dependency-tracking code that uses it to decide recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation | Vector-route phrasing of the same question: a computed/signal-like getter that returns the computation function used for dependency tracking and recomputation.",
+      "accepted_target_ids": [
+        "target-039a06d3d8db5fd591b4",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6"
+      ],
+      "bridge_target_ids": [
+        "target-9c48d8c9173904b0ae3d",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "task_fact_ids": [
+        "query-fact-91d5231cfe4343ff"
+      ],
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_ecd40ee2edd2401e8870a3fc",
+          "native_call_id": "2a19831f-2844-474a-92e3-5dcd9a016783:root:call_ecd40ee2edd2401e8870a3fc",
+          "message_id": "chatcmpl-10851eca-4c2f-9614-a2ae-d608ae07e24a",
+          "model_turn_id": "2a19831f-2844-474a-92e3-5dcd9a016783:root:chatcmpl-10851eca-4c2f-9614-a2ae-d608ae07e24a",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r04-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "30964bd178d6adbf4335e057c19eacdb93c06473fcecd0de79e8fc9e7e74c1d5",
+            "bytes": 201978,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          },
+          "backend_source": {
+            "path": "qoder-qwen38max/reflex-6-r04-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "e31826919684297b2d66fc1d491ef761b527a64db3905500c86e05dc0b0871de",
+            "bytes": 134769,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-998314f246cb1f0a",
+          "annotation_id": "annotation-6182a6d6d1579eec"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-2c4e2c1083b42246dec1",
+        "proposal-2dd9862cf7c167f3a36c",
+        "proposal-53fbbc3ef5504ebabd5b",
+        "proposal-5b46cd1e5e1abbe758ea",
+        "proposal-6cb66650a3c69df16a65",
+        "proposal-704ea861761038a5ec0e",
+        "proposal-8a3aeb62d2e0d84b0d2c",
+        "proposal-927ae04d74319571b108",
+        "proposal-af6de83c070a6ca1afba",
+        "proposal-d28dc20a4f4c28a8efe2",
+        "proposal-dcc6a3252f3a9ad0ba88",
+        "proposal-e2435cdb74cc18ded7e2"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-22090b34a4ffd508b48e"
+      ],
+      "role_disagreements": []
+    },
+    {
+      "query_id": "annotation-7a407c625db20a4d",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Answer how the computation function exposed by the derived state variable's accessor is used for dependency tracking and recomputation of state. | Fused semantic retrieval of the same question: role of the ComputedVar computation-function accessor in dependency tracking and state recomputation. | Understand the role of the computation function returned by ComputedVar's fget accessor in dependency tracking for state recomputation",
+      "accepted_target_ids": [
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6"
+      ],
+      "bridge_target_ids": [
+        "target-039a06d3d8db5fd591b4"
+      ],
+      "task_fact_ids": [
+        "query-fact-d0f3b518cb49eabe"
+      ],
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_b770f2e61d154c26b39f0c6b",
+          "native_call_id": "cb077f19-e530-4d64-9aa6-6f2a83c5cbb3:root:call_b770f2e61d154c26b39f0c6b",
+          "message_id": "chatcmpl-0f08d116-66f9-9082-a855-8b35bf9af08f",
+          "model_turn_id": "cb077f19-e530-4d64-9aa6-6f2a83c5cbb3:root:chatcmpl-0f08d116-66f9-9082-a855-8b35bf9af08f",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r02-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "8a19db993cddadc36ca04fd51080e3b70c8c909d596ec5b89b3ae22c0c394160",
+            "bytes": 185788,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          },
+          "backend_source": {
+            "path": "qoder-qwen38max/reflex-6-r02-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "4782d14a019c98710ac4d87aa37767933b51972abf788cff351dee69a103f1bf",
+            "bytes": 139413,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-8e91ddbe45cd0c2e",
+          "annotation_id": "annotation-7a407c625db20a4d"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-11e13eafc0d4cafaaad3",
+        "proposal-240b8064e9dfc5d3ca0a",
+        "proposal-38700cefee54925f9ad0",
+        "proposal-5a0ac9ce84a3a66a1fd0",
+        "proposal-5dfcdcae3ef0cc2af7e6",
+        "proposal-647df5772fe6a0122489",
+        "proposal-661686a6e9ab1a4d8df4",
+        "proposal-b9f552068f6646cfb6e7",
+        "proposal-d95c77d17ff6b543675c",
+        "proposal-e396b16c58a91dab508f"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-0afd06468e3b46cf710d",
+        "proposal-23c78825d96750bd2a65",
+        "proposal-4e2bd6a8205034a62b57"
+      ],
+      "role_disagreements": [
+        "target-f213cb2a0bf485da8d09"
+      ]
+    },
+    {
+      "query_id": "annotation-818a216735dac2bc",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation\n[\"computed\", \"ComputedRefImpl\", \"getter\", \"dependents\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework. | Locate the derived-state (computed) variable class's computation-function accessor in this Reflex repo and show how the returned function drives static dependency discovery and value recomputation. | Locate the derived-state var class (Reflex ComputedVar), its computation-function accessor (fget), and the code showing how that returned function drives dependency tracking and recomputation.",
+      "accepted_target_ids": [
+        "target-1ec162b9f2ff67a1d66e",
+        "target-400683c984a17d349570",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-b9a59d2b880cb294540e"
+      ],
+      "task_fact_ids": [
+        "query-fact-f1fff8b4b26f4370"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_b9cd6fdbdf0f46ac94326d37",
+          "native_call_id": "ses_f6097c239ffeDDW0EQR1Ojr7KS:root:call_b9cd6fdbdf0f46ac94326d37",
+          "message_id": "msg_09f683f87001M10FrVXYrSxzC9",
+          "model_turn_id": "ses_f6097c239ffeDDW0EQR1Ojr7KS:root:msg_09f683f87001M10FrVXYrSxzC9",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-qwen38max/reflex-6-r03-zvec-grep/agent/opencode.txt",
+            "sha256": "c27b379d51b8eb08b950f79fe62fea806e2e6dcc25ddf8e8b741bf51461377f2",
+            "bytes": 127102,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-qwen38max/reflex-6-r03-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "5321bb6c21d0233cdde171dfacc7238129e1133f107c028372bb51e8f14b33c0",
+            "bytes": 128920,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-f8a6a0349d44722d",
+          "annotation_id": "annotation-818a216735dac2bc"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-076afa4601cb0c1de473",
+        "proposal-0f0852f54766499c7f91",
+        "proposal-2ae20a8b4cbf66acca04",
+        "proposal-3528280d4089750fe36c",
+        "proposal-3afddd38ddf139f43396",
+        "proposal-47bf9ded645dc16f90e0",
+        "proposal-73e128590a4ca9d85c58",
+        "proposal-87587f0a2cf3f3abb282",
+        "proposal-9beca4d9daf6ab5e47da",
+        "proposal-9ddfd8013b9eeaf703ed",
+        "proposal-bbd962c3ae21c8d2b81c",
+        "proposal-ceaab5237d7f782aedf4",
+        "proposal-e2fa947b8e1b34f44836",
+        "proposal-f9027c67fff6483eae42",
+        "proposal-fc4f439f73e5e1135557"
+      ],
+      "unresolved_proposal_ids": [],
+      "role_disagreements": []
+    },
+    {
+      "query_id": "annotation-835e97f63654e1bb",
+      "text": "derived state variable class computation function accessor dependency tracking recomputation",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework. | Identify the computation function returned by ComputedVar's fget accessor and explain its part in dependency tracking and state recomputation. | Same intent without a route hint: find ComputedVar's fget accessor and the dependency-tracking/recompute machinery built on the function it returns.",
+      "accepted_target_ids": [
+        "target-032de42bf0bde3972871",
+        "target-1ec162b9f2ff67a1d66e",
+        "target-400683c984a17d349570",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-9c48d8c9173904b0ae3d",
+        "target-b9a59d2b880cb294540e"
+      ],
+      "task_fact_ids": [
+        "query-fact-7bc8b31bf6b41eaa"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r01-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_6d839f54d97440de96565ad9",
+          "native_call_id": "ses_f609d47aeffePTVgXKj5V7n9r1:root:call_6d839f54d97440de96565ad9",
+          "message_id": "msg_09f62bafe001ers5T2kfJYoM4u",
+          "model_turn_id": "ses_f609d47aeffePTVgXKj5V7n9r1:root:msg_09f62bafe001ers5T2kfJYoM4u",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r01-zvec-grep/agent/opencode.txt",
+            "sha256": "f5ceb3a2347ca839c03bfe041a0876165f68c252c1f03909d89ea227bf2117c1",
+            "bytes": 113174,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r01-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "54393e78ceb8e49c5c6f0f7b1a70ac25c5ca7b99edfe42c39ea412f8d4336826",
+            "bytes": 80077,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-d51e59c19e96a750",
+          "annotation_id": "annotation-835e97f63654e1bb"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_3da5eee277704a2ab6e82845",
+          "native_call_id": "ses_f609a4e29ffelET5OMcIr1bSLy:root:call_3da5eee277704a2ab6e82845",
+          "message_id": "msg_09f65b456001HPjfAAsOwvWzi6",
+          "model_turn_id": "ses_f609a4e29ffelET5OMcIr1bSLy:root:msg_09f65b456001HPjfAAsOwvWzi6",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "0c67bc7db921680c5c2a316245cd63954f77bd035c66dec5b2331b508a565e81",
+            "bytes": 127428,
+            "line": 3,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "36ee3cb8a78b139a16bf2259b3816fc6ba17fcef51dd4573bf4d9cd129eb7cbd",
+            "bytes": 155777,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-d51e59c19e96a750",
+          "annotation_id": "annotation-835e97f63654e1bb"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r04-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_11955b4805174613ba233fcb",
+          "native_call_id": "ses_f60970d1fffeeIkQhLfXtiKc7M:root:call_11955b4805174613ba233fcb",
+          "message_id": "msg_09f68f563001V0CFVZ0vTUAiWP",
+          "model_turn_id": "ses_f60970d1fffeeIkQhLfXtiKc7M:root:msg_09f68f563001V0CFVZ0vTUAiWP",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r04-zvec-grep/agent/opencode.txt",
+            "sha256": "c9c9fd1e8ea80751c5572246596534f9c46afeae91e54e0e5f04b5c55bcdc7e9",
+            "bytes": 129363,
+            "line": 5,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r04-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "6decbefef35bc104f9709bbd05b0a3142515414a07047b2e7d0140875d225b14",
+            "bytes": 80078,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-d51e59c19e96a750",
+          "annotation_id": "annotation-835e97f63654e1bb"
+        },
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_8c6452bec23642068a86493b",
+          "native_call_id": "ses_f60953908ffes7ROBgJahkIduN:root:call_8c6452bec23642068a86493b",
+          "message_id": "msg_09f6ac996001NF9tj8w7bjweBg",
+          "model_turn_id": "ses_f60953908ffes7ROBgJahkIduN:root:msg_09f6ac996001NF9tj8w7bjweBg",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r05-zvec-grep/agent/opencode.txt",
+            "sha256": "1635623c0716c5f2f6ee5a1317805d1a4f549d99ee528a3ee84b403025511908",
+            "bytes": 124659,
+            "line": 5,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r05-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "d4a9cf52c187c8491ea06b154cecb10d7d59e2e82cd5b0420a4d252a1992285e",
+            "bytes": 144894,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-d51e59c19e96a750",
+          "annotation_id": "annotation-835e97f63654e1bb"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-0707f6d689b2be739c09",
+        "proposal-08a94af4aa8ce87de2da",
+        "proposal-18af485d0edbb1902d61",
+        "proposal-404353c7c6dd85f6083b",
+        "proposal-4afcbe72ad07672c0556",
+        "proposal-4e0d134ab3c2a1c8742e",
+        "proposal-50a0bad177aad1d6fa55",
+        "proposal-5da0249038b042461ac5",
+        "proposal-680a5d3114842dd3c54e",
+        "proposal-753c6b6cdd6abe7e5bea",
+        "proposal-8e11967bdaa39434bd65",
+        "proposal-953cb3acf72714c2ba73",
+        "proposal-ae8b06b9d44ce3ad30b4",
+        "proposal-f90da16f880d44d4384f"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-f08e56bb0aaf45178a4d"
+      ],
+      "role_disagreements": []
+    },
+    {
+      "query_id": "annotation-8b17271c35c20f14",
+      "text": "[\"derived state variable class computation function accessor getter\", \"computed property dependency tracking recompute dependencies\"]",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Fuse two phrasings of the same lookup: the computed/derived var class's getter accessor and how computed-property dependency tracking drives recompute of dependencies. | Fused two-part query: (a) the derived state var class's computation-function accessor/getter, and (b) computed-property dependency tracking and recompute of dependencies; jointly they target ComputedVar.fget plus the dep-tracking and dirty-var recomputation path. | Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework.",
+      "accepted_target_ids": [
+        "target-1ec162b9f2ff67a1d66e",
+        "target-400683c984a17d349570",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-9b72a90712bd927e84a6",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-b9a59d2b880cb294540e"
+      ],
+      "task_fact_ids": [
+        "query-fact-330269e72b889e8b"
+      ],
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r03-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_e58e817d2cea47978f9e8baf",
+          "native_call_id": "dcf0c2e4-b7c5-4bbd-8686-9cc2f408be6e:root:call_e58e817d2cea47978f9e8baf",
+          "message_id": "chatcmpl-cc0acc52-6976-9a84-8f1e-c877737facbe",
+          "model_turn_id": "dcf0c2e4-b7c5-4bbd-8686-9cc2f408be6e:root:chatcmpl-cc0acc52-6976-9a84-8f1e-c877737facbe",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r03-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "a1597af7fed0fa3627d143f346f0a58b726e6882032fa85b28e8d351756f3875",
+            "bytes": 202729,
+            "line": 7,
+            "pointer": "/message/content/0/input"
+          },
+          "backend_source": {
+            "path": "qoder-qwen38max/reflex-6-r03-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "533aa358431841b2fb5ca43bf2b903aa770f75c4b3ee27f4d66eed3ec74716af",
+            "bytes": 70001,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-1675dd49fb4ce9ca",
+          "annotation_id": "annotation-8b17271c35c20f14"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-05de1f59fc5d0e395fbf",
+        "proposal-2c26ba920f7e7ba5df9a",
+        "proposal-2e18dad8f5a50fefac5b",
+        "proposal-5b263f1557c13d0eaad6",
+        "proposal-5b36fc70063f44961139",
+        "proposal-673e912e1398930c5213",
+        "proposal-6f79a19a0a3e1e3aca9a",
+        "proposal-7e18922c0675f695acab",
+        "proposal-890df2fbe5661a4d781b",
+        "proposal-9201c243aec5391dfe9b",
+        "proposal-a3c921bfb94c06b9a123",
+        "proposal-cee02bea80ae17873cce",
+        "proposal-d1e936b252aec83f03b7"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-07dcf5b418a199d36103",
+        "proposal-137cee2497504b22644c"
+      ],
+      "role_disagreements": [
+        "target-039a06d3d8db5fd591b4"
+      ]
+    },
+    {
+      "query_id": "annotation-b69b3869398a690f",
+      "text": "derived state variable class computation function getter dependency tracking recompute",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Find the computed/derived var getter function and trace its role in dependency tracking and recomputation of dependent state. | Find the derived state variable class's computation-function getter and how the returned function participates in dependency tracking and recompute triggering. | Identify how the ComputedVar class's computation function (accessed via the fget property) participates in dependency tracking and state recomputation in the Reflex framework.",
+      "accepted_target_ids": [
+        "target-1ec162b9f2ff67a1d66e",
+        "target-400683c984a17d349570",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-8f20a1a4db9e33ef68c3",
+        "target-f213cb2a0bf485da8d09"
+      ],
+      "bridge_target_ids": [
+        "target-9c48d8c9173904b0ae3d",
+        "target-b9a59d2b880cb294540e"
+      ],
+      "task_fact_ids": [
+        "query-fact-30ba059a87bf58c2"
+      ],
+      "observed_at": [
+        {
+          "group": "qoder-qwen38max",
+          "trial_id": "reflex-6-r05-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_c34b6432c200498785c3f0cf",
+          "native_call_id": "360150d7-f0e6-4bd0-923e-a4f36a8543c1:root:call_c34b6432c200498785c3f0cf",
+          "message_id": "chatcmpl-6b81e4dc-5acd-9845-9150-37c079c3442f",
+          "model_turn_id": "360150d7-f0e6-4bd0-923e-a4f36a8543c1:root:chatcmpl-6b81e4dc-5acd-9845-9150-37c079c3442f",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "qoder-qwen38max/reflex-6-r05-zvec-grep/agent/qodercli-stream.jsonl",
+            "sha256": "8a89bee673fdbabfe44cad4cca5cf8f972f6edf05db07ad1e251fff1a3479a12",
+            "bytes": 188864,
+            "line": 5,
+            "pointer": "/message/content/0/input"
+          },
+          "backend_source": {
+            "path": "qoder-qwen38max/reflex-6-r05-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "4082b7ef1184e3c01e38fb2228b72ccee7492a84189d6bd6795531265119f12b",
+            "bytes": 79990,
+            "line": 3,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-852cd814980e4ab6",
+          "annotation_id": "annotation-b69b3869398a690f"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-00a1a7d78e6a87af8725",
+        "proposal-196c500db7adc0e5e85d",
+        "proposal-38d4252ca920fa67b5a8",
+        "proposal-3d417963ae76c9379ebd",
+        "proposal-4e02fa8df15013d981c8",
+        "proposal-5c20fd4604b22947254d",
+        "proposal-5d755530229f9ff76400",
+        "proposal-7881ed09acdad24cd0c1",
+        "proposal-8dc8752f2a995aa04f5f",
+        "proposal-9ed11340215b32fbaba9",
+        "proposal-b4f207612e432cc1768b",
+        "proposal-cbd5b32db225b67223de",
+        "proposal-d088ffc8ac977e1e23b2",
+        "proposal-fd653a1f36de9e7f913f"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-3b0b59a1dda4a9db385d"
+      ],
+      "role_disagreements": []
+    },
+    {
+      "query_id": "annotation-ef7042897ec3f33f",
+      "text": "derived state variable computation function dependency tracking",
+      "context_id": "context-36d663cdc8c05835",
+      "classification": "equivalent_rewrite",
+      "annotation_status": "reviewed",
+      "goal": "Broader phrasing of the same lookup: the derived state variable's computation function and the dependency tracking built from it.",
+      "accepted_target_ids": [
+        "target-032de42bf0bde3972871",
+        "target-7628c52a63ffe1ed0ec5",
+        "target-f748c73c63a0a771a9d8"
+      ],
+      "bridge_target_ids": [],
+      "task_fact_ids": [
+        "query-fact-07d6d0aa006186e1"
+      ],
+      "observed_at": [
+        {
+          "group": "opencode-glm52",
+          "trial_id": "reflex-6-r02-zvec-grep",
+          "profile": "zvec-grep",
+          "call_id": "call_fde303b8a53a4399a58b80ed",
+          "native_call_id": "ses_f609a4e29ffelET5OMcIr1bSLy:root:call_fde303b8a53a4399a58b80ed",
+          "message_id": "msg_09f65b456001HPjfAAsOwvWzi6",
+          "model_turn_id": "ses_f609a4e29ffelET5OMcIr1bSLy:root:msg_09f65b456001HPjfAAsOwvWzi6",
+          "model_turn_index": 1,
+          "zg_decision_round_index": 1,
+          "context_id": "context-36d663cdc8c05835",
+          "source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/opencode.txt",
+            "sha256": "0c67bc7db921680c5c2a316245cd63954f77bd035c66dec5b2331b508a565e81",
+            "bytes": 127428,
+            "line": 4,
+            "pointer": "/part/state/input"
+          },
+          "backend_source": {
+            "path": "opencode-glm52/reflex-6-r02-zvec-grep/agent/zg-trace.jsonl",
+            "sha256": "36ee3cb8a78b139a16bf2259b3816fc6ba17fcef51dd4573bf4d9cd129eb7cbd",
+            "bytes": 155777,
+            "line": 4,
+            "pointer": null
+          },
+          "native_call_status": "completed",
+          "backend_status": "success",
+          "backend_link_status": "matched",
+          "request_id": "request-38552903790f38c4",
+          "annotation_id": "annotation-ef7042897ec3f33f"
+        }
+      ],
+      "reviewed_proposal_ids": [
+        "proposal-243f983b76bce3a2243d",
+        "proposal-426bf12622aeb7fd955c",
+        "proposal-ba9b395d622e0774d407"
+      ],
+      "unresolved_proposal_ids": [
+        "proposal-0fcf6e748251c3815b60",
+        "proposal-3d8b22347ac4f1a0c248",
+        "proposal-44a8ef5ff0af691e8f94",
+        "proposal-5ce8e50d5ed6bc8b30fb",
+        "proposal-8b90a3763dab5da60ffc",
+        "proposal-90972b996ba1bd77a593",
+        "proposal-b5e6823d3300b238e0b6",
+        "proposal-dfc19de01e0a55d87e74",
+        "proposal-ebbabf371aa75ed0f0b9",
+        "proposal-f32c5fb3ce388c4ce117",
+        "proposal-f545a64cff126c347a2c",
+        "proposal-f74124c1a26a1af4b6ae"
+      ],
+      "role_disagreements": []
+    }
+  ],
+  "request_bindings": [
+    {
+      "request": {
+        "root": "/app",
+        "query": "What is the role of the computation function returned by the derived state variable class's computation function accessor in the framework's dependency tracking for state recomputation?",
+        "limit": 10,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-ef503ec497303a9b"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "ComputedVar computation function accessor property cached computed_fn wrapper"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-750017df89320add",
+      "query_id": "annotation-0e14ae745eeddd63"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derived\", \"compute\", \"dependencies\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-2295c8d7e3d8224e"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking state recomputation"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-25da688fd61f9856"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"computedFn\", \"derive\", \"StateVariable\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-2f0a822e87e7d14c"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"derived\", \"compute_fn\", \"getter\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-560ffc8d30019fca"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor getter dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "vector",
+            "query": "[\"computed signal getter returns computation function dependency tracking\"]"
+          }
+        ],
+        "fuse": true,
+        "limit": 20,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-6182a6d6d1579eec"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "fuse": true,
+        "limit": 20,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-7a407c625db20a4d"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [
+          {
+            "mode": "fts",
+            "query": "[\"computed\", \"ComputedRefImpl\", \"getter\", \"dependents\"]"
+          }
+        ],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-818a216735dac2bc"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function accessor dependency tracking recomputation"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-835e97f63654e1bb"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "[\"derived state variable class computation function accessor getter\", \"computed property dependency tracking recompute dependencies\"]"
+        ],
+        "routes": [],
+        "fuse": true,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-8b17271c35c20f14"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable class computation function getter dependency tracking recompute"
+        ],
+        "routes": [],
+        "fuse": true,
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-b69b3869398a690f"
+    },
+    {
+      "request": {
+        "root": "/app",
+        "queries": [
+          "derived state variable computation function dependency tracking"
+        ],
+        "routes": [],
+        "autoUpdate": false,
+        "trace": true
+      },
+      "context_id": "context-36d663cdc8c05835",
+      "query_id": "annotation-ef7042897ec3f33f"
+    }
+  ],
+  "annotation_provenance": {
+    "independent_human_gold": false,
+    "kind": "model_assisted_source_verified_cross_review",
+    "groups": [
+      "opencode-glm52",
+      "opencode-qwen38max",
+      "qoder-qwen38max"
+    ],
+    "same_context_shared_labels": true,
+    "current_zg_output_visible": false,
+    "e2e_final_answer_visible": false,
+    "prior_tool_feedback_may_include_earlier_zg_output": true,
+    "semantic_review_is_model_judgment_not_formal_proof": true,
+    "selection_policy": "Each source-verified nomination needs reasoned endorsements from both other groups; unresolved nominations stay unknown. Different valid alternatives may coexist.",
+    "annotation_cost_included_in_e2e": false
+  },
+  "protocol": {
+    "metric_profile": "entry-ranking-v1",
+    "query_match": "exact complete request and observed context",
+    "unknown_policy": "No accepted independently reviewed anchor means unknown, not zero.",
+    "target_policy": "Any accepted target is sufficient for entry localization; bridges are separate.",
+    "unreviewed_policy": "Partial positive labels are not exhaustive relevance judgments; no Recall/Precision estimate."
+  }
+}
