@@ -1,7 +1,11 @@
 name: Qualified zg Workspace QA
-run-name: "Workspace QA · priority ${{ inputs.mode }} · ${{ github.ref_name }}"
+run-name: "Workspace QA · priority ${{ inputs.mode || 'qualify' }} · ${{ github.ref_name }}"
 
 on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - '.github/workflows/workspace-qa-priority.yml'
   workflow_dispatch:
     inputs:
       mode:
@@ -14,17 +18,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: workspace-qa-priority-${{ github.ref }}-${{ inputs.mode }}
+  group: workspace-qa-priority-${{ github.ref }}-${{ inputs.mode || 'qualify' }}
   cancel-in-progress: false
 
 jobs:
   validate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[workspace-qa-qualify]')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       tasks: ${{ steps.plan.outputs.tasks }}
       rest_matrix: ${{ steps.plan.outputs.rest_matrix }}
       repetitions: ${{ steps.plan.outputs.repetitions }}
+      mode: ${{ steps.plan.outputs.mode }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -35,7 +41,7 @@ jobs:
       - name: Validate harness and freeze the priority matrix
         id: plan
         env:
-          MODE: ${{ inputs.mode }}
+          MODE: ${{ inputs.mode || 'qualify' }}
         run: |
           python -m unittest discover -s benchmarks/workspace-qa/tests -v
           python - <<'PY'
@@ -59,13 +65,14 @@ jobs:
               output.write('tasks=' + json.dumps(tasks) + '\n')
               output.write('rest_matrix=' + json.dumps({'include': rest}) + '\n')
               output.write('repetitions=' + str(repetitions) + '\n')
+              output.write('mode=' + mode + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('Priority tasks: `' + ', '.join(tasks) + '`. Mode: `' + mode
                             + '`. Each job runs exactly one baseline/with-zg pair.\n')
           PY
 
   first-pair:
-    name: "${{ inputs.mode }} · task ${{ matrix.task }} · pair 1/${{ needs.validate.outputs.repetitions }}"
+    name: "${{ needs.validate.outputs.mode }} · task ${{ matrix.task }} · pair 1/${{ needs.validate.outputs.repetitions }}"
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -87,7 +94,7 @@ jobs:
           repetitions: ${{ needs.validate.outputs.repetitions }}
           shard-repetition: '1'
           artifact-suffix: '-r01'
-          artifact-prefix: workspace-qa-priority-${{ inputs.mode }}
+          artifact-prefix: workspace-qa-priority-${{ needs.validate.outputs.mode }}
           phase: batch
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
@@ -96,7 +103,7 @@ jobs:
   remaining-pairs:
     name: "formal · task ${{ matrix.task }} · pair ${{ matrix.repetition }}/10"
     needs: [validate, first-pair]
-    if: always() && inputs.mode == 'formal' && needs.validate.result == 'success'
+    if: always() && needs.validate.outputs.mode == 'formal' && needs.validate.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -133,7 +140,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: workspace-qa-priority-${{ inputs.mode }}-batch-*
+          pattern: workspace-qa-priority-${{ needs.validate.outputs.mode }}-batch-*
           path: results
       - name: Build the exact selected-task manifest
         env:
@@ -154,7 +161,7 @@ jobs:
         run: |
           args=()
           if [ "${{ needs.first-pair.result }}" = success ] && \
-             { [ "${{ inputs.mode }}" = qualify ] || [ "${{ needs.remaining-pairs.result }}" = success ]; }; then
+             { [ "${{ needs.validate.outputs.mode }}" = qualify ] || [ "${{ needs.remaining-pairs.result }}" = success ]; }; then
             args+=(--require-complete)
           fi
           python benchmarks/workspace-qa/report.py --runs-dir results \
@@ -170,6 +177,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: workspace-qa-priority-${{ inputs.mode }}-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: workspace-qa-priority-${{ needs.validate.outputs.mode }}-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: report/
           if-no-files-found: error
