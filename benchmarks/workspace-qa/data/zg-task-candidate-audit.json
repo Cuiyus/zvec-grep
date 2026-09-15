@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "reviewed_pool": {
+    "benchmark": "Workspace-Bench Lite CN",
+    "task_count": 100,
+    "source": "Workspace-Bench/Workspace-Bench-Lite task_lite_clean_cn_metadata_table.csv"
+  },
+  "selection_basis": "Keep read-only QA tasks where useful evidence is sparse inside long documents, the wording or location is unknown, or relationships, chronology, causality, and cross-document comparison require semantic discovery. Exclude tasks whose file set is exposed by exact paths, names, prefixes, or counts, and exclude exhaustive fixed-schema enumeration, counting, grouping, joins, copying, and file-management work.",
+  "qualification_task_ids": ["334", "116"],
+  "recommended_tasks": [
+    {
+      "task_id": "334",
+      "priority": 1,
+      "fit": "high",
+      "retrieval_shape": "Sparse disclosure and risk evidence across four long annual-report PDFs",
+      "reason": "The answer needs dividend-policy reasons, major risk disclosures, and comparable operating facts buried in different report sections. Semantic chunk retrieval can avoid reading four PDFs end to end."
+    },
+    {
+      "task_id": "116",
+      "priority": 2,
+      "fit": "high",
+      "retrieval_shape": "Event, actor, chronology, and contradiction tracing across seven chat logs",
+      "reason": "The question asks who changed which service, how the meeting time changed, and where duplicate or conflicting updates occurred. The relevant wording varies across conversations and requires source-aware relationship tracing."
+    },
+    {
+      "task_id": "192",
+      "priority": 3,
+      "fit": "high",
+      "retrieval_shape": "Causal and comparative evidence across five long annual-report PDFs",
+      "reason": "Operating problems, their causes, research investment, common risks, and industry prospects are distributed across narrative sections and tables rather than a small fixed field scan."
+    },
+    {
+      "task_id": "232",
+      "priority": 4,
+      "fit": "high",
+      "retrieval_shape": "Multi-criteria investment evidence across five long annual-report PDFs",
+      "reason": "Financial health, growth, competitive moats, policy exposure, and risk factors require repeated semantic retrieval from distant report sections before comparison."
+    },
+    {
+      "task_id": "363",
+      "priority": 5,
+      "fit": "high",
+      "retrieval_shape": "Method, result, metric, and challenge comparison across four research PDFs",
+      "reason": "The requested claims live in abstracts, methods, experiments, and limitations under different terminology; semantic queries can retrieve comparable passages without loading every paper in full."
+    },
+    {
+      "task_id": "281",
+      "priority": 6,
+      "fit": "medium_high",
+      "retrieval_shape": "Dispersed financial, production, subsidiary, and risk evidence inside one large workbook",
+      "reason": "The task explicitly depends on semantic association between distant sections and a causal path from demand decline through losses to cash-flow pressure. The source is a binary workbook, so native text grep is insufficient."
+    },
+    {
+      "task_id": "300",
+      "priority": 7,
+      "fit": "medium_high",
+      "retrieval_shape": "Role and permission inference across eight heterogeneous policy and activity files",
+      "reason": "Rules, historical behavior, role definitions, and sensitive operations must be related across spreadsheets, slides, JSON, and text; filenames alone do not answer the permission questions."
+    },
+    {
+      "task_id": "328",
+      "priority": 8,
+      "fit": "medium_high",
+      "retrieval_shape": "Department-specific evidence filtering across reports and presentations",
+      "reason": "Administrative-department hiring facts must be isolated from broader HR materials and linked across annual, monthly, role, and channel evidence in PPTX and DOCX content."
+    },
+    {
+      "task_id": "287",
+      "priority": 9,
+      "fit": "medium_high",
+      "retrieval_shape": "Chronological and lineage synthesis across short-term plans, weekly reports, monthly metrics, partnerships, and quarterly plans",
+      "reason": "The value is in connecting differently worded goals and results across time horizons and preserving source lineage, rather than extracting a uniform schema."
+    },
+    {
+      "task_id": "23",
+      "priority": 10,
+      "fit": "medium",
+      "retrieval_shape": "Causal anomaly investigation across inventory reports, logs, purchase orders, and supplier data",
+      "reason": "Useful evidence includes mismatches, approval bottlenecks, date inconsistencies, and supplier context that must be connected causally across heterogeneous sources."
+    }
+  ],
+  "explicitly_excluded": [
+    {
+      "task_ids": ["3", "139", "143", "159", "373"],
+      "reason": "Exhaustive enumeration, deduplication, fixed-field extraction, counting, grouping, or joining over uniformly named files; native iteration is the correct path."
+    },
+    {
+      "task_ids": ["127", "128", "158", "160", "161", "191", "224", "227"],
+      "reason": "The prompt or filenames expose a small complete file set through exact names, prefixes, directories, or counts, so Glob and Read are sufficient."
+    },
+    {
+      "task_ids": ["120", "124", "152"],
+      "reason": "The decisive evidence is in images, while this benchmark uses the text-only Qwen embedding model; after visual recognition, exact filename lookup is sufficient."
+    }
+  ],
+  "policy": {
+    "qualification_repetitions_per_arm": 1,
+    "formal_repetitions_per_arm": 10,
+    "advance_condition": "A candidate advances only after a completed with-zg run contains at least one real zvec_grep_search call whose returned evidence contributes to the answer. Installed-but-unused runs do not qualify.",
+    "stop_condition": "Stop a candidate after the first completed with-zg run with zero zg calls; do not spend ten repetitions proving non-use.",
+    "no_automatic_model_run": true
+  }
+}
