@@ -257,6 +257,15 @@ command, and native guidance discovery for a new 30-trial cohort. It is implemen
 by `official-install-qa.yml`; historical bridge execution is retired. New runtime
 results must be verified before this rerun is described as completed.
 
+The [zg 0.2.2 official-install reflex-6 result](../../docs/benchmark-results/official-install-qa-v1-reflex-6.zh-CN.md)
+records all 30 native E2E sessions and 70/70 completed retrieval replays. All 14
+fixed requests were internally identical across five replays; 13 scorable
+request/context labels achieved Hit@10 13/13 and Hit@5 11/13. This did not
+establish stable E2E savings: OpenCode/Qwen never adopted zg, Qoder input rose,
+and source audit found answer-judge false positives. The report retains one
+unknown query label, four failed annotation sessions, one cross-index ranking
+change, and the hash-proven Qoder wrapper-status correction.
+
 **Integration correction:** v6 did not execute `zg install`. It used the custom
 `readonly-search.mjs` bridge, omitted installer-managed Agent guidance, and
 bypassed the native daemon while forcing `autoUpdate=false`. These results

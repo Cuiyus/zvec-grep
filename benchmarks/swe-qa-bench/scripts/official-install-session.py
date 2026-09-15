@@ -29,6 +29,7 @@ QODER_ALLOW = ["mcp__zvec_grep__zvec_grep_search", "mcp__zvec_grep__zvec_grep_rg
 DENIED = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "Task", "Skill", "WebFetch", "WebSearch", "ImageGen", "ImageSearch", "Workflow"]
 START = "<!-- ZVEC_GREP_START -->"
 END = "<!-- ZVEC_GREP_END -->"
+QODER_SECURITY_SCAN_DEFAULTS = {"l1StaticCheck": True, "l2LightweightScan": True, "l3DeepScan": True}
 REDIRECT_ENV = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION",
                 "QODER_CONFIG_DIR", "QODER_IDE_MCP_PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
                 "ZVEC_GREP_HOME", "ZVEC_GREP_SERVER_URL", "ZVEC_GREP_MODE", "ZVEC_GREP_MCP_TOOLSET",
@@ -48,6 +49,117 @@ def scrub(text, env):
     for name in ("OPENAI_API_KEY", "GLM_API_KEY", "QWEN_API_KEY", "QODER_PERSONAL_ACCESS_TOKEN"):
         if env.get(name): text = text.replace(env[name], "[REDACTED]")
     return text
+
+
+class ConfigurationContractError(ValueError):
+    """The native session changed a protected experimental configuration."""
+
+
+def strict_config(raw):
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate configuration key")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("Non-JSON configuration constant")
+
+    value = json.loads(raw, object_pairs_hook=unique_keys, parse_constant=invalid_constant)
+    if not isinstance(value, dict):
+        raise ValueError("Configuration must be a JSON object")
+    json.dumps(value, allow_nan=False)
+    return value
+
+
+def verify_agent_config_integrity(agent, version, installed_bytes, final_bytes):
+    """Keep byte identity separate from one pinned native settings migration.
+
+    Qoder 1.1.45 bundle: nHA -> EFn -> setValue -> Nat -> q3A materializes
+    absent securityScan defaults (all three true) and rewrites JSON formatting.
+    CI 34922580478 independently matched this exact transformation to all ten
+    recorded final SHA256 values. No other content change is permitted.
+    """
+    result = {"agent_config_unchanged": final_bytes is not None and installed_bytes == final_bytes,
+              "agent_config_contract_valid": False, "agent_config_change": "missing_final_configuration",
+              "agent_config_allowed_added_fields": []}
+    if final_bytes is None:
+        return result
+    try:
+        before, after = strict_config(installed_bytes), strict_config(final_bytes)
+    except (ValueError, UnicodeError, TypeError):
+        result["agent_config_change"] = "invalid_configuration_json"
+        return result
+    if result["agent_config_unchanged"]:
+        result.update(agent_config_contract_valid=True, agent_config_change="byte_identical")
+        return result
+    if agent != "qodercli" or version != "1.1.45":
+        result["agent_config_change"] = "unapproved_byte_change"
+        return result
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if canonical(before) == canonical(after):
+        result.update(agent_config_contract_valid=True, agent_config_change="qoder_1_1_45_json_format_only")
+    elif "securityScan" not in before and canonical(after) == canonical({**before, "securityScan": QODER_SECURITY_SCAN_DEFAULTS}):
+        result.update(agent_config_contract_valid=True, agent_config_change="qoder_1_1_45_security_scan_defaults",
+                      agent_config_allowed_added_fields=["securityScan." + key for key in QODER_SECURITY_SCAN_DEFAULTS])
+    else:
+        result["agent_config_change"] = "unapproved_configuration_content_change"
+    return result
+
+
+def capture_final_config(config_path, log_dir, env):
+    """Save only the final config, preserving its raw digest separately.
+
+    The snapshot is byte-exact when no known credential is present. Unexpected
+    credential fields and environment credentials are redacted before export;
+    validation always uses the unredacted in-memory bytes.
+    """
+    destination = Path(log_dir) / "agent-config-final.json"
+    if not config_path.is_file():
+        return None, {"final_agent_config_sha256": None,
+                      "final_agent_config_evidence": {"available": False, "path": None, "redacted": None}}
+    raw = config_path.read_bytes()
+    text = raw.decode("utf-8", errors="replace")
+    redacted = scrub(text, env)
+    for name in ("OPENAI_API_KEY", "GLM_API_KEY", "QWEN_API_KEY", "QODER_PERSONAL_ACCESS_TOKEN"):
+        if env.get(name):
+            redacted = redacted.replace(json.dumps(env[name])[1:-1], "[REDACTED]")
+    try:
+        parsed = strict_config(redacted)
+        protected = {"apikey", "accesstoken", "refreshtoken", "personalaccesstoken",
+                     "password", "secret", "token", "authorization", "credentials"}
+        changed = False
+
+        def protect(value):
+            nonlocal changed
+            if isinstance(value, list):
+                return [protect(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {}
+            for key, item in value.items():
+                normalized = re.sub(r"[^a-z]", "", key.lower())
+                placeholder = isinstance(item, str) and re.fullmatch(r"\{env:[A-Z0-9_]+\}", item)
+                if normalized in protected and item is not None and not placeholder:
+                    result[key] = "[REDACTED]"; changed = changed or item != "[REDACTED]"
+                else:
+                    result[key] = protect(item)
+            return result
+
+        safe = protect(parsed)
+        if changed:
+            redacted = json.dumps(safe, ensure_ascii=False, indent=2) + "\n"
+    except (ValueError, UnicodeError):
+        # Invalid JSON is already a contract failure; do not export potentially
+        # secret malformed contents merely to preserve a diagnostic snapshot.
+        redacted = json.dumps({"snapshot_omitted": "invalid_configuration_json", "raw_sha256": digest(raw)}) + "\n"
+    captured = redacted.encode("utf-8")
+    destination.write_bytes(captured)
+    return raw, {"final_agent_config_sha256": digest(raw), "final_agent_config_evidence": {
+        "available": True, "path": destination.name, "sha256": digest(captured),
+        "redacted": captured != raw, "raw_sha256": digest(raw)}}
 
 
 def validate_spec(spec):
@@ -273,6 +385,7 @@ def run(spec):
               "embedding":EMBEDDING if spec["profile"]=="zvec-grep" else None,
               "new_index_builds":0,"agent_model_calls_started":False,"status":"preparing"}
     save(logs/"install-manifest.json",manifest); tap=None; old_cwd=Path.cwd(); daemon_started=False
+    installed_config_bytes=None
     before_source=source_identity(root); save(logs/"source-before.json",before_source)
     try:
         for cli in (("zg",spec["agent"]) if spec["profile"]=="zvec-grep" else (spec["agent"],)):
@@ -314,8 +427,9 @@ def run(spec):
             manifest["native_catalog"]=probe_installed_mcp(checked["native_mcp_command"],cwd=root,env=env,log_dir=logs)
         else:
             after=before;manifest["installation_verified"]=True;manifest["install_command"]=None
-        (logs/"agent-config-installed.json").write_bytes(paths["config"].read_bytes())
-        manifest["installed_agent_config_sha256"]=digest(paths["config"].read_bytes())
+        installed_config_bytes=paths["config"].read_bytes()
+        (logs/"agent-config-installed.json").write_bytes(installed_config_bytes)
+        manifest["installed_agent_config_sha256"]=digest(installed_config_bytes)
         save(logs/"install-manifest.json",manifest)
         if replay_plan:
             run_checked(["node",str(Path(__file__).with_name("official-replay.mjs")),"--plan",str(replay_plan),"--log-dir",str(logs)],cwd=root,env=env,log_prefix=logs/"official-replay",timeout=1800)
@@ -333,26 +447,40 @@ def run(spec):
             manifest["agent_model_calls_started"]=True;save(logs/"install-manifest.json",manifest)
             os.chdir(root)
             code=qa.run(session)
+            if spec["profile"]=="zvec-grep" and not paths["guidance"].is_file():
+                manifest["guidance_unchanged"]=False
+                raise ConfigurationContractError("Agent removed installed guidance")
             manifest.update(verify_guidance_delivery(spec,paths,logs))
             if spec["agent"]=="opencode" and spec["profile"]=="zvec-grep" and manifest["guidance_loaded"] is not True:
                 manifest["status"]="guidance_verification_failed";code=4
-        manifest["final_agent_config_sha256"]=digest(paths["config"].read_bytes())
-        manifest["agent_config_unchanged"]=manifest["final_agent_config_sha256"]==manifest["installed_agent_config_sha256"]
-        manifest["guidance_unchanged"]=(digest(paths["guidance"].read_bytes())==manifest["installed_guidance_sha256"]) if spec["profile"]=="zvec-grep" else not paths["guidance"].exists()
-        if not manifest["agent_config_unchanged"] or not manifest["guidance_unchanged"]:raise ValueError("Agent changed installed configuration or guidance")
+        final_config_bytes, config_evidence=capture_final_config(paths["config"],logs,env)
+        manifest.update(config_evidence)
+        manifest.update(verify_agent_config_integrity(spec["agent"],manifest["versions"][spec["agent"]],
+                                                    installed_config_bytes,final_config_bytes))
+        manifest["guidance_unchanged"]=(paths["guidance"].is_file() and digest(paths["guidance"].read_bytes())==manifest["installed_guidance_sha256"]) if spec["profile"]=="zvec-grep" else not paths["guidance"].exists()
         manifest["source_unchanged"]=source_identity(root)==before_source
         if not manifest["source_unchanged"]:raise ValueError("QA source files changed")
+        if not manifest["agent_config_contract_valid"] or not manifest["guidance_unchanged"]:
+            raise ConfigurationContractError("Agent changed protected configuration or installed guidance")
         if manifest["status"]=="preparing":manifest["status"]="completed" if code==0 else "agent_failed"
         return code
     except Exception as exc:
-        manifest.update(status="failed",error_type=type(exc).__name__,error=scrub(str(exc),env))
+        contract_failure=isinstance(exc,ConfigurationContractError)
+        manifest.update(status="contract_failure" if contract_failure else "failed",error_type=type(exc).__name__,error=scrub(str(exc),env))
         save(logs/"official-failure.json",{"error":manifest["error"],"error_type":manifest["error_type"]})
         if not (logs/"session.json").exists():save(logs/"session.json",{"status":"preparation_failed","returncode":None,"model_calls":0 if not manifest["agent_model_calls_started"] else None})
-        return 5
+        return 4 if contract_failure else 5
     finally:
         os.chdir(old_cwd)
         if tap:tap.server.shutdown();tap.server.server_close()
-        if paths["config"].exists():manifest["final_agent_config_sha256"]=digest(paths["config"].read_bytes())
+        if "final_agent_config_evidence" not in manifest:
+            final_config_bytes, config_evidence=capture_final_config(paths["config"],logs,env)
+            manifest.update(config_evidence)
+            if installed_config_bytes is not None:
+                manifest.update(verify_agent_config_integrity(spec["agent"],manifest["versions"].get(spec["agent"]),
+                                                            installed_config_bytes,final_config_bytes))
+        if "installed_guidance_sha256" in manifest and "guidance_unchanged" not in manifest:
+            manifest["guidance_unchanged"]=paths["guidance"].is_file() and digest(paths["guidance"].read_bytes())==manifest["installed_guidance_sha256"]
         if daemon_started:
             try:run_checked(["zg","server","off"],cwd=root,env=env,log_prefix=logs/"server-off",timeout=60)
             except Exception as exc:manifest["server_shutdown_error"]=type(exc).__name__

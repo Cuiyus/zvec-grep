@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -182,13 +183,15 @@ class OfficialInstallSessionTests(unittest.TestCase):
                 Path(paths["ide_config"]).write_text(json.dumps({"mcpServers": installed["mcpServers"]}))
         return "fixture command completed\n"
 
-    def prepared(self, spec):
+    def prepared(self, spec, session_runner=None):
         with ExitStack() as stack:
             stack.enter_context(patch.object(Path, "home", return_value=self.home))
             stack.enter_context(patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=True))
             stack.enter_context(patch.object(official, "run_checked", side_effect=self.fake_checked))
             stack.enter_context(patch.object(official, "assert_source_readonly"))
             stack.enter_context(patch.object(official, "source_identity", return_value={"source.py": "fixed-source-fixture"}))
+            if session_runner is not None:
+                stack.enter_context(patch.object(official, "load_qa_session", return_value=SimpleNamespace(run=session_runner)))
             probe = stack.enter_context(patch.object(official, "probe_installed_mcp", return_value={
                 "tools": [{"name": "zvec_grep_search", "description": "released fixture", "inputSchema": {"type": "object"}}]}))
             result = official.run(spec)
@@ -268,6 +271,153 @@ class OfficialInstallSessionTests(unittest.TestCase):
         Path(paths["guidance"]).write_text(GUIDANCE)
         value = official.verify_guidance_delivery(spec, paths, self.root / "qoder-logs")
         self.assertIsNone(value["guidance_loaded"])
+
+    def test_byte_identity_is_separate_from_verified_native_security_scan_defaults(self):
+        before = official.base_config(self.spec(agent="qodercli"))
+        raw = (json.dumps(before, indent=2) + "\n").encode()
+        after = json.dumps({**before, "securityScan": dict(official.QODER_SECURITY_SCAN_DEFAULTS)}, indent=2).encode()
+        result = official.verify_agent_config_integrity("qodercli", "1.1.45", raw, after)
+        self.assertFalse(result["agent_config_unchanged"])
+        self.assertTrue(result["agent_config_contract_valid"])
+        self.assertEqual(result["agent_config_change"], "qoder_1_1_45_security_scan_defaults")
+        self.assertEqual(len(result["agent_config_allowed_added_fields"]), 3)
+        # This pinned baseline fixture reproduces the recorded final bytes of
+        # the five native baseline sessions in CI 34922580478.
+        self.assertEqual(official.digest(after), "022c332a0b6f9bf4665c0a9acab67d0018c81600298862ebd41d1ed69c820224")
+
+    def test_qoder_only_format_change_requires_exact_pinned_agent_version(self):
+        before = b'{"model":{"name":"Qwen3.8-Max"},"enabled":true}\n'
+        formatted = b'{\n  "enabled": true,\n  "model": {"name": "Qwen3.8-Max"}\n}'
+        for agent, version, expected in (("qodercli", "1.1.45", True), ("qodercli", "1.1.46", False),
+                                          ("qodercli", None, False), ("opencode", "1.18.4", False)):
+            with self.subTest(agent=agent, version=version):
+                result = official.verify_agent_config_integrity(agent, version, before, formatted)
+                self.assertFalse(result["agent_config_unchanged"])
+                self.assertIs(result["agent_config_contract_valid"], expected)
+                unchanged = official.verify_agent_config_integrity(agent, version, before, before)
+                self.assertTrue(unchanged["agent_config_unchanged"])
+                self.assertTrue(unchanged["agent_config_contract_valid"])
+
+    def test_security_scan_allowance_never_masks_other_content_changes(self):
+        before = self.installed_config(official.base_config(self.spec(agent="qodercli")), agent="qodercli")
+        raw = json.dumps(before).encode()
+        modifications = [
+            lambda value: value["model"].update(name="different-model"),
+            lambda value: value["permissions"]["allow"].append("Bash"),
+            lambda value: value["permissions"]["deny"].remove("Write"),
+            lambda value: value["mcpServers"]["zvec_grep"].update(command="node"),
+            lambda value: value.update(instructions=["/tmp/manual-guidance.md"]),
+            lambda value: value["tools"].update(core=["Bash"]),
+            lambda value: value["security"].update(disableYoloMode=False),
+            lambda value: value["securityScan"].update(l1StaticCheck=1),
+            lambda value: value["securityScan"].update(l1StaticCheck=False),
+            lambda value: value["securityScan"].update(extra=True),
+            lambda value: value["securityScan"].pop("l2LightweightScan"),
+            lambda value: value.pop("disableAllHooks"),
+        ]
+        for index, change in enumerate(modifications):
+            after = {**copy.deepcopy(before), "securityScan": dict(official.QODER_SECURITY_SCAN_DEFAULTS)}
+            change(after)
+            with self.subTest(change=index):
+                result = official.verify_agent_config_integrity("qodercli", "1.1.45", raw, json.dumps(after).encode())
+                self.assertFalse(result["agent_config_contract_valid"])
+
+    def test_existing_security_scan_values_cannot_be_changed_by_default_exception(self):
+        for existing in ({"l1StaticCheck": False}, {}, {**official.QODER_SECURITY_SCAN_DEFAULTS, "l3DeepScan": False}):
+            before = {"model": {"name": "Qwen3.8-Max"}, "securityScan": existing}
+            after = {**before, "securityScan": dict(official.QODER_SECURITY_SCAN_DEFAULTS)}
+            with self.subTest(existing=existing):
+                result = official.verify_agent_config_integrity("qodercli", "1.1.45", json.dumps(before).encode(), json.dumps(after).encode())
+                self.assertFalse(result["agent_config_contract_valid"])
+
+    def test_missing_invalid_or_duplicate_final_json_fails_closed(self):
+        before = b'{"model":{"name":"Qwen3.8-Max"}}'
+        for after in (None, b'[]', b'{} trailing', b'{"model":{},"model":{"name":"Qwen3.8-Max"}}',
+                      b'{"value":NaN}', b'{"value":1e999}', b'\xff'):
+            with self.subTest(after=after):
+                result = official.verify_agent_config_integrity("qodercli", "1.1.45", before, after)
+                self.assertFalse(result["agent_config_contract_valid"])
+
+    def test_final_config_capture_preserves_bytes_and_separates_redacted_evidence_digest(self):
+        path = self.root / "settings.json"
+        raw = b'{"model":{"name":"Qwen3.8-Max"}}\n'
+        path.write_bytes(raw)
+        observed, evidence = official.capture_final_config(path, self.root, {})
+        self.assertEqual(observed, raw)
+        self.assertEqual((self.root / "agent-config-final.json").read_bytes(), raw)
+        self.assertFalse(evidence["final_agent_config_evidence"]["redacted"])
+        for raw, env in ((b'{"note":"fixture-pat","apiKey":"fixture-secret"}', {"QODER_PERSONAL_ACCESS_TOKEN": "fixture-pat"}),
+                         (b'{"token":"other-sensitive-value","apiKey":"{env:OPENAI_API_KEY}"}', {}),
+                         (b'bad JSON with unknown sensitive fields', {})):
+            path.write_bytes(raw)
+            observed, evidence = official.capture_final_config(path, self.root, env)
+            snapshot = (self.root / "agent-config-final.json").read_bytes()
+            with self.subTest(raw=raw):
+                self.assertEqual(observed, raw)
+                self.assertEqual(evidence["final_agent_config_sha256"], official.digest(raw))
+                self.assertEqual(evidence["final_agent_config_evidence"]["sha256"], official.digest(snapshot))
+                self.assertTrue(evidence["final_agent_config_evidence"]["redacted"])
+                for secret in (b'fixture-pat', b'fixture-secret', b'other-sensitive-value', b'unknown sensitive fields'):
+                    self.assertNotIn(secret, snapshot)
+
+    def fake_native_session(self, mutation):
+        def run(session):
+            mutation()
+            official.save(Path(session["log_dir"]) / "session.json", {"status": "completed", "returncode": 0})
+            return 0
+        return run
+
+    def test_native_qoder_default_write_completes_without_rewriting_installed_evidence(self):
+        spec = self.spec(agent="qodercli")
+        spec["prepare_only"] = False
+        def mutation():
+            path = official.default_paths("qodercli", home=self.home)["config"]
+            after = json.loads(path.read_text())
+            after["securityScan"] = dict(official.QODER_SECURITY_SCAN_DEFAULTS)
+            path.write_text(json.dumps(after, indent=2))
+        code, _ = self.prepared(spec, self.fake_native_session(mutation))
+        self.assertEqual(code, 0)
+        logs = Path(spec["log_dir"])
+        manifest = json.loads((logs / "install-manifest.json").read_text())
+        self.assertEqual(manifest["status"], "completed")
+        self.assertFalse(manifest["agent_config_unchanged"])
+        self.assertTrue(manifest["agent_config_contract_valid"])
+        self.assertTrue(manifest["guidance_unchanged"])
+        self.assertEqual((logs / "agent-config-installed.json").read_bytes(), self.installed_bytes["qodercli"])
+        self.assertEqual(official.digest((logs / "agent-config-final.json").read_bytes()), manifest["final_agent_config_sha256"])
+        self.assertEqual(json.loads((logs / "session.json").read_text())["status"], "completed")
+
+    def test_native_model_change_is_contract_failure_with_final_evidence(self):
+        spec = self.spec(agent="qodercli")
+        spec["prepare_only"] = False
+        def mutation():
+            path = official.default_paths("qodercli", home=self.home)["config"]
+            after = json.loads(path.read_text())
+            after.update(securityScan=dict(official.QODER_SECURITY_SCAN_DEFAULTS))
+            after["model"]["name"] = "different-model"
+            path.write_text(json.dumps(after, indent=2))
+        code, _ = self.prepared(spec, self.fake_native_session(mutation))
+        logs = Path(spec["log_dir"])
+        manifest = json.loads((logs / "install-manifest.json").read_text())
+        self.assertEqual(code, 4)
+        self.assertEqual(manifest["status"], "contract_failure")
+        self.assertFalse(manifest["agent_config_contract_valid"])
+        self.assertTrue((logs / "agent-config-final.json").is_file())
+        self.assertEqual(json.loads((logs / "session.json").read_text())["status"], "completed")
+
+    def test_removed_guidance_is_contract_failure_and_still_captures_final_config(self):
+        spec = self.spec(agent="qodercli")
+        spec["prepare_only"] = False
+        def mutation():
+            official.default_paths("qodercli", home=self.home)["guidance"].unlink()
+        code, _ = self.prepared(spec, self.fake_native_session(mutation))
+        logs = Path(spec["log_dir"])
+        manifest = json.loads((logs / "install-manifest.json").read_text())
+        self.assertEqual(code, 4)
+        self.assertEqual(manifest["status"], "contract_failure")
+        self.assertFalse(manifest["guidance_unchanged"])
+        self.assertTrue(manifest["agent_config_unchanged"])
+        self.assertTrue((logs / "agent-config-final.json").is_file())
 
 
 @unittest.skipUnless(os.environ.get("OPENCODE_READONLY_TEST_BINARY"),

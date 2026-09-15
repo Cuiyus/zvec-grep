@@ -1,10 +1,38 @@
 """Official repeat experiment retains failures and never invents missing cost."""
 import unittest
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from zg_bench.swe_qa import official_install_benchmark as bench
 
 
 class OfficialExperimentTests(unittest.TestCase):
+    def test_changed_controls_override_native_completion_but_not_archived_byte_mismatch(self):
+        spec, _ = bench.session_spec("qoder-qwen38max", {"question": "Explain."}, "baseline")
+        trial = {"trial_id": "baseline-r01", "profile": "baseline", "repetition": 1}
+        converted = {"contract_error_count": 0, "error_event_count": 0, "has_final_answer": True}
+        with tempfile.TemporaryDirectory() as temporary:
+            logs = Path(temporary)
+            (logs / "session.json").write_text(json.dumps({"status": "completed", "observed": {
+                "input_tokens": 123, "tool_calls": 3}}))
+            for installation, code, expected in [
+                ({"agent_config_contract_valid": False}, 5, "contract_failure"),
+                ({"guidance_unchanged": False}, 5, "contract_failure"),
+                ({"status": "contract_failure"}, 4, "contract_failure"),
+                ({"agent_config_unchanged": False, "agent_config_contract_valid": True,
+                  "guidance_unchanged": True}, 0, "completed"),
+                ({"agent_config_unchanged": False, "guidance_unchanged": True}, 5, "failed"),
+            ]:
+                with self.subTest(installation=installation):
+                    (logs / "install-manifest.json").write_text(json.dumps(installation))
+                    with patch.object(bench, "convert_agent_trace", return_value=converted):
+                        result = bench.collect_result(trial, logs, spec, code, True, "Explain.")
+                    self.assertEqual(result["status"], expected)
+                    self.assertEqual(result["returncode"], code)
+                    self.assertEqual(result["input_tokens"], 123)
+
     def fixture(self):
         plan = bench.make_plan("reflex-6")
         plan["group"] = "opencode-glm52"

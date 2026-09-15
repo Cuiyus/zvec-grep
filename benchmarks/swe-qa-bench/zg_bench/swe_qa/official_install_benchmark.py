@@ -107,6 +107,13 @@ def collect_result(trial: dict, logs: Path, spec, code: int, source_ok: bool, qu
         status = "preparation_failure"
     if code and status == "completed":
         status = "contract_failure" if code == 4 else "failed"
+    # Native completion cannot override a proved change to experiment controls.
+    # Missing fields remain compatible with archived runs; their original
+    # statuses must not be silently repaired by a newer collector.
+    if (installation.get("status") == "contract_failure"
+            or installation.get("agent_config_contract_valid") is False
+            or installation.get("guidance_unchanged") is False):
+        status = "contract_failure"
     observed = session.get("observed", {})
     row = {"trial_id": trial["trial_id"], "profile": trial["profile"], "repetition": trial["repetition"],
            "status": status, "returncode": code, "session": session, "installation": installation,
