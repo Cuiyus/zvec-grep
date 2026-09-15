@@ -264,14 +264,23 @@ def run_native_probe(source: Path, output: Path) -> dict:
     (source / ".zvec-grep").mkdir(exist_ok=True)
     before = r.directory_identity(source, skip_git=True)
     index, cache = output / "index", output / "model-cache"
+    print(json.dumps({"phase": "native_install_preflight", "step": "index", "status": "starting"}), flush=True)
     native_index(source, index, output / "index-preparation", cache, image=IMAGE)
+    print(json.dumps({"phase": "native_install_preflight", "step": "index", "status": "completed"}), flush=True)
     prompt = ("This is a connectivity check on a synthetic fixture, not a benchmark question. "
               "Call mcp__zvec_grep__zvec_grep_search exactly once with "
               '{"root":"/app","vector":"代码仓库 repository source files","limit":1}. '
               "Do not use other tools. After the tool returns, reply with the retrieved filename only. "
               "If it fails, report the error without retrying.")
+    # Qoder's Security SessionStart hook can legitimately spend more than two
+    # minutes reaching its service before the model turn begins.  Keep the
+    # structured terminal hook requirement, but give the native startup the
+    # same practical network allowance as a small QA turn.
+    print(json.dumps({"phase": "native_install_preflight", "step": "qoder_mcp_call", "status": "starting"}), flush=True)
     result = run_native_trial(source, output / "agent", index, cache, prompt=prompt, profile="with-zg",
-        limits={"model_requests": 4, "tool_calls": 4, "input_tokens": 50000, "wall_seconds": 120})
+        limits={"model_requests": 4, "tool_calls": 4, "input_tokens": 50000, "wall_seconds": 300})
+    print(json.dumps({"phase": "native_install_preflight", "step": "qoder_mcp_call",
+                      "status": result.get("status"), "wall_seconds": result.get("wall_seconds")}), flush=True)
     result.update(phase="setup_qoder_mcp_probe", included_in_benchmark=False,
                   embedding_model=r.EMBEDDING,
                   source_unchanged=r.directory_identity(source, skip_git=True) == before)
