@@ -54,7 +54,10 @@ natively adds its three enabled `securityScan` defaults at startup; this verifie
 addition and JSON formatting changes are allowed, while installed MCP settings,
 permissions and `AGENTS.md` must remain unchanged. Both arms retain the native
 Security `SessionStart` outcome; an observed startup failure invalidates an
-otherwise completed trial without discarding its model usage or answer.
+otherwise completed trial without discarding its model usage or answer. A
+terminal `cancelled` security scan remains recorded separately and does not
+invalidate a Qoder session that completed successfully with reconciled MCP
+calls; a missing terminal response remains incomplete.
 
 MCP tool permission and remote embedding authorization are separate. The user
 has selected remote `qwen/qwen3.7-text-embedding` for this experiment; its

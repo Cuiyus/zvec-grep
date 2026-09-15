@@ -80,13 +80,18 @@ def native_startup_evidence(agent: Path) -> dict:
         complete = (len(replies) == 1 and replies[0]["outcome"] == "success"
                     and (replies[0]["exit_code"] is None
                          or type(replies[0]["exit_code"]) is int and replies[0]["exit_code"] == 0))
-        rows.append({**hook, "status": "failed" if failed else "passed" if complete else "incomplete"})
+        cancelled = (len(replies) == 1 and replies[0]["outcome"] == "cancelled"
+                     and replies[0]["exit_code"] is None)
+        rows.append({**hook, "status": ("failed" if failed else "passed" if complete
+                                         else "cancelled" if cancelled else "incomplete")})
     failures = sum(row["status"] == "failed" for row in rows)
     incomplete = sum(row["status"] == "incomplete" for row in rows)
-    status = "failed" if failures else "incomplete" if incomplete else "passed" if rows else "unobserved"
+    cancelled = sum(row["status"] == "cancelled" for row in rows)
+    status = ("failed" if failures else "incomplete" if incomplete else "cancelled" if cancelled
+              else "passed" if rows else "unobserved")
     return {"status": status, "scope": "Initializing Qoder Security / SessionStart structured lifecycle",
             "security_hooks": rows, "failure_count": failures if rows else None,
-            "incomplete_count": incomplete if rows else None,
+            "incomplete_count": incomplete if rows else None, "cancelled_count": cancelled if rows else None,
             "native_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 

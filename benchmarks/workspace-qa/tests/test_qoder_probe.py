@@ -68,6 +68,14 @@ class QoderProbeTests(unittest.TestCase):
         evidence = qoder_probe.validate_probe(self.output)
         self.assertEqual(evidence["startup_evidence"]["status"], "passed")
 
+    def test_security_hook_cancellation_is_recorded_but_does_not_mask_successful_mcp(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events(outcome="cancelled", exit_code=None))
+        evidence = qoder_probe.validate_probe(self.output)
+        self.assertEqual(evidence["startup_evidence"]["status"], "cancelled")
+        self.assertEqual(evidence["startup_evidence"]["cancelled_count"], 1)
+        self.assertEqual(evidence["native_fixture_vector_successes"], 1)
+
     def test_unobserved_hook_remains_unknown_and_unrelated_hook_errors_are_not_security_failures(self):
         for kwargs in ({"name": "Optional unrelated startup notification"}, {"hook_event": "OtherEvent"}):
             with self.subTest(kwargs=kwargs):
