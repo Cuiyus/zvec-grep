@@ -10,6 +10,10 @@ COPY scripts/readonly-search.mjs ./readonly-search.mjs
 COPY scripts/replay-search.mjs ./replay-search.mjs
 COPY scripts/prepare-index.mjs ./prepare-index.mjs
 COPY scripts/qa-session.py ./qa-session.py
+COPY scripts/native-agent-session.py ./native-agent-session.py
+COPY scripts/native-mcp-tap.mjs ./native-mcp-tap.mjs
+COPY scripts/native-replay.mjs ./native-replay.mjs
+COPY scripts/capture-native-state.py ./capture-native-state.py
 ENV PATH="/opt/qa/node_modules/.bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 ENV OPENCODE_DISABLE_LSP_DOWNLOAD=true

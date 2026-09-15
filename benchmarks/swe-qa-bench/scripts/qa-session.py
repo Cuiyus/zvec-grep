@@ -68,12 +68,17 @@ class WireTap:
                     data = json.loads(body)
                     schema = data.get("tools", [])
                     save(tap.root / "wire-requests" / f"request-{request_id:03d}.json", data)
+                    recorded_body = scrub(body.decode("utf-8")).encode("utf-8")
+                    raw_path = tap.root / "wire-requests" / f"request-{request_id:03d}.raw.json"
+                    raw_path.write_bytes(recorded_body)
                     tap.record({"event": "request", "request_id": request_id, "timestamp": time.time(),
                                 "model": data.get("model"), "temperature": data.get("temperature"),
                                 "top_p": data.get("top_p"), "max_tokens": data.get("max_tokens"),
                                 "tool_names": [t.get("function", {}).get("name") for t in schema],
                                 "schema_sha256": hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
-                                "request_sha256": hashlib.sha256(body).hexdigest()})
+                                "request_sha256": hashlib.sha256(body).hexdigest(),
+                                "raw_body_path": str(raw_path.relative_to(tap.root)),
+                                "raw_body_redacted": recorded_body != body})
                     headers = {"Content-Type": "application/json", "Accept": self.headers.get("Accept", "*/*")}
                     if self.headers.get("Authorization"):
                         headers["Authorization"] = self.headers["Authorization"]

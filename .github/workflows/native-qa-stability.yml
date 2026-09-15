@@ -1,0 +1,264 @@
+name: Native zg install E2E prompt stability
+
+on:
+  push:
+    branches: [dev/benchmark-readonly-qa]
+    paths:
+      - "benchmarks/swe-qa-bench/**"
+      - ".github/workflows/native-qa-stability.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-qa-stability-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-install]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Validate native integration, decisions, accounting and legacy compatibility
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
+          node --test benchmarks/swe-qa-bench/scripts/native-replay.test.mjs
+      - name: Build released zg 0.2.2 and pinned agents
+        run: >-
+          docker build -f benchmarks/swe-qa-bench/runtime/Dockerfile
+          --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
+          -t zg-native-qa:0.2.2 benchmarks/swe-qa-bench
+      - name: Verify the installed MCP SDK over real stdio without a model
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,source="$PWD/benchmarks/swe-qa-bench/scripts",target=/qa-scripts,readonly
+          --env ZG_TEST_SDK_ROOT=/opt/qa/node_modules/@zvec/zvec-grep
+          zg-native-qa:0.2.2 node --test /qa-scripts/native-replay.test.mjs
+      - name: Preserve exact runtime for this experiment
+        run: docker save zg-native-qa:0.2.2 | gzip -1 > "$RUNNER_TEMP/native-runtime.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-runtime.tar.gz
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+  screen:
+    needs: validate
+    name: Verify real install, capture initial state, screen four prompt variants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+      - run: docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+      - name: Screen with native initial states, source-reviewed query targets and real MCP replay
+        id: experiment
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark screen
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --output "$RUNNER_TEMP/screen"
+      - name: Scan all retained screening evidence
+        id: scan
+        if: always() && steps.experiment.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/screen"
+      - name: Package evidence without index or embedding copies
+        if: always() && steps.scan.outcome == 'success'
+        run: >-
+          tar --exclude=model-cache --exclude=corpus --exclude=workspaces
+          --exclude=capture-indexes --exclude=workspace
+          -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/screen.tar.gz" screen
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/screen.tar.gz
+            ${{ runner.temp }}/screen/selection.json
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+
+  e2e:
+    needs: [validate, screen]
+    name: Native E2E / ${{ matrix.group }} / five trials per arm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        group: [opencode-glm52, opencode-qwen38max, qoder-qwen38max]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+      - uses: actions/download-artifact@v5
+        with:
+          name: native-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/screen-bundle
+      - name: Load image and frozen prompt selection
+        run: |
+          docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/screen-bundle/screen.tar.gz" screen/selection.json
+      - name: Run independent sessions, actual zg install and fresh potionv2 indexes
+        id: benchmark
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark run
+          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --group "${{ matrix.group }}" --selection "$RUNNER_TEMP/screen/selection.json"
+          --output "$RUNNER_TEMP/${{ matrix.group }}"
+      - name: Blind answer review and paired quality/cost report
+        if: always() && steps.benchmark.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark review \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --judge-case benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json \
+            --output "$RUNNER_TEMP/${{ matrix.group }}"
+          cat "$RUNNER_TEMP/${{ matrix.group }}/e2e-stability.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Scan all retained E2E evidence
+        id: scan
+        if: always() && steps.benchmark.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/${{ matrix.group }}"
+      - name: Package all planned outcomes without index reuse
+        if: always() && steps.scan.outcome == 'success'
+        run: >-
+          tar --exclude=model-cache --exclude=corpus --exclude=workspaces
+          -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/${{ matrix.group }}.tar.gz" "${{ matrix.group }}"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-e2e-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/${{ matrix.group }}.tar.gz
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+
+  diagnosis:
+    needs: [validate, screen, e2e]
+    if: always() && needs.screen.result == 'success' && !cancelled()
+    name: E2E queries, shared source labels and native retrieval replay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - uses: actions/download-artifact@v5
+        with:
+          name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: native-e2e-*-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/evidence
+      - name: Load exact runtime and all groups from this experiment
+        run: |
+          docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+          mkdir "$RUNNER_TEMP/recorded"
+          for group in opencode-glm52 opencode-qwen38max qoder-qwen38max; do
+            tar -C "$RUNNER_TEMP/recorded" -xzf "$RUNNER_TEMP/evidence/$group.tar.gz"
+          done
+      - name: Source-reviewed targets and five native replays per observed request
+        id: diagnosis
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark diagnose \
+            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
+            --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            --runs-dir "$RUNNER_TEMP/recorded" --output "$RUNNER_TEMP/diagnosis"
+          cat "$RUNNER_TEMP/diagnosis/retrieval-diagnosis.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Scan diagnosis evidence
+        id: scan
+        if: always() && steps.diagnosis.outcome != 'skipped'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.pipeline_artifacts scan
+          --root "$RUNNER_TEMP/diagnosis"
+      - name: Package explanation evidence
+        if: always() && steps.scan.outcome == 'success'
+        run: >-
+          tar --exclude=model-cache --exclude=corpus --exclude=workspace
+          -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/diagnosis.tar.gz" diagnosis
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnosis.tar.gz
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error

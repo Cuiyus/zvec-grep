@@ -230,8 +230,9 @@ def _qoder_identity(events: list[dict[str, Any]], spec: AgentSpec) -> dict[str, 
             "sources": sorted(sources), "valid": observed == {spec.provider_model}}
 
 
-def qoder_contract(events: list[dict[str, Any]], *, zg: bool) -> dict[str, Any]:
-    allowed = {*QODER_READ_TOOLS, *([QODER_SEARCH_TOOL] if zg else [])}
+def qoder_contract(events: list[dict[str, Any]], *, zg: bool,
+                   installed_tools: list[str] | None = None) -> dict[str, Any]:
+    allowed = set(installed_tools) if installed_tools is not None else {*QODER_READ_TOOLS, *([QODER_SEARCH_TOOL] if zg else [])}
     starts = [e for e in events if e.get("type") == "system" and e.get("subtype") == "init"
               and not e.get("parent_tool_use_id")]
     observed = {t for e in starts for t in e.get("tools", []) if isinstance(t, str)}
@@ -309,6 +310,7 @@ def _annotate_qoder_messages(data: dict[str, Any], events: list[dict[str, Any]])
 
 def convert_agent_trace(
     agent_dir: Path, spec: AgentSpec, instruction: str, *, zg: bool = False,
+    installed_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """Always retain a recoverable trajectory; return explicit validity failures.
 
@@ -337,7 +339,7 @@ def convert_agent_trace(
         results = [e for e in events if e.get("type") == "result" and not e.get("parent_tool_use_id")]
         successful_result = bool(results) and results[-1].get("subtype") == "success" and not results[-1].get("is_error")
         identity = _qoder_identity(events, spec)
-        contract = qoder_contract(events, zg=zg)
+        contract = qoder_contract(events, zg=zg, installed_tools=installed_tools)
         validation_errors = int(not identity["valid"]) + int(not contract["valid"])
         # Missing identity/init after a truncated stream is a failed observation,
         # not affirmative evidence of a configuration mismatch for later trials.
