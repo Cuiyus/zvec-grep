@@ -81,6 +81,7 @@ class JudgeTests(unittest.TestCase):
     def test_full_boolean_mean_hashes_raw_model_latency_and_harness_output(self):
         captured = []
         result = self.run_judge(lambda **kwargs: captured.append(kwargs) or self.response())
+        self.assertEqual(result["expected_trials"], 1)
         row = result["trials"][0]
         self.assertEqual(row["score"], 0.5)
         self.assertEqual(row["status"], "judged")
@@ -92,6 +93,19 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(json.loads(captured[0]["messages"][1]["content"])["candidate_outputs"][0]["filename"], "answer.md")
         self.assertEqual(captured[0]["model"], "glm-5.2")
         self.assertNotIn("test-private-key", (self.runs / "judgements.json").read_text())
+
+    def test_sharded_ledger_is_complete_when_its_selected_pair_is_judged(self):
+        second = dict(self.trial, trial_id="128-with-zg-1", profile="with-zg",
+                      candidate_output_path="128-with-zg-1/candidate/answer.md")
+        candidate = self.runs / second["candidate_output_path"]
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text(second["answer"], encoding="utf-8")
+        dump(self.runs / "trial-results.json", {"task_id": "128", "repetitions_per_profile": 5,
+             "shard_repetitions": [1], "trials": [self.trial, second]})
+        result = self.run_judge()
+        self.assertEqual(result["repetitions_per_profile"], 5)
+        self.assertEqual(result["expected_trials"], 2)
+        self.assertEqual(sum(row["status"] == "judged" for row in result["trials"]), 2)
 
     def test_model_output_schema_rejects_omission_duplicate_ids_integer_scores_extra_keys(self):
         valid = [{"id": 0, "score": True, "reason": "yes"}, {"id": 1, "score": False, "reason": "no"}]

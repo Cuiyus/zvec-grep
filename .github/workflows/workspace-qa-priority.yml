@@ -1,5 +1,5 @@
 name: Qualified zg Workspace QA
-run-name: "Official Lite CN tasks 287 + 116 · 5 pairs each · ${{ github.ref_name }}"
+run-name: "Official Lite CN tasks 328 + 116 · 5 pairs each · ${{ github.ref_name }}"
 
 on:
   push:
@@ -41,12 +41,12 @@ jobs:
           import json, os
           from pathlib import Path
           root = Path('benchmarks/workspace-qa/data')
-          lock = json.loads((root / 'official-tasks-287-116-five-run-lock.json').read_text())
+          lock = json.loads((root / 'official-tasks-328-116-five-run-lock.json').read_text())
           tasks = [task['task_id'] for task in lock['tasks']]
           locked = {task['task_id'] for task in lock['tasks']}
           repetitions = lock.get('repetitions')
-          if (lock.get('schema_version') != 1 or tasks != ['287', '116']
-                  or locked != {'287', '116'} or repetitions != 5):
+          if (lock.get('schema_version') != 1 or tasks != ['328', '116']
+                  or locked != {'328', '116'} or repetitions != 5):
               raise SystemExit('Invalid official two-task, five-pair lock')
           rest = [{'task': task, 'repetition': repetition}
                   for task in tasks for repetition in range(2, repetitions + 1)]
@@ -55,7 +55,7 @@ jobs:
               output.write('rest_matrix=' + json.dumps({'include': rest}) + '\n')
               output.write('repetitions=' + str(repetitions) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('Official tasks: `287`, `116`. Each task runs five baseline/with-zg pairs '
+              summary.write('Official tasks: `328`, `116`. Each task runs five baseline/with-zg pairs '
                             '(20 Qoder trials total). The official task text and rubrics are unmodified. '
                             'Each execution job runs exactly one visible pair.\n')
           PY
@@ -76,7 +76,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the isolated two-task lock
-        run: cp benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
+        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
@@ -104,7 +104,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the isolated two-task lock
-        run: cp benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
+        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
@@ -141,7 +141,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          path = Path('benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json')
+          path = Path('benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json')
           lock = json.loads(path.read_text())
           selected = set(json.loads(os.environ['TASKS']))
           lock['tasks'] = [task for task in lock['tasks'] if task['task_id'] in selected]

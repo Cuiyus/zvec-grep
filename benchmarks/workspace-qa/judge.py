@@ -445,7 +445,10 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     report: dict[str, Any] = {"schema_version": 1, "adapter": ADAPTER,
         "score_label": "original-rubric boolean mean (custom adapter)",
         "official_judge": False, "leaderboard_comparable": False,
-        "task_id": task_id, "repetitions_per_profile": repetitions, "expected_trials": repetitions * 2,
+        # A sharded CI ledger intentionally contains only the selected pair.  Judge
+        # completion against the ledger being processed; the aggregate report keeps
+        # the full manifest denominator across all shards.
+        "task_id": task_id, "repetitions_per_profile": repetitions, "expected_trials": len(trials),
         "judge_model": model, "temperature": 0, "order_seed": seed,
         "retry_policy": {"max_total_attempts": attempts,
             "retry_on": ["transient transport error", "invalid response JSON/schema", "truncated response"],
