@@ -96,7 +96,7 @@ def control_manifest(spec: AgentSpec, *, max_model_turns: int, model_seed: int |
         raise ValueError("model_seed must be a 32-bit non-negative integer")
     if model_seed is not None and spec.name != "opencode":
         raise ValueError("model_seed passthrough is only verified for OpenCode")
-    return {
+    controls = {
         "temperature": 0 if spec.name == "opencode" else None,
         "temperature_control": "provider.models.<model>.temperature=true + agent.build.temperature=0" if spec.name == "opencode"
         else "not_configured_native_effective_value_unverified",
@@ -104,11 +104,13 @@ def control_manifest(spec: AgentSpec, *, max_model_turns: int, model_seed: int |
         "model_turn_limit": max_model_turns,
         "native_model_turn_limit": "agent.build.steps" if spec.name == "opencode" else "--max-turns (pinned bundle verified)",
         "external_budget_enforcement_required": True,
-        "qoder_model_request_retries": 0 if spec.name == "qodercli" else None,
         "model_seed": model_seed,
         "seed_control": "agent.build.options.seed -> provider request body" if model_seed is not None else "not_configured",
         "seed_wire_verification_required": model_seed is not None,
     }
+    if spec.name == "qodercli":
+        controls["qoder_model_request_retries"] = 0
+    return controls
 
 
 def build_agent_config(

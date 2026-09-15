@@ -34,6 +34,11 @@ GROUPS = {
 PROTOCOL = "native-install-e2e-prompt-v1"
 LIMITS = {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": 900}
 MODEL_SEED = e2e_stability.MODEL_SEED
+SCREEN_WORKERS_PER_GROUP = 2
+
+
+def progress(phase: str, status: str, **details: Any) -> None:
+    print(json.dumps({"phase": phase, "status": status, **details}, ensure_ascii=False), flush=True)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -256,7 +261,7 @@ def run_group(args: argparse.Namespace) -> int:
     source = source_checkout(case, output / "corpus")
     source_before = directory_identity(source, skip_git=True)
     rows = []
-    for trial in plan["trials"]:
+    for number, trial in enumerate(plan["trials"], 1):
         trial_dir = output / trial["trial_id"]
         agent_dir = trial_dir / "agent"
         spec, runtime = runtime_spec(args.group, case, zg=trial["arm"] != "B",
@@ -264,7 +269,8 @@ def run_group(args: argparse.Namespace) -> int:
                                      model_seed=trial["model_seed"])
         trial["status"] = "running"
         write_json(output / "plan.json", plan)
-        print(json.dumps({"phase": "native_e2e", "group": args.group, "trial": trial["trial_id"], "status": "running"}), flush=True)
+        progress("native_e2e", "running", group=args.group, trial=trial["trial_id"],
+                 completed=number - 1, planned=len(plan["trials"]))
         code = launch(image=args.image, source=source, logs=agent_dir, cache=output / "model-cache",
                       workspace=output / "workspaces" / trial["trial_id"], spec=runtime,
                       credential="GLM_API_KEY")
@@ -277,8 +283,8 @@ def run_group(args: argparse.Namespace) -> int:
         write_json(trial_dir / "result.json", row)
         write_json(output / "results.json", {"trials": rows})
         write_json(output / "plan.json", plan)
-        print(json.dumps({"phase": "native_e2e", "trial": trial["trial_id"], "status": trial["status"],
-                          "metrics": row["metrics"]}), flush=True)
+        progress("native_e2e", trial["status"], group=args.group, trial=trial["trial_id"],
+                 completed=number, planned=len(plan["trials"]), metrics=row["metrics"])
         if row["execution_status"] in {"contract_failure", "preparation_failure", "source_integrity_failure"}:
             # An affirmative installation/configuration failure stops spend;
             # remaining planned rows stay visible, not silently resampled.
@@ -288,6 +294,7 @@ def run_group(args: argparse.Namespace) -> int:
     report = e2e_stability.summarize(plan, rows, source_reference=case["repo"], controls=manifest["controls"])
     write_json(output / "e2e-stability.json", report)
     (output / "e2e-stability.md").write_text(e2e_stability.render_markdown(report))
+    (output / "e2e-ci-summary.md").write_text(e2e_stability.render_ci_conclusion({args.group: report}, {}))
     return 0 if all(t["status"] == "completed" for t in plan["trials"]) else 1
 
 
@@ -322,6 +329,7 @@ def review_group(args: argparse.Namespace) -> None:
                                    controls=read_json(output / "manifest.json")["controls"])
     write_json(output / "e2e-stability.json", report)
     (output / "e2e-stability.md").write_text(e2e_stability.render_markdown(report))
+    (output / "e2e-ci-summary.md").write_text(e2e_stability.render_ci_conclusion({output.name: report}, {}))
 
 
 def replay_catalog(*, analysis: dict, source: Path, output: Path, image: str, case: dict,
@@ -364,10 +372,13 @@ def screen(args: argparse.Namespace) -> int:
     output = args.output.resolve()
     fresh(output)
     case = read_json(args.case)
+    progress("screen", "starting", groups=len(GROUPS), variants=4,
+             repetitions=pd.REPETITIONS, max_parallel=len(GROUPS) * SCREEN_WORKERS_PER_GROUP)
     source = source_checkout(case, output / "corpus")
     captures = {}
     traces = []
     for group in ("opencode-glm52", "opencode-qwen38max"):
+        progress("native_capture", "running", group=group)
         agent_dir = output / "capture" / group
         spec, runtime = runtime_spec(group, case, zg=True)
         code = launch(image=args.image, source=source, logs=agent_dir, cache=output / "model-cache",
@@ -380,6 +391,7 @@ def screen(args: argparse.Namespace) -> int:
         traces.append({"group_id": group, "trial_id": "initial-native-capture", "agent_dir": str(agent_dir),
                        "agent": "opencode", "model": spec.provider_model, "capture_only": True,
                        "intended_endpoint": spec.base_url, "native_request_builder_verified": True})
+        progress("native_capture", "completed", group=group)
     states = pd.extract_states(traces, output / "states")
     config = pd.default_prompt_config(captures)
     write_json(output / "prompt-config.json", config)
@@ -391,17 +403,23 @@ def screen(args: argparse.Namespace) -> int:
                 "no_posthoc_variant_shopping": True})
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(pd.run_plan, plan_path, credential_env="GLM_API_KEY",
-                               endpoint=OPENCODE_CUSTOM_BASE_URL, group_id=group) for group in captures]
+                               endpoint=OPENCODE_CUSTOM_BASE_URL, group_id=group,
+                               max_workers=SCREEN_WORKERS_PER_GROUP) for group in captures]
         for future in futures:
             future.result()
     preliminary = pd.analyze(plan_path)
+    progress("prompt_screen", "completed", completed=preliminary["completed"], planned=preliminary["planned"])
     write_json(output / "screening-preliminary.json", preliminary)
     analysis = nq.build_decision_catalog(plan_path, case)
     analysis_path = output / "query-analysis.json"
     write_json(analysis_path, analysis)
+    progress("screen_ground_truth", "running", requests=len(analysis["request_catalog"]))
     annotate(analysis_path=analysis_path, args=args, source=source, output=output / "annotations")
+    progress("screen_ground_truth", "completed", requests=len(analysis["request_catalog"]))
+    progress("screen_retrieval_replay", "running", requests=len(analysis["request_catalog"]), repetitions=5)
     replay = replay_catalog(analysis=analysis, source=source, output=output / "retrieval",
                             image=args.image, case=case, cache=output / "model-cache")
+    progress("screen_retrieval_replay", "completed", observations=len(replay))
     labels = read_json(output / "annotations" / "query-intents.json")
     evidence = nq.screening_evidence(plan_path, analysis, labels, read_json(args.entries), replay)
     evidence_path = output / "screening-evidence.json"
@@ -428,6 +446,8 @@ def screen(args: argparse.Namespace) -> int:
                  "unavailable": states["unavailable"], "missing_categories": states["missing_categories"],
                  "scope": "One native initial state per registered OpenCode model combination; later states are not represented."}
     write_json(output / "selection.json", selection)
+    (output / "screening-summary.md").write_text(pd.render_ci_summary(assessed, selection))
+    progress("screen", "completed", selection_status=selection["status"], candidate=selection["candidate"])
     return 0
 
 
@@ -440,16 +460,27 @@ def diagnose(args: argparse.Namespace) -> int:
     if any(not (directory / "plan.json").is_file() for directory in runs):
         raise ValueError("All registered group artifacts are required")
     source = source_checkout(case, output / "corpus")
+    progress("diagnosis_catalog", "running", groups=len(runs))
     analysis = nq.build_catalog(runs, case)
     path = output / "query-analysis.json"
     write_json(path, analysis)
+    progress("diagnosis_catalog", "completed", requests=len(analysis["request_catalog"]),
+             occurrences=len(analysis["occurrences"]))
+    progress("diagnosis_ground_truth", "running", requests=len(analysis["request_catalog"]))
     annotate(analysis_path=path, args=args, source=source, output=output / "annotations")
+    progress("diagnosis_ground_truth", "completed", requests=len(analysis["request_catalog"]))
+    progress("diagnosis_retrieval_replay", "running", requests=len(analysis["request_catalog"]), repetitions=5)
     replay = replay_catalog(analysis=analysis, source=source, output=output / "retrieval",
                             image=args.image, case=case, cache=output / "model-cache")
+    progress("diagnosis_retrieval_replay", "completed", observations=len(replay))
     report = nq.score_records(analysis, read_json(output / "annotations" / "query-intents.json"),
                               read_json(args.entries), replay)
     write_json(output / "retrieval-diagnosis.json", report)
     (output / "retrieval-diagnosis.md").write_text(nq.render_markdown(report))
+    e2e_reports = {group: read_json(directory / "e2e-stability.json", {}) for group, directory in zip(GROUPS, runs)}
+    conclusion = e2e_stability.render_ci_conclusion(e2e_reports, report)
+    (output / "benchmark-conclusion.md").write_text(conclusion)
+    progress("diagnosis", "completed", reports=len(e2e_reports), retrieval_requests=len(report.get("replays", [])))
     return 0
 
 

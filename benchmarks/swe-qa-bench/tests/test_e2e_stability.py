@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from zg_bench.swe_qa.e2e_stability import make_plan, summarize, render_markdown, main
+from zg_bench.swe_qa.e2e_stability import make_plan, summarize, render_markdown, render_ci_conclusion, main
 
 
 def observations(plan):
@@ -200,6 +200,23 @@ class E2EStabilityTests(unittest.TestCase):
             self.assertIn("independent approximately normal", markdown)
             with self.assertRaises(SystemExit):
                 main(args)
+
+    def test_ci_conclusion_separates_applied_controls_from_behavior_stability(self):
+        plan = make_plan("case", candidate=None)
+        results, quality = observations(plan)
+        for row in results:
+            row["wire_contract"] = {"valid": True, "temperature_zero_verified": True, "seed_verified": True}
+        report = summarize(plan, results, quality)
+        retrieval = {"case_id": "case", "replays": [{"stability": {"identical_all_five": True},
+            "context_assessments": [{"assessment": {"status": "scored", "target": {
+                "hit_at_1": False, "hit_at_5": True, "hit_at_10": True, "rr_at_10": 0.2}}}]}],
+            "actual_vs_replay": [{"original_vs_replay_text_identical": True}]}
+        markdown = render_ci_conclusion({"opencode-test": report}, retrieval)
+        self.assertIn("temp=0 verified", markdown)
+        self.assertIn("20/20", markdown)
+        self.assertIn("behavior stability is reported separately", markdown)
+        self.assertIn("Hit@10", markdown)
+        self.assertIn("lower cost observed", markdown)
 
 
 if __name__ == "__main__":

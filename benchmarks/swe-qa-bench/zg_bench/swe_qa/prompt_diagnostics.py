@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 import re
 import tempfile
@@ -471,7 +472,7 @@ def _transport(endpoint: str, key: str, body: dict[str, Any], timeout: float) ->
 
 def run_plan(plan_path: Path, *, credential_env: str, endpoint: str, timeout: float = 180,
              transport: Callable[..., tuple[int, dict[str, str], bytes]] | None = None,
-             group_id: str | None = None) -> dict[str, Any]:
+             group_id: str | None = None, max_workers: int = 1) -> dict[str, Any]:
     """Execute each planned sample once. Existing/error/interrupted attempts never rerun.
 
     An atomic attempt marker is written before network I/O. This protects against
@@ -489,8 +490,11 @@ def run_plan(plan_path: Path, *, credential_env: str, endpoint: str, timeout: fl
     selected = [s for s in plan["samples"] if group_id is None or s["group_id"] == group_id]
     if not selected:
         raise ValueError("No planned samples for selected group")
+    if type(max_workers) is not int or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
     if any(plan["requests"][s["request_key"]]["endpoint"] != endpoint for s in selected):
         raise ValueError("Execution endpoint differs from frozen native route; select a single endpoint group")
+    pending = []
     for sample in selected:
         directory = plan_path.parent / "samples" / sample["sample_id"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -498,6 +502,12 @@ def run_plan(plan_path: Path, *, credential_env: str, endpoint: str, timeout: fl
         result_path = directory / "result.json"
         if marker.exists() or result_path.exists():
             continue
+        pending.append(sample)
+
+    def execute(sample: dict[str, Any]) -> str:
+        directory = plan_path.parent / "samples" / sample["sample_id"]
+        marker = directory / "attempt.json"
+        result_path = directory / "result.json"
         definition = plan["requests"][sample["request_key"]]
         body = definition["request"]
         if sha(body) != definition["request_sha256"]:
@@ -543,6 +553,26 @@ def run_plan(plan_path: Path, *, credential_env: str, endpoint: str, timeout: fl
             result["error"] = _scrub(str(error), (key,))[:1000]
         result["wall_seconds"] = time.monotonic() - started
         _write(result_path, result, (key,))
+        return result["status"]
+
+    completed = len(selected) - len(pending)
+    print(json.dumps({"phase": "prompt_screen", "group": group_id, "completed": completed,
+                      "planned": len(selected), "parallelism": min(max_workers, max(1, len(pending))) }), flush=True)
+    if max_workers == 1:
+        for sample in pending:
+            status = execute(sample)
+            completed += 1
+            print(json.dumps({"phase": "prompt_screen", "group": group_id, "sample": sample["sample_id"],
+                              "status": status, "completed": completed, "planned": len(selected)}), flush=True)
+    else:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(pending) or 1)) as pool:
+            futures = {pool.submit(execute, sample): sample for sample in pending}
+            for future in as_completed(futures):
+                sample = futures[future]
+                status = future.result()
+                completed += 1
+                print(json.dumps({"phase": "prompt_screen", "group": group_id, "sample": sample["sample_id"],
+                                  "status": status, "completed": completed, "planned": len(selected)}), flush=True)
     return analyze(plan_path)
 
 
@@ -680,6 +710,24 @@ def select_candidate(plan: dict[str, Any], rows: list[dict[str, Any]], evidence:
     return {"variant": chosen, "status": "screened_candidate_requires_fresh_e2e", "eligible": eligible,
             "tie_rule": "Fewest changed factors, then P10/P01/P11 fixed order", "candidate_findings": reasons,
             "reason": "No observed correctness/ranking decrease; at least one screening improvement per candidate across available strata"}
+
+
+def render_ci_summary(analysis: dict[str, Any], selection: dict[str, Any]) -> str:
+    """Compact screening result for the GitHub job summary; JSON keeps full evidence."""
+    lines = ["## Prompt screening", "",
+             f"**Decision:** `{selection.get('status', 'unknown')}`; selected candidate: `{selection.get('candidate') or 'P00 (current)'}`.", "",
+             "| Agent + model | Variant | Completed | zg decisions | Valid calls | Unique zg requests |",
+             "|---|---|---:|---:|---:|---:|"]
+    for row in analysis.get("groups", []):
+        lines.append("| " + " | ".join(str(value) for value in (
+            row.get("group_id"), row.get("variant"), f"{row.get('completed', 0)}/{row.get('planned', 0)}",
+            row.get("zg_adopting_decisions", 0), f"{row.get('valid_calls', 0)}/{row.get('attempted_calls', 0)}",
+            row.get("unique_valid_zg_requests", 0))) + " |")
+    reason = selection.get("screening", {}).get("reason") or analysis.get("selection", {}).get("reason")
+    if reason:
+        lines += ["", f"Selection reason: {reason}"]
+    lines += ["", "This stage screens prompt behavior only. E2E quality and cost determine whether the integration helps.", ""]
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

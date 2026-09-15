@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -181,6 +183,27 @@ class PromptDiagnosticsTests(unittest.TestCase):
         files = list((self.root / "samples").rglob("*.json")) + list((self.root / "samples").rglob("*.txt"))
         self.assertFalse(any("secret-token" in p.read_text() for p in files))
         self.assertEqual(report["selection"]["variant"], "P00")
+
+    def test_parallel_run_bounds_concurrency_and_preserves_all_samples(self):
+        self.make_plan()
+        lock = threading.Lock()
+        active = maximum = calls = 0
+        def fake(endpoint, key, body, timeout):
+            nonlocal active, maximum, calls
+            with lock:
+                active += 1
+                calls += 1
+                maximum = max(maximum, active)
+            time.sleep(0.005)
+            with lock:
+                active -= 1
+            return 200, {"Content-Type": "application/json"}, json.dumps(response()).encode()
+        with patch.dict(os.environ, {"DIAGNOSTIC_KEY": "key"}):
+            report = run_plan(self.root / "plan.json", credential_env="DIAGNOSTIC_KEY",
+                              endpoint=ENDPOINT, transport=fake, max_workers=2)
+        self.assertEqual(calls, 40)
+        self.assertEqual(report["completed"], 40)
+        self.assertEqual(maximum, 2)
 
     def test_run_refuses_changed_endpoint_before_sending(self):
         self.make_plan()

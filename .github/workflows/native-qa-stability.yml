@@ -22,6 +22,7 @@ env:
 jobs:
   validate:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-install]')
+    name: 1/4 Validate and build exact runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -53,19 +54,19 @@ jobs:
           --mount type=bind,source="$PWD/benchmarks/swe-qa-bench/scripts",target=/qa-scripts,readonly
           --env ZG_TEST_SDK_ROOT=/opt/qa/node_modules/@zvec/zvec-grep
           zg-native-qa:0.2.2 node --test /qa-scripts/native-replay.test.mjs
-      - name: Preserve exact runtime for this experiment
-        run: docker save zg-native-qa:0.2.2 | gzip -1 > "$RUNNER_TEMP/native-runtime.tar.gz"
+      - name: Preserve exact runtime for this experiment (parallel zstd)
+        run: docker save zg-native-qa:0.2.2 | zstd -T0 -3 -o "$RUNNER_TEMP/native-runtime.tar.zst"
       - uses: actions/upload-artifact@v7
         with:
           name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/native-runtime.tar.gz
+          path: ${{ runner.temp }}/native-runtime.tar.zst
           compression-level: 0
           retention-days: 30
           if-no-files-found: error
 
   screen:
     needs: validate
-    name: Verify real install, capture initial state, screen four prompt variants
+    name: 2/4 Screen native install and prompt variants
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
@@ -83,7 +84,8 @@ jobs:
         with:
           name: native-runtime-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/runtime
-      - run: docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+      - name: Load exact benchmark runtime
+        run: zstd -dc "$RUNNER_TEMP/runtime/native-runtime.tar.zst" | docker load
       - name: Screen with native initial states, source-reviewed query targets and real MCP replay
         id: experiment
         env:
@@ -93,6 +95,12 @@ jobs:
           --case benchmarks/swe-qa-bench/cases/reflex-6.json
           --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
           --output "$RUNNER_TEMP/screen"
+      - name: Publish screening decision
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/screen/screening-summary.md" ]]; then
+            cat "$RUNNER_TEMP/screen/screening-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Scan all retained screening evidence
         id: scan
         if: always() && steps.experiment.outcome != 'skipped'
@@ -120,7 +128,7 @@ jobs:
 
   e2e:
     needs: [validate, screen]
-    name: Native E2E / ${{ matrix.group }} / ten trials per arm
+    name: 3/4 E2E / ${{ matrix.group }} / 10 per arm
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -149,7 +157,7 @@ jobs:
           path: ${{ runner.temp }}/screen-bundle
       - name: Load image and frozen prompt selection
         run: |
-          docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+          zstd -dc "$RUNNER_TEMP/runtime/native-runtime.tar.zst" | docker load
           tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/screen-bundle/screen.tar.gz" screen/selection.json
       - name: Run independent sessions, actual zg install and fresh potionv2 indexes
         id: benchmark
@@ -169,7 +177,7 @@ jobs:
             --case benchmarks/swe-qa-bench/cases/reflex-6.json \
             --judge-case benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json \
             --output "$RUNNER_TEMP/${{ matrix.group }}"
-          cat "$RUNNER_TEMP/${{ matrix.group }}/e2e-stability.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/${{ matrix.group }}/e2e-ci-summary.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Scan all retained E2E evidence
         id: scan
         if: always() && steps.benchmark.outcome != 'skipped'
@@ -195,7 +203,7 @@ jobs:
   diagnosis:
     needs: [validate, screen, e2e]
     if: always() && needs.screen.result == 'success' && !cancelled()
-    name: E2E queries, shared source labels and native retrieval replay
+    name: 4/4 Explain E2E with retrieval replay and final conclusion
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
@@ -220,7 +228,7 @@ jobs:
           path: ${{ runner.temp }}/evidence
       - name: Load exact runtime and all groups from this experiment
         run: |
-          docker load -i "$RUNNER_TEMP/runtime/native-runtime.tar.gz"
+          zstd -dc "$RUNNER_TEMP/runtime/native-runtime.tar.zst" | docker load
           mkdir "$RUNNER_TEMP/recorded"
           for group in opencode-glm52 opencode-qwen38max; do
             tar -C "$RUNNER_TEMP/recorded" -xzf "$RUNNER_TEMP/evidence/$group.tar.gz"
@@ -234,7 +242,10 @@ jobs:
             --case benchmarks/swe-qa-bench/cases/reflex-6.json \
             --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
             --runs-dir "$RUNNER_TEMP/recorded" --output "$RUNNER_TEMP/diagnosis"
+          cat "$RUNNER_TEMP/diagnosis/benchmark-conclusion.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n<details><summary>Detailed retrieval rows</summary>\n\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/diagnosis/retrieval-diagnosis.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n</details>\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Scan diagnosis evidence
         id: scan
         if: always() && steps.diagnosis.outcome != 'skipped'

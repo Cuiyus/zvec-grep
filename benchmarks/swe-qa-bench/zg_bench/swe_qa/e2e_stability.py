@@ -343,6 +343,123 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _ratio(numerator: int, denominator: int) -> str:
+    return f"{numerator}/{denominator}" if denominator else "0/0"
+
+
+def _percent_change(left: Any, right: Any) -> str:
+    if type(left) not in (int, float) or type(right) not in (int, float) or right == 0:
+        return "unknown"
+    return f"{(left - right) / right:+.1%}"
+
+
+def _wire_counts(report: dict[str, Any]) -> tuple[int, int, int, int]:
+    observed = [row for row in report.get("trials", []) if row.get("execution_status") != "missing"]
+    contracts = [row.get("observation", {}).get("wire_contract", {}) for row in observed]
+    return (sum(contract.get("valid") is True for contract in contracts), len(observed),
+            sum(contract.get("temperature_zero_verified") is True for contract in contracts),
+            sum(contract.get("seed_verified") is True for contract in contracts))
+
+
+def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict[str, Any]) -> str:
+    """Render one decision-oriented dashboard across E2E, Agent and retrieval layers."""
+    case_id = retrieval.get("case_id") or next((report.get("case_id") for report in e2e_reports.values()), "unknown")
+    lines = [f"# Benchmark conclusion: {case_id}", "",
+             "Negative cost changes mean zg used fewer resources. Cost claims use only completed, quality-passed pairs with complete measurements.", "",
+             "## 1. Run health and sampling controls", "",
+             "| Agent + model | Completed trials | Quality B / C | Qualified pairs | temp=0 verified | seed verified |",
+             "|---|---:|---:|---:|---:|---:|"]
+    for group, report in e2e_reports.items():
+        arms = report.get("arms", {})
+        baseline, current = arms.get("B", {}), arms.get("C", {})
+        comparison = report.get("comparisons", {}).get("C-B", {})
+        pair = comparison.get("metrics", {}).get("input_tokens", {})
+        _, observed, temperatures, seeds = _wire_counts(report)
+        lines.append("| " + " | ".join((group,
+            _ratio(report.get("execution_counts", {}).get("completed", 0), report.get("planned_trials", 0)),
+            f"{baseline.get('completed_quality_passed', 0)}/{baseline.get('planned', 0)} / {current.get('completed_quality_passed', 0)}/{current.get('planned', 0)}",
+            _ratio(pair.get("eligible_pairs", 0), comparison.get("planned_pairs", REPETITIONS)),
+            _ratio(temperatures, observed), _ratio(seeds, observed))) + " |")
+
+    lines += ["", "`temperature=0` and the fixed seed are verified from outgoing provider requests. This proves the controls were applied; behavior stability is reported separately.", "",
+              "## 2. Agent behavior", "",
+              "| Agent + model | zg adoption | First request unique / observed | Modal request share | First query unique / observed |",
+              "|---|---:|---:|---:|---:|"]
+    for group, report in e2e_reports.items():
+        current = report.get("arms", {}).get("C", {})
+        adoption = current.get("zg_adoption", {})
+        repetition = current.get("first_complete_request_repetition", {})
+        observed = repetition.get("observed", 0)
+        modal = repetition.get("modal_count", 0)
+        queries = current.get("first_query_repetition", {})
+        lines.append("| " + " | ".join((group,
+            _ratio(adoption.get("yes", 0), adoption.get("planned", 0)),
+            _ratio(repetition.get("unique", 0), observed),
+            f"{modal / observed:.0%}" if observed else "unknown",
+            _ratio(queries.get("unique", 0), queries.get("observed", 0)))) + " |")
+
+    lines += ["", "## 3. E2E quality and cost", "",
+              "| Agent + model | Mean input B → C | Descriptive change | Qualified paired input Δ | Mean tools B → C | Descriptive change | Qualified paired tool Δ |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+    findings = []
+    for group, report in e2e_reports.items():
+        arms = report.get("arms", {})
+        baseline, current = arms.get("B", {}), arms.get("C", {})
+        def mean(arm: dict[str, Any], metric: str) -> Any:
+            return arm.get("cost", {}).get(metric, {}).get("observed_all_statuses", {}).get("mean")
+        comparisons = report.get("comparisons", {}).get("C-B", {}).get("metrics", {})
+        input_pair = comparisons.get("input_tokens", {})
+        tool_pair = comparisons.get("tool_calls_attempted", {})
+        input_b, input_c = mean(baseline, "input_tokens"), mean(current, "input_tokens")
+        tool_b, tool_c = mean(baseline, "tool_calls_attempted"), mean(current, "tool_calls_attempted")
+        input_delta = input_pair.get("qualified_difference_summary", {}).get("mean")
+        tool_delta = tool_pair.get("qualified_difference_summary", {}).get("mean")
+        lines.append("| " + " | ".join((_cell(group), f"{_cell(input_b)} → {_cell(input_c)}",
+            _percent_change(input_c, input_b), _cell(input_delta), f"{_cell(tool_b)} → {_cell(tool_c)}",
+            _percent_change(tool_c, tool_b), _cell(tool_delta))) + " |")
+        planned = report.get("comparisons", {}).get("C-B", {}).get("planned_pairs", REPETITIONS)
+        eligible = input_pair.get("eligible_pairs", 0)
+        adoption = current.get("zg_adoption", {}).get("yes", 0)
+        quality_b, quality_c = baseline.get("completed_quality_passed", 0), current.get("completed_quality_passed", 0)
+        if eligible < planned:
+            findings.append(f"**{group}: incomplete evidence** — {eligible}/{planned} pairs qualify; do not treat its cost delta as a full planned-sample estimate.")
+        if quality_c < quality_b:
+            findings.append(f"**{group}: quality risk observed** — C passed {quality_c}/{current.get('planned', 0)} versus B {quality_b}/{baseline.get('planned', 0)}.")
+        if adoption < current.get("planned", 0) / 2:
+            findings.append(f"**{group}: adoption is the main bottleneck** — zg was used in only {adoption}/{current.get('planned', 0)} runs.")
+        if eligible == planned and quality_c >= quality_b:
+            if type(input_delta) in (int, float) and type(tool_delta) in (int, float) and input_delta < 0 and tool_delta < 0:
+                findings.append(f"**{group}: lower cost observed** — all {eligible} qualified pairs are available and both mean paired cost deltas are negative.")
+            else:
+                findings.append(f"**{group}: no consistent two-metric saving** — the qualified input/tool deltas do not both show a reduction.")
+
+    if retrieval:
+        scored = []
+        for replay in retrieval.get("replays", []):
+            for context in replay.get("context_assessments", []):
+                assessment = context.get("assessment", {})
+                if assessment.get("status") == "scored":
+                    scored.append(assessment.get("target", {}))
+        stable = [replay.get("stability", {}).get("identical_all_five") for replay in retrieval.get("replays", [])]
+        comparisons = retrieval.get("actual_vs_replay", [])
+        rr_values = [row.get("rr_at_10") for row in scored if type(row.get("rr_at_10")) in (int, float)]
+        lines += ["", "## 4. Retrieval explanation", "",
+                  "| Scored requests | Hit@1 | Hit@5 | Hit@10 | Mean RR@10 | Five-replay identical | E2E output = replay output |",
+                  "|---:|---:|---:|---:|---:|---:|---:|",
+                  "| " + " | ".join((str(len(scored)),
+                      _ratio(sum(row.get("hit_at_1") is True for row in scored), len(scored)),
+                      _ratio(sum(row.get("hit_at_5") is True for row in scored), len(scored)),
+                      _ratio(sum(row.get("hit_at_10") is True for row in scored), len(scored)),
+                      f"{statistics.mean(rr_values):.3f}" if rr_values else "unknown",
+                      _ratio(sum(value is True for value in stable), len(stable)),
+                      _ratio(sum(row.get("original_vs_replay_text_identical") is True for row in comparisons),
+                             sum(row.get("original_vs_replay_text_identical") is not None for row in comparisons)))) + " |"]
+    lines += ["", "## Decision", "", *[f"- {finding}" for finding in findings], "",
+              "Fixed sampling parameters reduce one source of variation but do not make an Agent deterministic. Exact request repetition and adoption above are the observed stability evidence.", "",
+              "The detailed per-trial reports and every exclusion remain in the uploaded artifacts.", ""]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
