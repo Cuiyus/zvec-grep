@@ -363,6 +363,7 @@ class QueryGroundTruthTest(unittest.TestCase):
             self.assertFalse(report["annotation_cost_included_in_e2e"])
             self.assertEqual(report["annotation_cost"]["input_tokens"], 738)
             self.assertEqual(report["execution"]["max_parallel_groups"], 3)
+            self.assertEqual(report["execution"]["within_group_batches"], 2)
             self.assertEqual([s["group"] for s in report["sessions"]], list(GROUPS) * 2)
             labels = load_labels(args.output / "query-intents.json", self.source)
             self.assertEqual(report["labels_sha256"], digest((args.output / "query-intents.json").read_bytes()))

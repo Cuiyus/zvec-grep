@@ -16,7 +16,7 @@ import os
 import re
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +31,7 @@ from ..settings import OPENCODE_CUSTOM_BASE_URL
 
 
 GROUPS = ("opencode-glm52", "opencode-qwen38max", "qoder-qwen38max")
+WITHIN_GROUP_WORKERS = 2
 MODEL_SEED = 20260915
 PROTOCOL = "query-ground-truth-v6"
 # Linux limits each execve argv string to 32 pages (typically 128 KiB).
@@ -526,7 +527,7 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
     write_json(output / "catalog.json", catalog)
     candidates: dict[str, dict[str, Any]] = {g: {"annotations": []} for g in groups}
     sessions = []
-    execution = {"max_parallel_groups": len(groups), "within_group_batches": "serial",
+    execution = {"max_parallel_groups": len(groups), "within_group_batches": WITHIN_GROUP_WORKERS,
                  "phase_barrier": "All candidate groups finish before any review starts.",
                  "merge_order": list(groups), "instruction_utf8_byte_limit": MAX_INLINE_INSTRUCTION_BYTES}
     write_json(output / "annotation-execution.json", execution)
@@ -536,20 +537,33 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
                "prior_turn_feedback", "prior_assistant_text", "context_capture_limitation")} for u in catalog]
     def candidate_group(group: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows: dict[str, Any] = {"annotations": []}
-        group_sessions = []
+        tasks = []
         for offset in range(0, len(packets), args.batch_size):
             parts = split_annotation_packet(group, "candidate", {"annotations": packets[offset:offset + args.batch_size]})
             for part_index, packet in enumerate(parts):
                 batch_id = offset // args.batch_size
                 name = f"batch-{batch_id:03}" + (f"-part-{part_index:03}" if len(parts) > 1 else "")
-                print(json.dumps({"phase": "ground_truth_candidate", "group": group,
-                                  "batch": batch_id, "sub_batch": part_index, "status": "running"}), flush=True)
-                result = session_runner(group=group, phase="candidate", packet=packet,
-                                        source_root=source, image=args.image, output=output / "candidate" / group / name, timeout=args.timeout)
-                group_sessions.append(result)
-                print_phase_result("candidate", group, batch_id, result, sub_batch=part_index)
-                if result.get("status") == "completed":
-                    rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+                tasks.append((len(tasks), batch_id, part_index, packet, name))
+
+        def run(task: tuple[int, int, int, dict[str, Any], str]) -> tuple[int, dict[str, Any]]:
+            ordinal, batch_id, part_index, packet, name = task
+            print(json.dumps({"phase": "ground_truth_candidate", "group": group,
+                              "batch": batch_id, "sub_batch": part_index, "status": "running"}), flush=True)
+            result = session_runner(group=group, phase="candidate", packet=packet,
+                                    source_root=source, image=args.image, output=output / "candidate" / group / name, timeout=args.timeout)
+            print_phase_result("candidate", group, batch_id, result, sub_batch=part_index)
+            return ordinal, result
+
+        completed = {}
+        with ThreadPoolExecutor(max_workers=min(WITHIN_GROUP_WORKERS, len(tasks) or 1)) as pool:
+            futures = [pool.submit(run, task) for task in tasks]
+            for future in as_completed(futures):
+                ordinal, result = future.result()
+                completed[ordinal] = result
+        group_sessions = [completed[index] for index in range(len(tasks))]
+        for result in group_sessions:
+            if result.get("status") == "completed":
+                rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
         return rows, group_sessions
 
     with ThreadPoolExecutor(max_workers=len(groups)) as pool:
@@ -566,7 +580,7 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
     units = {u["annotation_id"]: p for u, p in zip(catalog, packets)}
     def review_group(group: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows: dict[str, Any] = {"annotations": []}
-        group_sessions = []
+        tasks = []
         pending = [p for p in proposals if p["source_status"] == "verified" and p["proposer_group"] != group]
         # Keep a unit's proposals together so repeated source reading is bounded.
         pending_ids = sorted({p["annotation_id"] for p in pending})
@@ -579,14 +593,27 @@ def execute(args: argparse.Namespace, *, session_runner: Callable[..., dict[str,
             for part_index, packet in enumerate(parts):
                 batch_id = offset // review_batch_size
                 name = f"batch-{batch_id:03}" + (f"-part-{part_index:03}" if len(parts) > 1 else "")
-                print(json.dumps({"phase": "ground_truth_review", "group": group, "batch": batch_id,
-                                  "sub_batch": part_index, "proposals": len(packet["proposals"]), "status": "running"}), flush=True)
-                result = session_runner(group=group, phase="review", packet=packet,
-                                        source_root=source, image=args.image, output=output / "review" / group / name, timeout=args.timeout)
-                group_sessions.append(result)
-                print_phase_result("review", group, batch_id, result, sub_batch=part_index)
-                if result.get("status") == "completed":
-                    rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
+                tasks.append((len(tasks), batch_id, part_index, packet, name))
+
+        def run(task: tuple[int, int, int, dict[str, Any], str]) -> tuple[int, dict[str, Any]]:
+            ordinal, batch_id, part_index, packet, name = task
+            print(json.dumps({"phase": "ground_truth_review", "group": group, "batch": batch_id,
+                              "sub_batch": part_index, "proposals": len(packet["proposals"]), "status": "running"}), flush=True)
+            result = session_runner(group=group, phase="review", packet=packet,
+                                    source_root=source, image=args.image, output=output / "review" / group / name, timeout=args.timeout)
+            print_phase_result("review", group, batch_id, result, sub_batch=part_index)
+            return ordinal, result
+
+        completed = {}
+        with ThreadPoolExecutor(max_workers=min(WITHIN_GROUP_WORKERS, len(tasks) or 1)) as pool:
+            futures = [pool.submit(run, task) for task in tasks]
+            for future in as_completed(futures):
+                ordinal, result = future.result()
+                completed[ordinal] = result
+        group_sessions = [completed[index] for index in range(len(tasks))]
+        for result in group_sessions:
+            if result.get("status") == "completed":
+                rows["annotations"].extend(result.get("parsed", {}).get("annotations", []))
         return rows, group_sessions
 
     with ThreadPoolExecutor(max_workers=len(groups)) as pool:
