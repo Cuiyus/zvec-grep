@@ -35,7 +35,7 @@ env:
 jobs:
   validate:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[native-install]')
-    name: 1/4 Validate and build exact runtime
+    name: 1/5 Validate and build exact runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -79,9 +79,14 @@ jobs:
 
   screen:
     needs: validate
-    name: 2/4 Select fixed prompt or screen variants
+    name: 2/5 Prompt / ${{ matrix.case }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        case: [reflex-6, pylint-9, matplotlib-37, streamlink-14, xarray-32]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -108,15 +113,15 @@ jobs:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark screen
-          --case benchmarks/swe-qa-bench/cases/reflex-6.json
-          --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json
+          --case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.json
+          --entries benchmarks/swe-qa-bench/cases/${{ matrix.case }}.entries.json
           --output "$RUNNER_TEMP/screen"
       - name: Freeze released MCP description and guidance without a prompt experiment
         id: fixed
         if: env.RUN_PROMPT_TEST != 'true'
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark select-fixed
-          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.json
           --output "$RUNNER_TEMP/screen"
       - name: Publish screening decision
         if: always()
@@ -141,7 +146,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.scan.outcome == 'success'
         with:
-          name: native-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-screen-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/screen.tar.gz
             ${{ runner.temp }}/screen/selection.json
@@ -151,13 +156,14 @@ jobs:
 
   e2e:
     needs: [validate, screen]
-    name: 3/4 E2E / ${{ matrix.group }} / 10 per arm
+    name: 3/5 E2E / ${{ matrix.case }} / ${{ matrix.group }} / 10 per arm
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 5
       matrix:
+        case: [reflex-6, pylint-9, matplotlib-37, streamlink-14, xarray-32]
         group: [opencode-glm52, opencode-qwen38max]
     steps:
       - uses: actions/checkout@v6
@@ -176,7 +182,7 @@ jobs:
           path: ${{ runner.temp }}/runtime
       - uses: actions/download-artifact@v5
         with:
-          name: native-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-screen-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/screen-bundle
       - name: Load image and frozen prompt selection
         run: |
@@ -188,7 +194,7 @@ jobs:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark run
-          --case benchmarks/swe-qa-bench/cases/reflex-6.json
+          --case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.json
           --group "${{ matrix.group }}" --selection "$RUNNER_TEMP/screen/selection.json"
           --output "$RUNNER_TEMP/${{ matrix.group }}"
       - name: Blind answer review and paired quality/cost report
@@ -197,8 +203,8 @@ jobs:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         run: |
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark review \
-            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
-            --judge-case benchmarks/swe-qa-bench/cases/reflex-6.judge-v2.json \
+            --case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.json \
+            --judge-case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.judge-v2.json \
             --output "$RUNNER_TEMP/${{ matrix.group }}"
           cat "$RUNNER_TEMP/${{ matrix.group }}/e2e-ci-summary.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Scan all retained E2E evidence
@@ -217,7 +223,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.scan.outcome == 'success'
         with:
-          name: native-e2e-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-e2e-${{ matrix.case }}-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ matrix.group }}.tar.gz
           compression-level: 0
           retention-days: 90
@@ -226,9 +232,14 @@ jobs:
   diagnosis:
     needs: [validate, screen, e2e]
     if: always() && needs.screen.result == 'success' && !cancelled()
-    name: 4/4 Summarize E2E and optional retrieval replay
+    name: 4/5 Diagnose / ${{ matrix.case }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        case: [reflex-6, pylint-9, matplotlib-37, streamlink-14, xarray-32]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -247,7 +258,7 @@ jobs:
           path: ${{ runner.temp }}/runtime
       - uses: actions/download-artifact@v5
         with:
-          pattern: native-e2e-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: native-e2e-${{ matrix.case }}-*-${{ github.run_id }}-${{ github.run_attempt }}
           merge-multiple: true
           path: ${{ runner.temp }}/evidence
       - name: Load all E2E groups from this experiment
@@ -269,8 +280,8 @@ jobs:
             retrieval_args+=(--skip-retrieval)
           fi
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa.native_benchmark diagnose \
-            --case benchmarks/swe-qa-bench/cases/reflex-6.json \
-            --entries benchmarks/swe-qa-bench/cases/reflex-6.entries.json \
+            --case benchmarks/swe-qa-bench/cases/${{ matrix.case }}.json \
+            --entries benchmarks/swe-qa-bench/cases/${{ matrix.case }}.entries.json \
             --runs-dir "$RUNNER_TEMP/recorded" --output "$RUNNER_TEMP/diagnosis" "${retrieval_args[@]}"
           cat "$RUNNER_TEMP/diagnosis/benchmark-conclusion.md" >> "$GITHUB_STEP_SUMMARY"
           if [[ -f "$RUNNER_TEMP/diagnosis/retrieval-diagnosis.md" ]]; then
@@ -296,8 +307,39 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.scan.outcome == 'success'
         with:
-          name: native-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-diagnosis-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/diagnosis.tar.gz
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
+
+  aggregate:
+    needs: diagnosis
+    if: always() && !cancelled()
+    name: 5/5 Aggregate five-case conclusions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: native-diagnosis-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnosis-bundles
+      - name: Publish five-case benchmark index
+        run: |
+          echo "# Five-case native zg benchmark" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Fixed cases: reflex-6, pylint-9, matplotlib-37, streamlink-14, xarray-32." >> "$GITHUB_STEP_SUMMARY"
+          echo "Each case/model cell contains 10 baseline and 10 zg sessions; at most five E2E cells execute concurrently." >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          for case in reflex-6 pylint-9 matplotlib-37 streamlink-14 xarray-32; do
+            archive="$RUNNER_TEMP/diagnosis-bundles/native-diagnosis-$case-${{ github.run_id }}-${{ github.run_attempt }}/diagnosis.tar.gz"
+            if [[ ! -f "$archive" ]]; then
+              echo "## $case" >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+              echo "Diagnosis artifact missing; this case is incomplete." >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            mkdir -p "$RUNNER_TEMP/unpacked/$case"
+            tar -C "$RUNNER_TEMP/unpacked/$case" -xzf "$archive"
+            cat "$RUNNER_TEMP/unpacked/$case/diagnosis/benchmark-conclusion.md" >> "$GITHUB_STEP_SUMMARY"
+          done

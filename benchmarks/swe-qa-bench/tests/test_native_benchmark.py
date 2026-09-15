@@ -424,5 +424,19 @@ class NativeBenchmarkTests(unittest.TestCase):
         self.assertTrue(manifest["sampling_controls_verified"])
 
 
+    def test_five_case_gold_and_entries_are_valid(self):
+        from zg_bench.swe_qa.quality_review import load_review_case
+        from zg_bench.swe_qa.retrieval_eval import load_manifest
+
+        cases = Path(__file__).parents[1] / "cases"
+        slugs = ("reflex-6", "pylint-9", "matplotlib-37", "streamlink-14", "xarray-32")
+        for slug in slugs:
+            reviewed = load_review_case(cases / f"{slug}.judge-v2.json")
+            entries = load_manifest(cases / f"{slug}.entries.json")
+            self.assertEqual(reviewed["case_id"], slug)
+            self.assertEqual(entries["case_id"], slug)
+            self.assertEqual(entries["repo"], reviewed["repo"])
+
+
 if __name__ == "__main__":
     unittest.main()

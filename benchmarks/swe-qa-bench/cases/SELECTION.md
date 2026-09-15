@@ -65,3 +65,11 @@ Baseline trajectory SHA-256 values for reproducibility:
 | `reflex-6__TMvVJmP` | `dda3f5ddb60f395e50e17261d3b83b19a4775e1c619515366740cbbb43dd7cdf` |
 | `reflex-6__iCYvQJ6` | `dfed56f377904caeca826ceffbab5b9f9146c0eb192b2c13d17efae6d7babeab` |
 | `reflex-6__zvWXJ7j` | `8e3c543eda142afce93e0588bd20675f77dd13372c111c7b21bc9f5f3159a3e9` |
+
+## Five-case native expansion
+
+The native-install workflow now executes the complete frozen smoke pool rather than only the `reflex-6` pilot: `reflex-6`, `pylint-9`, `matplotlib-37`, `streamlink-14`, and `xarray-32`. These are the five predeclared `gate.auto_tasks`; the expansion does not select cases after observing the new treatment results. Together they retain the intended spread of what/where/how/why questions and include both vague semantic-entry tasks and explicit-symbol controls recorded in the baseline-only ledger above.
+
+Each case has a pinned source commit, exact hashed evidence excerpts, a source-reviewed reference, a calibrated two-model judge file, and retrieval entry targets. `pylint-9` narrows the inherited answer to the class-local static-analysis behavior actually shown by source. `xarray-32` removes the inherited unmeasured “2-3x” claim and treats its performance explanation as structural overhead rather than a measured speed ratio.
+
+For each of the five cases, OpenCode + GLM-5.2 and OpenCode + Qwen3.8-Max each run 10 baseline and 10 zg sessions under the same fixed sampling controls. The resulting 10 case/model cells use `max-parallel: 5`; this is execution concurrency, not additional statistical replication. Reports remain per case and model, followed by a five-case index. Retrieval-only and prompt experiments remain opt-in workflow stages.

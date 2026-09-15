@@ -1,0 +1,68 @@
+{
+  "case_id": "pylint-9",
+  "question": "What is the scope resolution chain for the namedtuple class attribute used as return type annotation in the nested class that affects static type checking in importing modules?",
+  "repo": {
+    "url": "https://github.com/pylint-dev/pylint.git",
+    "commit": "44740e5e5cdd2b80321a4f0ed4254213d058b9f6"
+  },
+  "evidence": [
+    {
+      "id": "nested_class_fixture",
+      "path": "tests/functional/u/used/used_before_assignment_type_annotations.py",
+      "start_line": 77,
+      "end_line": 90,
+      "text": "def nested_class_as_return_annotation():\n    \"\"\"A namedtuple as a class attribute is used as a return annotation\n\n    Taken from https://github.com/pylint-dev/pylint/issues/5568\"\"\"\n    class MyObject:\n        \"\"\"namedtuple as class attribute\"\"\"\n        Coords = namedtuple('Point', ['x', 'y'])\n\n        def my_method(self) -> Coords:\n            \"\"\"Return annotation is valid\"\"\"\n            # pylint: disable=unnecessary-pass\n            pass\n\n    print(MyObject)\n",
+      "sha256": "9e2fd04ff455f250605d8c6ed5e7ee847f7f0aeae1866506f0b0a4faa22f044b"
+    },
+    {
+      "id": "return_annotation_class_lookup",
+      "path": "pylint/checkers/variables.py",
+      "start_line": 2300,
+      "end_line": 2316,
+      "text": "        elif isinstance(defframe, nodes.ClassDef) and isinstance(\n            frame, nodes.FunctionDef\n        ):\n            # Special rules for function return annotations.\n            if node is frame.returns:\n                # Using a name defined earlier in the class containing the function.\n                if defframe.parent_of(frame.returns):\n                    annotation_return = True\n                    if frame.returns.name in defframe.locals:\n                        definition = defframe.locals[node.name][0]\n                        # no warning raised if a name was defined earlier in the class\n                        maybe_before_assign = (\n                            definition.lineno is not None\n                            and definition.lineno >= frame.lineno\n                        )\n                    else:\n                        maybe_before_assign = True\n",
+      "sha256": "e8f3e364e21ad97f5337835f17902cd8e5e21e810274c2b86443ad26ba59ee29"
+    },
+    {
+      "id": "class_scope_exception",
+      "path": "pylint/checkers/variables.py",
+      "start_line": 2560,
+      "end_line": 2598,
+      "text": "    def _ignore_class_scope(self, node: nodes.NodeNG) -> bool:\n        \"\"\"Return True if the node is in a local class scope, as an assignment.\n\n        Detect if we are in a local class scope, as an assignment.\n        For example, the following is fair game.\n\n        class A:\n           b = 1\n           c = lambda b=b: b * b\n\n        class B:\n           tp = 1\n           def func(self, arg: tp):\n               ...\n        class C:\n           tp = 2\n           def func(self, arg=tp):\n               ...\n        class C:\n           class Tp:\n               pass\n           class D(Tp):\n               ...\n        \"\"\"\n        name = node.name\n        frame = node.statement().scope()\n        in_annotation_or_default_or_decorator = self._defined_in_function_definition(\n            node, frame\n        )\n        in_ancestor_list = utils.is_ancestor_name(frame, node)\n        if in_annotation_or_default_or_decorator or in_ancestor_list:\n            frame_locals = frame.parent.scope().locals\n        else:\n            frame_locals = frame.locals\n        return not (\n            (isinstance(frame, nodes.ClassDef) or in_annotation_or_default_or_decorator)\n            and not self._in_lambda_or_comprehension_body(node, frame)\n            and name in frame_locals\n        )\n",
+      "sha256": "6f40576fafc27575541c115dbdee993ec6350cca716fcc2050536dc8b824872d"
+    },
+    {
+      "id": "annotation_context_detection",
+      "path": "pylint/checkers/utils.py",
+      "start_line": 1613,
+      "end_line": 1646,
+      "text": "def is_node_in_type_annotation_context(node: nodes.NodeNG) -> bool:\n    \"\"\"Check if node is in type annotation context.\n\n    Check for 'AnnAssign', function 'Arguments',\n    or part of function return type annotation.\n    \"\"\"\n    # pylint: disable=too-many-boolean-expressions\n    current_node, parent_node = node, node.parent\n    while True:\n        if (\n            (\n                isinstance(parent_node, nodes.AnnAssign)\n                and parent_node.annotation == current_node\n            )\n            or (\n                isinstance(parent_node, nodes.Arguments)\n                and current_node\n                in (\n                    *parent_node.annotations,\n                    *parent_node.posonlyargs_annotations,\n                    *parent_node.kwonlyargs_annotations,\n                    parent_node.varargannotation,\n                    parent_node.kwargannotation,\n                )\n            )\n            or (\n                isinstance(parent_node, nodes.FunctionDef)\n                and parent_node.returns == current_node\n            )\n        ):\n            return True\n        current_node, parent_node = parent_node, parent_node.parent\n        if isinstance(parent_node, nodes.Module):\n            return False\n",
+      "sha256": "050bbcf61369b6d21185535552578d30df8351cfe9751033addb4bbb28536d5a"
+    }
+  ],
+  "sufficient_sets": [
+    [
+      "nested_class_fixture",
+      "return_annotation_class_lookup",
+      "class_scope_exception",
+      "annotation_context_detection"
+    ]
+  ],
+  "reference_answer": "The concrete name is Coords, assigned as a MyObject class local before my_method declares `-> Coords`. Pylint identifies that Name as a function return-annotation context. Its class-scope exception switches the locals examined for a name in a function definition to the enclosing class scope; the used-before-assignment path also checks that the defining class contains the return annotation, that the name exists in the class locals, and that its definition precedes the method. Thus the relevant resolution is the method annotation context to the enclosing MyObject class locals, where Coords is found. The pinned excerpts do not establish a general four-scope runtime chain or any special behavior in importing modules; the fixture is about avoiding a false used-before-assignment diagnostic.",
+  "required_facts": [
+    "Identify Coords as a class attribute of the nested MyObject class and as my_method return annotation.",
+    "Explain that Pylint recognizes the return-annotation context and consults the enclosing class locals.",
+    "Explain that the earlier class-local definition prevents a false used-before-assignment finding; do not claim the excerpts prove special importing-module behavior."
+  ],
+  "reference_provenance": {
+    "kind": "source_corrected_reference",
+    "source_commit": "44740e5e5cdd2b80321a4f0ed4254213d058b9f6",
+    "original_task_id": "pylint:9",
+    "correction": "Replaces an unsupported four-scope/importing-module narrative with the class-local static-analysis path present at the pinned commit.",
+    "citations": [
+      "tests/functional/u/used/used_before_assignment_type_annotations.py:77-90",
+      "pylint/checkers/variables.py:2300-2316",
+      "pylint/checkers/variables.py:2560-2598",
+      "pylint/checkers/utils.py:1613-1646"
+    ]
+  }
+}

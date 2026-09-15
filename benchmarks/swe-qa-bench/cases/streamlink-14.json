@@ -1,0 +1,58 @@
+{
+  "case_id": "streamlink-14",
+  "question": "How does the stream retrieval method implement multi-stage validation schema composition for extracting and processing embedded media delivery platform metadata?",
+  "repo": {
+    "url": "https://github.com/streamlink/streamlink.git",
+    "commit": "ab1f36560005253ca6a290a614730bf18a29a7f9"
+  },
+  "evidence": [
+    {
+      "id": "page_schema_and_ids",
+      "path": "src/streamlink/plugins/cmmedia.py",
+      "start_line": 38,
+      "end_line": 64,
+      "text": "    def _get_streams(self):\n        self.author, iframe_url = self.session.http.get(\n            self.url,\n            schema=validate.Schema(\n                validate.parse_html(),\n                validate.union((\n                    validate.xml_xpath_string(\".//h1[contains(@class, 'btn-title')]/text()\"),\n                    validate.all(\n                        validate.xml_xpath_string(\".//script[contains(text(), '/embedIframeJs/')]/text()\"),\n                        validate.none_or_all(\n                            re.compile(r\"\"\"{getKs\\((?P<q>\")(?P<url>.+?)(?P=q)\"\"\"),\n                            validate.none_or_all(validate.get(\"url\"), validate.url()),\n                        ),\n                    ),\n                )),\n            ),\n        )\n        if not iframe_url:\n            return\n\n        m = re.search(r\"/p/(\\d+)/sp/(\\d+)/\", iframe_url)\n        if not m:\n            log.error(\"Failed to find partner IDs in IFRAME URL\")\n            return\n\n        p = m.group(1)\n        sp = m.group(2)\n",
+      "sha256": "00fe12f14bf59441e0b3c30f8283d6627f025893ad2a3a84b1b060a7918bfff0"
+    },
+    {
+      "id": "iframe_schema",
+      "path": "src/streamlink/plugins/cmmedia.py",
+      "start_line": 66,
+      "end_line": 100,
+      "text": "        json = self.session.http.get(\n            iframe_url,\n            schema=validate.Schema(\n                re.compile(r\"twindow\\.kalturaIframePackageData\\s*=\\s*({.*});[\\\\nt]*var isIE8\"),\n                validate.none_or_all(\n                    validate.get(1),\n                    validate.transform(lambda text: re.sub(r'\\\\\"', r'\"', text)),\n                    validate.parse_json(),\n                    validate.any(\n                        {\n                            \"entryResult\": {\n                                \"contextData\": {\n                                    \"isSiteRestricted\": bool,\n                                    \"isCountryRestricted\": bool,\n                                    \"isSessionRestricted\": bool,\n                                    \"isIpAddressRestricted\": bool,\n                                    \"isUserAgentRestricted\": bool,\n                                    \"flavorAssets\": [\n                                        {\n                                            \"id\": str,\n                                        },\n                                    ],\n                                },\n                                \"meta\": {\n                                    \"id\": str,\n                                    \"name\": str,\n                                    \"categories\": validate.any(None, str),\n                                },\n                            },\n                        },\n                        {\"error\": str},\n                    ),\n                ),\n            ),\n        )\n",
+      "sha256": "3b7283061255bbe917b27fefe642e363ffc0dc10cf187bdcca9756c32ffbf5e6"
+    },
+    {
+      "id": "validated_data_consumption",
+      "path": "src/streamlink/plugins/cmmedia.py",
+      "start_line": 102,
+      "end_line": 126,
+      "text": "        if not json:\n            return\n\n        if \"error\" in json:\n            log.error(f\"API error: {json['error']}\")\n            return\n\n        json = json.get(\"entryResult\")\n\n        if self.is_restricted(json[\"contextData\"]):\n            return\n\n        self.id = json[\"meta\"][\"id\"]\n        self.title = json[\"meta\"][\"name\"]\n        self.category = json[\"meta\"][\"categories\"]\n\n        for asset in json[\"contextData\"][\"flavorAssets\"]:\n            yield from HLSStream.parse_variant_playlist(\n                self.session,\n                (\n                    f\"https://cdnapisec.kaltura.com/p/{p}/sp/{sp}/playManifest/entryId/{json['meta']['id']}\"\n                    + f\"/flavorIds/{asset['id']}/format/applehttp/protocol/https/a.m3u8\"\n                ),\n                name_fmt=\"{pixels}_{bitrate}\",\n            ).items()\n",
+      "sha256": "60d211305618047df38d2506ffdb21c3864c593b9a49995119c671ec6feb5dc1"
+    }
+  ],
+  "sufficient_sets": [
+    [
+      "page_schema_and_ids",
+      "iframe_schema",
+      "validated_data_consumption"
+    ]
+  ],
+  "reference_answer": "_get_streams performs two HTTP/schema stages. The page request parses HTML and uses validate.union to return an h1 author plus an iframe URL extracted from a script; the URL branch composes XPath, regex capture, get(\"url\"), URL validation, and none_or_all. It stops when the iframe URL or its partner IDs are absent. The iframe request regex-extracts the embedded Kaltura package, selects the capture, unescapes quotes, parses JSON, and validate.any accepts either a typed entryResult schema or an error object, again allowing no result. It then rejects empty/error/restricted responses, copies validated metadata, and forms HLS variant URLs from the validated flavor asset IDs and partner IDs.",
+  "required_facts": [
+    "Describe the first HTML schema using union to extract author and a validated iframe URL.",
+    "Describe the second composed regex/transform/JSON schema and its success-versus-error alternatives.",
+    "Describe the validation gates and downstream use of validated partner IDs, metadata, restrictions, and flavor assets to yield HLS streams."
+  ],
+  "reference_provenance": {
+    "kind": "source_reviewed_reference",
+    "source_commit": "ab1f36560005253ca6a290a614730bf18a29a7f9",
+    "original_task_id": "streamlink:14",
+    "correction": "Expands the terse upstream reference into the actual two-request gates and downstream use of typed data.",
+    "citations": [
+      "src/streamlink/plugins/cmmedia.py:38-64",
+      "src/streamlink/plugins/cmmedia.py:66-100",
+      "src/streamlink/plugins/cmmedia.py:102-126"
+    ]
+  }
+}

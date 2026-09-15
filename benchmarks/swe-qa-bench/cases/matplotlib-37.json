@@ -1,0 +1,88 @@
+{
+  "case_id": "matplotlib-37",
+  "question": "Where does the FontInfo NamedTuple propagate font metrics and glyph data through the mathematical text rendering pipeline, and what control flow determines whether the postscript_name or the FT2Font object is used at different stages of character rendering?",
+  "repo": {
+    "url": "https://github.com/matplotlib/matplotlib.git",
+    "commit": "a5e1f6086e92d5cc0a23f85685d03d85b89a8395"
+  },
+  "evidence": [
+    {
+      "id": "output_conversion",
+      "path": "lib/matplotlib/_mathtext.py",
+      "start_line": 118,
+      "end_line": 176,
+      "text": "class Output:\n    r\"\"\"\n    Result of `ship`\\ping a box: lists of positioned glyphs and rectangles.\n\n    This class is not exposed to end users, but converted to a `VectorParse` or\n    a `RasterParse` by `.MathTextParser.parse`.\n    \"\"\"\n\n    def __init__(self, box: Box):\n        self.box = box\n        self.glyphs: list[tuple[float, float, FontInfo]] = []  # (ox, oy, info)\n        self.rects: list[tuple[float, float, float, float]] = []  # (x1, y1, x2, y2)\n\n    def to_vector(self) -> VectorParse:\n        w, h, d = map(\n            np.ceil, [self.box.width, self.box.height, self.box.depth])\n        gs = [(info.font, info.fontsize, info.num, ox, h - oy + info.offset)\n              for ox, oy, info in self.glyphs]\n        rs = [(x1, h - y2, x2 - x1, y2 - y1)\n              for x1, y1, x2, y2 in self.rects]\n        return VectorParse(w, h + d, d, gs, rs)\n\n    def to_raster(self, *, antialiased: bool) -> RasterParse:\n        # Metrics y's and mathtext y's are oriented in opposite directions,\n        # hence the switch between ymin and ymax.\n        xmin = min([*[ox + info.metrics.xmin for ox, oy, info in self.glyphs],\n                    *[x1 for x1, y1, x2, y2 in self.rects], 0]) - 1\n        ymin = min([*[oy - info.metrics.ymax for ox, oy, info in self.glyphs],\n                    *[y1 for x1, y1, x2, y2 in self.rects], 0]) - 1\n        xmax = max([*[ox + info.metrics.xmax for ox, oy, info in self.glyphs],\n                    *[x2 for x1, y1, x2, y2 in self.rects], 0]) + 1\n        ymax = max([*[oy - info.metrics.ymin for ox, oy, info in self.glyphs],\n                    *[y2 for x1, y1, x2, y2 in self.rects], 0]) + 1\n        w = xmax - xmin\n        h = ymax - ymin - self.box.depth\n        d = ymax - ymin - self.box.height\n        image = np.zeros((math.ceil(h + max(d, 0)), math.ceil(w)), np.uint8)\n\n        # Ideally, we could just use self.glyphs and self.rects here, shifting\n        # their coordinates by (-xmin, -ymin), but this yields slightly\n        # different results due to floating point slop; shipping twice is the\n        # old approach and keeps baseline images backcompat.\n        shifted = ship(self.box, (-xmin, -ymin))\n\n        for ox, oy, info in shifted.glyphs:\n            info.font.draw_glyph_to_bitmap(\n                image, int(ox), int(oy - info.metrics.iceberg), info.glyph,\n                antialiased=antialiased)\n        for x1, y1, x2, y2 in shifted.rects:\n            height = max(int(y2 - y1) - 1, 0)\n            if height == 0:\n                center = (y2 + y1) / 2\n                y = int(center - (height + 1) / 2)\n            else:\n                y = int(y1)\n            x1 = math.floor(x1)\n            x2 = math.ceil(x2)\n            image[y:y+height+1, x1:x2+1] = 0xff\n        return RasterParse(0, 0, w, h + d, d, image)\n",
+      "sha256": "4e858007365461486105fe49a459be503a5b6bea77648d7c5d3c79fe3baeb44e"
+    },
+    {
+      "id": "font_info_fields",
+      "path": "lib/matplotlib/_mathtext.py",
+      "start_line": 211,
+      "end_line": 218,
+      "text": "class FontInfo(NamedTuple):\n    font: FT2Font\n    fontsize: float\n    postscript_name: str\n    metrics: FontMetrics\n    num: int\n    glyph: Glyph\n    offset: float\n",
+      "sha256": "0391639bfccc68f76cb41dbfce72bd0ad8c1b6177becf195f39bac70db6876bc"
+    },
+    {
+      "id": "append_font_info",
+      "path": "lib/matplotlib/_mathtext.py",
+      "start_line": 281,
+      "end_line": 296,
+      "text": "\n        Returns\n        -------\n        FontMetrics\n        \"\"\"\n        info = self._get_info(font, font_class, sym, fontsize, dpi)\n        return info.metrics\n\n    def render_glyph(self, output: Output, ox: float, oy: float, font: str,\n                     font_class: str, sym: str, fontsize: float, dpi: float) -> None:\n        \"\"\"\n        At position (*ox*, *oy*), draw the glyph specified by the remaining\n        parameters (see `get_metrics` for their detailed description).\n        \"\"\"\n        info = self._get_info(font, font_class, sym, fontsize, dpi)\n        output.glyphs.append((ox, oy, info))\n",
+      "sha256": "0d17aa8458b56f3c169379486e6f3e59fe1e4fda4f7eb60d6cd5fc7659b16f52"
+    },
+    {
+      "id": "construct_font_info",
+      "path": "lib/matplotlib/_mathtext.py",
+      "start_line": 373,
+      "end_line": 402,
+      "text": "    def _get_info(self, fontname: str, font_class: str, sym: str, fontsize: float,\n                  dpi: float) -> FontInfo:\n        font, num, slanted = self._get_glyph(fontname, font_class, sym)\n        font.set_size(fontsize, dpi)\n        glyph = font.load_char(num, flags=self.load_glyph_flags)\n\n        xmin, ymin, xmax, ymax = (val / 64 for val in glyph.bbox)\n        offset = self._get_offset(font, glyph, fontsize, dpi)\n        metrics = FontMetrics(\n            advance=glyph.linearHoriAdvance / 65536,\n            height=glyph.height / 64,\n            width=glyph.width / 64,\n            xmin=xmin,\n            xmax=xmax,\n            ymin=ymin + offset,\n            ymax=ymax + offset,\n            # iceberg is the equivalent of TeX's \"height\"\n            iceberg=glyph.horiBearingY / 64 + offset,\n            slanted=slanted\n        )\n\n        return FontInfo(\n            font=font,\n            fontsize=fontsize,\n            postscript_name=font.postscript_name,\n            metrics=metrics,\n            num=num,\n            glyph=glyph,\n            offset=offset\n        )\n",
+      "sha256": "ddaae0c1bda2ef2fb31cf91627cd36a21ed901ddb5a5d4abf5bb7d37f0da296f"
+    },
+    {
+      "id": "char_render_delegation",
+      "path": "lib/matplotlib/_mathtext.py",
+      "start_line": 1125,
+      "end_line": 1129,
+      "text": "    def render(self, output: Output, x: float, y: float) -> None:\n        self.fontset.render_glyph(\n            output, x, y,\n            self.font, self.font_class, self.c, self.fontsize, self.dpi)\n\n",
+      "sha256": "3b874a90245d3d2afb7a18e0ded655bf0ee18d1bcec96851721539a37df73078"
+    },
+    {
+      "id": "postscript_backend_consumption",
+      "path": "lib/matplotlib/backends/backend_ps.py",
+      "start_line": 821,
+      "end_line": 842,
+      "text": "    def draw_mathtext(self, gc, x, y, s, prop, angle):\n        \"\"\"Draw the math text using matplotlib.mathtext.\"\"\"\n        width, height, descent, glyphs, rects = \\\n            self._text2path.mathtext_parser.parse(s, 72, prop)\n        self.set_color(*gc.get_rgb())\n        self._pswriter.write(\n            f\"gsave\\n\"\n            f\"{x:g} {y:g} translate\\n\"\n            f\"{angle:g} rotate\\n\")\n        lastfont = None\n        for font, fontsize, num, ox, oy in glyphs:\n            self._character_tracker.track_glyph(font, num)\n            if (font.postscript_name, fontsize) != lastfont:\n                lastfont = font.postscript_name, fontsize\n                self._pswriter.write(\n                    f\"/{font.postscript_name} {fontsize} selectfont\\n\")\n            glyph_name = font.get_glyph_name(font.get_char_index(num))\n            self._pswriter.write(\n                f\"{ox:g} {oy:g} moveto\\n\"\n                f\"/{glyph_name} glyphshow\\n\")\n        for ox, oy, w, h in rects:\n            self._pswriter.write(f\"{ox} {oy} {w} {h} rectfill\\n\")\n",
+      "sha256": "197ef83892a017c62e87e742123b842a98353779187b0f3ea4fb9910a3481b35"
+    }
+  ],
+  "sufficient_sets": [
+    [
+      "font_info_fields",
+      "construct_font_info",
+      "append_font_info",
+      "output_conversion",
+      "char_render_delegation",
+      "postscript_backend_consumption"
+    ]
+  ],
+  "reference_answer": "TruetypeFonts._get_info obtains an FT2Font and glyph, loads the character, derives FontMetrics, and returns FontInfo carrying the font object, its postscript_name, metrics, glyph number/object, size, and offset. Char.render delegates to Fonts.render_glyph; render_glyph calls _get_info and stores the FontInfo with position in Output.glyphs. Output.to_vector projects each record to an FT2Font-based glyph tuple, while Output.to_raster uses info.metrics and calls info.font.draw_glyph_to_bitmap with info.glyph. The PostScript backend consumes the vector tuples: it reads font.postscript_name for font selection and uses the same FT2Font for glyph tracking/name lookup. There is therefore no earlier branch that substitutes the string for the object: FontInfo carries both, conversion keeps the FT2Font, and a backend chooses which attribute or method it needs.",
+  "required_facts": [
+    "Explain where FontInfo is constructed and what font, metrics, glyph, and postscript-name data it carries.",
+    "Trace Char.render through Fonts.render_glyph into Output.glyphs and then vector/raster conversion.",
+    "Explain that vector/raster consumers retain/use FT2Font, while the PostScript backend reads its postscript_name for font selection; do not invent a substitution branch."
+  ],
+  "reference_provenance": {
+    "kind": "source_reviewed_reference",
+    "source_commit": "a5e1f6086e92d5cc0a23f85685d03d85b89a8395",
+    "original_task_id": "matplotlib:37",
+    "correction": "Clarifies that vector output carries FT2Font and backend_ps later reads font.postscript_name; no FontInfo branch replaces the object with a string.",
+    "citations": [
+      "lib/matplotlib/_mathtext.py:118-176",
+      "lib/matplotlib/_mathtext.py:211-218",
+      "lib/matplotlib/_mathtext.py:281-296",
+      "lib/matplotlib/_mathtext.py:373-402",
+      "lib/matplotlib/_mathtext.py:1125-1129",
+      "lib/matplotlib/backends/backend_ps.py:821-842"
+    ]
+  }
+}

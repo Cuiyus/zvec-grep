@@ -1,0 +1,78 @@
+{
+  "case_id": "xarray-32",
+  "question": "Why do performance bottlenecks emerge from the sequential invocation of from_variables(), from_xindex(), and assign_coords() operations on large datasets, and how does the overhead of variable materialization during coordinate transformation impact throughput compared to direct index assignment?",
+  "repo": {
+    "url": "https://github.com/pydata/xarray.git",
+    "commit": "40119bf35c53fc222934894d842cfc07b2e264bf"
+  },
+  "evidence": [
+    {
+      "id": "from_xindex_materialization",
+      "path": "xarray/core/coordinates.py",
+      "start_line": 363,
+      "end_line": 389,
+      "text": "    def from_xindex(cls, index: Index) -> Self:\n        \"\"\"Create Xarray coordinates from an existing Xarray index.\n\n        Parameters\n        ----------\n        index : Index\n            Xarray index object. The index must support generating new\n            coordinate variables from itself.\n\n        Returns\n        -------\n        coords : Coordinates\n            A collection of Xarray indexed coordinates created from the index.\n\n        \"\"\"\n        variables = index.create_variables()\n\n        if not variables:\n            raise ValueError(\n                \"`Coordinates.from_xindex()` only supports index objects that can generate \"\n                \"new coordinate variables from scratch. The given index (shown below) did not \"\n                f\"create any coordinate.\\n{index!r}\"\n            )\n\n        indexes = dict.fromkeys(variables, index)\n\n        return cls(coords=variables, indexes=indexes)\n",
+      "sha256": "a72eef06526d0a58f122ece4ae4ec065bec521d62a774742295c9be0f764dbd3"
+    },
+    {
+      "id": "assign_coords_copy_update",
+      "path": "xarray/core/common.py",
+      "start_line": 653,
+      "end_line": 665,
+      "text": "        from xarray.core.coordinates import Coordinates\n\n        coords_combined = either_dict_or_kwargs(coords, coords_kwargs, \"assign_coords\")\n        data = self.copy(deep=False)\n\n        results: Coordinates | dict[Hashable, Any]\n        if isinstance(coords, Coordinates):\n            results = coords\n        else:\n            results = self._calc_assign_results(coords_combined)\n\n        data.coords.update(results)\n        return data\n",
+      "sha256": "aec64674f61c22a61b8eb775b91449aba9c05ceded4ff8169e442dcebfdb98f4"
+    },
+    {
+      "id": "coordinates_update_merge",
+      "path": "xarray/core/coordinates.py",
+      "start_line": 567,
+      "end_line": 600,
+      "text": "    def update(self, other: Mapping[Any, Any]) -> None:\n        \"\"\"Update this Coordinates variables with other coordinate variables.\"\"\"\n\n        if not len(other):\n            return\n\n        other_coords: Coordinates\n\n        if isinstance(other, Coordinates):\n            # Coordinates object: just pass it (default indexes won't be created)\n            other_coords = other\n        else:\n            other_coords = create_coords_with_default_indexes(\n                getattr(other, \"variables\", other)\n            )\n\n        # Discard original indexed coordinates prior to merge allows to:\n        # - fail early if the new coordinates don't preserve the integrity of existing\n        #   multi-coordinate indexes\n        # - drop & replace coordinates without alignment (note: we must keep indexed\n        #   coordinates extracted from the DataArray objects passed as values to\n        #   `other` - if any - as those are still used for aligning the old/new coordinates)\n        coords_to_align = drop_indexed_coords(set(other_coords) & set(other), self)\n\n        coords, indexes = merge_coords(\n            [coords_to_align, other_coords],\n            priority_arg=1,\n            indexes=coords_to_align.xindexes,\n        )\n\n        # special case for PandasMultiIndex: updating only its dimension coordinate\n        # is still allowed but depreciated.\n        # It is the only case where we need to actually drop coordinates here (multi-index levels)\n        # TODO: remove when removing PandasMultiIndex's dimension coordinate.\n",
+      "sha256": "3de0f6251d55644e030dc171def3bc2927bf1b7f2b67f5de47193c2cd8a80246"
+    },
+    {
+      "id": "set_xindex_path",
+      "path": "xarray/core/dataset.py",
+      "start_line": 4946,
+      "end_line": 5007,
+      "text": "        coord_vars = {name: self._variables[name] for name in coord_names}\n\n        index = index_cls.from_variables(coord_vars, options=options)\n\n        new_coord_vars = index.create_variables(coord_vars)\n\n        # special case for setting a pandas multi-index from level coordinates\n        # TODO: remove it once we depreciate pandas multi-index dimension (tuple\n        # elements) coordinate\n        if isinstance(index, PandasMultiIndex):\n            coord_names = [index.dim] + list(coord_names)\n\n        # Check for extra variables that don't match the coordinate names\n        extra_vars = set(new_coord_vars) - set(coord_names)\n        if extra_vars:\n            extra_vars_str = \", \".join(f\"'{name}'\" for name in extra_vars)\n            coord_names_str = \", \".join(f\"'{name}'\" for name in coord_names)\n            raise ValueError(\n                f\"The index created extra variables {extra_vars_str} that are not \"\n                f\"in the list of coordinates {coord_names_str}. \"\n                f\"Use a factory method pattern instead:\\n\"\n                f\"  index = {index_cls.__name__}.from_variables(ds, {list(coord_names)!r})\\n\"\n                f\"  coords = xr.Coordinates.from_xindex(index)\\n\"\n                f\"  ds = ds.assign_coords(coords)\"\n            )\n\n        variables: dict[Hashable, Variable]\n        indexes: dict[Hashable, Index]\n\n        if len(coord_names) == 1:\n            variables = self._variables.copy()\n            indexes = self._indexes.copy()\n\n            name = list(coord_names).pop()\n            if name in new_coord_vars:\n                variables[name] = new_coord_vars[name]\n            indexes[name] = index\n        else:\n            # reorder variables and indexes so that coordinates having the same\n            # index are next to each other\n            variables = {}\n            for name, var in self._variables.items():\n                if name not in coord_names:\n                    variables[name] = var\n\n            indexes = {}\n            for name, idx in self._indexes.items():\n                if name not in coord_names:\n                    indexes[name] = idx\n\n            for name in coord_names:\n                try:\n                    variables[name] = new_coord_vars[name]\n                except KeyError:\n                    variables[name] = self._variables[name]\n                indexes[name] = index\n\n        return self._replace(\n            variables=variables,\n            coord_names=self._coord_names | set(coord_names),\n            indexes=indexes,\n        )\n",
+      "sha256": "b9a91fc4f11c998ac9e11f858ac66ee80e80104a89d13ec82dc212cd62d5ffbd"
+    },
+    {
+      "id": "factory_pattern_fixture",
+      "path": "xarray/tests/test_indexes.py",
+      "start_line": 734,
+      "end_line": 782,
+      "text": "class IndexWithExtraVariables(Index):\n    @classmethod\n    def from_variables(cls, variables, *, options=None):\n        return cls()\n\n    def create_variables(self, variables=None):\n        if variables is None:\n            # For Coordinates.from_xindex(), return all variables the index can create\n            return {\n                \"time\": Variable(dims=(\"time\",), data=[1, 2, 3]),\n                \"valid_time\": Variable(\n                    dims=(\"time\",),\n                    data=[2, 3, 4],  # time + 1\n                    attrs={\"description\": \"time + 1\"},\n                ),\n            }\n\n        result = dict(variables)\n        if \"time\" in variables:\n            result[\"valid_time\"] = Variable(\n                dims=(\"time\",),\n                data=variables[\"time\"].data + 1,\n                attrs={\"description\": \"time + 1\"},\n            )\n        return result\n\n\ndef test_set_xindex_with_extra_variables() -> None:\n    \"\"\"Test that set_xindex raises an error when custom index creates extra variables.\"\"\"\n\n    ds = xr.Dataset(coords={\"time\": [1, 2, 3]}).reset_index(\"time\")\n\n    # Test that set_xindex raises error for extra variables\n    with pytest.raises(ValueError, match=\"extra variables 'valid_time'\"):\n        ds.set_xindex(\"time\", IndexWithExtraVariables)\n\n\ndef test_set_xindex_factory_method_pattern() -> None:\n    ds = xr.Dataset(coords={\"time\": [1, 2, 3]}).reset_index(\"time\")\n\n    # Test the recommended factory method pattern\n    coord_vars = {\"time\": ds._variables[\"time\"]}\n    index = IndexWithExtraVariables.from_variables(coord_vars)\n    coords = xr.Coordinates.from_xindex(index)\n    result = ds.assign_coords(coords)\n\n    assert \"time\" in result.variables\n    assert \"valid_time\" in result.variables\n    assert_array_equal(result.valid_time.data, result.time.data + 1)\n",
+      "sha256": "e048a7e50107be58208585189a4776a07e148d7f1ffa60ec577afc70aa13efce"
+    }
+  ],
+  "sufficient_sets": [
+    [
+      "from_xindex_materialization",
+      "assign_coords_copy_update",
+      "coordinates_update_merge",
+      "set_xindex_path",
+      "factory_pattern_fixture"
+    ]
+  ],
+  "reference_answer": "The factory pattern separates work into three object-building steps: Index.from_variables constructs the index; Coordinates.from_xindex immediately calls index.create_variables(), builds a name-to-index mapping, and constructs Coordinates; assign_coords makes a shallow copy of the caller and updates its Coordinates, whose update path merges coordinate/index mappings before returning a new object. This adds Python object construction, mapping creation/copying, and coordinate merge bookkeeping as the number of variables grows. Dataset.set_xindex is a more integrated path: it constructs the index, calls create_variables with existing coordinate variables, updates copied/rebuilt variable and index mappings, and replaces the dataset once. However, at this commit set_xindex deliberately rejects indexes that create extra coordinate variables and tells callers to use the factory pattern. The excerpts establish structural overhead and an optimization opportunity, but they do not benchmark throughput, prove data-buffer copying, or justify a numeric speedup such as 2–3x.",
+  "required_facts": [
+    "Trace the factory pattern through index creation, from_xindex create_variables/mapping construction, and assign_coords shallow-copy plus coordinate merge/update.",
+    "Compare with set_xindex as an integrated mapping-update path while noting it rejects extra variables and recommends the factory pattern for that case.",
+    "State the evidence boundary: the source supports extra object/mapping/merge work, but not a measured throughput ratio or universal data copying claim."
+  ],
+  "reference_provenance": {
+    "kind": "source_corrected_reference",
+    "source_commit": "40119bf35c53fc222934894d842cfc07b2e264bf",
+    "original_task_id": "xarray:32",
+    "correction": "Removes unsupported 2-3x and repeated-data-materialization claims; source establishes control-flow overhead but contains no performance measurement.",
+    "citations": [
+      "xarray/core/coordinates.py:363-389",
+      "xarray/core/common.py:653-665",
+      "xarray/core/coordinates.py:567-600",
+      "xarray/core/dataset.py:4946-5007",
+      "xarray/tests/test_indexes.py:734-782"
+    ]
+  }
+}
