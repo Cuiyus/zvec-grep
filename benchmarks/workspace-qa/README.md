@@ -1,9 +1,10 @@
 # Qoder + Qwen3.8-Max Workspace QA
 
 **Current status: the documented `zg install` integration passed its fresh
-[native probe](https://github.com/Cuiyus/zvec-grep/actions/runs/34919506961).
-The new task-3 smoke and 200-trial formal matrix remain pending; no
-standard-installation efficacy result is available.**
+[native probe](https://github.com/Cuiyus/zvec-grep/actions/runs/34919506961) and
+[task-3 smoke](https://github.com/Cuiyus/zvec-grep/actions/runs/34919707888).
+The separate 200-trial formal matrix is running in the latter workflow; no
+completed standard-installation efficacy result is available.**
 
 The earlier implementation used released zg 0.2.2 through a benchmark-managed
 MCP bridge and manually assembled Qoder configuration. That did not satisfy the
@@ -102,8 +103,13 @@ sequence is offline validation, a tiny probe of the **standard-installed** path,
 a fresh task-3 smoke pair, and then the 10-task / 200-trial formal matrix.
 The native probe passed with one successful vector retrieval; its original
 artifact hashes and installation evidence are recorded in
-[native-probe-validation.json](data/native-probe-validation.json). The new smoke
-pair must also pass before formal trials start.
+[native-probe-validation.json](data/native-probe-validation.json). The fresh
+smoke pair also passed; [native-smoke-validation.json](data/native-smoke-validation.json)
+records its two completed and judged answers, including one successful QA zg
+call. Both rubric scores were 18/21. Input tokens were 169,184 baseline and
+466,308 with-zg; these single-pair observations are retained unchanged and
+excluded from the formal matrix. Smoke validation establishes pipeline readiness,
+not a token-saving or quality-improvement claim.
 An old bridge probe or smoke cannot unlock the corrected formal run, even when
 its old code hashes match or its bridge retrieval succeeded.
 
@@ -191,5 +197,5 @@ No automatic recovery of the legacy bridge run may fill the new experiment.
 python3.12 -m unittest discover -s benchmarks/workspace-qa/tests -v
 ```
 
-The standard-installation probe passed and 164 offline checks passed. No
-standard-installation smoke or 200-trial result is claimed here.
+The standard-installation probe, fresh smoke and 164 offline checks passed.
+The formal matrix is still in progress; no completed 200-trial result is claimed.
