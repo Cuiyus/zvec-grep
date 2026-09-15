@@ -27,7 +27,8 @@ def native_index(source: Path, index: Path, logs: Path, cache: Path, *, image: s
                  check_only: bool = False) -> dict:
     index.mkdir(parents=True, exist_ok=True)
     (index / "locks").mkdir(exist_ok=True)
-    command = remote_environment(r.docker_command(image, source, logs, cache, index=index))
+    # Reap native zg's detached daemon instead of leaving it under Python PID 1.
+    command = remote_environment(r.docker_command(image, source, logs, cache, index=index) + ["--init"])
     command += [image, "python3", "/opt/qa/native-index.py", "--output", "/logs/native-index.json"]
     if check_only:
         command.append("--check-only")
@@ -50,7 +51,7 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
     spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": "Qwen3.8-Max",
             "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits}
     r.write_json(agent / "native-spec.json", spec)
-    command = r.docker_command(image, source, agent, cache, index=index)
+    command = r.docker_command(image, source, agent, cache, index=index) + ["--init"]
     if zg:
         command = remote_environment(command)
     name = "native-qa-" + hashlib.sha256(str(agent).encode()).hexdigest()[:12]
@@ -114,6 +115,16 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
         result["status"] = "measurement_failure"
     if result.get("installation_error") and result["status"] == "completed":
         result["status"] = "contract_failure"
+    try:
+        from qoder_probe import native_startup_evidence
+        result["startup_evidence"] = native_startup_evidence(agent)
+        if (result["startup_evidence"]["status"] in {"failed", "incomplete"}
+                and result["status"] == "completed"):
+            result["status"] = "contract_failure"
+    except (OSError, ValueError, TypeError) as error:
+        result["startup_evidence_error"] = r.redact(str(error))
+        if result["status"] == "completed":
+            result["status"] = "contract_failure"
     result["finished_at"] = r.now()
     return result
 

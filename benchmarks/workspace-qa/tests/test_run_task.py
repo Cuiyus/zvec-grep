@@ -30,6 +30,7 @@ class SmokeGateTests(unittest.TestCase):
         agent = self.runs / trial_id / "agent"
         installation = write_installation(agent)
         write_native(agent, statuses)
+        write_native(self.runs / "3-r01-baseline/agent", ())
         dump(self.runs / "trial-results.json", {"protocol": PROTOCOL, "task_id": "3", "repetitions_per_profile": 1, "trials": [
             {"trial_id": "3-r01-baseline", "task_id": "3", "profile": "baseline", "repetition": 1,
              "status": "completed", "input_tokens": 374316, "tool_calls": 43, "wall_seconds": 409.309},
@@ -103,6 +104,22 @@ class SmokeGateTests(unittest.TestCase):
                     ledger["trials"][1]["installation"]["manifest_sha256"] = "stale"
                 dump(path, ledger)
                 self.assertEqual(module.smoke_validation(self.runs, "smoke")["status"], "invalid")
+
+    def test_security_startup_failure_in_either_profile_invalidates_smoke(self):
+        self.probe_fixture()
+        for profile in ("baseline", "with-zg"):
+            with self.subTest(profile=profile):
+                self.fixture([True])
+                path = self.runs / f"3-r01-{profile}/agent/qodercli-stream.jsonl"
+                event = {"type": "system", "subtype": "hook_response", "hook_id": "security",
+                    "hook_name": "Initializing Qoder Security", "hook_event": "SessionStart",
+                    "exit_code": 127, "outcome": "error"}
+                path.write_text(json.dumps(event) + "\n" + path.read_text())
+                result = module.smoke_validation(self.runs, "smoke")
+                self.assertEqual(result["status"], "invalid")
+                check = next(row for row in result["startup_checks"] if row["profile"] == profile)
+                self.assertEqual(check["status"], "failed")
+                self.assertEqual(check["security_hooks"][0]["responses"][0]["exit_code"], 127)
 
     def test_batch_never_filters_tool_choice(self):
         self.fixture([])

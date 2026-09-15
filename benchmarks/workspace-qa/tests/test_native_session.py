@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -37,7 +38,8 @@ class NativeSessionTests(unittest.TestCase):
                  "limits": {"model_requests": 30, "tool_calls": 80, "input_tokens": 1000000, "wall_seconds": 900}}
         return home, root, logs, env, value
 
-    def fake_runtime(self, home, root, logs, calls, *, fail_phase=None, mutate=False, credential_in_config=False):
+    def fake_runtime(self, home, root, logs, calls, *, fail_phase=None, mutate=False, credential_in_config=False,
+                     settings_change=None):
         def execute(command, **kwargs):
             calls.append((command, kwargs))
             stdout, stderr, returncode = "", "", 0
@@ -75,6 +77,11 @@ class NativeSessionTests(unittest.TestCase):
                 if mutate:
                     with (home / ".qoder/AGENTS.md").open("a") as out:
                         out.write("changed by agent")
+                if settings_change:
+                    path = home / ".qoder/settings.json"
+                    data = json.loads(path.read_text())
+                    settings_change(data)
+                    path.write_text(json.dumps(data, indent=2))
             elif command != ["zg", "server", "off"]:
                 self.fail(f"unexpected command {command}")
             if fail_phase and command[:len(fail_phase)] == fail_phase:
@@ -172,6 +179,75 @@ class NativeSessionTests(unittest.TestCase):
             self.assertEqual(result, 2)
             self.assertEqual(manifest["qa_session_returncode"], 0)
             self.assertFalse(manifest["files_unchanged_after_session"])
+            self.assertIn("AGENTS.md:$", manifest["error"]["message"])
+            self.assertTrue((values[2] / "installation/after/AGENTS.md").is_file())
+
+    def test_observed_native_security_defaults_preserve_managed_installation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            values = self.fixture(temp)
+            result, _, manifest = self.run_fake(*values, settings_change=lambda data: data.update(
+                securityScan={"l1StaticCheck": True, "l2LightweightScan": True, "l3DeepScan": True}))
+            self.assertEqual(result, 0)
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertFalse(manifest["files_unchanged_after_session"])
+            comparison = manifest["installation_comparison"]
+            self.assertTrue(comparison["valid"])
+            self.assertTrue(comparison["managed_contents_unchanged"])
+            self.assertEqual(comparison["unexpected_changes"], [])
+            self.assertEqual(comparison["allowed_changes"], [{"file": "settings.json", "field": "$.securityScan",
+                              "reason": "qoder_1.1.45_native_security_scan_defaults"}])
+            logs = values[2]
+            before = json.loads((logs / "installation/settings.json").read_text())
+            after = json.loads((logs / "installation/after/settings.json").read_text())
+            self.assertNotIn("securityScan", before)
+            self.assertEqual(after.pop("securityScan"), native.QODER_SECURITY_SCAN_DEFAULTS)
+            self.assertEqual(before, after)
+            self.assertEqual(set(manifest["after_files"]), set(native.INSTALL_FILES))
+
+    def test_unknown_settings_or_nondefault_security_changes_remain_failures(self):
+        changes = [
+            (lambda data: data.update(hooks={"SessionStart": ["unexpected command"]}), "settings.json:$.hooks"),
+            (lambda data: data["mcpServers"]["zvec_grep"].update(args=["server", "--http"]),
+             "settings.json:$.mcpServers.zvec_grep.args"),
+            (lambda data: data.update(securityScan={"l1StaticCheck": False, "l2LightweightScan": True, "l3DeepScan": True}),
+             "settings.json:$.securityScan"),
+            (lambda data: data.update(securityScan={"l1StaticCheck": 1, "l2LightweightScan": True, "l3DeepScan": True}),
+             "settings.json:$.securityScan"),
+            (lambda data: data.pop("permissions"), "settings.json:$.permissions"),
+        ]
+        for change, expected in changes:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temp:
+                values = self.fixture(temp)
+                result, _, manifest = self.run_fake(*values, settings_change=change)
+                self.assertEqual(result, 2)
+                self.assertFalse(manifest["installation_comparison"]["valid"])
+                self.assertIn(expected, manifest["error"]["message"])
+                self.assertTrue((values[2] / "installation/after/settings.json").is_file())
+                with self.assertRaisesRegex(ValueError, re.escape(expected)):
+                    native.validate_installation(values[2])
+
+    def test_final_validation_requires_after_files_and_recomputes_comparison(self):
+        with tempfile.TemporaryDirectory() as temp:
+            values = self.fixture(temp)
+            _, _, manifest = self.run_fake(*values)
+            logs = values[2]
+            with patch.object(native, "STANDARD_GUIDANCE_SHA256", hashlib.sha256(GUIDANCE_FIXTURE).hexdigest()):
+                for key in ("after_files", "qa_session_returncode", "installation_comparison"):
+                    changed = dict(manifest)
+                    changed.pop(key)
+                    (logs / "install-manifest.json").write_text(json.dumps(changed))
+                    with self.assertRaises(ValueError):
+                        native.validate_installation(logs)
+                    self.assertTrue(native.validate_installation(logs, stage="setup")["valid"])
+                (logs / "install-manifest.json").write_text(json.dumps(manifest))
+                path = logs / "installation/after/settings.json"
+                path.write_text('{"mcpServers":{}}')
+                with self.assertRaisesRegex(ValueError, "after-session.*hash/path"):
+                    native.validate_installation(logs)
+                manifest["after_files"]["settings.json"]["sha256"] = native.sha256(path)
+                (logs / "install-manifest.json").write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "unapproved.*settings.json"):
+                    native.validate_installation(logs)
 
     def test_evidence_validation_never_executes_artifact_commands_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -295,6 +371,38 @@ context.discovery.config = {getAllowedAgentSources: () => undefined, isTrustedFo
             self.assertEqual(observed["normal"]["global"], [str(qoder / "AGENTS.md")])
             self.assertEqual(observed["content"], GUIDANCE_FIXTURE.decode())
             self.assertEqual(observed["blocked"]["global"], [])
+
+    @unittest.skipUnless(os.environ.get("ZG_QA_QODER_TEST_BUNDLE"), "published Qoder bundle path not configured")
+    def test_published_qoder_startup_writes_only_observed_security_defaults(self):
+        bundle = Path(os.environ["ZG_QA_QODER_TEST_BUNDLE"]).read_text()
+        self.assertIn('!l&&!eu()&&EFn(i.loadedSettings)', bundle)
+        self.assertIn('oPA="1.1.45"', bundle)
+        first = bundle.index("function pFn(")
+        helper = bundle[first:bundle.index("function A0e(", first)]
+        first = bundle.index("function EFn(")
+        migration = bundle[first:bundle.index("function mFn(", first)]
+        constants = re.search(r'foo=(\["l1StaticCheck"[^;]+?),zFl=', bundle)
+        self.assertIsNotNone(constants)
+        source = "var foo=" + constants[1] + ";\n" + helper + migration
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        program = r'''
+const fs = require("node:fs"), vm = require("node:vm");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const context = {settings: {mcpServers: {zvec_grep: {command: "zg", args: ["server", "--stdio"]}}}, writes: []};
+context.loaded = {user: {settings: context.settings}, setValue(scope, field, value) {
+  context.writes.push({scope, field, value}); context.settings[field] = value;
+}};
+vm.createContext(context);
+vm.runInContext(input.source + "\nEFn(loaded); EFn(loaded);", context);
+process.stdout.write(JSON.stringify({settings: context.settings, writes: context.writes}));
+'''
+        completed = subprocess.run([node, "-e", program], input=json.dumps({"source": source}),
+                                   text=True, capture_output=True, check=True, timeout=15)
+        observed = json.loads(completed.stdout)
+        self.assertEqual(observed["writes"], [{"scope": "User", "field": "securityScan",
+                          "value": native.QODER_SECURITY_SCAN_DEFAULTS}])
+        self.assertEqual(set(observed["settings"]), {"mcpServers", "securityScan"})
 
 
 if __name__ == "__main__":

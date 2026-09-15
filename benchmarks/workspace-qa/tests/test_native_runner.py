@@ -247,6 +247,8 @@ class NativeRunnerTests(unittest.TestCase):
             command, options = captured[0]
             self.assertEqual(result["status"], "completed")
             self.assertIn("/opt/qa/native-index.py", command)
+            self.assertEqual(command.count("--init"), 1)
+            self.assertLess(command.index("--init"), command.index(native_runner.IMAGE))
             self.assertIn("--check-only", command)
             self.assertIn("QWEN_API_KEY", command)
             self.assertIn("ZVEC_GREP_EMBEDDING=" + runner.EMBEDDING, command)
@@ -255,7 +257,7 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertNotIn(runner.SPEC.credential_env, command)
             self.assertEqual(options["timeout"], 1800)
 
-    def trial(self, root, profile, *, invalid_proof=False, session_status="completed"):
+    def trial(self, root, profile, *, invalid_proof=False, session_status="completed", startup_status="passed"):
         source, agent, cache = [root / name for name in ("source", "agent", "cache")]
         source.mkdir()
         index = root / "index" if profile == "with-zg" else None
@@ -274,12 +276,14 @@ class NativeRunnerTests(unittest.TestCase):
                 patch.object(native_runner.subprocess, "Popen", side_effect=launch), \
                 patch.object(native_runner.time, "monotonic", side_effect=[100.0, 120.0]), \
                 patch.object(runner, "cleanup_container"), \
+                patch("qoder_probe.native_startup_evidence", return_value={"status": startup_status}) as startup, \
                 patch.object(native_runner, "validate_installation", return_value=proof,
                     side_effect=ValueError("invalid install fake-embedding-secret") if invalid_proof else None) as validate, \
                 patch.object(runner, "convert_agent_trace", return_value={"has_final_answer": True, "contract_error_count": 0}), \
                 patch.object(runner, "trial_metrics", return_value={"input_tokens": 120, "tool_calls": 2, "answer": ANSWER}):
             result = native_runner.run_native_trial(source, agent, index, cache, prompt="原始提示", profile=profile, limits=LIMITS)
             validate.assert_called_once_with(agent, profile=profile)
+            startup.assert_called_once_with(agent)
         return result, captured[0], json.loads((agent / "native-spec.json").read_text())
 
     def test_native_session_profiles_isolate_embedding_and_separate_installation_wall_time(self):
@@ -296,6 +300,8 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertEqual(spec["model"], "Qwen3.8-Max")
                 self.assertEqual(spec["limits"], LIMITS)
                 self.assertIn("/opt/qa/native-session.py", command)
+                self.assertEqual(command.count("--init"), 1)
+                self.assertLess(command.index("--init"), command.index(native_runner.IMAGE))
                 self.assertIn(runner.SPEC.credential_env, command)
                 self.assertEqual("QWEN_API_KEY" in command, profile == "with-zg")
                 mounts = [v for v in command if v.startswith("type=bind,")]
@@ -317,6 +323,18 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertEqual(result["status"], "budget_exhausted")
             self.assertEqual(result["wall_seconds"], 7.5)
             self.assertEqual(result["input_tokens"], 120)
+
+    def test_security_startup_failure_keeps_observations_and_existing_budget_outcomes(self):
+        for profile in ("baseline", "with-zg"):
+            for startup in ("failed", "incomplete"):
+                for session in ("completed", "budget_exhausted"):
+                    with self.subTest(profile=profile, startup=startup, session=session), tempfile.TemporaryDirectory() as tmp:
+                        result, _, _ = self.trial(Path(tmp), profile, session_status=session, startup_status=startup)
+                        self.assertEqual(result["status"], "contract_failure" if session == "completed" else session)
+                        self.assertEqual(result["startup_evidence"]["status"], startup)
+                        self.assertEqual(result["input_tokens"], 120)
+                        self.assertEqual(result["wall_seconds"], 7.5)
+                        self.assertEqual(result["answer"], ANSWER)
 
     def test_profile_index_mismatch_fails_without_starting_a_container(self):
         with tempfile.TemporaryDirectory() as tmp:

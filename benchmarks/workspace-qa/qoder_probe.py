@@ -38,6 +38,52 @@ def _content_text(content) -> str:
     return ""
 
 
+def native_startup_evidence(agent: Path) -> dict:
+    """Inspect only the pinned native Security/SessionStart hook's lifecycle.
+
+    Text warnings are not failure predicates. Absent hook events remain
+    unobserved rather than evidence that security initialized successfully.
+    """
+    path = agent / "qodercli-stream.jsonl"
+    hooks = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("Native trace must contain objects")
+        if (event.get("type") != "system" or event.get("hook_name") != "Initializing Qoder Security"
+                or event.get("hook_event") != "SessionStart"
+                or event.get("subtype") not in {"hook_started", "hook_progress", "hook_response"}):
+            continue
+        key = (event.get("session_id"), event.get("hook_id"))
+        if not isinstance(key[1], str) or not key[1]:
+            raise ValueError("Native security startup hook has no ID")
+        hook = hooks.setdefault(key, {"session_id": key[0], "hook_id": key[1], "started": False,
+                                     "responses": []})
+        if event["subtype"] == "hook_started":
+            hook["started"] = True
+        elif event["subtype"] == "hook_response":
+            response = {"outcome": event.get("outcome"), "exit_code": event.get("exit_code"),
+                        "duration_ms": event.get("duration_ms")}
+            if response not in hook["responses"]:
+                hook["responses"].append(response)
+    rows = []
+    for hook in hooks.values():
+        replies = hook["responses"]
+        failed = any(reply["outcome"] in {"error", "failed", "failure"}
+                     or type(reply["exit_code"]) is int and reply["exit_code"] != 0 for reply in replies)
+        complete = len(replies) == 1 and replies[0]["outcome"] == "success" and type(replies[0]["exit_code"]) is int and replies[0]["exit_code"] == 0
+        rows.append({**hook, "status": "failed" if failed else "passed" if complete else "incomplete"})
+    failures = sum(row["status"] == "failed" for row in rows)
+    incomplete = sum(row["status"] == "incomplete" for row in rows)
+    status = "failed" if failures else "incomplete" if incomplete else "passed" if rows else "unobserved"
+    return {"status": status, "scope": "Initializing Qoder Security / SessionStart structured lifecycle",
+            "security_hooks": rows, "failure_count": failures if rows else None,
+            "incomplete_count": incomplete if rows else None,
+            "native_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def native_mcp_evidence(agent: Path) -> dict:
     """Read actual native calls/results; no private bridge trace is required."""
     path = agent / "qodercli-stream.jsonl"
@@ -78,7 +124,8 @@ def native_mcp_evidence(agent: Path) -> dict:
                and isinstance(calls[key].get("vector"), str) and calls[key]["vector"].strip()]
     fixtures = [key for key in vectors if "probe.md" in observations[key]["text"]
                 and PROBE_MARKER in observations[key]["text"]]
-    return {"mcp_registered_and_connected": bool(initialized) and all(initialized),
+    return {"startup_evidence": native_startup_evidence(agent),
+            "mcp_registered_and_connected": bool(initialized) and all(initialized),
             "native_attempts": len(calls), "native_successes": len(succeeded),
             "native_errors": sum(observations[key]["is_error"] for key in calls if key in observations),
             "native_missing_results": sum(key not in observations for key in calls),
@@ -90,6 +137,10 @@ def native_mcp_evidence(agent: Path) -> dict:
 def validate_probe(output: Path) -> dict:
     report = read_object(output / "result.json")
     evidence = native_mcp_evidence(output / "agent")
+    startup = evidence["startup_evidence"]
+    if startup["status"] in {"failed", "incomplete"}:
+        codes = [reply["exit_code"] for hook in startup["security_hooks"] for reply in hook["responses"]]
+        raise ValueError(f"Native Qoder Security SessionStart startup is {startup['status']} (exit_codes={codes})")
     installation = installation_evidence(output / "agent")
     measured, attempts = report.get("zg_tool_calls_successful"), report.get("zg_tool_calls")
     valid = (report.get("protocol") == PROTOCOL and report.get("status") == "completed"
@@ -104,7 +155,8 @@ def validate_probe(output: Path) -> dict:
         and type(attempts) is int and attempts == evidence["native_attempts"]
         and type(measured) is int and measured == evidence["native_successes"] and measured > 0
         and evidence["native_missing_results"] == 0 and evidence["native_empty_successes"] == 0
-        and evidence["native_fixture_vector_successes"] > 0)
+        and evidence["native_fixture_vector_successes"] > 0
+        and evidence["startup_evidence"]["status"] not in {"failed", "incomplete"})
     if not valid:
         raise ValueError("Native probe requires standard installation, unchanged source, actual fixture vector retrieval and observable Qoder usage")
     return {"status": "valid", "protocol": PROTOCOL, "included_in_qa_metrics": False,

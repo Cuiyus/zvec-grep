@@ -23,6 +23,60 @@ class QoderProbeTests(unittest.TestCase):
         self.proof.start()
         self.addCleanup(self.proof.stop)
 
+    def startup_events(self, *, outcome="success", exit_code=0, response=True, name="Initializing Qoder Security", hook_event="SessionStart"):
+        common = {"type": "system", "hook_id": "security-hook", "session_id": "fixture-session",
+                  "hook_name": name, "hook_event": hook_event}
+        rows = [{**common, "subtype": "hook_started"}]
+        if response:
+            rows.append({**common, "subtype": "hook_response", "outcome": outcome, "exit_code": exit_code,
+                         "duration_ms": 27, "stderr": "ordinary nonfatal warning"})
+        return rows
+
+    def prepend_events(self, events):
+        path = self.output / "agent/qodercli-stream.jsonl"
+        path.write_text("\n".join(json.dumps(event) for event in events) + "\n" + path.read_text())
+
+    def test_structured_security_bootstrap_exit_127_invalidates_successful_retrieval(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events(outcome="error", exit_code=127))
+        evidence = qoder_probe.native_startup_evidence(self.output / "agent")
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["failure_count"], 1)
+        self.assertEqual(evidence["security_hooks"][0]["responses"][0]["exit_code"], 127)
+        self.assertEqual(qoder_probe.native_mcp_evidence(self.output / "agent")["native_successes"], 1)
+        with self.assertRaisesRegex(ValueError, r"SessionStart startup is failed .*127"):
+            qoder_probe.validate_probe(self.output)
+
+    def test_security_start_without_terminal_response_is_incomplete(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events(response=False))
+        evidence = qoder_probe.native_startup_evidence(self.output / "agent")
+        self.assertEqual(evidence["status"], "incomplete")
+        self.assertEqual(evidence["incomplete_count"], 1)
+        with self.assertRaises(ValueError):
+            qoder_probe.validate_probe(self.output)
+
+    def test_security_success_with_stderr_warning_is_valid(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events())
+        evidence = qoder_probe.validate_probe(self.output)
+        self.assertEqual(evidence["startup_evidence"]["status"], "passed")
+
+    def test_unobserved_hook_remains_unknown_and_unrelated_hook_errors_are_not_security_failures(self):
+        for kwargs in ({"name": "Optional unrelated startup notification"}, {"hook_event": "OtherEvent"}):
+            with self.subTest(kwargs=kwargs):
+                write_probe(self.output)
+                self.prepend_events(self.startup_events(outcome="error", exit_code=127, **kwargs))
+                evidence = qoder_probe.validate_probe(self.output)["startup_evidence"]
+                self.assertEqual(evidence["status"], "unobserved")
+                self.assertIsNone(evidence["failure_count"])
+                self.assertIsNone(evidence["incomplete_count"])
+
+    def test_nonzero_security_exit_is_failure_even_with_success_label(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events(outcome="success", exit_code=1))
+        self.assertEqual(qoder_probe.native_startup_evidence(self.output / "agent")["status"], "failed")
+
     def test_success_uses_native_call_result_and_install_artifacts_without_bridge(self):
         write_probe(self.output)
         result = qoder_probe.validate_probe(self.output)

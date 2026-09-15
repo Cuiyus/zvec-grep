@@ -47,6 +47,13 @@ The documented installer may start the local server when possible; verify the
 selected transport and readiness as described in the
 [setup verification guide](../../docs/01-agents.md#verify-the-setup).
 
+Retain installation files both before and after each session. Qoder 1.1.45
+natively adds its three enabled `securityScan` defaults at startup; this verified
+addition and JSON formatting changes are allowed, while installed MCP settings,
+permissions and `AGENTS.md` must remain unchanged. Both arms retain the native
+Security `SessionStart` outcome; an observed startup failure invalidates an
+otherwise completed trial without discarding its model usage or answer.
+
 MCP tool permission and remote embedding authorization are separate. The user
 has selected remote `qwen/qwen3.7-text-embedding` for this experiment; its
 workspace authorization and provider credential must use the released product's

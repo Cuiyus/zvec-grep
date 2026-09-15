@@ -42,7 +42,7 @@ def smoke_validation(runs: Path, phase: str) -> dict:
     """Validate integration in smoke; formal trials never depend on choosing zg."""
     result = {"schema_version": 3, "protocol": PROTOCOL, "phase": phase, "status": "not_applicable" if phase == "batch" else "invalid",
               "scope": "Standard zg installation and native Qoder retrieval; natural non-use requires a verified same-run native vector probe",
-              "trials": [], "verified_successful_searches": 0,
+              "trials": [], "startup_checks": [], "verified_successful_searches": 0,
               "preserves_all_trial_metrics_and_judgements": True}
     if phase == "batch":
         return result
@@ -60,7 +60,7 @@ def smoke_validation(runs: Path, phase: str) -> dict:
         result["qa_execution_complete"] = bool(ledger["trials"]) and all(
             trial.get("status") == "completed" for trial in ledger["trials"])
         for trial in ledger["trials"]:
-            if trial.get("profile") != "with-zg" or trial.get("status") != "completed":
+            if trial.get("status") != "completed":
                 continue
             trial_id = trial.get("trial_id")
             if not isinstance(trial_id, str) or not trial_id or Path(trial_id).name != trial_id:
@@ -68,6 +68,11 @@ def smoke_validation(runs: Path, phase: str) -> dict:
             agent = (runs / trial_id / "agent").resolve()
             if not agent.is_relative_to(runs.resolve()):
                 raise ValueError("Smoke trace path escapes runs")
+            from qoder_probe import native_startup_evidence
+            startup = native_startup_evidence(agent)
+            result["startup_checks"].append({"trial_id": trial_id, "profile": trial.get("profile"), **startup})
+            if trial.get("profile") != "with-zg":
+                continue
             evidence = _mcp_evidence(agent)
             from qoder_probe import installation_evidence
             installation = installation_evidence(agent)
@@ -78,7 +83,8 @@ def smoke_validation(runs: Path, phase: str) -> dict:
             integrity = (trial.get("source_unchanged") is True
                 and isinstance(trial.get("installation"), dict)
                 and trial["installation"].get("manifest_sha256") == installation["manifest_sha256"]
-                and evidence["native_missing_results"] == 0 and evidence["native_empty_successes"] == 0)
+                and evidence["native_missing_results"] == 0 and evidence["native_empty_successes"] == 0
+                and evidence["startup_evidence"]["status"] not in {"failed", "incomplete"})
             non_use = attempts_reconcile and attempts == 0
             eligible = measured > 0 if reconciles else False
             if non_use and result["setup_probe"]["status"] == "valid":
@@ -92,7 +98,8 @@ def smoke_validation(runs: Path, phase: str) -> dict:
             if reconciles:
                 result["verified_successful_searches"] += evidence["native_successes"]
         if (result["qa_execution_complete"] and result["setup_probe"]["status"] == "valid"
-                and result["trials"] and all(row["valid"] for row in result["trials"])):
+                and result["trials"] and all(row["valid"] for row in result["trials"])
+                and all(row["status"] not in {"failed", "incomplete"} for row in result["startup_checks"])):
             result["status"] = "valid"
         else:
             result["reason"] = "Smoke requires a fresh native installation probe, unchanged sources, registered QA MCP and reconciled successful calls or natural non-use"

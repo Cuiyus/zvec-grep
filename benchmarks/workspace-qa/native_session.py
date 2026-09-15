@@ -29,6 +29,11 @@ DENY_TOOLS = ("Bash", "Edit", "Write", "NotebookEdit", "Agent", "Task", "Skill",
 INSTALL_COMMAND = ["zg", "install", "--target", "qoder", "--yes"]
 READY_COMMAND = ["zg", "server", "status", "--check-ready"]
 INSTALL_FILES = ("settings.json", "AGENTS.md", "mcp.json")
+INSTALLATION_SCHEMA_VERSION = 2
+# Qoder 1.1.45's EFn startup migration writes precisely this block through
+# loadedSettings.setValue("User", "securityScan", ...). No arbitrary user
+# settings, hooks, permissions, or MCP changes are allowed after installation.
+QODER_SECURITY_SCAN_DEFAULTS = {"l1StaticCheck": True, "l2LightweightScan": True, "l3DeepScan": True}
 # Exact output of the published 0.2.2 installer in an empty Qoder HOME. This
 # binds the evidence to the standard guidance, rather than a hand-written copy.
 STANDARD_GUIDANCE_SHA256 = "45cd2d41b63b6ba1a7afbd2e7c429b4918b415fb8b6a8d2cf1eb01fb0c286742"
@@ -150,18 +155,26 @@ def run_command(argv: list[str], name: str, *, root: Path, log_dir: Path, env: d
     return output.strip()
 
 
-def copy_installation(home: Path, log_dir: Path, env: dict) -> dict:
+def copy_installation(home: Path, log_dir: Path, env: dict, *, after: bool = False) -> dict:
     files = {}
+    folder = "installation/after" if after else "installation"
+    (log_dir / folder).mkdir(parents=True, exist_ok=True)
     for name in INSTALL_FILES:
         source = home / ".qoder" / name
         if not source.is_file() or source.is_symlink():
+            if after:
+                files[name] = {"path": f"{folder}/{name}", "status": "missing_or_symlink"}
+                continue
             raise ValueError(f"standard installer did not produce {name}")
         data = source.read_bytes()
         if any(env.get(key) and env[key].encode() in data for key in SECRET_NAMES):
+            if after:
+                files[name] = {"path": f"{folder}/{name}", "status": "credential_copy_rejected"}
+                continue
             raise ValueError("standard installation unexpectedly contains a credential; refusing artifact copy")
-        path = log_dir / "installation" / name
+        path = log_dir / folder / name
         path.write_bytes(data)
-        files[name] = {"path": f"installation/{name}", "sha256": sha256(path), "source_path": str(source)}
+        files[name] = {"path": f"{folder}/{name}", "sha256": sha256(path), "source_path": str(source)}
     return files
 
 
@@ -172,13 +185,85 @@ def _object(path: Path) -> dict:
     return value
 
 
-def validate_installation(agent: Path, *, profile: str = "with-zg") -> dict:
+def _changed_fields(before, after, prefix: str = "$") -> list[str]:
+    if isinstance(before, dict) and isinstance(after, dict):
+        changed = []
+        for key in sorted(set(before) | set(after)):
+            field = f"{prefix}.{key}"
+            if key not in before or key not in after:
+                changed.append(field)
+            else:
+                changed.extend(_changed_fields(before[key], after[key], field))
+        return changed
+    # Preserve JSON type distinctions, including true versus 1.
+    return [] if type(before) is type(after) and before == after else [prefix]
+
+
+def compare_installation(agent: Path) -> dict:
+    """Compare retained files; accept only a verified native Qoder migration."""
+    before, after = agent / "installation", agent / "installation/after"
+    unchanged, allowed, unexpected = True, [], []
+    for name in INSTALL_FILES:
+        old, new = before / name, after / name
+        if not new.is_file() or new.is_symlink():
+            unchanged = False
+            unexpected.append({"file": name, "field": "$", "reason": "missing_or_unsafe_after_file"})
+            continue
+        same = old.read_bytes() == new.read_bytes()
+        unchanged = unchanged and same
+        if same:
+            continue
+        if name == "AGENTS.md":
+            unexpected.append({"file": name, "field": "$", "reason": "managed_guidance_changed"})
+            continue
+        try:
+            original, current = _object(old), _object(new)
+        except (ValueError, OSError):
+            unexpected.append({"file": name, "field": "$", "reason": "invalid_json"})
+            continue
+        expected = dict(original)
+        if name == "settings.json" and "securityScan" not in original and "securityScan" in current:
+            if not _changed_fields(QODER_SECURITY_SCAN_DEFAULTS, current["securityScan"]):
+                expected["securityScan"] = dict(QODER_SECURITY_SCAN_DEFAULTS)
+                allowed.append({"file": name, "field": "$.securityScan",
+                                "reason": "qoder_1.1.45_native_security_scan_defaults"})
+        for field in _changed_fields(expected, current):
+            unexpected.append({"file": name, "field": field, "reason": "unapproved_configuration_change"})
+        if not _changed_fields(original, current):
+            allowed.append({"file": name, "field": "$", "reason": "json_formatting_only"})
+    return {"policy": "qoder-1.1.45-startup-settings-v1", "valid": not unexpected,
+            "byte_unchanged": unchanged, "managed_contents_unchanged": not unexpected,
+            "allowed_changes": allowed, "unexpected_changes": unexpected}
+
+
+def _verify_file_evidence(agent: Path, files: dict, *, after: bool = False) -> None:
+    folder = "installation/after" if after else "installation"
+    label = "after-session" if after else "standard"
+    if not isinstance(files, dict) or set(files) != set(INSTALL_FILES):
+        raise ValueError(f"{label} installation must include all three Qoder files")
+    if (agent / "installation").is_symlink() or (agent / folder).is_symlink():
+        raise ValueError(f"{label} installation evidence directory must not be a symlink")
+    for name in INSTALL_FILES:
+        expected_path = f"{folder}/{name}"
+        item = files[name]
+        candidate = agent / expected_path
+        if (not isinstance(item, dict) or item.get("path") != expected_path or candidate.is_symlink()
+                or not candidate.is_file() or candidate.resolve().parent != (agent / folder).resolve()
+                or sha256(candidate) != item.get("sha256")):
+            detail = item.get("status", "hash/path mismatch") if isinstance(item, dict) else "invalid metadata"
+            raise ValueError(f"{label} installation artifact hash/path mismatch: {name} ({detail})")
+
+
+def validate_installation(agent: Path, *, profile: str = "with-zg", stage: str = "postsession") -> dict:
     """Validate copied evidence only; never execute artifact commands or scripts."""
     path = agent / "install-manifest.json"
     if path.is_symlink():
         raise ValueError("installation manifest must be a regular artifact")
     manifest = _object(path)
-    if manifest.get("schema_version") != 1 or manifest.get("protocol") != PROTOCOL or manifest.get("profile") != profile:
+    if stage not in {"setup", "postsession"}:
+        raise ValueError("unknown installation validation stage")
+    if (manifest.get("schema_version") != INSTALLATION_SCHEMA_VERSION or manifest.get("protocol") != PROTOCOL
+            or manifest.get("profile") != profile):
         raise ValueError("installation manifest schema/protocol/profile mismatch")
     if manifest.get("qoder_version") != QODER_VERSION:
         raise ValueError("Qoder installation version mismatch")
@@ -190,23 +275,15 @@ def validate_installation(agent: Path, *, profile: str = "with-zg") -> dict:
                     "embedding_model": EMBEDDING_MODEL, "install_command": INSTALL_COMMAND,
                     "auth_command": auth_command(manifest.get("root", "")), "daemon_ready": True,
                     "mcp_startup": {"command": "zg", "args": ["server", "--stdio"]}}
-        if any(manifest.get(k) != v for k, v in expected.items()):
-            raise ValueError("native installation identity/authorization/readiness mismatch")
+        mismatched = [k for k, v in expected.items() if manifest.get(k) != v]
+        if mismatched:
+            message = str((manifest.get("error") or {}).get("message", ""))
+            raise ValueError("native installation identity/authorization/readiness mismatch: "
+                             + ", ".join(mismatched) + ("; " + message if message else ""))
         if not isinstance(manifest.get("root"), str) or not Path(manifest["root"]).is_absolute():
             raise ValueError("installation root must be absolute")
         files = manifest.get("files")
-        if not isinstance(files, dict) or set(files) != set(INSTALL_FILES):
-            raise ValueError("installation must include all standard Qoder files")
-        if (agent / "installation").is_symlink():
-            raise ValueError("installation evidence directory must not be a symlink")
-        for name in INSTALL_FILES:
-            expected_path = f"installation/{name}"
-            item = files[name]
-            candidate = agent / expected_path
-            if (not isinstance(item, dict) or item.get("path") != expected_path or candidate.is_symlink()
-                    or not candidate.is_file() or candidate.resolve().parent != (agent / "installation").resolve()
-                    or sha256(candidate) != item.get("sha256")):
-                raise ValueError(f"standard installation artifact hash/path mismatch: {name}")
+        _verify_file_evidence(agent, files)
         if files["AGENTS.md"]["sha256"] != STANDARD_GUIDANCE_SHA256:
             raise ValueError("Qoder guidance differs from the published zg 0.2.2 installer")
         settings = _object(agent / "installation/settings.json")
@@ -236,13 +313,25 @@ def validate_installation(agent: Path, *, profile: str = "with-zg") -> dict:
         for phase, argv in (("install", INSTALL_COMMAND), ("grant", expected["auth_command"]), ("ready", READY_COMMAND)):
             if phases.get(phase, {}).get("argv") != argv or phases.get(phase, {}).get("returncode") != 0:
                 raise ValueError(f"standard {phase} command did not complete")
-        if manifest.get("files_unchanged_after_session") is False:
-            raise ValueError("Qoder installation changed during the agent session")
+        if stage == "postsession":
+            if type(manifest.get("qa_session_returncode")) is not int:
+                raise ValueError("after-session installation evidence lacks qa_session_returncode")
+            _verify_file_evidence(agent, manifest.get("after_files"), after=True)
+            comparison = compare_installation(agent)
+            if not comparison["valid"]:
+                fields = [change["file"] + ":" + change["field"] for change in comparison["unexpected_changes"]]
+                raise ValueError("unapproved Qoder installation changes: " + ", ".join(fields))
+            if manifest.get("installation_comparison") != comparison:
+                raise ValueError("installation_comparison does not match retained before/after evidence")
+            if manifest.get("files_unchanged_after_session") is not comparison["byte_unchanged"]:
+                raise ValueError("files_unchanged_after_session does not match retained evidence")
     else:
         raise ValueError("unknown installation profile")
     return {"valid": True, "manifest_path": "install-manifest.json", "manifest_sha256": sha256(path),
             "protocol": PROTOCOL, "profile": profile, "standard_install": profile == "with-zg",
-            "files": manifest["files"], "setup_wall_seconds": manifest.get("setup_wall_seconds")}
+            "files": manifest["files"], "after_files": manifest.get("after_files"),
+            "installation_comparison": manifest.get("installation_comparison"),
+            "setup_wall_seconds": manifest.get("setup_wall_seconds")}
 
 
 def run(spec: dict, *, log_dir: Path = Path("/logs"), qa_session: Path = Path("/opt/qa/qa-session.py"),
@@ -251,7 +340,7 @@ def run(spec: dict, *, log_dir: Path = Path("/logs"), qa_session: Path = Path("/
     env = runtime_environment(spec, dict(os.environ) if environment is None else environment)
     home, root = Path(env["HOME"]), Path(spec["root"])
     log_dir.mkdir(parents=True, exist_ok=True)
-    manifest = {"schema_version": 1, "protocol": PROTOCOL, "profile": spec["profile"], "root": str(root),
+    manifest = {"schema_version": INSTALLATION_SCHEMA_VERSION, "protocol": PROTOCOL, "profile": spec["profile"], "root": str(root),
                 "status": "started", "standard_install": spec["profile"] == "with-zg", "files": {},
                 "embedding_model": EMBEDDING_MODEL, "commands": [], "daemon_ready": False,
                 "install_command": INSTALL_COMMAND if spec["profile"] == "with-zg" else None,
@@ -292,7 +381,7 @@ def run(spec: dict, *, log_dir: Path = Path("/logs"), qa_session: Path = Path("/
             manifest["status"] = "not_applicable"
         manifest["setup_wall_seconds"] = time.monotonic() - started
         save(manifest_path, manifest, env)
-        validate_installation(log_dir, profile=spec["profile"])
+        validate_installation(log_dir, profile=spec["profile"], stage="setup")
         child_spec = session_spec(spec, log_dir)
         save(log_dir / "session-spec.json", child_spec, env)
         print(json.dumps({"phase": "native-install", "status": manifest["status"],
@@ -300,15 +389,21 @@ def run(spec: dict, *, log_dir: Path = Path("/logs"), qa_session: Path = Path("/
         launched = True
         # No prompt/config rewriting, trace repair, model retry, or model call is
         # performed here. qa-session enforces the same native counters per arm.
-        returncode = subprocess.run([sys.executable, str(qa_session), "--spec", str(log_dir / "session-spec.json")],
-                                    cwd=root, env=env).returncode
-        manifest["qa_session_returncode"] = returncode
+        try:
+            returncode = subprocess.run([sys.executable, str(qa_session), "--spec", str(log_dir / "session-spec.json")],
+                                        cwd=root, env=env).returncode
+            manifest["qa_session_returncode"] = returncode
+        finally:
+            if spec["profile"] == "with-zg":
+                # Keep original bytes and collect after evidence even on a
+                # failed QA process. This harness never rewrites either file.
+                manifest["after_files"] = copy_installation(home, log_dir, env, after=True)
+                comparison = compare_installation(log_dir)
+                manifest["installation_comparison"] = comparison
+                manifest["files_unchanged_after_session"] = comparison["byte_unchanged"]
         if spec["profile"] == "with-zg":
-            manifest["files_unchanged_after_session"] = all(
-                (home / ".qoder" / name).is_file() and sha256(home / ".qoder" / name) == item["sha256"]
-                for name, item in manifest["files"].items())
-            if not manifest["files_unchanged_after_session"]:
-                raise ValueError("standard Qoder installation was modified during the session")
+            save(manifest_path, manifest, env)
+            validate_installation(log_dir, profile=spec["profile"])
         return returncode
     except (OSError, ValueError, RuntimeError) as error:
         manifest["status"] = "failed"
