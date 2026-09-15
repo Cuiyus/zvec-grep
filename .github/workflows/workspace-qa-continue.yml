@@ -149,12 +149,21 @@ jobs:
           run-id: ${{ needs.plan.outputs.source_run_id }}
           name: workspace-qa-batch-${{ matrix.task }}-${{ needs.plan.outputs.source_run_id }}-${{ needs.plan.outputs.source_run_attempt }}
           path: ${{ runner.temp }}/original-task
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.plan.outputs.source_run_id }}
+          name: workspace-qa-batch-3-${{ needs.plan.outputs.source_run_id }}-${{ needs.plan.outputs.source_run_attempt }}
+          path: ${{ runner.temp }}/source-preflight
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
           repetitions: '10'
           phase: batch
-          continue-from: ${{ runner.temp }}/original-task
+          continue-from: ${{ matrix.mode == 'partial_trials' && format('{0}/original-task', runner.temp) || '' }}
+          unstarted-from: ${{ matrix.mode == 'setup_only' && format('{0}/original-task', runner.temp) || '' }}
+          continuation-source-config: ${{ github.workspace }}/benchmarks/workspace-qa/data/continuation-source.json
+          shared-preflight: ${{ runner.temp }}/source-preflight
           continuation-code-review: ${{ runner.temp }}/continuation-code-review.json
           artifact-prefix: workspace-qa-continuation
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}

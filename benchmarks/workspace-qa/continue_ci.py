@@ -90,14 +90,18 @@ def load_originals(root: Path, config: dict) -> dict[str, dict]:
     result = {}
     for task_id, artifact in artifact_map(root, config, continued=False).items():
         try:
-            bundle = continuation.load_prior(artifact, runner.make_plan(task_id, 10, 1729))
-            ci = bundle["manifest"].get("ci_identity", {})
-            if (str(ci.get("GITHUB_RUN_ID")) != config["source_run_id"]
-                    or ci.get("GITHUB_SHA") != config["source_commit"]
-                    or str(ci.get("GITHUB_RUN_ATTEMPT")) != config["source_run_attempt"]):
-                raise ValueError("Original artifact manifest does not match the pinned source run")
+            expected_plan = runner.make_plan(task_id, 10, 1729)
+            if (artifact / "runs/manifest.json").is_file():
+                bundle = continuation.load_prior(artifact, expected_plan)
+                ci = bundle["manifest"].get("ci_identity", {})
+                if (str(ci.get("GITHUB_RUN_ID")) != config["source_run_id"]
+                        or ci.get("GITHUB_SHA") != config["source_commit"]
+                        or str(ci.get("GITHUB_RUN_ATTEMPT")) != config["source_run_attempt"]):
+                    raise ValueError("Original artifact manifest does not match the pinned source run")
+            else:
+                bundle = continuation.load_setup_prior(artifact, expected_plan)
             require_unambiguous(bundle["ledger"])
-            if bundle["manifest"].get("continuation") is not None:
+            if bundle.get("manifest", {}).get("continuation") is not None:
                 raise ValueError("Expected the original full-run artifact, not a prior continuation")
             result[task_id] = bundle
         except (OSError, ValueError, KeyError, TypeError) as error:
@@ -113,15 +117,16 @@ def plan(artifacts: Path, source_run_json: Path, source_config: Path) -> dict:
     for task_id in config["task_ids"]:
         bundle = bundles[task_id]
         records.append({"task_id": task_id, "artifact_name": bundle["root"].name,
+            "mode": bundle["kind"],
             "preserved_trial_ids": bundle["preserved_trial_ids"], "pending_trial_ids": bundle["pending_trial_ids"],
             "prior_ledger_sha256": bundle["files_sha256"]["runs/trial-results.json"],
-            "prior_manifest_sha256": bundle["files_sha256"]["runs/manifest.json"],
-            "prior_judgements_sha256": bundle["files_sha256"]["runs/judgements.json"]})
-    pending = [r["task_id"] for r in records if r["pending_trial_ids"]]
+            "prior_manifest_sha256": bundle["files_sha256"].get("runs/manifest.json"),
+            "prior_judgements_sha256": bundle["files_sha256"].get("runs/judgements.json")})
+    pending = [{"task": r["task_id"], "mode": r["mode"]} for r in records if r["pending_trial_ids"]]
     return {"schema_version": 1, "protocol": config["protocol"],
         "source_run_id": config["source_run_id"], "source_run_attempt": config["source_run_attempt"],
         "source_commit": config["source_commit"], "branch": config["branch"],
-        "matrix": {"task": pending}, "has_pending": bool(pending), "tasks": records,
+        "matrix": {"include": pending}, "has_pending": bool(pending), "tasks": records,
         "counts": {"tasks": 10, "planned_trials": 200, "pending_tasks": len(pending),
             "attempted_trials": sum(len(r["preserved_trial_ids"]) for r in records),
             "pending_trials": sum(len(r["pending_trial_ids"]) for r in records)},
@@ -131,6 +136,37 @@ def plan(artifacts: Path, source_run_json: Path, source_config: Path) -> dict:
 def validate_merged(artifact: Path, bundle: dict, config: dict) -> dict[str, str]:
     files = continuation.file_hashes(artifact)
     runs = artifact / "runs"
+    if bundle.get("kind") == "setup_only":
+        proof = continuation.validate_setup_continuation_evidence(runs, bundle)
+        if (str(proof.get("source_run_id")) != config["source_run_id"]
+                or str(proof.get("source_run_attempt")) != config["source_run_attempt"]
+                or proof.get("source_commit") != config["source_commit"]
+                or proof.get("original_artifact_name") != bundle["root"].name):
+            raise ValueError("Setup-only continuation refers to a different source run")
+        if continuation.read_object(artifact / "selection.json") != bundle["selection"]:
+            raise ValueError("Setup-only continuation changed the task selection")
+        ledger = continuation.read_object(runs / "trial-results.json")
+        require_unambiguous(ledger)
+        if any(continuation.is_unstarted(row) for row in ledger["trials"]):
+            raise ValueError("Setup-only continuation did not attempt every original QA slot")
+        transition = continuation.validate_transition(bundle["ledger"], ledger)
+        if transition["preserved_trial_ids"] or transition["pending_trial_ids"] != bundle["pending_trial_ids"]:
+            raise ValueError("Setup-only continuation changed the original all-unstarted classification")
+        current_plan = continuation.read_object(runs / "plan.json")
+        expected = copy.deepcopy(bundle["plan"])
+        for planned, row in zip(expected["trials"], ledger["trials"], strict=True):
+            planned["status"] = row["status"]
+        if current_plan != expected:
+            raise ValueError("Setup-only continuation changed its complete plan or order")
+        judgements = continuation.read_object(runs / "judgements.json")
+        if judgements.get("trial_results_sha256") != continuation.digest(runs / "trial-results.json"):
+            raise ValueError("Setup-only judgements refer to a different ledger")
+        manifest = continuation.read_object(runs / "manifest.json")
+        suffix = artifact.name.rsplit("-", 2)[1:]
+        ci = manifest.get("ci_identity", {})
+        if [str(ci.get("GITHUB_RUN_ID")), str(ci.get("GITHUB_RUN_ATTEMPT"))] != suffix:
+            raise ValueError("Continued artifact name and CI identity disagree")
+        return files
     proof = continuation.validate_continuation_evidence(runs)
     for name, relative in (("ledger", "runs/trial-results.json"), ("manifest", "runs/manifest.json"),
                            ("judgements", "runs/judgements.json")):

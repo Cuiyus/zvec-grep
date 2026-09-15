@@ -23,6 +23,18 @@ inputs:
     required: false
     default: ''
     description: Validated original task artifact; only originally unstarted trials may run
+  unstarted-from:
+    required: false
+    default: ''
+    description: Validated original setup-only artifact with zero attempted QA trials
+  continuation-source-config:
+    required: false
+    default: ''
+    description: Pinned source run identity for a setup-only continuation
+  shared-preflight:
+    required: false
+    default: ''
+    description: Exact source-run task-3 artifact containing a verified native setup probe
   continuation-code-review:
     required: false
     default: ''
@@ -119,12 +131,25 @@ runs:
         WORKSPACE_QA_RANGE_CACHE_BYTES: ${{ steps.cache-plan.outputs.range_cache_bytes }}
         WORKSPACE_QA_INDEX_CACHE: ${{ steps.cache-plan.outputs.index_cache_path }}
         CONTINUE_FROM: ${{ inputs.continue-from }}
+        UNSTARTED_FROM: ${{ inputs.unstarted-from }}
+        CONTINUATION_SOURCE_CONFIG: ${{ inputs.continuation-source-config }}
+        SHARED_PREFLIGHT: ${{ inputs.shared-preflight }}
         CONTINUATION_CODE_REVIEW: ${{ inputs.continuation-code-review }}
       run: |
         continuation_args=()
-        if [ -n "$CONTINUE_FROM" ]; then
+        if [ -n "$CONTINUE_FROM" ] && [ -n "$UNSTARTED_FROM" ]; then
+          echo 'Only one continuation source type is allowed.' >&2
+          exit 2
+        elif [ -n "$CONTINUE_FROM" ]; then
           test -n "$CONTINUATION_CODE_REVIEW"
           continuation_args+=(--continue-from "$CONTINUE_FROM" --continuation-code-review "$CONTINUATION_CODE_REVIEW")
+        elif [ -n "$UNSTARTED_FROM" ]; then
+          test -n "$CONTINUATION_CODE_REVIEW" && test -n "$CONTINUATION_SOURCE_CONFIG"
+          continuation_args+=(--unstarted-from "$UNSTARTED_FROM" --continuation-source-config "$CONTINUATION_SOURCE_CONFIG" --continuation-code-review "$CONTINUATION_CODE_REVIEW")
+        fi
+        if [ -n "$SHARED_PREFLIGHT" ]; then
+          test -n "$CONTINUATION_SOURCE_CONFIG" && test -n "$CONTINUATION_CODE_REVIEW"
+          continuation_args+=(--shared-preflight "$SHARED_PREFLIGHT" --continuation-source-config "$CONTINUATION_SOURCE_CONFIG")
         fi
         uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py \
           --task-id "$TASK_ID" --repetitions "$REPETITIONS" --phase "$QA_PHASE" \

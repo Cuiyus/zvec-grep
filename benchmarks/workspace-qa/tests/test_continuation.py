@@ -122,6 +122,37 @@ class ContinuationTests(unittest.TestCase):
             self.assertNotEqual(proof["compatibility"]["source_image_id"], proof["compatibility"]["current_image_id"])
             self.assertFalse(any((runs / name).exists() for name in bundle["pending_trial_ids"]))
 
+    def test_setup_only_artifact_is_staged_before_execution_and_bound_afterward(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prior = root / "workspace-qa-batch-3-34919707888-1"
+            plan = runner.make_plan("3", 10)
+            selection = continuation.read_object(continuation.LOCK_PATH)
+            selection["tasks"] = [task for task in selection["tasks"] if task["task_id"] == "3"]
+            selection["repetitions"] = 10
+            dump(prior / "selection.json", selection)
+            dump(prior / "planned.json", plan)
+            dump(prior / "setup-failure.json", {"status": "failed", "error_type": "ValueError"})
+            runner.collect_results(prior / "runs", plan)
+            bundle = continuation.load_setup_prior(prior, plan)
+            review = {"status": "verified", "base_commit": OLD_COMMIT, "head_commit": NEW_COMMIT,
+                      "changed_files": []}
+            config = {"source_run_id": 34919707888, "source_run_attempt": 1, "source_commit": OLD_COMMIT}
+            staged = root / "staged"
+            evidence = continuation.stage_setup_prior(bundle, staged, review, config)
+            before = continuation.file_hashes(prior)
+            runs = root / "new/runs"
+            runs.mkdir(parents=True)
+            current = fixture(root / "manifest-template")[3]
+            current["continuation_code_review"] = review
+            current["ci_identity"]["GITHUB_SHA"] = NEW_COMMIT
+            continuation.install_setup_prior(staged, runs, current)
+            dump(runs / "manifest.json", current)
+            proof = continuation.validate_setup_continuation_evidence(runs, bundle)
+            self.assertEqual(proof, evidence)
+            self.assertEqual(continuation.file_hashes(prior), before)
+            self.assertEqual(len(proof["pending_trial_ids"]), 20)
+
     def test_planned_trial_directory_or_hidden_usage_cannot_be_resampled(self):
         for evidence in ("directory", "usage", "started_at"):
             with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as tmp:

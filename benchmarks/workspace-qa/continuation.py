@@ -23,6 +23,7 @@ IDENTITY_FIELDS = ("trial_id", "task_id", "profile", "repetition", "block_id", "
 PRIOR_PATHS = {"ledger": "continuation-evidence/prior-ledger.json",
                "manifest": "continuation-evidence/prior-manifest.json",
                "judgements": "continuation-evidence/prior-judgements.json"}
+SETUP_EVIDENCE_PATH = "continuation-evidence/setup-only/evidence.json"
 RUNTIME_FIELDS = ("schema_version", "protocol", "integration_method", "install_command", "task_id",
     "package", "embedding_model", "embedding_endpoint", "agent", "agent_version", "model", "agent_spec",
     "source_files", "question_sha256", "answer_filename", "run_limits", "repetitions_per_profile",
@@ -227,7 +228,117 @@ def load_prior(prior_artifact_root: Path, plan: dict) -> dict:
         if row["status"] == "completed":
             validate_installation(trial_dir / "agent", profile=row["profile"])
     return {"root": root, **values, **classification, "rows_by_id": by_id,
-            "files_sha256": files, "compatibility": None}
+            "files_sha256": files, "compatibility": None, "kind": "partial_trials"}
+
+
+def load_setup_prior(prior_artifact_root: Path, plan: dict) -> dict:
+    """Validate an original artifact that failed before the first QA trial."""
+    root = Path(prior_artifact_root)
+    files = file_hashes(root)
+    selection = read_object(root / "selection.json")
+    frozen = read_object(root / "planned.json")
+    ledger = read_object(root / "runs/trial-results.json")
+    failure = read_object(root / "setup-failure.json")
+    selected = read_object(LOCK_PATH)
+    task_id = plan.get("task_id")
+    selected["tasks"] = [task for task in selected["tasks"] if task["task_id"] == task_id]
+    selected["repetitions"] = 10
+    if selection != selected or frozen != plan:
+        raise ValueError("Setup-only artifact differs from the frozen task selection or plan")
+    _validate_plan(plan, ledger)
+    if any(not is_unstarted(row) for row in ledger["trials"]):
+        raise ValueError("Setup-only recovery requires zero attempted QA trials")
+    if failure.get("status") != "failed" or not isinstance(failure.get("error_type"), str):
+        raise ValueError("Setup-only artifact lacks its original setup failure")
+    forbidden = [root / "runs" / name for name in ("manifest.json", "plan.json", "judgements.json")]
+    trial_dirs = [root / "runs" / row["trial_id"] for row in ledger["trials"]]
+    if any(path.exists() for path in forbidden + trial_dirs):
+        raise ValueError("Setup-only artifact contains QA execution evidence")
+    return {"root": root, "selection": selection, "plan": frozen, "ledger": ledger,
+            "setup_failure": failure, "preserved_trial_ids": [],
+            "pending_trial_ids": [row["trial_id"] for row in ledger["trials"]],
+            "rows_by_id": {row["trial_id"]: row for row in ledger["trials"]},
+            "files_sha256": files, "compatibility": None, "kind": "setup_only"}
+
+
+def stage_setup_prior(bundle: dict, staging: Path, review: dict, source_config: dict) -> dict:
+    """Copy a zero-QA original artifact to content-addressed evidence before execution."""
+    if bundle.get("kind") != "setup_only" or file_hashes(bundle["root"]) != bundle["files_sha256"]:
+        raise ValueError("Setup-only original artifact changed after validation")
+    if (not isinstance(review, dict) or review.get("status") != "verified"
+            or review.get("base_commit") != source_config.get("source_commit")
+            or not re.fullmatch(r"[0-9a-f]{40}", str(review.get("head_commit", "")))):
+        raise ValueError("Setup-only recovery lacks the trusted CI code-change review")
+    staging = Path(staging)
+    if staging.exists() or staging.resolve().is_relative_to(bundle["root"].resolve()):
+        raise ValueError("Setup-only staging must be a new separate directory")
+    blobs = staging / "blobs"
+    blobs.mkdir(parents=True)
+    stored = {}
+    for relative, sha in bundle["files_sha256"].items():
+        target = blobs / sha
+        if not target.exists():
+            shutil.copyfile(bundle["root"] / relative_path(relative), target)
+        if digest(target) != sha:
+            raise ValueError("Setup-only original bytes changed during staging")
+        stored[relative] = f"blobs/{sha}"
+    evidence = {"schema_version": 1, "kind": "setup_only", "no_qa_attempts": True,
+        "no_resampling": True, "source_run_id": str(source_config.get("source_run_id")),
+        "source_run_attempt": str(source_config.get("source_run_attempt")),
+        "source_commit": source_config.get("source_commit"), "code_review": copy.deepcopy(review),
+        "original_artifact_name": bundle["root"].name,
+        "original_files_sha256": copy.deepcopy(bundle["files_sha256"]),
+        "stored_files": stored, "preserved_trial_ids": [],
+        "pending_trial_ids": list(bundle["pending_trial_ids"])}
+    (staging / "evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+    return evidence
+
+
+def install_setup_prior(staging: Path, runs: Path, manifest: dict) -> dict:
+    """Attach staged setup-only evidence to a completed continuation artifact."""
+    staging, runs = Path(staging), Path(runs)
+    evidence = read_object(staging / "evidence.json")
+    review = manifest.get("continuation_code_review")
+    if (review != evidence.get("code_review")
+            or review.get("head_commit") != manifest.get("ci_identity", {}).get("GITHUB_SHA")):
+        raise ValueError("Setup-only continuation manifest differs from its reviewed code")
+    target = runs / "continuation-evidence/setup-only"
+    if target.exists():
+        raise ValueError("Setup-only continuation evidence already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(staging, target)
+    manifest["setup_continuation"] = copy.deepcopy(evidence)
+    return evidence
+
+
+def validate_setup_continuation_evidence(runs: Path, original_bundle: dict | None = None) -> dict:
+    manifest = read_object(Path(runs) / "manifest.json")
+    _native_manifest(manifest)
+    evidence = read_object(Path(runs) / SETUP_EVIDENCE_PATH)
+    if (manifest.get("setup_continuation") != evidence or evidence.get("schema_version") != 1
+            or evidence.get("kind") != "setup_only" or evidence.get("no_qa_attempts") is not True
+            or evidence.get("no_resampling") is not True or evidence.get("preserved_trial_ids") != []):
+        raise ValueError("Setup-only continuation provenance is missing or inconsistent")
+    review = manifest.get("continuation_code_review")
+    if (review != evidence.get("code_review") or review.get("status") != "verified"
+            or review.get("base_commit") != evidence.get("source_commit")
+            or review.get("head_commit") != manifest.get("ci_identity", {}).get("GITHUB_SHA")):
+        raise ValueError("Setup-only continuation code review differs")
+    hashes, stored = evidence.get("original_files_sha256"), evidence.get("stored_files")
+    if not isinstance(hashes, dict) or not hashes or not isinstance(stored, dict) or set(hashes) != set(stored):
+        raise ValueError("Setup-only original file map is invalid")
+    root = Path(runs) / "continuation-evidence/setup-only"
+    for relative, sha in hashes.items():
+        relative_path(relative)
+        stored_path = stored[relative]
+        if stored_path != f"blobs/{sha}" or digest(root / relative_path(stored_path)) != sha:
+            raise ValueError("Setup-only retained original bytes differ")
+    if original_bundle is not None:
+        if original_bundle.get("kind") != "setup_only" or hashes != original_bundle.get("files_sha256"):
+            raise ValueError("Setup-only continuation refers to a different original artifact")
+        if evidence.get("pending_trial_ids") != original_bundle.get("pending_trial_ids"):
+            raise ValueError("Setup-only pending trial set differs")
+    return evidence
 
 
 def validate_runtime(bundle: dict, current_manifest: dict, question: str, filename: str) -> dict:

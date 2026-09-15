@@ -165,12 +165,13 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "answer_delivery": "Harness saves terminal response verbatim outside corpus to requested report path",
         "ci_identity": {k: os.environ.get(k) for k in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")}, **identity}
     preserved = set()
+    if getattr(args, "continuation_code_review", None):
+        manifest["continuation_code_review"] = json.loads(args.continuation_code_review.read_text())
     if getattr(args, "continue_from", None):
         from continuation import load_prior, validate_runtime, import_prior
         from failure_audit import TERMINAL
         if not getattr(args, "continuation_code_review", None):
             raise ValueError("Continuation requires a reviewed source-to-current code diff")
-        manifest["continuation_code_review"] = json.loads(args.continuation_code_review.read_text())
         prior = load_prior(args.continue_from, plan)
         # An interrupted observation is not rerunnable, but cannot be imported
         # as a terminal result either. In particular, collect_results must not

@@ -7,6 +7,7 @@ import hashlib
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -142,6 +143,43 @@ def sdk_preflight(output: Path):
     standalone_native_probe(output)
 
 
+def reuse_source_preflight(source: Path, root: Path, source_config: dict, review: dict) -> dict:
+    """Reuse the successful source-run setup probe when its implementation is frozen."""
+    from continuation import file_hashes, read_object
+    from qoder_probe import validate_probe
+    source = source.resolve()
+    expected_name = (f"workspace-qa-batch-3-{source_config['source_run_id']}-"
+                     f"{source_config['source_run_attempt']}")
+    manifest = read_object(source / "runs/manifest.json")
+    ci = manifest.get("ci_identity", {})
+    if (source.name != expected_name or str(ci.get("GITHUB_RUN_ID")) != str(source_config["source_run_id"])
+            or str(ci.get("GITHUB_RUN_ATTEMPT")) != str(source_config["source_run_attempt"])
+            or ci.get("GITHUB_SHA") != source_config["source_commit"]
+            or manifest.get("protocol") != PROTOCOL or manifest.get("integration_method") != "zg_install"
+            or manifest.get("install_command") != ["zg", "install", "--target", "qoder", "--yes"]):
+        raise ValueError("Shared preflight does not belong to the pinned native source run")
+    if (review.get("status") != "verified" or review.get("base_commit") != source_config["source_commit"]):
+        raise ValueError("Shared preflight lacks the source-to-current code review")
+    probe = validate_probe(source / "sdk-preflight/qoder")
+    embedding = read_object(source / "embedding-preflight.json")
+    if (probe.get("status") != "valid" or embedding.get("status") != "completed"
+            or embedding.get("requested_model") != "qwen3.7-text-embedding"):
+        raise ValueError("Pinned source-run preflight was not successful")
+    before = file_hashes(source)
+    shutil.copytree(source / "sdk-preflight", root / "sdk-preflight")
+    shutil.copyfile(source / "embedding-preflight.json", root / "embedding-preflight.json")
+    if file_hashes(source) != before:
+        raise ValueError("Shared preflight artifact changed during validation")
+    evidence = {"schema_version": 1, "protocol": PROTOCOL, "status": "valid",
+        "included_in_qa_metrics": False, "source_run_id": str(source_config["source_run_id"]),
+        "source_run_attempt": str(source_config["source_run_attempt"]),
+        "source_commit": source_config["source_commit"], "source_artifact": source.name,
+        "source_artifact_files_sha256": before, "code_review": review,
+        "policy": "Reused source-run connectivity probe; native installation is still performed and recorded independently in every with-zg QA trial."}
+    (root / "sdk-preflight/preflight-reuse.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+    return evidence
+
+
 def embedding_preflight(output: Path):
     from runner import EMBEDDING, embedding_endpoint
     endpoint = embedding_endpoint()
@@ -182,12 +220,22 @@ def main(argv=None):
     p.add_argument("--upstream", type=Path, required=True)
     p.add_argument("--phase", choices=("smoke", "batch"), required=True)
     p.add_argument("--continue-from", type=Path)
+    p.add_argument("--unstarted-from", type=Path)
+    p.add_argument("--continuation-source-config", type=Path)
     p.add_argument("--continuation-code-review", type=Path)
+    p.add_argument("--shared-preflight", type=Path)
     args = p.parse_args(argv)
-    if args.continue_from and (args.phase != "batch" or not args.continuation_code_review):
+    if args.continue_from and args.unstarted_from:
+        raise ValueError("Choose partial-trial or setup-only continuation, not both")
+    continuing = bool(args.continue_from or args.unstarted_from)
+    if continuing and (args.phase != "batch" or not args.continuation_code_review):
         raise ValueError("Continuation requires batch phase and a verified code review")
-    if args.continue_from and args.repetitions != 10:
+    if continuing and args.repetitions != 10:
         raise ValueError("Continuation requires the original 10 repetitions per profile")
+    if (args.unstarted_from or args.shared_preflight) and not args.continuation_source_config:
+        raise ValueError("Setup-only or shared-preflight continuation requires the pinned source configuration")
+    if args.shared_preflight and not continuing:
+        raise ValueError("Shared source-run preflight is only valid for an audited continuation")
     lock = json.loads((HERE / "data/lock.json").read_text())
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     if args.repetitions < 1:
@@ -201,15 +249,31 @@ def main(argv=None):
     root.joinpath("planned.json").write_text(json.dumps(plan, indent=2) + "\n")
     scoped = {**lock, "tasks": [task], "repetitions": args.repetitions}
     root.joinpath("selection.json").write_text(json.dumps(scoped, ensure_ascii=False, indent=2) + "\n")
+    setup_staging = None
+    if args.unstarted_from:
+        from continuation import load_setup_prior, stage_setup_prior
+        source_config = json.loads(args.continuation_source_config.read_text())
+        review = json.loads(args.continuation_code_review.read_text())
+        bundle = load_setup_prior(args.unstarted_from, plan)
+        if bundle["selection"] != scoped:
+            raise ValueError("Setup-only continuation selection differs")
+        setup_staging = root / "setup-continuation-staging"
+        stage_setup_prior(bundle, setup_staging, review, source_config)
     outcome = 1
     try:
         # Stop before downloads, while retaining the already-frozen trial ledger.
         for name in ("QODER_PERSONAL_ACCESS_TOKEN", "GLM_API_KEY", "QWEN_API_KEY"):
             if not os.environ.get(name):
                 raise RuntimeError(f"Required GitHub Actions secret is missing: {name}")
-        embedding_preflight(root / "embedding-preflight.json")
-        print(json.dumps({"phase": "native_install_preflight", "status": "starting"}), flush=True)
-        sdk_preflight(root / "sdk-preflight")
+        if args.shared_preflight:
+            source_config = json.loads(args.continuation_source_config.read_text())
+            review = json.loads(args.continuation_code_review.read_text())
+            reuse_source_preflight(args.shared_preflight, root, source_config, review)
+            print(json.dumps({"phase": "native_install_preflight", "status": "reused_verified_source_run"}), flush=True)
+        else:
+            embedding_preflight(root / "embedding-preflight.json")
+            print(json.dumps({"phase": "native_install_preflight", "status": "starting"}), flush=True)
+            sdk_preflight(root / "sdk-preflight")
         print(json.dumps({"phase": "dataset_preparation", "status": "starting"}), flush=True)
         subprocess.run([sys.executable, str(HERE / "dataset.py"), "--task-id", args.task_id,
                         "--output", str(preparation), "--upstream", str(args.upstream)], check=True)
@@ -221,7 +285,15 @@ def main(argv=None):
         if args.continue_from:
             runner_command += ["--continue-from", str(args.continue_from),
                                "--continuation-code-review", str(args.continuation_code_review)]
+        elif args.unstarted_from:
+            runner_command += ["--continuation-code-review", str(args.continuation_code_review)]
         result = subprocess.run(runner_command)
+        if setup_staging:
+            from continuation import install_setup_prior
+            manifest_path = runs / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            install_setup_prior(setup_staging, runs, manifest)
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
         # Retain and judge completed candidates even if a different trial failed.
         judge_command = [sys.executable, str(HERE / "judge.py"), "--metadata",
                                  str(preparation / "tasks" / args.task_id / "metadata.json"), "--task-dir",
@@ -230,7 +302,7 @@ def main(argv=None):
             judge_command += ["--continue-from-ledger", str(runs / "continuation-evidence/prior-ledger.json"),
                               "--continue-from-judgements", str(runs / "continuation-evidence/prior-judgements.json")]
         judged = subprocess.run(judge_command)
-        if args.continue_from and (result.returncode not in (0, 1) or judged.returncode not in (0, 1)):
+        if continuing and (result.returncode not in (0, 1) or judged.returncode not in (0, 1)):
             # Exit 1 can describe a preserved failed observation. Signals and
             # CLI/process failures cannot be excused by a complete report.
             raise RuntimeError(f"Continuation process failed abnormally: runner={result.returncode}, judge={judged.returncode}")
@@ -248,8 +320,8 @@ def main(argv=None):
             outcome = 1
         reported = subprocess.run([sys.executable, str(HERE / "report.py"), "--runs-dir", str(runs),
                                    "--manifest", str(root / "selection.json"), "--output", str(root / "report"),
-                                   "--require-executed" if args.continue_from else "--require-complete"])
-        if args.continue_from:
+                                   "--require-executed" if continuing else "--require-complete"])
+        if continuing:
             # Original failures remain failures; completion means every original
             # slot was attempted and every completed answer has its judgement.
             outcome = reported.returncode

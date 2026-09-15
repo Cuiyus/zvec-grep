@@ -215,6 +215,8 @@ dispatch record is deliberately absent while the original run remains active.
 It selects only original `planned` slots with no execution evidence. Completed,
 failed, budget-exhausted, or ambiguous running slots cannot be resampled.
 The full 10-task × 2-arm × 10-repetition denominator and original order stay fixed.
+An artifact that failed in setup before creating any QA trial directory is kept
+as `setup_only` evidence; all 20 of its still-planned QA slots remain eligible.
 
 Before any new QA trial, CI verifies the exact source run and artifact identities,
 records hashes of the permitted code changes, and rechecks the original source
@@ -222,8 +224,18 @@ files, prompt, Node/Qoder/zg versions, model, embedding, limits and install
 configuration. Each new with-zg trial still uses standard `zg install`.
 Original trial files and the original ledger, manifest and judgements are
 retained under `runs/continuation-evidence` and checked again during aggregation.
+For setup-only artifacts, every original file is retained in a content-addressed
+evidence directory and matched back to its original path and hash.
 Only new answers are judged. The aggregate chooses exactly one merged ledger
 per task, so old and new artifacts cannot double-count observations.
+
+The continuation reuses the successful native installation/vector connectivity
+probe from the exact source-run task-3 artifact after verifying its run, commit,
+installation command and file hashes. This removes ten duplicate setup model
+calls that had no task-specific input and avoids letting a transient probe
+timeout discard an entire task. Setup evidence remains outside QA metrics.
+Every with-zg QA trial still independently runs `zg install --target qoder --yes`,
+checks the generated configuration and uses its own isolated writable index.
 
 `--require-executed` means all 200 planned slots have terminal execution records
 and every completed answer has been judged. It can pass with honestly recorded

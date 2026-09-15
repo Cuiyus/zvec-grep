@@ -25,7 +25,7 @@ SOURCE_RUN = "34919707888"
 NEW_RUN = "900001"
 
 
-def collection_fixture(root, *, pending=("3",)):
+def collection_fixture(root, *, pending=("3",), setup_only=()):
     template_root = root / "template"
     prior, _, _, _ = single_fixture(template_root)
     template = continuation.read_object(prior / "runs/manifest.json")
@@ -82,6 +82,14 @@ def collection_fixture(root, *, pending=("3",)):
             "repetitions_per_profile": 10, "trial_results_sha256": continuation.digest(artifact / "runs/trial-results.json"),
             "trials": [{"trial_id": row["trial_id"], "status": "judged" if i < 3 else "execution_not_completed",
                         "score": 0.5 if i < 3 else None} for i, row in enumerate(ledger["trials"])]})
+        if task_id in setup_only:
+            pristine = runner.make_plan(task_id, 10)
+            dump(artifact / "planned.json", pristine)
+            dump(artifact / "setup-failure.json", {"status": "failed", "error_type": "ValueError"})
+            for child in list((artifact / "runs").iterdir()):
+                if child.is_dir(): shutil.rmtree(child)
+                else: child.unlink()
+            runner.collect_results(artifact / "runs", pristine)
     return artifacts, root / "config.json", root / "source-run.json"
 
 
@@ -121,6 +129,46 @@ def merged_fixture(root, originals, task_id="3"):
     return artifact
 
 
+def setup_merged_fixture(root, originals, config_path, task_id="139"):
+    original = originals / f"workspace-qa-batch-{task_id}-{SOURCE_RUN}-1"
+    plan = runner.make_plan(task_id, 10)
+    bundle = continuation.load_setup_prior(original, plan)
+    template_root = root / "setup-manifest-template"
+    template_prior, _, _, template = single_fixture(template_root)
+    shutil.rmtree(template_root)
+    filename = bundle["selection"]["tasks"][0]["answer_filename"]
+    manifest = copy.deepcopy(template)
+    manifest.update(task_id=task_id, answer_filename=filename, image_id="sha256:rebuilt",
+        source_git_commit="d" * 40,
+        ci_identity={"GITHUB_SHA": NEW_COMMIT, "GITHUB_RUN_ID": NEW_RUN, "GITHUB_RUN_ATTEMPT": "1"})
+    review = {"status": "verified", "base_commit": OLD_COMMIT, "head_commit": NEW_COMMIT,
+              "changed_files": []}
+    manifest["continuation_code_review"] = review
+    config = continuation.read_object(config_path)
+    staged = root / ("setup-staging-" + task_id)
+    continuation.stage_setup_prior(bundle, staged, review, config)
+    artifact = root / "continued" / f"workspace-qa-continuation-batch-{task_id}-{NEW_RUN}-1"
+    runs = artifact / "runs"
+    runs.mkdir(parents=True)
+    continuation.install_setup_prior(staged, runs, manifest)
+    dump(runs / "manifest.json", manifest)
+    ledger = copy.deepcopy(bundle["ledger"])
+    for row, planned in zip(ledger["trials"], plan["trials"], strict=True):
+        row.update(status="failed", input_tokens=None, wall_seconds=1.0, tool_calls=0,
+                   provenance={"manifest_path": "manifest.json", "source_git_commit": manifest["source_git_commit"],
+                               "question_sha256": manifest["question_sha256"], "image_id": manifest["image_id"]})
+        planned["status"] = "failed"
+        dump(runs / row["trial_id"] / "result.json", row)
+    dump(runs / "trial-results.json", ledger)
+    dump(runs / "plan.json", plan)
+    dump(runs / "judgements.json", {"schema_version": 1, "task_id": task_id, "expected_trials": 20,
+        "repetitions_per_profile": 10, "trial_results_sha256": continuation.digest(runs / "trial-results.json"),
+        "trials": [{"trial_id": row["trial_id"], "status": "execution_not_completed", "score": None}
+                   for row in ledger["trials"]]})
+    dump(artifact / "selection.json", bundle["selection"])
+    return artifact
+
+
 class ContinueCiTests(unittest.TestCase):
     def setUp(self):
         validator = patch.object(continuation, "validate_installation", side_effect=installation_stub)
@@ -136,7 +184,7 @@ class ContinueCiTests(unittest.TestCase):
                     "--source-config", str(config), "--output", str(root / "plan.json")])
             result = continuation.read_object(root / "plan.json")
             self.assertEqual(status, 0)
-            self.assertEqual(result["matrix"], {"task": ["3"]})
+            self.assertEqual(result["matrix"], {"include": [{"task": "3", "mode": "partial_trials"}]})
             self.assertTrue(result["has_pending"])
             self.assertEqual(result["counts"], {"tasks": 10, "planned_trials": 200, "attempted_trials": 184, "pending_trials": 16, "pending_tasks": 1})
             record = next(task for task in result["tasks"] if task["task_id"] == "3")
@@ -221,10 +269,35 @@ class ContinueCiTests(unittest.TestCase):
             root = Path(tmp)
             artifacts, config, source = collection_fixture(root, pending=())
             result = continue_ci.plan(artifacts, source, config)
-            self.assertEqual(result["matrix"], {"task": []})
+            self.assertEqual(result["matrix"], {"include": []})
             self.assertFalse(result["has_pending"])
             assembled = continue_ci.assemble(artifacts, root / "not-created", root / "out", config)
             self.assertTrue(all(task["kind"] == "original" for task in assembled["tasks"]))
+
+    def test_setup_only_failure_recovers_all_twenty_without_claiming_an_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts, config, source = collection_fixture(root, pending=("3", "139"), setup_only=("139",))
+            result = continue_ci.plan(artifacts, source, config)
+            self.assertIn({"task": "139", "mode": "setup_only"}, result["matrix"]["include"])
+            record = next(row for row in result["tasks"] if row["task_id"] == "139")
+            self.assertEqual(record["preserved_trial_ids"], [])
+            self.assertEqual(len(record["pending_trial_ids"]), 20)
+            self.assertIsNone(record["prior_manifest_sha256"])
+
+    def test_assembly_accepts_setup_only_continuation_with_original_bytes_retained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            originals, config, _ = collection_fixture(root, pending=("3", "139"), setup_only=("139",))
+            merged_fixture(root, originals, "3")
+            setup = setup_merged_fixture(root, originals, config, "139")
+            result = continue_ci.assemble(originals, root / "continued", root / "out", config)
+            self.assertEqual(result["counts"]["attempted_trials"], 200)
+            copied = root / "out/task-139/runs/continuation-evidence/setup-only"
+            evidence = continuation.read_object(copied / "evidence.json")
+            self.assertEqual(evidence["original_files_sha256"],
+                             continuation.file_hashes(originals / f"workspace-qa-batch-139-{SOURCE_RUN}-1"))
+            self.assertEqual(continuation.file_hashes(root / "out/task-139"), continuation.file_hashes(setup))
 
     def test_missing_or_duplicate_continuation_and_extra_completed_task_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

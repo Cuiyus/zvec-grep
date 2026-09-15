@@ -281,6 +281,27 @@ class ContinuationTaskTests(unittest.TestCase):
         preflight.assert_not_called()
         self.assertFalse(self.output.exists())
 
+    def test_shared_source_preflight_is_verified_and_copied_without_network_calls(self):
+        source = self.root / "workspace-qa-batch-3-34919707888-1"
+        dump(source / "runs/manifest.json", {"protocol": PROTOCOL, "integration_method": "zg_install",
+            "install_command": ["zg", "install", "--target", "qoder", "--yes"],
+            "ci_identity": {"GITHUB_RUN_ID": "34919707888", "GITHUB_RUN_ATTEMPT": "1",
+                            "GITHUB_SHA": "a" * 40}})
+        dump(source / "embedding-preflight.json", {"status": "completed",
+            "requested_model": "qwen3.7-text-embedding"})
+        dump(source / "sdk-preflight/qoder/result.json", {"original": True})
+        config = {"source_run_id": 34919707888, "source_run_attempt": 1, "source_commit": "a" * 40}
+        review = {"status": "verified", "base_commit": "a" * 40, "head_commit": "b" * 40}
+        target = self.root / "reused"
+        target.mkdir()
+        with patch("qoder_probe.validate_probe", return_value={"status": "valid"}) as validate:
+            evidence = module.reuse_source_preflight(source, target, config, review)
+        validate.assert_called_once_with(source.resolve() / "sdk-preflight/qoder")
+        self.assertEqual(evidence["source_artifact"], source.name)
+        self.assertEqual(json.loads((target / "sdk-preflight/qoder/result.json").read_text()), {"original": True})
+        self.assertEqual(json.loads((target / "embedding-preflight.json").read_text())["status"], "completed")
+        self.assertTrue((target / "sdk-preflight/preflight-reuse.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
