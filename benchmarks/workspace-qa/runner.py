@@ -82,11 +82,11 @@ def identity_digest(files: dict[str, str]) -> str:
 
 def answer_filename(value: str | None) -> str:
     if not isinstance(value, str) or not value or "\\" in value or any(ord(c) < 32 for c in value):
-        raise ValueError("answer filename must be a relative .md or .txt path")
+        raise ValueError("answer filename must be a relative text-output path")
     path = PurePosixPath(value)
     if (path.is_absolute() or any(p in {"", ".", ".."} for p in value.split("/"))
-            or path.suffix.lower() not in {".md", ".txt"}):
-        raise ValueError("answer filename must be a safe relative .md or .txt path")
+            or path.suffix.lower() not in {".md", ".txt", ".csv"}):
+        raise ValueError("answer filename must be a safe relative .md, .txt or .csv path")
     return path.as_posix()
 
 

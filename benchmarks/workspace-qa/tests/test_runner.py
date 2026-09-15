@@ -64,6 +64,7 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.answer_filename(invalid)
         self.assertEqual(runner.answer_filename("报告/输出.md"), "报告/输出.md")
+        self.assertEqual(runner.answer_filename("行政部年度招聘情况专属简报.csv"), "行政部年度招聘情况专属简报.csv")
         q = "原始问题必须保留\n"
         a = runner.instruction(q, "输出.md", zg=False)
         b = runner.instruction(q, "输出.md", zg=True)
