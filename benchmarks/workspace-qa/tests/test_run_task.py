@@ -297,7 +297,7 @@ class ContinuationTaskTests(unittest.TestCase):
         with patch("qoder_probe.validate_probe", return_value={"status": "valid"}) as validate:
             evidence = module.reuse_source_preflight(source, target, config, review)
         validate.assert_called_once_with(source.resolve() / "sdk-preflight/qoder")
-        self.assertEqual(evidence["source_artifact"], source.name)
+        self.assertEqual(evidence["source_artifact"], "workspace-qa-batch-3-34919707888-1")
         self.assertEqual(json.loads((target / "sdk-preflight/qoder/result.json").read_text()), {"original": True})
         self.assertEqual(json.loads((target / "embedding-preflight.json").read_text())["status"], "completed")
         self.assertTrue((target / "sdk-preflight/preflight-reuse.json").is_file())

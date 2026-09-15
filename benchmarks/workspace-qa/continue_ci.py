@@ -109,8 +109,21 @@ def load_originals(root: Path, config: dict) -> dict[str, dict]:
     return result
 
 
-def plan(artifacts: Path, source_run_json: Path, source_config: Path) -> dict:
+def selected_tasks(dispatch_path: Path | None, config: dict) -> list[str]:
+    if dispatch_path is None:
+        return list(config["task_ids"])
+    dispatch = continuation.read_object(dispatch_path)
+    selected = dispatch.get("selected_task_ids")
+    if (not isinstance(selected, list) or not selected or len(selected) != len(set(selected))
+            or any(str(task) not in config["task_ids"] for task in selected)):
+        raise ValueError("Dispatch selected_task_ids must be a nonempty frozen task subset")
+    return [str(task) for task in selected]
+
+
+def plan(artifacts: Path, source_run_json: Path, source_config: Path,
+         dispatch_path: Path | None = None) -> dict:
     config = load_config(source_config)
+    selected = selected_tasks(dispatch_path, config)
     validate_source_run(continuation.read_object(source_run_json), config)
     bundles = load_originals(artifacts, config)
     records = []
@@ -122,14 +135,20 @@ def plan(artifacts: Path, source_run_json: Path, source_config: Path) -> dict:
             "prior_ledger_sha256": bundle["files_sha256"]["runs/trial-results.json"],
             "prior_manifest_sha256": bundle["files_sha256"].get("runs/manifest.json"),
             "prior_judgements_sha256": bundle["files_sha256"].get("runs/judgements.json")})
-    pending = [{"task": r["task_id"], "mode": r["mode"]} for r in records if r["pending_trial_ids"]]
+    pending = [{"task": r["task_id"], "mode": r["mode"]} for r in records
+               if r["task_id"] in selected and r["pending_trial_ids"]]
+    if dispatch_path is not None and {row["task"] for row in pending} != set(selected):
+        raise ValueError("Every selected wave task must still have original unstarted trials")
     return {"schema_version": 1, "protocol": config["protocol"],
         "source_run_id": config["source_run_id"], "source_run_attempt": config["source_run_attempt"],
         "source_commit": config["source_commit"], "branch": config["branch"],
         "matrix": {"include": pending}, "has_pending": bool(pending), "tasks": records,
         "counts": {"tasks": 10, "planned_trials": 200, "pending_tasks": len(pending),
             "attempted_trials": sum(len(r["preserved_trial_ids"]) for r in records),
-            "pending_trials": sum(len(r["pending_trial_ids"]) for r in records)},
+            "pending_trials": sum(len(r["pending_trial_ids"]) for r in records),
+            "wave_tasks": len(selected),
+            "wave_pending_trials": sum(len(r["pending_trial_ids"]) for r in records if r["task_id"] in selected)},
+        "selected_task_ids": selected,
         "policy": "Only original planned trials without execution evidence are eligible; no failed or ambiguous trial is resampled."}
 
 
@@ -244,6 +263,58 @@ def assemble(original: Path, continued: Path, output: Path, source_config: Path)
     return report
 
 
+def verify_wave(original: Path, continued: Path, output: Path, source_config: Path,
+                dispatch_path: Path) -> dict:
+    config = load_config(source_config)
+    selected_ids = selected_tasks(dispatch_path, config)
+    bundles = load_originals(original, config)
+    continuations = artifact_map(continued, config, continued=True)
+    if set(continuations) != set(selected_ids):
+        raise ValueError("Wave continuation artifacts differ from the selected task set")
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise ValueError("Wave output must be new or empty")
+    output.mkdir(parents=True, exist_ok=True)
+    records = []
+    for task_id in selected_ids:
+        artifact = continuations[task_id]
+        hashes = validate_merged(artifact, bundles[task_id], config)
+        target = output / ("task-" + task_id)
+        shutil.copytree(artifact, target)
+        if continuation.file_hashes(target) != hashes:
+            raise ValueError("Wave artifact bytes changed during verification")
+        records.append({"task_id": task_id, "artifact_name": artifact.name,
+                        "ledger_sha256": hashes["runs/trial-results.json"]})
+    report = {"schema_version": 1, "protocol": config["protocol"], "kind": "verified_wave",
+              "source_run_id": config["source_run_id"], "selected_task_ids": selected_ids,
+              "tasks": records, "no_resampling": True}
+    runner.write_json(output / "wave.json", report)
+    return report
+
+
+def audit_empty_continuation(artifacts: Path, run_id: str) -> dict:
+    run_id = positive_id(run_id, "superseded continuation run ID")
+    if artifacts.is_symlink() or not artifacts.is_dir():
+        raise ValueError("Superseded artifact collection must be a real directory")
+    records = []
+    pattern = re.compile(r"workspace-qa-continuation-batch-([1-9][0-9]*)-" + re.escape(run_id) + r"-1")
+    for artifact in sorted(artifacts.iterdir()):
+        match = pattern.fullmatch(artifact.name)
+        if not match or artifact.is_symlink() or not artifact.is_dir():
+            raise ValueError("Unexpected superseded continuation artifact")
+        ledger = continuation.read_object(artifact / "runs/trial-results.json")
+        rows = continuation._rows(ledger)
+        if any(not continuation.is_unstarted(row) or (artifact / "runs" / row["trial_id"]).exists() for row in rows):
+            raise ValueError("Superseded continuation contains QA execution evidence")
+        failure = continuation.read_object(artifact / "setup-failure.json")
+        if failure.get("status") != "failed":
+            raise ValueError("Superseded continuation lacks its pre-QA failure")
+        records.append({"task_id": ledger["task_id"], "artifact_name": artifact.name,
+                        "ledger_sha256": continuation.digest(artifact / "runs/trial-results.json")})
+    if not records:
+        raise ValueError("No superseded continuation artifacts were found")
+    return {"schema_version": 1, "run_id": run_id, "qa_trials_attempted": 0, "tasks": records}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -252,18 +323,34 @@ def main(argv=None) -> int:
     planning.add_argument("--source-run-json", type=Path, required=True)
     planning.add_argument("--source-config", type=Path, required=True)
     planning.add_argument("--output", type=Path, required=True)
+    planning.add_argument("--dispatch", type=Path)
     assembly = subparsers.add_parser("assemble")
     assembly.add_argument("--original", type=Path, required=True)
     assembly.add_argument("--continued", type=Path, required=True)
     assembly.add_argument("--output", type=Path, required=True)
     assembly.add_argument("--source-config", type=Path, required=True)
+    wave = subparsers.add_parser("verify-wave")
+    wave.add_argument("--original", type=Path, required=True)
+    wave.add_argument("--continued", type=Path, required=True)
+    wave.add_argument("--output", type=Path, required=True)
+    wave.add_argument("--source-config", type=Path, required=True)
+    wave.add_argument("--dispatch", type=Path, required=True)
+    empty = subparsers.add_parser("audit-empty")
+    empty.add_argument("--artifacts", type=Path, required=True)
+    empty.add_argument("--run-id", required=True)
+    empty.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            report = plan(args.artifacts, args.source_run_json, args.source_config)
+            report = plan(args.artifacts, args.source_run_json, args.source_config, args.dispatch)
             runner.write_json(args.output, report)
-        else:
+        elif args.command == "assemble":
             report = assemble(args.original, args.continued, args.output, args.source_config)
+        elif args.command == "verify-wave":
+            report = verify_wave(args.original, args.continued, args.output, args.source_config, args.dispatch)
+        else:
+            report = audit_empty_continuation(args.artifacts, args.run_id)
+            runner.write_json(args.output, report)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(2, "Continuation orchestration refused incomplete or conflicting evidence: " + runner.redact(str(error)) + "\n")
     print(json.dumps(report, ensure_ascii=False))

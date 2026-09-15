@@ -24,6 +24,7 @@ jobs:
       has_pending: ${{ steps.plan.outputs.has_pending }}
       source_run_id: ${{ steps.source.outputs.source_run_id }}
       source_run_attempt: ${{ steps.source.outputs.source_run_attempt }}
+      selected_tasks: ${{ steps.plan.outputs.selected_tasks }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -50,6 +51,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('source_run_id=' + str(source['source_run_id']) + '\n')
               out.write('source_run_attempt=' + str(source['source_run_attempt']) + '\n')
+              out.write('superseded_run_id=' + str(dispatch.get('superseded_no_qa_run_id', '')) + '\n')
           PY
       - name: Check original execution is over and no continuation already exists
         env:
@@ -74,9 +76,15 @@ jobs:
           runs = json.loads((root / 'continuation-runs.json').read_text())
           if runs.get('total_count', 0) > 100:
               raise SystemExit('Continuation history needs explicit review.')
-          others = [run['id'] for run in runs['workflow_runs']
+          dispatch = json.loads(Path('benchmarks/workspace-qa/data/continuation-dispatch.json').read_text())
+          allowed = {int(dispatch['superseded_no_qa_run_id'])} if dispatch.get('superseded_no_qa_run_id') else set()
+          branch_runs = [run for run in runs['workflow_runs']
                     if run['id'] != int(os.environ['GITHUB_RUN_ID'])
                     and run.get('head_branch') == os.environ['GITHUB_REF_NAME']]
+          indexed = {run['id']: run for run in branch_runs}
+          if any(run_id not in indexed or indexed[run_id].get('status') != 'completed' for run_id in allowed):
+              raise SystemExit('Declared superseded continuation is absent or still running.')
+          others = [run['id'] for run in branch_runs if run['id'] not in allowed]
           if others:
               raise SystemExit('Existing continuation runs require artifact review before any further execution: ' + str(others))
           PY
@@ -93,12 +101,26 @@ jobs:
           run-id: ${{ steps.source.outputs.source_run_id }}
           pattern: workspace-qa-batch-*
           path: original
+      - uses: actions/download-artifact@v4
+        if: steps.source.outputs.superseded_run_id != ''
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.superseded_run_id }}
+          pattern: workspace-qa-continuation-batch-*
+          path: superseded
+      - name: Prove the superseded workflow stopped before every QA trial
+        if: steps.source.outputs.superseded_run_id != ''
+        run: >-
+          python benchmarks/workspace-qa/continue_ci.py audit-empty
+          --artifacts superseded --run-id "${{ steps.source.outputs.superseded_run_id }}"
+          --output "$RUNNER_TEMP/superseded-audit.json"
       - name: Freeze only never-started slots from original artifacts
         id: plan
         run: |
           python benchmarks/workspace-qa/continue_ci.py plan \
             --artifacts original --source-run-json "$RUNNER_TEMP/source-run.json" \
             --source-config benchmarks/workspace-qa/data/continuation-source.json \
+            --dispatch benchmarks/workspace-qa/data/continuation-dispatch.json \
             --output "$RUNNER_TEMP/continuation-plan.json"
           python - <<'PY'
           import json, os
@@ -107,6 +129,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('matrix=' + json.dumps(plan['matrix']) + '\n')
               out.write('has_pending=' + str(plan['has_pending']).lower() + '\n')
+              out.write('selected_tasks=' + json.dumps(plan['selected_task_ids']) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('Only original planned slots can execute. Original attempts and judge results remain fixed.\n\n```json\n')
               out.write(json.dumps(plan['counts'], indent=2) + '\n```\n')
@@ -119,6 +142,7 @@ jobs:
             ${{ runner.temp }}/source-run.json
             ${{ runner.temp }}/continuation-code-review.json
             ${{ runner.temp }}/continuation-plan.json
+            ${{ runner.temp }}/superseded-audit.json
           if-no-files-found: error
 
   continue:
@@ -193,25 +217,43 @@ jobs:
         with:
           pattern: workspace-qa-continuation-batch-*
           path: continued
-      - name: Validate preserved evidence and choose one ledger per original task
+      - name: Validate preserved evidence for this selected wave
         run: >-
-          python benchmarks/workspace-qa/continue_ci.py assemble
-          --original original --continued continued --output canonical
+          python benchmarks/workspace-qa/continue_ci.py verify-wave
+          --original original --continued continued --output wave
           --source-config benchmarks/workspace-qa/data/continuation-source.json
-      - name: Report all 200 slots with original failures retained
-        run: >-
-          python benchmarks/workspace-qa/report.py --runs-dir canonical
-          --manifest benchmarks/workspace-qa/data/lock.json --output report
-          --require-executed
-      - name: Audit original failures and execution coverage
+          --dispatch benchmarks/workspace-qa/data/continuation-dispatch.json
+      - name: Require complete execution coverage for each selected task
+        env:
+          SELECTED_TASKS: ${{ needs.plan.outputs.selected_tasks }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          for task in json.loads(os.environ['SELECTED_TASKS']):
+              root = Path('wave') / ('task-' + task)
+              subprocess.run([sys.executable, 'benchmarks/workspace-qa/report.py',
+                  '--runs-dir', str(root), '--manifest', str(root / 'selection.json'),
+                  '--output', str(Path('report') / ('task-' + task)), '--require-executed'], check=True)
+          PY
+      - name: Audit original failures and execution coverage in this wave
         if: always()
-        run: >-
-          python benchmarks/workspace-qa/failure_audit.py --runs-dir canonical
-          --manifest benchmarks/workspace-qa/data/lock.json --output report/failure-audit
+        env:
+          SELECTED_TASKS: ${{ needs.plan.outputs.selected_tasks }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          for task in json.loads(os.environ['SELECTED_TASKS']):
+              root = Path('wave') / ('task-' + task)
+              subprocess.run([sys.executable, 'benchmarks/workspace-qa/failure_audit.py',
+                  '--runs-dir', str(root), '--manifest', str(root / 'selection.json'),
+                  '--output', str(Path('report/failure-audit') / ('task-' + task))], check=True)
+          PY
       - name: Publish execution coverage and quality separately
         if: always()
         run: |
-          for summary in report/summary.md report/failure-audit/summary.md; do
+          for summary in report/task-*/summary.md report/failure-audit/task-*/summary.md; do
             if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
           done
       - uses: actions/upload-artifact@v4
@@ -220,5 +262,5 @@ jobs:
           name: workspace-qa-continuation-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             report/
-            canonical/assembly.json
+            wave/wave.json
           if-no-files-found: error

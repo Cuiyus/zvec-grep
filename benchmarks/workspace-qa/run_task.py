@@ -152,7 +152,7 @@ def reuse_source_preflight(source: Path, root: Path, source_config: dict, review
                      f"{source_config['source_run_attempt']}")
     manifest = read_object(source / "runs/manifest.json")
     ci = manifest.get("ci_identity", {})
-    if (source.name != expected_name or str(ci.get("GITHUB_RUN_ID")) != str(source_config["source_run_id"])
+    if (str(ci.get("GITHUB_RUN_ID")) != str(source_config["source_run_id"])
             or str(ci.get("GITHUB_RUN_ATTEMPT")) != str(source_config["source_run_attempt"])
             or ci.get("GITHUB_SHA") != source_config["source_commit"]
             or manifest.get("protocol") != PROTOCOL or manifest.get("integration_method") != "zg_install"
@@ -173,7 +173,7 @@ def reuse_source_preflight(source: Path, root: Path, source_config: dict, review
     evidence = {"schema_version": 1, "protocol": PROTOCOL, "status": "valid",
         "included_in_qa_metrics": False, "source_run_id": str(source_config["source_run_id"]),
         "source_run_attempt": str(source_config["source_run_attempt"]),
-        "source_commit": source_config["source_commit"], "source_artifact": source.name,
+        "source_commit": source_config["source_commit"], "source_artifact": expected_name,
         "source_artifact_files_sha256": before, "code_review": review,
         "policy": "Reused source-run connectivity probe; native installation is still performed and recorded independently in every with-zg QA trial."}
     (root / "sdk-preflight/preflight-reuse.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

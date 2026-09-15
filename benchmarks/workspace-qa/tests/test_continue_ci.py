@@ -186,7 +186,10 @@ class ContinueCiTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertEqual(result["matrix"], {"include": [{"task": "3", "mode": "partial_trials"}]})
             self.assertTrue(result["has_pending"])
-            self.assertEqual(result["counts"], {"tasks": 10, "planned_trials": 200, "attempted_trials": 184, "pending_trials": 16, "pending_tasks": 1})
+            self.assertEqual({key: result["counts"][key] for key in
+                ("tasks", "planned_trials", "attempted_trials", "pending_trials", "pending_tasks")},
+                {"tasks": 10, "planned_trials": 200, "attempted_trials": 184,
+                 "pending_trials": 16, "pending_tasks": 1})
             record = next(task for task in result["tasks"] if task["task_id"] == "3")
             self.assertEqual(record["pending_trial_ids"], [row["trial_id"] for row in runner.make_plan("3", 10)["trials"]][4:])
 
@@ -284,6 +287,35 @@ class ContinueCiTests(unittest.TestCase):
             self.assertEqual(record["preserved_trial_ids"], [])
             self.assertEqual(len(record["pending_trial_ids"]), 20)
             self.assertIsNone(record["prior_manifest_sha256"])
+
+    def test_dispatch_limits_first_wave_without_changing_full_pending_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts, config, source = collection_fixture(root, pending=("3", "127"))
+            dispatch = root / "dispatch.json"
+            dump(dispatch, {"selected_task_ids": ["3", "127"]})
+            result = continue_ci.plan(artifacts, source, config, dispatch)
+            self.assertEqual(result["selected_task_ids"], ["3", "127"])
+            self.assertEqual({row["task"] for row in result["matrix"]["include"]}, {"3", "127"})
+            self.assertEqual(result["counts"]["wave_tasks"], 2)
+            self.assertEqual(result["counts"]["pending_trials"], 32)
+            self.assertEqual(result["counts"]["wave_pending_trials"], 32)
+
+    def test_superseded_continuation_must_have_zero_qa_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts = root / "artifacts"
+            artifact = artifacts / f"workspace-qa-continuation-batch-3-{NEW_RUN}-1"
+            plan = runner.make_plan("3", 10)
+            runner.collect_results(artifact / "runs", plan)
+            dump(artifact / "setup-failure.json", {"status": "failed", "error_type": "ValueError"})
+            result = continue_ci.audit_empty_continuation(artifacts, NEW_RUN)
+            self.assertEqual(result["qa_trials_attempted"], 0)
+            row = continuation.read_object(artifact / "runs/trial-results.json")
+            row["trials"][0]["status"] = "failed"
+            dump(artifact / "runs/trial-results.json", row)
+            with self.assertRaisesRegex(ValueError, "execution evidence"):
+                continue_ci.audit_empty_continuation(artifacts, NEW_RUN)
 
     def test_assembly_accepts_setup_only_continuation_with_original_bytes_retained(self):
         with tempfile.TemporaryDirectory() as tmp:
