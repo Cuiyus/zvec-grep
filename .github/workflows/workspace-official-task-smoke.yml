@@ -1,0 +1,58 @@
+name: Workspace-Bench official task smoke
+run-name: "Official Lite CN task 116 · baseline vs with-zg · ${{ github.ref_name }}"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-official-task-116-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  task-116:
+    name: "Task 116 · one baseline/with-zg pair"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Select the frozen official task without a QA rewrite
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = Path('benchmarks/workspace-qa/data')
+          source = data / 'official-task-116-smoke-lock.json'
+          lock = json.loads(source.read_text())
+          tasks = lock.get('tasks')
+          if lock.get('smoke_task_id') != '116' or lock.get('repetitions') != 1:
+              raise SystemExit('Official smoke identity mismatch')
+          if not isinstance(tasks, list) or len(tasks) != 1 or tasks[0].get('task_id') != '116':
+              raise SystemExit('Official smoke must contain only task 116')
+          if any(key in tasks[0] for key in ('question', 'instruction', 'official_effective_instruction')):
+              raise SystemExit('Official smoke lock must not contain a rewritten prompt')
+          if tasks[0].get('answer_filename') != 'output20.md' or len(tasks[0].get('inputs', [])) != 7:
+              raise SystemExit('Official task 116 metadata mismatch')
+          (data / 'lock.json').write_text(json.dumps(lock, ensure_ascii=False, indent=2) + '\n')
+          with open(Path(__import__('os').environ['GITHUB_STEP_SUMMARY']), 'a') as summary:
+              summary.write('Runs the unmodified `metadata.json.task` and official rubrics for Lite CN Task 116. '
+                            'Exactly one baseline and one with-zg observation are planned.\n')
+          PY
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: "116"
+          repetitions: "1"
+          phase: smoke
+          artifact-prefix: workspace-official-task
+          artifact-suffix: -r01
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
