@@ -73,7 +73,13 @@ def native_startup_evidence(agent: Path) -> dict:
         replies = hook["responses"]
         failed = any(reply["outcome"] in {"error", "failed", "failure"}
                      or type(reply["exit_code"]) is int and reply["exit_code"] != 0 for reply in replies)
-        complete = len(replies) == 1 and replies[0]["outcome"] == "success" and type(replies[0]["exit_code"]) is int and replies[0]["exit_code"] == 0
+        # Qoder 1.1.45 emits both forms for a successful hook response:
+        # exit_code=0 and an omitted/null exit_code.  The structured success
+        # outcome is terminal in either case; an explicit non-zero code above
+        # remains a failure.
+        complete = (len(replies) == 1 and replies[0]["outcome"] == "success"
+                    and (replies[0]["exit_code"] is None
+                         or type(replies[0]["exit_code"]) is int and replies[0]["exit_code"] == 0))
         rows.append({**hook, "status": "failed" if failed else "passed" if complete else "incomplete"})
     failures = sum(row["status"] == "failed" for row in rows)
     incomplete = sum(row["status"] == "incomplete" for row in rows)

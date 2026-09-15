@@ -62,6 +62,12 @@ class QoderProbeTests(unittest.TestCase):
         evidence = qoder_probe.validate_probe(self.output)
         self.assertEqual(evidence["startup_evidence"]["status"], "passed")
 
+    def test_security_success_with_null_exit_code_is_terminal(self):
+        write_probe(self.output)
+        self.prepend_events(self.startup_events(exit_code=None))
+        evidence = qoder_probe.validate_probe(self.output)
+        self.assertEqual(evidence["startup_evidence"]["status"], "passed")
+
     def test_unobserved_hook_remains_unknown_and_unrelated_hook_errors_are_not_security_failures(self):
         for kwargs in ({"name": "Optional unrelated startup notification"}, {"hook_event": "OtherEvent"}):
             with self.subTest(kwargs=kwargs):
