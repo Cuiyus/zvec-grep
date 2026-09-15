@@ -133,6 +133,25 @@ jobs:
         with:
           pattern: workspace-qa-priority-five-pairs-batch-*
           path: results
+      - name: Keep the latest artifact attempt for each task pair
+        run: |
+          python - <<'PY'
+          import re, shutil
+          from pathlib import Path
+          root = Path('results')
+          latest = {}
+          parsed = []
+          for path in root.iterdir():
+              match = re.fullmatch(r'(.+)-(\d+)', path.name)
+              if path.is_dir() and match:
+                  key, attempt = match.group(1), int(match.group(2))
+                  parsed.append((path, key, attempt))
+                  latest[key] = max(latest.get(key, 0), attempt)
+          for path, key, attempt in parsed:
+              if attempt < latest[key]:
+                  print(f'Removing superseded artifact: {path.name}')
+                  shutil.rmtree(path)
+          PY
       - name: Build the exact selected-task manifest
         env:
           TASKS: ${{ needs.validate.outputs.tasks }}
