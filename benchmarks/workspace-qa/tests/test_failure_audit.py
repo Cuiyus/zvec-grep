@@ -69,6 +69,24 @@ class FailureAuditTests(unittest.TestCase):
         self.assertIsNone(result["failures"][0]["input_tokens_observed_lower_bound"])
         self.assertFalse(result["execution_coverage_complete"])
 
+    def test_disjoint_pair_shards_preserve_complete_execution_coverage(self):
+        write(self.manifest, {"tasks": [{"task_id": "3"}], "repetitions": 2})
+        for repetition in (1, 2):
+            trials = [{**self.trial(profile), "trial_id": f"3-r{repetition:02d}-{profile}",
+                       "repetition": repetition} for profile in audit.PROFILES]
+            path = self.results / f"artifact-r{repetition:02d}/runs/trial-results.json"
+            write(path, {"task_id": "3", "repetitions_per_profile": 2,
+                         "shard_repetitions": [repetition], "trials": trials})
+        result = audit.build_audit(self.results, self.manifest)
+        self.assertTrue(result["execution_coverage_complete"])
+        self.assertEqual(result["summary"]["terminal_recorded"], 4)
+        duplicate = self.results / "duplicate/runs/trial-results.json"
+        write(duplicate, {"task_id": "3", "repetitions_per_profile": 2,
+                          "shard_repetitions": [1], "trials": [self.trial(profile) for profile in audit.PROFILES]})
+        result = audit.build_audit(self.results, self.manifest)
+        self.assertFalse(result["execution_coverage_complete"])
+        self.assertTrue(any("overlapping" in row["reason"].lower() for row in result["artifact_anomalies"]))
+
     def test_explicit_planned_is_not_started_but_missing_record_is_unknown(self):
         self.ledger([self.trial("baseline", "planned")])
         result = audit.build_audit(self.results, self.manifest)

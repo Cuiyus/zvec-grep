@@ -74,6 +74,8 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
     repetitions = repetitions if repetitions is not None else manifest_repetitions
     ledger_files = sorted(runs_dir.rglob("trial-results.json"))
     declarations: dict[str, int] = {}
+    declared_repetitions: dict[str, set[int]] = defaultdict(set)
+    unsharded_tasks: set[str] = set()
     continuations: dict[str, dict[str, Any]] = {}
     trials: dict[tuple[str, str, int], dict[str, Any]] = {}
     trial_ids: dict[str, tuple[str, str, int]] = {}
@@ -90,11 +92,24 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
             raise ReportError(f"invalid trial-results declaration: {path}")
         if selected and task_id not in selected:
             raise ReportError(f"unexpected task artifact {task_id}; use a separate runs directory")
-        if task_id in declarations:
-            raise ReportError(f"duplicate task ledger: {task_id}")
         if repetitions is not None and expected != repetitions:
             raise ReportError(f"task {task_id} declares {expected} repetitions, expected {repetitions}")
-        declarations[task_id] = expected
+        shard = ledger.get("shard_repetitions")
+        if shard is None:
+            if task_id in declarations:
+                raise ReportError(f"duplicate task ledger: {task_id}")
+            declared = set(range(1, expected + 1))
+            unsharded_tasks.add(task_id)
+        else:
+            if (not isinstance(shard, list) or not shard or len(shard) != len(set(shard))
+                    or any(type(value) is not int or not 1 <= value <= expected for value in shard)
+                    or task_id in unsharded_tasks or declared_repetitions[task_id].intersection(shard)):
+                raise ReportError(f"invalid or overlapping task shard: {task_id}")
+            declared = set(shard)
+        declarations.setdefault(task_id, expected)
+        if declarations[task_id] != expected:
+            raise ReportError(f"task shards disagree on repetition count: {task_id}")
+        declared_repetitions[task_id].update(declared)
         continuation = runtime_manifest.get("continuation") if runtime_manifest is not None else None
         if continuation is not None:
             from continuation import validate_continuation_evidence
@@ -105,6 +120,8 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
             continuations[task_id] = continuation
         if not isinstance(ledger.get("trials"), list):
             raise ReportError("trial-results requires trials array")
+        if shard is not None and {trial.get("repetition") for trial in ledger["trials"]} != declared:
+            raise ReportError("task shard trials differ from declared repetitions")
         for trial in ledger["trials"]:
             if not isinstance(trial, dict) or trial.get("task_id") != task_id or trial.get("profile") not in PROFILES:
                 raise ReportError("trial identity does not match ledger")

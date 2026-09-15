@@ -90,23 +90,35 @@ def answer_filename(value: str | None) -> str:
     return path.as_posix()
 
 
-def make_plan(task_id: str, repetitions: int, seed: int = 1729) -> dict[str, Any]:
+def make_plan(task_id: str, repetitions: int, seed: int = 1729,
+              shard_repetitions: list[int] | None = None) -> dict[str, Any]:
     positive(repetitions, "repetitions")
     if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id):
         raise ValueError("task_id must be a safe non-empty identifier")
     # Exactly equal AB/BA blocks for an even N; imbalance at most one for odd N.
     first_arms = [PROFILES[i % 2] for i in range(repetitions)]
     random.Random(f"{seed}:{task_id}").shuffle(first_arms)
+    selected = set(range(1, repetitions + 1))
+    if shard_repetitions is not None:
+        if (not shard_repetitions or len(shard_repetitions) != len(set(shard_repetitions))
+                or any(type(value) is not int or not 1 <= value <= repetitions for value in shard_repetitions)):
+            raise ValueError("shard repetitions must be unique integers inside the full plan")
+        selected = set(shard_repetitions)
     trials = []
     for repetition, first in enumerate(first_arms, 1):
+        if repetition not in selected:
+            continue
         for profile in (first, next(p for p in PROFILES if p != first)):
             trial_id = f"{task_id}-r{repetition:02d}-{profile}"
             trials.append({"trial_id": trial_id, "task_id": task_id, "profile": profile,
                            "repetition": repetition, "block_id": repetition, "status": "planned",
                            "trajectory_path": f"{trial_id}/agent/trajectory.json"})
-    return {"schema_version": 1, "protocol": PROTOCOL, "task_id": task_id,
+    plan = {"schema_version": 1, "protocol": PROTOCOL, "task_id": task_id,
             "repetitions_per_profile": repetitions, "order_seed": seed,
             "order_policy": "balanced AB/BA blocks, shuffled before execution", "trials": trials}
+    if shard_repetitions is not None:
+        plan["shard_repetitions"] = sorted(selected)
+    return plan
 
 
 def instruction(question: str, filename: str, *, zg: bool) -> str:
@@ -182,6 +194,8 @@ def collect_results(output: Path, plan: dict[str, Any]) -> dict[str, Any]:
         rows.append(row)
     report = {"schema_version": 1, "protocol": PROTOCOL, "task_id": plan["task_id"],
               "repetitions_per_profile": plan["repetitions_per_profile"], "trials": rows}
+    if "shard_repetitions" in plan:
+        report["shard_repetitions"] = plan["shard_repetitions"]
     write_json(output / "trial-results.json", report)
     return report
 
@@ -307,7 +321,9 @@ def run_named(command: list[str], name: str, *, stream_output: Path | None = Non
 
 
 def execute(args: argparse.Namespace) -> int:
-    plan = make_plan(args.task_id, args.repetitions, args.order_seed)
+    shard_repetition = getattr(args, "shard_repetition", None)
+    shard = [shard_repetition] if shard_repetition is not None else None
+    plan = make_plan(args.task_id, args.repetitions, args.order_seed, shard)
     positive(args.timeout, "timeout")
     filename = answer_filename(args.answer_filename) if args.answer_filename else None
     if not filename and not args.dry_run:
@@ -359,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--order-seed", type=int, default=1729)
+    parser.add_argument("--shard-repetition", type=int,
+                        help="Execute one repetition from the full deterministic plan")
     parser.add_argument("--continue-from", type=Path,
                         help="Verified prior task artifact; execute only its unstarted trials")
     parser.add_argument("--continuation-code-review", type=Path)

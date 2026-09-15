@@ -48,7 +48,7 @@ def build_audit(runs_dir: Path, manifest_path: Path) -> dict[str, Any]:
         task_ids.append(task_id)
     planned = {(task, profile, repetition) for task in task_ids for profile in PROFILES for repetition in range(1, repetitions + 1)}
     records: dict[tuple[str, str, int], tuple[dict, Path]] = {}
-    conflicts, seen_tasks, anomalies = set(), set(), []
+    conflicts, seen_tasks, unsharded_tasks, declared_repetitions, anomalies = set(), set(), set(), {}, []
     for path in sorted(runs_dir.rglob("trial-results.json")):
         relative = display_path(path, runs_dir)
         try:
@@ -56,9 +56,23 @@ def build_audit(runs_dir: Path, manifest_path: Path) -> dict[str, Any]:
             task_id = ledger.get("task_id")
             if task_id not in task_ids or ledger.get("repetitions_per_profile") != repetitions or not isinstance(ledger.get("trials"), list):
                 raise ValueError("Ledger does not match the locked task/repetition plan")
-            if task_id in seen_tasks:
-                raise ValueError("Duplicate task ledger; do not combine attempts or smoke artifacts")
+            shard = ledger.get("shard_repetitions")
+            if shard is None:
+                if task_id in seen_tasks:
+                    raise ValueError("Duplicate task ledger; do not combine attempts or smoke artifacts")
+                declared = set(range(1, repetitions + 1))
+                unsharded_tasks.add(task_id)
+            else:
+                prior = declared_repetitions.setdefault(task_id, set())
+                if (not isinstance(shard, list) or not shard or len(shard) != len(set(shard))
+                        or any(type(value) is not int or not 1 <= value <= repetitions for value in shard)
+                        or task_id in unsharded_tasks or prior.intersection(shard)):
+                    raise ValueError("Invalid or overlapping task shard")
+                declared = set(shard)
+                prior.update(declared)
             seen_tasks.add(task_id)
+            if shard is not None and {trial.get("repetition") for trial in ledger["trials"]} != declared:
+                raise ValueError("Task shard trials differ from declared repetitions")
             for trial in ledger["trials"]:
                 if not isinstance(trial, dict):
                     raise ValueError("Trial row is not an object")

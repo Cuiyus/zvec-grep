@@ -95,6 +95,38 @@ and index preparation are recorded separately from QA time and token usage.
 Installing the integration correctly does not require redownloading the complete
 workspace or rebuilding its index on every repetition.
 
+## zg suitability gate and shorter CI jobs
+
+The original formal plan contains 10 tasks, two profiles, and 10 repetitions per
+profile: 200 QA trials, plus setup probes and rubric judging. The stopped
+continuation currently preserves 71 terminal trials, one interrupted trial, and
+128 trials that were never started. It must not be presented as a completed
+200-trial experiment.
+
+Read-only QA alone is not enough to establish that indexed semantic retrieval is
+useful. The review in [zg-task-suitability.json](data/zg-task-suitability.json)
+applies the installed product guidance before running any previously unstarted
+task results. Tasks 191 and 158 are the first qualification candidates because
+they require cross-document semantic synthesis. Exact schema scans, exhaustive
+enumeration, counting, and joins are deliberately deprioritized. An installed
+but unused zg arm remains a valid natural-use observation, but it is not evidence
+of retrieval efficacy.
+
+The manually dispatched `workspace-qa-priority.yml` workflow has two modes:
+
+- `qualify`: one baseline/with-zg pair for each priority task, four QA trials in
+  total. Review actual zg calls and retrieval relevance before formal execution.
+- `formal`: ten pairs per task. Each repetition is an independent, named matrix
+  job with a 45-minute bound and its own artifact. The first priority job warms
+  the shared immutable persona workspace and index caches; the second priority
+  job restores them, and pairs 2-10 begin only after those caches are available.
+
+This changes the longest unit from 20 sequential trials to two sequential trials.
+GitHub displays task and repetition in every job name, completed pairs remain
+available if another pair fails, and the report merges only disjoint shard
+declarations. The model, original task, AB/BA order, installation, limits, judge,
+and ten-pair formal denominator remain unchanged.
+
 ## CI validation and execution
 
 All actual installation checks, dataset preparation and model calls run through

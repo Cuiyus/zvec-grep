@@ -27,7 +27,7 @@ class RunnerTests(unittest.TestCase):
         question.write_text("请读取工作区，生成分析报告。\n")
         values = dict(source_root=source, question_file=question, task_id="task-3", output=root / "runs",
                       repetitions=repetitions, image="zg-readonly-qa:0.2.2", timeout=900,
-                      order_seed=1729, dry_run=False, answer_filename="报告/分析.md")
+                      order_seed=1729, shard_repetition=None, dry_run=False, answer_filename="报告/分析.md")
         values.update(overrides)
         return argparse.Namespace(**values)
 
@@ -47,6 +47,17 @@ class RunnerTests(unittest.TestCase):
         for invalid in ("../3", "/3", "", "3/4"):
             with self.assertRaises(ValueError):
                 runner.make_plan(invalid, 10)
+
+    def test_one_pair_shard_preserves_the_full_plan_identity_and_order(self):
+        full = runner.make_plan("3", 10)
+        shard = runner.make_plan("3", 10, shard_repetitions=[7])
+        expected = [trial for trial in full["trials"] if trial["repetition"] == 7]
+        self.assertEqual(shard["trials"], expected)
+        self.assertEqual(shard["shard_repetitions"], [7])
+        self.assertEqual(shard["repetitions_per_profile"], 10)
+        for invalid in ([], [0], [11], [2, 2], [True]):
+            with self.assertRaises(ValueError):
+                runner.make_plan("3", 10, shard_repetitions=invalid)
 
     def test_candidate_path_cannot_escape_and_source_suffix_is_symmetric(self):
         for invalid in ("../answer.md", "/answer.md", "a/../answer.md", "a//answer.md", "a\\answer.md", "answer.pdf", "./answer.md", "a\n.md"):

@@ -1,0 +1,175 @@
+name: Qualified zg Workspace QA
+run-name: "Workspace QA · priority ${{ inputs.mode }} · ${{ github.ref_name }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: One pair per priority task, or ten independently visible pairs
+        type: choice
+        options: [qualify, formal]
+        default: qualify
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-qa-priority-${{ github.ref }}-${{ inputs.mode }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tasks: ${{ steps.plan.outputs.tasks }}
+      rest_matrix: ${{ steps.plan.outputs.rest_matrix }}
+      repetitions: ${{ steps.plan.outputs.repetitions }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate harness and freeze the priority matrix
+        id: plan
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          python -m unittest discover -s benchmarks/workspace-qa/tests -v
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path('benchmarks/workspace-qa/data')
+          audit = json.loads((root / 'zg-task-suitability.json').read_text())
+          lock = json.loads((root / 'lock.json').read_text())
+          tasks = audit['qualification_task_ids']
+          locked = {task['task_id'] for task in lock['tasks']}
+          if (audit.get('schema_version') != 1 or len(tasks) != len(set(tasks)) or not tasks
+                  or any(task not in locked for task in tasks)):
+              raise SystemExit('Invalid priority task audit')
+          mode = os.environ['MODE']
+          if mode not in {'qualify', 'formal'}:
+              raise SystemExit('Mode must be qualify or formal')
+          repetitions = 1 if mode == 'qualify' else 10
+          rest = [{'task': task, 'repetition': repetition}
+                  for task in tasks for repetition in range(2, repetitions + 1)]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tasks=' + json.dumps(tasks) + '\n')
+              output.write('rest_matrix=' + json.dumps({'include': rest}) + '\n')
+              output.write('repetitions=' + str(repetitions) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Priority tasks: `' + ', '.join(tasks) + '`. Mode: `' + mode
+                            + '`. Each job runs exactly one baseline/with-zg pair.\n')
+          PY
+
+  first-pair:
+    name: "${{ inputs.mode }} · task ${{ matrix.task }} · pair 1/${{ needs.validate.outputs.repetitions }}"
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      # Both priority tasks share the Operations Manager persona cache. Let the
+      # first task publish it before the second task starts instead of downloading
+      # and indexing the same workspace twice.
+      max-parallel: 1
+      matrix:
+        task: ${{ fromJSON(needs.validate.outputs.tasks) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: ${{ matrix.task }}
+          repetitions: ${{ needs.validate.outputs.repetitions }}
+          shard-repetition: '1'
+          artifact-suffix: '-r01'
+          artifact-prefix: workspace-qa-priority-${{ inputs.mode }}
+          phase: batch
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+
+  remaining-pairs:
+    name: "formal · task ${{ matrix.task }} · pair ${{ matrix.repetition }}/10"
+    needs: [validate, first-pair]
+    if: always() && inputs.mode == 'formal' && needs.validate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.validate.outputs.rest_matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: ${{ matrix.task }}
+          repetitions: '10'
+          shard-repetition: ${{ matrix.repetition }}
+          artifact-suffix: '-r${{ matrix.repetition }}'
+          artifact-prefix: workspace-qa-priority-formal
+          phase: batch
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+
+  report:
+    needs: [validate, first-pair, remaining-pairs]
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: workspace-qa-priority-${{ inputs.mode }}-batch-*
+          path: results
+      - name: Build the exact selected-task manifest
+        env:
+          TASKS: ${{ needs.validate.outputs.tasks }}
+          REPETITIONS: ${{ needs.validate.outputs.repetitions }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('benchmarks/workspace-qa/data/lock.json')
+          lock = json.loads(path.read_text())
+          selected = set(json.loads(os.environ['TASKS']))
+          lock['tasks'] = [task for task in lock['tasks'] if task['task_id'] in selected]
+          lock['repetitions'] = int(os.environ['REPETITIONS'])
+          Path('priority-manifest.json').write_text(json.dumps(lock, ensure_ascii=False, indent=2) + '\n')
+          PY
+      - name: Aggregate visible pair jobs without dropping failures
+        run: |
+          args=()
+          if [ "${{ needs.first-pair.result }}" = success ] && \
+             { [ "${{ inputs.mode }}" = qualify ] || [ "${{ needs.remaining-pairs.result }}" = success ]; }; then
+            args+=(--require-complete)
+          fi
+          python benchmarks/workspace-qa/report.py --runs-dir results \
+            --manifest priority-manifest.json --output report "${args[@]}"
+          python benchmarks/workspace-qa/failure_audit.py --runs-dir results \
+            --manifest priority-manifest.json --output report/failure-audit
+      - name: Publish metrics and execution coverage
+        if: always()
+        run: |
+          for summary in report/summary.md report/failure-audit/summary.md; do
+            if [ -f "$summary" ]; then cat "$summary"; cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-qa-priority-${{ inputs.mode }}-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report/
+          if-no-files-found: error

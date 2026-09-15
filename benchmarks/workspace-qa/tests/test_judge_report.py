@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import sys
 import unittest
@@ -460,6 +461,33 @@ class ReportTests(unittest.TestCase):
         (self.runs / "duplicate/trial-results.json").unlink()
         with self.assertRaisesRegex(report.ReportError, "repetitions"):
             report.load_rows(self.runs, repetitions=10)
+
+    def test_disjoint_pair_shards_merge_into_one_complete_task(self):
+        self.write_task("128")
+        source = self.runs / "128"
+        ledger = report.read_object(source / "trial-results.json")
+        judgments = report.read_object(source / "judgements.json")
+        for repetition in (1, 2):
+            target = self.runs / f"128-r{repetition:02d}"
+            target.mkdir()
+            shutil.copy2(source / "manifest.json", target / "manifest.json")
+            selected = [row for row in ledger["trials"] if row["repetition"] == repetition]
+            for row in selected:
+                shutil.copytree(source / row["trial_id"], target / row["trial_id"])
+            dump(target / "trial-results.json", {"protocol": PROTOCOL, "task_id": "128",
+                 "repetitions_per_profile": 2, "shard_repetitions": [repetition], "trials": selected})
+            dump(target / "judgements.json", {**judgments,
+                 "trials": [row for row in judgments["trials"] if row["repetition"] == repetition]})
+        shutil.rmtree(source)
+        rows, plan = report.load_rows(self.runs, manifest_path=self.manifest)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(plan["ledger_files"], 2)
+        task_rows = [row for row in rows if row["task_id"] == "128"]
+        self.assertTrue(all(row["execution_status"] == "completed" for row in task_rows))
+        duplicate = self.runs / "128-r03"
+        shutil.copytree(self.runs / "128-r01", duplicate)
+        with self.assertRaisesRegex(report.ReportError, "overlapping task shard"):
+            report.load_rows(self.runs, manifest_path=self.manifest)
 
     def test_execution_complete_preserves_failed_outcome_and_does_not_claim_full_quality(self):
         self.write_task("128")

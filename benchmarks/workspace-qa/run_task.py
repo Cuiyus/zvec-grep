@@ -224,6 +224,7 @@ def main(argv=None):
     p.add_argument("--continuation-source-config", type=Path)
     p.add_argument("--continuation-code-review", type=Path)
     p.add_argument("--shared-preflight", type=Path)
+    p.add_argument("--shard-repetition", type=int)
     args = p.parse_args(argv)
     if args.continue_from and args.unstarted_from:
         raise ValueError("Choose partial-trial or setup-only continuation, not both")
@@ -232,6 +233,8 @@ def main(argv=None):
         raise ValueError("Continuation requires batch phase and a verified code review")
     if continuing and args.repetitions != 10:
         raise ValueError("Continuation requires the original 10 repetitions per profile")
+    if continuing and args.shard_repetition is not None:
+        raise ValueError("Continuation and sharded fresh execution cannot be combined")
     if (args.unstarted_from or args.shared_preflight) and not args.continuation_source_config:
         raise ValueError("Setup-only or shared-preflight continuation requires the pinned source configuration")
     if args.shared_preflight and not continuing:
@@ -244,7 +247,8 @@ def main(argv=None):
     root.mkdir(parents=True, exist_ok=True)
     preparation, runs = root / "dataset", root / "runs"
     from runner import make_plan, collect_results
-    plan = make_plan(args.task_id, args.repetitions)
+    shard = [args.shard_repetition] if args.shard_repetition is not None else None
+    plan = make_plan(args.task_id, args.repetitions, shard_repetitions=shard)
     # A setup failure must still account for every planned trial.
     root.joinpath("planned.json").write_text(json.dumps(plan, indent=2) + "\n")
     scoped = {**lock, "tasks": [task], "repetitions": args.repetitions}
@@ -282,6 +286,8 @@ def main(argv=None):
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
                                  "--repetitions", str(args.repetitions), "--timeout", "900"]
+        if args.shard_repetition is not None:
+            runner_command += ["--shard-repetition", str(args.shard_repetition)]
         if args.continue_from:
             runner_command += ["--continue-from", str(args.continue_from),
                                "--continuation-code-review", str(args.continuation_code_review)]
@@ -318,9 +324,13 @@ def main(argv=None):
         root.joinpath("smoke_validation.json").write_text(json.dumps(validation, ensure_ascii=False, indent=2) + "\n")
         if validation["status"] == "invalid":
             outcome = 1
-        reported = subprocess.run([sys.executable, str(HERE / "report.py"), "--runs-dir", str(runs),
-                                   "--manifest", str(root / "selection.json"), "--output", str(root / "report"),
-                                   "--require-executed" if continuing else "--require-complete"])
+        report_command = [sys.executable, str(HERE / "report.py"), "--runs-dir", str(runs),
+                          "--manifest", str(root / "selection.json"), "--output", str(root / "report")]
+        if continuing:
+            report_command.append("--require-executed")
+        elif args.shard_repetition is None:
+            report_command.append("--require-complete")
+        reported = subprocess.run(report_command)
         if continuing:
             # Original failures remain failures; completion means every original
             # slot was attempted and every completed answer has its judgement.
