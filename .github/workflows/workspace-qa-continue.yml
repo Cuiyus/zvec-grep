@@ -78,15 +78,64 @@ jobs:
               raise SystemExit('Continuation history needs explicit review.')
           dispatch = json.loads(Path('benchmarks/workspace-qa/data/continuation-dispatch.json').read_text())
           allowed = {int(dispatch['superseded_no_qa_run_id'])} if dispatch.get('superseded_no_qa_run_id') else set()
+          prior = dispatch.get('prior_verified_waves', [])
+          if not isinstance(prior, list) or any(not isinstance(wave, dict) for wave in prior):
+              raise SystemExit('prior_verified_waves must be a list of reviewed wave records.')
+          prior_ids = []
+          prior_tasks = set()
+          selected = {str(task) for task in dispatch.get('selected_task_ids', [])}
+          for wave in prior:
+              try:
+                  run_id = int(wave['run_id'])
+              except (KeyError, TypeError, ValueError):
+                  raise SystemExit('Each prior verified wave needs a positive run_id.')
+              tasks = wave.get('task_ids')
+              if (run_id <= 0 or not isinstance(tasks, list) or not tasks
+                      or len(tasks) != len(set(map(str, tasks)))
+                      or any(str(task) in prior_tasks or str(task) in selected for task in tasks)):
+                  raise SystemExit('Prior wave tasks must be unique and disjoint from the selected wave.')
+              prior_ids.append(run_id)
+              prior_tasks.update(map(str, tasks))
+          if len(prior_ids) != len(set(prior_ids)):
+              raise SystemExit('Prior verified wave run IDs must be unique.')
+          allowed.update(prior_ids)
           branch_runs = [run for run in runs['workflow_runs']
                     if run['id'] != int(os.environ['GITHUB_RUN_ID'])
                     and run.get('head_branch') == os.environ['GITHUB_REF_NAME']]
           indexed = {run['id']: run for run in branch_runs}
           if any(run_id not in indexed or indexed[run_id].get('status') != 'completed' for run_id in allowed):
               raise SystemExit('Declared superseded continuation is absent or still running.')
+          for wave in prior:
+              run = indexed[int(wave['run_id'])]
+              if (run.get('conclusion') != 'success' or run.get('head_sha') != wave.get('head_sha')):
+                  raise SystemExit('A declared prior wave is not the reviewed successful commit.')
           others = [run['id'] for run in branch_runs if run['id'] not in allowed]
           if others:
               raise SystemExit('Existing continuation runs require artifact review before any further execution: ' + str(others))
+
+          # A successful run alone is insufficient: require the exact immutable
+          # batch and report artifacts that its report job validated.
+          import urllib.request
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                     'Accept': 'application/vnd.github+json'}
+          for wave in prior:
+              run_id = int(wave['run_id'])
+              url = (os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY']
+                     + '/actions/runs/' + str(run_id) + '/artifacts?per_page=100')
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:
+                  document = json.load(response)
+              if document.get('total_count', 0) > 100:
+                  raise SystemExit('Prior wave artifact history needs explicit review.')
+              artifacts = document.get('artifacts', [])
+              names = [item.get('name') for item in artifacts]
+              expected = {'workspace-qa-continuation-report-' + str(run_id) + '-1'}
+              expected.update('workspace-qa-continuation-batch-' + str(task) + '-' + str(run_id) + '-1'
+                              for task in wave['task_ids'])
+              if any(names.count(name) != 1 for name in expected):
+                  raise SystemExit('A prior wave is missing an exact batch or report artifact.')
+              chosen = [item for item in artifacts if item.get('name') in expected]
+              if any(item.get('expired') or not str(item.get('digest', '')).startswith('sha256:') for item in chosen):
+                  raise SystemExit('A prior wave artifact is expired or lacks a content digest.')
           PY
       - name: Audit permitted code changes against original execution
         run: >-
@@ -254,7 +303,7 @@ jobs:
         if: always()
         run: |
           for summary in report/task-*/summary.md report/failure-audit/task-*/summary.md; do
-            if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+            if [ -f "$summary" ]; then cat "$summary"; cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
           done
       - uses: actions/upload-artifact@v4
         if: always()
