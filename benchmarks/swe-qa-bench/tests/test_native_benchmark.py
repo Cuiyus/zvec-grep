@@ -86,6 +86,41 @@ class NativeBenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             nb.runtime_spec("opencode-glm52", CASE, zg=True, variant="Pxx")
 
+    def test_fixed_selection_uses_released_defaults_without_model_or_retrieval_calls(self):
+        args = argparse.Namespace(case=self.case_path, output=self.root / "fixed")
+        with patch.object(nb, "launch") as launch, patch.object(nb, "annotate") as annotate, \
+             patch.object(nb, "replay_catalog") as replay:
+            self.assertEqual(nb.select_fixed(args), 0)
+        launch.assert_not_called()
+        annotate.assert_not_called()
+        replay.assert_not_called()
+        selection = json.loads((args.output / "selection.json").read_text())
+        self.assertTrue(selection["ready"])
+        self.assertIsNone(selection["candidate"])
+        self.assertEqual(selection["status"], "fixed_mcp_and_guidance")
+        self.assertFalse(selection["prompt_test_enabled"])
+        self.assertEqual(selection["fixed_configuration"], {
+            "variant": "P00", "source": "released_zg_install", "package": "@zvec/zvec-grep@0.2.2",
+            "guidance": "installed_default", "mcp_description": "installed_default"})
+
+    def test_skipped_retrieval_builds_e2e_conclusion_without_checkout_or_replay(self):
+        runs = self.root / "recorded"
+        for group in nb.GROUPS:
+            dump(runs / group / "plan.json", {"trials": []})
+            dump(runs / group / "e2e-stability.json", {"case_id": "case", "planned_trials": 20})
+        args = argparse.Namespace(case=self.case_path, entries=self.args.entries,
+            output=self.root / "diagnosis", runs_dir=runs, image="native:test", skip_retrieval=True)
+        with patch.object(nb, "source_checkout") as checkout, patch.object(nb, "annotate") as annotate, \
+             patch.object(nb, "replay_catalog") as replay:
+            self.assertEqual(nb.diagnose(args), 0)
+        checkout.assert_not_called()
+        annotate.assert_not_called()
+        replay.assert_not_called()
+        mode = json.loads((args.output / "diagnosis-mode.json").read_text())
+        self.assertFalse(mode["retrieval_only_enabled"])
+        self.assertTrue((args.output / "benchmark-conclusion.md").is_file())
+        self.assertFalse((args.output / "retrieval-diagnosis.json").exists())
+
     def test_wire_contract_requires_the_fixed_seed_on_every_task_request(self):
         directory = self.root / "wire"
         directory.mkdir()

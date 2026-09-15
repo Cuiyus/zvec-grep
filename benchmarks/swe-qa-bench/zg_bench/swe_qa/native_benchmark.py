@@ -366,6 +366,40 @@ def annotate(*, analysis_path: Path, args: argparse.Namespace, source: Path, out
                                       batch_size=8, timeout=1200))
 
 
+def select_fixed(args: argparse.Namespace) -> int:
+    """Freeze the released install's MCP description and guidance without model calls."""
+    output = args.output.resolve()
+    fresh(output)
+    case = read_json(args.case)
+    selection = {
+        "schema_version": 1,
+        "ready": True,
+        "candidate": None,
+        "status": "fixed_mcp_and_guidance",
+        "prompt_test_enabled": False,
+        "decision_sampling_complete": False,
+        "confirmation_trials_per_arm": e2e_stability.REPETITIONS,
+        "case_sha256": sha256(args.case),
+        "prompt_runtime_overrides": frozen_overrides(None, case),
+        "fixed_configuration": {
+            "variant": "P00",
+            "source": "released_zg_install",
+            "package": PACKAGE,
+            "guidance": "installed_default",
+            "mcp_description": "installed_default",
+        },
+        "frozen_at": datetime.now(UTC).isoformat(),
+    }
+    write_json(output / "selection.json", selection)
+    (output / "screening-summary.md").write_text(
+        "## Fixed MCP + guidance\n\n"
+        f"Prompt experiment: **disabled**. E2E uses the released `{PACKAGE}` installation's "
+        "fixed MCP description and guidance (`P00`).\n\n"
+    )
+    progress("prompt_selection", "completed", mode="fixed", variant="P00")
+    return 0
+
+
 def screen(args: argparse.Namespace) -> int:
     from . import prompt_diagnostics as pd
     from . import native_query_diagnosis as nq
@@ -436,6 +470,7 @@ def screen(args: argparse.Namespace) -> int:
     promoted = candidate in {"P10", "P01", "P11"}
     selection = {"schema_version": 1, "ready": True, "candidate": candidate if promoted else None,
                  "status": "screening_supported_candidate" if promoted else "retain_current_insufficient_evidence",
+                 "prompt_test_enabled": True,
                  "decision_sampling_complete": complete,
                  "screening": selected, "screening_plan_sha256": sha256(plan_path),
                  "screening_evidence_sha256": sha256(evidence_path), "candidate_policy_sha256": sha256(output / "candidate-policy.json"),
@@ -459,6 +494,17 @@ def diagnose(args: argparse.Namespace) -> int:
     runs = [args.runs_dir / group for group in GROUPS]
     if any(not (directory / "plan.json").is_file() for directory in runs):
         raise ValueError("All registered group artifacts are required")
+    e2e_reports = {group: read_json(directory / "e2e-stability.json", {}) for group, directory in zip(GROUPS, runs)}
+    if args.skip_retrieval:
+        write_json(output / "diagnosis-mode.json", {
+            "schema_version": 1,
+            "retrieval_only_enabled": False,
+            "e2e_groups": list(e2e_reports),
+        })
+        (output / "benchmark-conclusion.md").write_text(
+            e2e_stability.render_ci_conclusion(e2e_reports, {}))
+        progress("diagnosis", "completed", reports=len(e2e_reports), retrieval_enabled=False)
+        return 0
     source = source_checkout(case, output / "corpus")
     progress("diagnosis_catalog", "running", groups=len(runs))
     analysis = nq.build_catalog(runs, case)
@@ -477,7 +523,6 @@ def diagnose(args: argparse.Namespace) -> int:
                               read_json(args.entries), replay)
     write_json(output / "retrieval-diagnosis.json", report)
     (output / "retrieval-diagnosis.md").write_text(nq.render_markdown(report))
-    e2e_reports = {group: read_json(directory / "e2e-stability.json", {}) for group, directory in zip(GROUPS, runs)}
     conclusion = e2e_stability.render_ci_conclusion(e2e_reports, report)
     (output / "benchmark-conclusion.md").write_text(conclusion)
     progress("diagnosis", "completed", reports=len(e2e_reports), retrieval_requests=len(report.get("replays", [])))
@@ -486,7 +531,7 @@ def diagnose(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["screen", "run", "review", "diagnose"])
+    parser.add_argument("command", choices=["select-fixed", "screen", "run", "review", "diagnose"])
     parser.add_argument("--case", type=Path, required=True)
     parser.add_argument("--entries", type=Path)
     parser.add_argument("--judge-case", type=Path)
@@ -495,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--group", choices=list(GROUPS))
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--runs-dir", type=Path)
+    parser.add_argument("--skip-retrieval", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_group(args)
@@ -503,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "screen":
         return screen(args)
+    if args.command == "select-fixed":
+        return select_fixed(args)
     return diagnose(args)
 
 
