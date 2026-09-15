@@ -1,5 +1,5 @@
 name: Qualified zg Workspace QA
-run-name: "Official Lite CN task 116 · ${{ inputs.mode || 'qualify' }} · ${{ github.ref_name }}"
+run-name: "Official Lite CN tasks 287 + 116 · 5 pairs each · ${{ github.ref_name }}"
 
 on:
   push:
@@ -9,18 +9,12 @@ on:
       - '.github/actions/workspace-qa/**'
       - 'benchmarks/workspace-qa/**'
   workflow_dispatch:
-    inputs:
-      mode:
-        description: One pair per priority task, or ten independently visible pairs
-        type: choice
-        options: [qualify, formal]
-        default: qualify
 
 permissions:
   contents: read
 
 concurrency:
-  group: workspace-qa-priority-${{ github.ref }}-${{ inputs.mode || 'qualify' }}
+  group: workspace-qa-priority-five-pairs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -32,7 +26,6 @@ jobs:
       tasks: ${{ steps.plan.outputs.tasks }}
       rest_matrix: ${{ steps.plan.outputs.rest_matrix }}
       repetitions: ${{ steps.plan.outputs.repetitions }}
-      mode: ${{ steps.plan.outputs.mode }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,71 +35,64 @@ jobs:
           python-version: '3.12'
       - name: Validate harness and freeze the official task matrix
         id: plan
-        env:
-          MODE: ${{ inputs.mode || 'qualify' }}
         run: |
           python -m unittest discover -s benchmarks/workspace-qa/tests -v
           python - <<'PY'
           import json, os
           from pathlib import Path
           root = Path('benchmarks/workspace-qa/data')
-          lock = json.loads((root / 'official-task-116-smoke-lock.json').read_text())
+          lock = json.loads((root / 'official-tasks-287-116-five-run-lock.json').read_text())
           tasks = [task['task_id'] for task in lock['tasks']]
           locked = {task['task_id'] for task in lock['tasks']}
-          if (lock.get('schema_version') != 1 or tasks != ['116'] or locked != {'116'}
-                  or lock.get('smoke_task_id') != '116'):
-              raise SystemExit('Invalid official Task 116 smoke lock')
-          mode = os.environ['MODE']
-          if mode not in {'qualify', 'formal'}:
-              raise SystemExit('Mode must be qualify or formal')
-          repetitions = 1 if mode == 'qualify' else 10
+          repetitions = lock.get('repetitions')
+          if (lock.get('schema_version') != 1 or tasks != ['287', '116']
+                  or locked != {'287', '116'} or repetitions != 5):
+              raise SystemExit('Invalid official two-task, five-pair lock')
           rest = [{'task': task, 'repetition': repetition}
                   for task in tasks for repetition in range(2, repetitions + 1)]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('tasks=' + json.dumps(tasks) + '\n')
               output.write('rest_matrix=' + json.dumps({'include': rest}) + '\n')
               output.write('repetitions=' + str(repetitions) + '\n')
-              output.write('mode=' + mode + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('Official task: `116`. The unmodified metadata task and rubrics are used. Mode: `'
-                            + mode + '`. Each job runs exactly one baseline/with-zg pair.\n')
+              summary.write('Official tasks: `287`, `116`. Each task runs five baseline/with-zg pairs '
+                            '(20 Qoder trials total). The official task text and rubrics are unmodified. '
+                            'Each execution job runs exactly one visible pair.\n')
           PY
 
   first-pair:
-    name: "${{ needs.validate.outputs.mode }} · task ${{ matrix.task }} · pair 1/${{ needs.validate.outputs.repetitions }}"
+    name: "task ${{ matrix.task }} · pair 1/${{ needs.validate.outputs.repetitions }}"
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      # Both priority tasks share the Operations Manager persona cache. Let the
-      # first task publish it before the second task starts instead of downloading
-      # and indexing the same workspace twice.
-      max-parallel: 1
+      # Seed each persona cache independently before the remaining repetitions.
+      max-parallel: 2
       matrix:
         task: ${{ fromJSON(needs.validate.outputs.tasks) }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install the isolated official Task 116 lock
-        run: cp benchmarks/workspace-qa/data/official-task-116-smoke-lock.json benchmarks/workspace-qa/data/lock.json
+      - name: Install the isolated two-task lock
+        run: cp benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
           repetitions: ${{ needs.validate.outputs.repetitions }}
           shard-repetition: '1'
           artifact-suffix: '-r01'
-          artifact-prefix: workspace-qa-priority-${{ needs.validate.outputs.mode }}
+          artifact-prefix: workspace-qa-priority-five-pairs
           phase: batch
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
           embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
 
   remaining-pairs:
-    name: "formal · task ${{ matrix.task }} · pair ${{ matrix.repetition }}/10"
+    name: "task ${{ matrix.task }} · pair ${{ matrix.repetition }}/${{ needs.validate.outputs.repetitions }}"
     needs: [validate, first-pair]
-    if: always() && needs.validate.outputs.mode == 'formal' && needs.validate.result == 'success'
+    if: always() && needs.validate.result == 'success' && needs.first-pair.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -117,15 +103,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install the isolated official Task 116 lock
-        run: cp benchmarks/workspace-qa/data/official-task-116-smoke-lock.json benchmarks/workspace-qa/data/lock.json
+      - name: Install the isolated two-task lock
+        run: cp benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
-          repetitions: '10'
+          repetitions: ${{ needs.validate.outputs.repetitions }}
           shard-repetition: ${{ matrix.repetition }}
           artifact-suffix: '-r${{ matrix.repetition }}'
-          artifact-prefix: workspace-qa-priority-formal
+          artifact-prefix: workspace-qa-priority-five-pairs
           phase: batch
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
@@ -145,7 +131,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: workspace-qa-priority-${{ needs.validate.outputs.mode }}-batch-*
+          pattern: workspace-qa-priority-five-pairs-batch-*
           path: results
       - name: Build the exact selected-task manifest
         env:
@@ -155,7 +141,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          path = Path('benchmarks/workspace-qa/data/official-task-116-smoke-lock.json')
+          path = Path('benchmarks/workspace-qa/data/official-tasks-287-116-five-run-lock.json')
           lock = json.loads(path.read_text())
           selected = set(json.loads(os.environ['TASKS']))
           lock['tasks'] = [task for task in lock['tasks'] if task['task_id'] in selected]
@@ -166,7 +152,7 @@ jobs:
         run: |
           args=()
           if [ "${{ needs.first-pair.result }}" = success ] && \
-             { [ "${{ needs.validate.outputs.mode }}" = qualify ] || [ "${{ needs.remaining-pairs.result }}" = success ]; }; then
+             [ "${{ needs.remaining-pairs.result }}" = success ]; then
             args+=(--require-complete)
           fi
           python benchmarks/workspace-qa/report.py --runs-dir results \
@@ -182,6 +168,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: workspace-qa-priority-${{ needs.validate.outputs.mode }}-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: workspace-qa-priority-five-pairs-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: report/
           if-no-files-found: error
