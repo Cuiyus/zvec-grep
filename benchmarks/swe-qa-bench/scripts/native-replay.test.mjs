@@ -279,9 +279,11 @@ test("installed SDK sends unchanged tools/call arguments through real stdio", as
   }
   const path = await temporary(t);
   const serverPath = join(path, "fake-native.mjs");
+  const wirePath = join(path, "server-wire.jsonl");
   await writeFile(
     serverPath,
     `import {createRequire} from 'node:module';
+import {appendFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 const require=createRequire(${JSON.stringify(join(packageDir, "package.json"))});
 const load=name=>import(pathToFileURL(require.resolve(name)).href);
@@ -290,6 +292,7 @@ const {StdioServerTransport}=await load('@modelcontextprotocol/server/stdio');
 const server=new Server({name:'test-native',version:'0.2.2'},{capabilities:{tools:{}},instructions:'fixed native instructions'});
 server.setRequestHandler('tools/list',async()=>(${JSON.stringify(catalog)}));
 server.setRequestHandler('tools/call',async request=>({content:[{type:'text',text:JSON.stringify(request.params)}]}));
+process.stdin.on('data',chunk=>appendFileSync(${JSON.stringify(wirePath)},chunk));
 await server.connect(new StdioServerTransport());`,
   );
   const connection = await connectNative({
@@ -319,7 +322,22 @@ await server.connect(new StdioServerTransport());`,
       future_extra: { yes: true },
     };
     const result = await connection.request("zvec_grep_search", args, params);
-    assert.deepEqual(JSON.parse(result.content[0].text), params);
+    // Check what crossed stdio before the server's SDK schema parses it.
+    // MCP SDK 2.0 strips unknown top-level params in the handler, while
+    // retaining tool arguments and _meta. That is server behavior, not a
+    // replay rewrite; comparing the parsed echo to raw params conflates them.
+    const wire = (await readFile(wirePath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const calls = wire.filter((message) => message.method === "tools/call");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].params, params);
+    assert.deepEqual(JSON.parse(result.content[0].text), {
+      name: params.name,
+      arguments: args,
+      _meta: params._meta,
+    });
     assert.equal(connection.instructions, "fixed native instructions");
   } finally {
     await connection.close();
