@@ -1,5 +1,5 @@
 name: Qualified zg Workspace QA
-run-name: "Workspace QA · priority ${{ inputs.mode || 'qualify' }} · ${{ github.ref_name }}"
+run-name: "Official Lite CN task 116 · ${{ inputs.mode || 'qualify' }} · ${{ github.ref_name }}"
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Validate harness and freeze the priority matrix
+      - name: Validate harness and freeze the official task matrix
         id: plan
         env:
           MODE: ${{ inputs.mode || 'qualify' }}
@@ -48,13 +48,12 @@ jobs:
           import json, os
           from pathlib import Path
           root = Path('benchmarks/workspace-qa/data')
-          audit = json.loads((root / 'zg-task-suitability.json').read_text())
-          lock = json.loads((root / 'lock.json').read_text())
-          tasks = audit['qualification_task_ids']
+          lock = json.loads((root / 'official-task-116-smoke-lock.json').read_text())
+          tasks = [task['task_id'] for task in lock['tasks']]
           locked = {task['task_id'] for task in lock['tasks']}
-          if (audit.get('schema_version') != 1 or len(tasks) != len(set(tasks)) or not tasks
-                  or any(task not in locked for task in tasks)):
-              raise SystemExit('Invalid priority task audit')
+          if (lock.get('schema_version') != 1 or tasks != ['116'] or locked != {'116'}
+                  or lock.get('smoke_task_id') != '116'):
+              raise SystemExit('Invalid official Task 116 smoke lock')
           mode = os.environ['MODE']
           if mode not in {'qualify', 'formal'}:
               raise SystemExit('Mode must be qualify or formal')
@@ -67,8 +66,8 @@ jobs:
               output.write('repetitions=' + str(repetitions) + '\n')
               output.write('mode=' + mode + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('Priority tasks: `' + ', '.join(tasks) + '`. Mode: `' + mode
-                            + '`. Each job runs exactly one baseline/with-zg pair.\n')
+              summary.write('Official task: `116`. The unmodified metadata task and rubrics are used. Mode: `'
+                            + mode + '`. Each job runs exactly one baseline/with-zg pair.\n')
           PY
 
   first-pair:
@@ -88,6 +87,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Install the isolated official Task 116 lock
+        run: cp benchmarks/workspace-qa/data/official-task-116-smoke-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
@@ -114,6 +115,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Install the isolated official Task 116 lock
+        run: cp benchmarks/workspace-qa/data/official-task-116-smoke-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
@@ -150,7 +153,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          path = Path('benchmarks/workspace-qa/data/lock.json')
+          path = Path('benchmarks/workspace-qa/data/official-task-116-smoke-lock.json')
           lock = json.loads(path.read_text())
           selected = set(json.loads(os.environ['TASKS']))
           lock['tasks'] = [task for task in lock['tasks'] if task['task_id'] in selected]
