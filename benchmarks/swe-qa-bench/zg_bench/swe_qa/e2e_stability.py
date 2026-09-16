@@ -1,10 +1,10 @@
 """Pure planning and accounting for the predeclared prompt-stability experiment.
 
 No model calls, grading, imputation, winner selection or trajectory repair occur
-here. Results and quality are lists (or objects with a ``trials`` list), joined
-by trial_id. A result contains execution_status/status, metrics, explicit
-usage_complete/tools_complete booleans and optional behavior. Unknown
-completeness cannot qualify an observed low cost as a benefit.
+here. Results and judge assessments are lists (or objects with a ``trials``
+list), joined by trial_id. A result contains execution_status/status, metrics,
+explicit usage_complete/tools_complete booleans and optional behavior.
+Unknown completeness cannot qualify an observed low cost as a measured delta.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from typing import Any
 
 PROFILES = {"B": "baseline", "C": "zvec-grep-current", "N": "zvec-grep-candidate"}
 METRICS = ("input_tokens", "tool_calls_attempted")
+JUDGE_CRITERIA = ("factual_correctness", "necessary_completeness", "evidence_support")
 REPETITIONS = 10
 ORDER_SEED = 1729
 MODEL_SEED = 20260915
@@ -123,6 +124,35 @@ def _quality(row: dict[str, Any]) -> str:
     return value if isinstance(value, str) and value else "unscored"
 
 
+def _judge_scores(review: dict[str, Any]) -> dict[str, dict[str, int | None]]:
+    """Keep both judges' criterion scores separate; '?' and missing stay unknown."""
+    judgments = review.get("judgments") if isinstance(review.get("judgments"), dict) else {}
+    scores = {}
+    for judge, judgment in judgments.items():
+        if not isinstance(judgment, dict):
+            continue
+        assessment = judgment.get("assessment") if isinstance(judgment.get("assessment"), dict) else {}
+        scores[judge] = {}
+        for criterion in JUDGE_CRITERIA:
+            detail = assessment.get(criterion)
+            value = detail.get("score") if isinstance(detail, dict) else None
+            scores[judge][criterion] = value if type(value) is int and value in (0, 1) else None
+    return scores
+
+
+def _score_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    judges = sorted({judge for row in rows for judge in row["judge_scores"]})
+    summary = {}
+    for judge in judges:
+        summary[judge] = {}
+        for criterion in JUDGE_CRITERIA:
+            values = [score for row in rows
+                      if (score := row["judge_scores"].get(judge, {}).get(criterion)) is not None]
+            summary[judge][criterion] = {"scored": len(values), "planned": len(rows), "ones": sum(values),
+                                         "mean": statistics.mean(values) if values else None}
+    return summary
+
+
 def _repetition(values: list[Any], planned: int) -> dict[str, Any]:
     groups: dict[str, dict[str, Any]] = {}
     for value in values:
@@ -173,7 +203,7 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
     comparisons require usage_complete=True; tool comparisons separately
     require tools_complete=True. Quality comes from a frozen external review,
     never from self-reported execution success. Observed partial/failed costs
-    remain visible but do not enter quality-qualified comparisons.
+    remain visible but do not enter measurement-complete comparisons.
     """
     planned = _validate_plan(plan)
     observed, reviewed = _records(results, "results"), _records(quality, "quality")
@@ -189,7 +219,8 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
         behavior = result.get("behavior") if isinstance(result.get("behavior"), dict) else {}
         request = behavior.get("first_zg_request")
         row = {**copy.deepcopy(trial), "planned_status": trial.get("status"), "execution_status": status,
-               "quality": _quality(review), "usage_complete": result.get("usage_complete") is True,
+               "quality": _quality(review), "judge_scores": _judge_scores(review),
+               "usage_complete": result.get("usage_complete") is True,
                "usage_completeness": result.get("usage_complete") if type(result.get("usage_complete")) is bool else None,
                "tools_complete": result.get("tools_complete") is True,
                "tools_completeness": result.get("tools_complete") if type(result.get("tools_complete")) is bool else None,
@@ -227,14 +258,32 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
                             "no": sum(r["zg_adopted"] is False for r in members),
                             "unknown": sum(r["zg_adopted"] is None for r in members), "planned": len(members)},
             "first_complete_request_repetition": _repetition(requests, len(members)),
-            "first_query_repetition": _repetition(queries, len(members)), "cost": cost}
+            "first_query_repetition": _repetition(queries, len(members)), "cost": cost,
+            "judge_scores": _score_summary(members)}
     pairs = {}
     by_block_arm = {(r["block"], r["arm"]): r for r in rows}
     for left, right in (("C", "B"), ("N", "B"), ("N", "C")):
         if left not in arm_reports:
             continue
         comparison = {"left": left, "right": right, "direction": "left minus right; negative cost difference means lower observed cost",
-                      "planned_pairs": REPETITIONS, "metrics": {}}
+                      "planned_pairs": REPETITIONS, "metrics": {}, "judge_score_deltas": {}}
+        judges = sorted(set(arm_reports[left]["judge_scores"]) | set(arm_reports[right]["judge_scores"]))
+        for judge in judges:
+            comparison["judge_score_deltas"][judge] = {}
+            for criterion in JUDGE_CRITERIA:
+                differences = []
+                for block in range(1, REPETITIONS + 1):
+                    a, b = by_block_arm[block, left], by_block_arm[block, right]
+                    av = a["judge_scores"].get(judge, {}).get(criterion)
+                    bv = b["judge_scores"].get(judge, {}).get(criterion)
+                    if av is not None and bv is not None:
+                        differences.append(av - bv)
+                comparison["judge_score_deltas"][judge][criterion] = {
+                    "scored_pairs": len(differences), "planned_pairs": REPETITIONS,
+                    "mean": statistics.mean(differences) if differences else None,
+                    "improved": sum(value > 0 for value in differences),
+                    "unchanged": sum(value == 0 for value in differences),
+                    "declined": sum(value < 0 for value in differences)}
         for metric in METRICS:
             flag = "usage_complete" if metric == "input_tokens" else "tools_complete"
             entries = []
@@ -254,14 +303,23 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
                 entries.append({"block": block, "left_trial_id": a["trial_id"], "right_trial_id": b["trial_id"],
                                 "left": av, "right": bv, "observed_delta": av - bv if av is not None and bv is not None else None,
                                 "benefit_eligible": not reasons, "exclusions": reasons})
+            measured = []
+            for entry in entries:
+                a, b = by_block_arm[entry["block"], left], by_block_arm[entry["block"], right]
+                entry["measurement_complete"] = (a["execution_status"] == b["execution_status"] == "completed"
+                                                 and a[flag] and b[flag] and entry["observed_delta"] is not None)
+                if entry["measurement_complete"]:
+                    measured.append(entry["observed_delta"])
             eligible = [e["observed_delta"] for e in entries if e["benefit_eligible"]]
             summary = _description(eligible)
+            measured_summary = _description(measured)
             interval = None
             if len(eligible) == REPETITIONS:
                 radius = T95_DF9 * statistics.stdev(eligible) / math.sqrt(REPETITIONS)
                 interval = {"lower": summary["mean"] - radius, "upper": summary["mean"] + radius,
                             "n": REPETITIONS, "df": REPETITIONS - 1, "assumptions": T_ASSUMPTIONS}
             comparison["metrics"][metric] = {"pairs": entries, "eligible_pairs": len(eligible),
+                "measured_pairs": len(measured), "measured_difference_summary": measured_summary,
                 "complete_planned_pair_estimate": len(eligible) == REPETITIONS,
                 "qualified_difference_summary": summary, "auxiliary_t95": interval,
                 "status": "ten_qualified_pairs" if len(eligible) == REPETITIONS else "insufficient_complete_quality_qualified_pairs"}
@@ -281,8 +339,8 @@ def summarize(plan: dict[str, Any], results: Any, quality: Any = None, *,
             "quality_counts": dict(Counter(r["quality"] for r in rows)), "trials": rows, "arms": arm_reports,
             "comparisons": pairs, "unplanned_results": [_safe_copy(r) for k, r in observed.items() if k not in planned_ids],
             "unplanned_quality": [_safe_copy(r) for k, r in reviewed.items() if k not in planned_ids],
-            "limitations": ["Observed costs include failures; only completed, quality-passed, complete pairs qualify for cost comparison.",
-                "Qualified subsets are conditional and must not replace planned denominators.", T_ASSUMPTIONS,
+            "limitations": ["Observed costs include failures; paired cost summaries require completed runs and complete measurements, independently of judge scores.",
+                "Measured subsets are conditional and must not replace planned denominators.", T_ASSUMPTIONS,
                 "Query repetition describes observable behavior, not correctness or a causal explanation of total cost.",
                 "Sampling and server behavior not verified by effective-request evidence remain unknown."]}
 
@@ -301,41 +359,55 @@ def render_markdown(report: dict[str, Any]) -> str:
              f"Source reference: `{json.dumps(report['source_reference'], ensure_ascii=False, sort_keys=True)}`.",
              f"Controls: {report['controls_record_status']}; explicitly unknown: {', '.join(report['unknown_controls']) or 'none listed (not proof all controls are verified)' }.", "",
              "Observed costs below include failures and partial measurements. Missing values are unknown, never zero.", "",
-             "| Block | Arm | Position | Execution | Quality | Input tokens | Tools | Usage complete | Tools complete | zg used |",
-             "|---:|---|---:|---|---|---:|---:|---|---|---|"]
+             "| Block | Arm | Position | Execution | Input tokens | Tools | Usage complete | Tools complete | zg used |",
+             "|---:|---|---:|---|---:|---:|---|---|---|"]
     for row in report["trials"]:
-        values = [row["block"], row["arm"], row["position"], row["execution_status"], row["quality"],
+        values = [row["block"], row["arm"], row["position"], row["execution_status"],
                   row["metrics"]["input_tokens"], row["metrics"]["tool_calls_attempted"],
                   row["usage_completeness"], row["tools_completeness"], row["zg_adopted"]]
         lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
+    lines += ["", "Judge scores: 1 means criterion met, 0 means not met; unknown answers are excluded from the mean and retained in the denominator.", "",
+              "| Arm | Judge | Criterion | Mean | Scored / planned |",
+              "|---|---|---|---:|---:|"]
+    for arm, summary in report["arms"].items():
+        for judge, criteria in summary.get("judge_scores", {}).items():
+            for criterion, score in criteria.items():
+                lines.append("| " + " | ".join((_cell(arm), _cell(judge), criterion,
+                    _cell(score["mean"]), f"{score['scored']}/{score['planned']}")) + " |")
     lines += ["", "Descriptive costs use all observed statuses, including partial failed runs; they are not benefit estimates.", "",
-              "| Arm | Metric | Observed / planned | Observed mean | Median | Range | Completed, passed, complete / planned |",
-              "|---|---|---:|---:|---:|---|---:|"]
+              "| Arm | Metric | Observed / planned | Observed mean | Median | Range |",
+              "|---|---|---:|---:|---:|---|"]
     for arm, summary in report["arms"].items():
         for metric, data in summary["cost"].items():
             stats = data["observed_all_statuses"]
             values = [arm, metric, f"{stats['n']}/{summary['planned']}", stats["mean"], stats["median"],
-                      f"{_cell(stats['minimum'])} … {_cell(stats['maximum'])}",
-                      f"{data['completed_quality_passed_and_complete']['n']}/{summary['planned']}"]
+                      f"{_cell(stats['minimum'])} … {_cell(stats['maximum'])}"]
             lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
-    lines += ["", "Only completed, quality-passed pairs with verified metric completeness enter the qualified summaries.",
+    lines += ["", "Only completed pairs with verified metric completeness enter measured cost summaries, independently of judge scores.",
               "C−B compares current integration; N−B candidate integration; N−C the prompt change. Negative deltas indicate lower cost.", "",
-              "| Comparison | Metric | Ten observed block deltas | Qualified pairs | Qualified mean | Median | Range | Auxiliary t95 |",
-              "|---|---|---|---:|---:|---:|---|---|"]
+              "| Comparison | Metric | Ten observed block deltas | Measured pairs | Measured mean | Median | Range |",
+              "|---|---|---|---:|---:|---:|---|"]
     for name, comparison in report["comparisons"].items():
         for metric, data in comparison["metrics"].items():
-            stats, interval = data["qualified_difference_summary"], data["auxiliary_t95"]
-            deltas = ", ".join(_cell(p["observed_delta"]) + ("*" if not p["benefit_eligible"] else "") for p in data["pairs"])
-            values = [name, metric, deltas, f"{data['eligible_pairs']}/{comparison['planned_pairs']}", stats["mean"], stats["median"],
-                      f"{_cell(stats['minimum'])} … {_cell(stats['maximum'])}",
-                      f"{_cell(interval['lower'])} … {_cell(interval['upper'])}" if interval else "unavailable"]
+            stats = data["measured_difference_summary"]
+            deltas = ", ".join(_cell(p["observed_delta"]) + ("*" if not p["measurement_complete"] else "") for p in data["pairs"])
+            values = [name, metric, deltas, f"{data['measured_pairs']}/{comparison['planned_pairs']}", stats["mean"], stats["median"],
+                      f"{_cell(stats['minimum'])} … {_cell(stats['maximum'])}"]
             lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
-    lines += ["", "* Excluded from qualified comparison; all per-block reasons remain in JSON. Conditional subsets do not establish full planned-sample benefit.", "", T_ASSUMPTIONS, "",
-              "| Arm | Quality passed / planned | zg used / planned | Unknown adoption | First complete request: unique / observed | Modal count / observed |",
-              "|---|---:|---:|---:|---:|---:|"]
+        lines += ["", f"{name} judge score deltas (left minus right):", "",
+                  "| Judge | Criterion | Mean delta | Scored pairs | Improved / unchanged / declined |",
+                  "|---|---|---:|---:|---:|"]
+        for judge, criteria in comparison.get("judge_score_deltas", {}).items():
+            for criterion, score in criteria.items():
+                lines.append("| " + " | ".join((_cell(judge), criterion, _cell(score["mean"]),
+                    f"{score['scored_pairs']}/{score['planned_pairs']}",
+                    f"{score['improved']}/{score['unchanged']}/{score['declined']}")) + " |")
+    lines += ["", "* Excluded from measured comparison; reasons and all raw observations remain in JSON.", "", T_ASSUMPTIONS, "",
+              "| Arm | zg used / planned | Unknown adoption | First complete request: unique / observed | Modal count / observed |",
+              "|---|---:|---:|---:|---:|"]
     for arm, summary in report["arms"].items():
         repetition, adoption = summary["first_complete_request_repetition"], summary["zg_adoption"]
-        values = [arm, f"{summary['completed_quality_passed']}/{summary['planned']}", f"{adoption['yes']}/{adoption['planned']}",
+        values = [arm, f"{adoption['yes']}/{adoption['planned']}",
                   adoption["unknown"], f"{repetition['unique']}/{repetition['observed']}", f"{repetition['modal_count']}/{repetition['observed']}"]
         lines.append("| " + " | ".join(_cell(x) for x in values) + " |")
     lines += ["", "Exact request grouping preserves argument values, omitted fields and array order; JSON key order is ignored. Repetition is not correctness.",
@@ -365,10 +437,10 @@ def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict
     """Render one decision-oriented dashboard across E2E, Agent and retrieval layers."""
     case_id = retrieval.get("case_id") or next((report.get("case_id") for report in e2e_reports.values()), "unknown")
     lines = [f"# Benchmark conclusion: {case_id}", "",
-             "Negative cost changes mean zg used fewer resources. Cost claims use only completed, quality-passed pairs with complete measurements.", "",
+             "Judge scores are reported per model and criterion (0/1); unknown scores are excluded with their denominators shown. Negative cost changes mean zg used fewer resources. Cost deltas require completed runs and complete measurements, independently of judge scores.", "",
              "## 1. Run health and sampling controls", "",
-             "| Agent + model | Completed trials | Quality B / C | Qualified pairs | temp=0 verified | seed verified |",
-             "|---|---:|---:|---:|---:|---:|"]
+             "| Agent + model | Completed trials | Measured input pairs | temp=0 verified | seed verified |",
+             "|---|---:|---:|---:|---:|"]
     for group, report in e2e_reports.items():
         arms = report.get("arms", {})
         baseline, current = arms.get("B", {}), arms.get("C", {})
@@ -377,8 +449,7 @@ def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict
         _, observed, temperatures, seeds = _wire_counts(report)
         lines.append("| " + " | ".join((group,
             _ratio(report.get("execution_counts", {}).get("completed", 0), report.get("planned_trials", 0)),
-            f"{baseline.get('completed_quality_passed', 0)}/{baseline.get('planned', 0)} / {current.get('completed_quality_passed', 0)}/{current.get('planned', 0)}",
-            _ratio(pair.get("eligible_pairs", 0), comparison.get("planned_pairs", REPETITIONS)),
+            _ratio(pair.get("measured_pairs", 0), comparison.get("planned_pairs", REPETITIONS)),
             _ratio(temperatures, observed), _ratio(seeds, observed))) + " |")
 
     lines += ["", "`temperature=0` and the fixed seed are verified from outgoing provider requests. This proves the controls were applied; behavior stability is reported separately.", "",
@@ -398,8 +469,26 @@ def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict
             f"{modal / observed:.0%}" if observed else "unknown",
             _ratio(queries.get("unique", 0), queries.get("observed", 0)))) + " |")
 
-    lines += ["", "## 3. E2E quality and cost", "",
-              "| Agent + model | Mean input B → C | Descriptive change | Qualified paired input Δ | Mean tools B → C | Descriptive change | Qualified paired tool Δ |",
+    lines += ["", "## 3. E2E judge scores", "",
+              "| Agent + model | Judge | Criterion | Baseline mean (n/10) | zg mean (n/10) | Paired zg−baseline (n/10) |",
+              "|---|---|---|---:|---:|---:|"]
+    for group, report in e2e_reports.items():
+        arms = report.get("arms", {})
+        baseline, current = arms.get("B", {}), arms.get("C", {})
+        deltas = report.get("comparisons", {}).get("C-B", {}).get("judge_score_deltas", {})
+        judges = sorted(set(baseline.get("judge_scores", {})) | set(current.get("judge_scores", {})))
+        for judge in judges:
+            for criterion in JUDGE_CRITERIA:
+                b = baseline.get("judge_scores", {}).get(judge, {}).get(criterion, {})
+                c = current.get("judge_scores", {}).get(judge, {}).get(criterion, {})
+                delta = deltas.get(judge, {}).get(criterion, {})
+                lines.append("| " + " | ".join((_cell(group), _cell(judge), criterion,
+                    f"{_cell(b.get('mean'))} ({b.get('scored', 0)}/{b.get('planned', REPETITIONS)})",
+                    f"{_cell(c.get('mean'))} ({c.get('scored', 0)}/{c.get('planned', REPETITIONS)})",
+                    f"{_cell(delta.get('mean'))} ({delta.get('scored_pairs', 0)}/{delta.get('planned_pairs', REPETITIONS)})")) + " |")
+    lines += ["", "Each mean is the share of numeric 1 scores. Paired differences use only blocks where that judge scored both answers on that criterion. Judge models are not merged.", "",
+              "## 4. E2E cost", "",
+              "| Agent + model | Mean input B → C | Descriptive change | Measured paired input Δ | Mean tools B → C | Descriptive change | Measured paired tool Δ |",
               "|---|---:|---:|---:|---:|---:|---:|"]
     findings = []
     for group, report in e2e_reports.items():
@@ -412,26 +501,23 @@ def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict
         tool_pair = comparisons.get("tool_calls_attempted", {})
         input_b, input_c = mean(baseline, "input_tokens"), mean(current, "input_tokens")
         tool_b, tool_c = mean(baseline, "tool_calls_attempted"), mean(current, "tool_calls_attempted")
-        input_delta = input_pair.get("qualified_difference_summary", {}).get("mean")
-        tool_delta = tool_pair.get("qualified_difference_summary", {}).get("mean")
+        input_delta = input_pair.get("measured_difference_summary", {}).get("mean")
+        tool_delta = tool_pair.get("measured_difference_summary", {}).get("mean")
         lines.append("| " + " | ".join((_cell(group), f"{_cell(input_b)} → {_cell(input_c)}",
             _percent_change(input_c, input_b), _cell(input_delta), f"{_cell(tool_b)} → {_cell(tool_c)}",
             _percent_change(tool_c, tool_b), _cell(tool_delta))) + " |")
         planned = report.get("comparisons", {}).get("C-B", {}).get("planned_pairs", REPETITIONS)
-        eligible = input_pair.get("eligible_pairs", 0)
+        eligible = input_pair.get("measured_pairs", 0)
         adoption = current.get("zg_adoption", {}).get("yes", 0)
-        quality_b, quality_c = baseline.get("completed_quality_passed", 0), current.get("completed_quality_passed", 0)
         if eligible < planned:
-            findings.append(f"**{group}: incomplete evidence** — {eligible}/{planned} pairs qualify; do not treat its cost delta as a full planned-sample estimate.")
-        if quality_c < quality_b:
-            findings.append(f"**{group}: quality risk observed** — C passed {quality_c}/{current.get('planned', 0)} versus B {quality_b}/{baseline.get('planned', 0)}.")
+            findings.append(f"**{group}: incomplete cost evidence** — {eligible}/{planned} input pairs have complete measurements; the paired cost delta is descriptive for this subset.")
         if adoption < current.get("planned", 0) / 2:
             findings.append(f"**{group}: adoption is the main bottleneck** — zg was used in only {adoption}/{current.get('planned', 0)} runs.")
-        if eligible == planned and quality_c >= quality_b:
+        if eligible == planned:
             if type(input_delta) in (int, float) and type(tool_delta) in (int, float) and input_delta < 0 and tool_delta < 0:
-                findings.append(f"**{group}: lower cost observed** — all {eligible} qualified pairs are available and both mean paired cost deltas are negative.")
+                findings.append(f"**{group}: lower measured cost observed** — all {eligible} input pairs are available and both mean paired cost deltas are negative; read judge scores above separately for quality.")
             else:
-                findings.append(f"**{group}: no consistent two-metric saving** — the qualified input/tool deltas do not both show a reduction.")
+                findings.append(f"**{group}: no consistent two-metric saving** — the measured input/tool deltas do not both show a reduction.")
 
     if retrieval:
         scored = []
@@ -443,7 +529,7 @@ def render_ci_conclusion(e2e_reports: dict[str, dict[str, Any]], retrieval: dict
         stable = [replay.get("stability", {}).get("identical_all_five") for replay in retrieval.get("replays", [])]
         comparisons = retrieval.get("actual_vs_replay", [])
         rr_values = [row.get("rr_at_10") for row in scored if type(row.get("rr_at_10")) in (int, float)]
-        lines += ["", "## 4. Retrieval explanation", "",
+        lines += ["", "## 5. Retrieval explanation", "",
                   "| Scored requests | Hit@1 | Hit@5 | Hit@10 | Mean RR@10 | Five-replay identical | E2E output = replay output |",
                   "|---:|---:|---:|---:|---:|---:|---:|",
                   "| " + " | ".join((str(len(scored)),

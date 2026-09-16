@@ -204,6 +204,11 @@ class E2EStabilityTests(unittest.TestCase):
     def test_ci_conclusion_separates_applied_controls_from_behavior_stability(self):
         plan = make_plan("case", candidate=None)
         results, quality = observations(plan)
+        for row in quality:
+            score = 1 if row["trial_id"].endswith("-C") else 0
+            row["judgments"] = {"judge-a": {"assessment": {
+                criterion: {"score": score} for criterion in
+                ("factual_correctness", "necessary_completeness", "evidence_support")}}}
         for row in results:
             row["wire_contract"] = {"valid": True, "temperature_zero_verified": True, "seed_verified": True}
         report = summarize(plan, results, quality)
@@ -216,7 +221,32 @@ class E2EStabilityTests(unittest.TestCase):
         self.assertIn("20/20", markdown)
         self.assertIn("behavior stability is reported separately", markdown)
         self.assertIn("Hit@10", markdown)
-        self.assertIn("lower cost observed", markdown)
+        self.assertIn("lower measured cost observed", markdown)
+        self.assertIn("## 3. E2E judge scores", markdown)
+        self.assertIn("0 (10/10)", markdown)
+        self.assertIn("1 (10/10)", markdown)
+        self.assertNotIn("Quality B / C", markdown)
+
+    def test_judge_scores_are_separate_and_do_not_gate_measured_cost(self):
+        plan = make_plan("case", candidate=None)
+        results, quality = observations(plan)
+        for row in quality:
+            arm = row["trial_id"].split("-")[-1]
+            row["consensus_status"] = "fail"
+            row["judgments"] = {"glm": {"assessment": {"factual_correctness": {"score": 1 if arm == "C" else 0},
+                "necessary_completeness": {"score": "?"}, "evidence_support": {"score": 0}}},
+                "qwen": {"assessment": {"factual_correctness": {"score": 0},
+                "necessary_completeness": {"score": 1}, "evidence_support": {"score": 1}}}}
+        report = summarize(plan, results, quality)
+        self.assertEqual(report["arms"]["B"]["judge_scores"]["glm"]["factual_correctness"]["mean"], 0)
+        self.assertEqual(report["arms"]["C"]["judge_scores"]["glm"]["factual_correctness"]["mean"], 1)
+        self.assertEqual(report["arms"]["C"]["judge_scores"]["glm"]["necessary_completeness"]["scored"], 0)
+        self.assertEqual(report["comparisons"]["C-B"]["judge_score_deltas"]["glm"]["factual_correctness"]["mean"], 1)
+        self.assertEqual(report["comparisons"]["C-B"]["metrics"]["input_tokens"]["measured_pairs"], 10)
+        rendered = render_ci_conclusion({"group": report}, {})
+        self.assertIn("glm", rendered)
+        self.assertIn("qwen", rendered)
+        self.assertNotIn("Quality B / C", rendered)
 
 
 if __name__ == "__main__":
