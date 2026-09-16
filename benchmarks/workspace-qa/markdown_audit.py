@@ -23,6 +23,7 @@ def verify(source: Path, manifest: dict, output: Path) -> dict:
     result = {"task_id": "328", "status": "failed", "variant": manifest["variant"], "files": [],
               "scope": "structured text, tables, chart caches and embedded workbook coverage; not full visual/audio equivalence",
               "media_review": review["media_review"], "corpus_status_counts": manifest["status_counts"]}
+    result["oversize_markdown_files"] = manifest.get("oversize_markdown_files", 0)
     errors = []
     if manifest["status_counts"].get("conversion_failed", 0):
         errors.append("Full-persona OOXML conversion contains failures")
@@ -80,6 +81,7 @@ def verify(source: Path, manifest: dict, output: Path) -> dict:
         lines.append(f"| {Path(row['path']).name} | {c.get('slides',0)} | {c.get('tables',0)} | {c.get('charts',0)} | "
             f"{row['embedded_workbooks']} | {row['xml_atoms_checked']} | {len(row['missing_atoms'])} | {row['markdown_bytes']} |")
     lines += ["", "Full-persona conversion: `" + json.dumps(manifest["status_counts"], sort_keys=True) + "`.",
+              "", f"Sidecars above the unchanged 1 MiB index cap: {result['oversize_markdown_files']}. Full content retained; no splitting/truncation.",
               "", "Conversion seconds: " + str(round(manifest["wall_seconds"], 3)) + ". Excluded from agent metrics.", "",
               "Raster review: 47 images inspected; decorative photographs, backgrounds, illustrations and media icons. "
               "Audio is retained but not transcribed. Legacy .doc/.xls/.ppt and PDF are outside this converter's scope.",

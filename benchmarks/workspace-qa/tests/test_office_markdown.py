@@ -21,7 +21,7 @@ class OfficeMarkdownTests(unittest.TestCase):
         path = self.root / "report.pptx"
         a, c, r = md.NS['a'], md.NS['c'], md.NS['r']
         with zipfile.ZipFile(path, "w") as z:
-            z.writestr('ppt/presentation.xml', f'<p:presentation xmlns:p="urn:p" xmlns:r="{r}"><p:sldIdLst><p:sldId r:id="second"/><p:sldId r:id="first"/></p:sldIdLst></p:presentation>')
+            z.writestr('ppt/presentation.xml', f'<p:presentation xmlns:p="urn:p" xmlns:r="{r}"><p:sldIdLst><p:sldId r:id="second"/><p:sldId r:id="first"/></p:sldIdLst><p:extLst><p:section><p:sldId id="120"/></p:section></p:extLst></p:presentation>')
             z.writestr('ppt/_rels/presentation.xml.rels', '<Relationships><Relationship Id="first" Type="slide" Target="slides/slide1.xml"/><Relationship Id="second" Type="slide" Target="slides/slide2.xml"/></Relationships>')
             for n in [1, 2]:
                 z.writestr(f'ppt/slides/slide{n}.xml', f'<slide xmlns:a="{a}"><a:p><a:r><a:t>正文{n}</a:t></a:r></a:p></slide>')
@@ -57,10 +57,11 @@ class OfficeMarkdownTests(unittest.TestCase):
         (source / 'unrelated.pptx').write_bytes(p.read_bytes())
         (source / 'original.txt').write_text('existing TXT')
         (source / 'empty.docx').touch()
-        (source / 'old.doc').write_bytes(b'legacy')
-        (source / 'broken.xlsx').write_bytes(b'not a zip')
+        (source / 'old.doc').write_bytes(md.OLE_MAGIC + b'legacy')
+        (source / 'broken.xlsx').write_bytes(b'PK\x00\x00not a zip')
+        (source / 'text.xlsx').write_text('部门,人数\n行政部,12\f下一页')
         result = md.convert_workspace(source, self.root / 'manifest.json')
-        self.assertEqual(result['status_counts'], {'conversion_failed':1, 'empty_original':1, 'legacy_unsupported':1, 'converted':1})
+        self.assertEqual(result['status_counts'], {'invalid_original':1, 'empty_original':1, 'legacy_unsupported':1, 'converted':2})
         self.assertTrue((source / 'unrelated.pptx.md').is_file())
         self.assertEqual((source / 'original.txt').read_text(), 'existing TXT')
         with self.assertRaises(FileExistsError):
@@ -82,12 +83,15 @@ class OfficeMarkdownTests(unittest.TestCase):
         self.assertIn('| B1 | 0.1 | 1/10 | 0.00% |', text)
         self.assertEqual(audit['counts']['worksheet_cells'], 2)
 
-    def test_large_utf8_sidecars_are_split_without_truncating_any_content(self):
-        text = ('中国|é\n' * 300000) + ('单' * 600000)
-        parts = md.chunks(text)
-        self.assertGreater(len(parts), 1)
-        self.assertEqual(''.join(parts), text)
-        self.assertTrue(all(len(p.encode()) <= md.PART_BYTES for p in parts))
+    def test_large_utf8_sidecars_are_retained_whole_and_reported_over_index_cap(self):
+        source = self.root / 'workspace'; source.mkdir()
+        text = '部门,人数\n' * 300000
+        (source / 'large.xlsx').write_text(text)
+        result = md.convert_workspace(source, self.root / 'manifest.json')
+        self.assertEqual(result['oversize_markdown_files'], 1)
+        self.assertEqual(len(result['files'][0]['outputs']), 1)
+        self.assertFalse(result['files'][0]['outputs'][0]['index_eligible_by_size'])
+        self.assertTrue((source / 'large.xlsx.md').read_text().endswith(text))
 
     def test_both_arm_prompts_share_mapping_notice_and_judge_can_see_chart_data(self):
         path = self.make_pptx()

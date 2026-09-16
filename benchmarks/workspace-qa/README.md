@@ -23,8 +23,13 @@ raster images (decorative photos, backgrounds, illustrations and media icons).
 This is not full visual/audio equivalence: audio is retained without
 transcription; legacy DOC/XLS/PPT and PDF are inventoried but not converted.
 Worksheet values/formulas and number formats are retained without recalculation.
-All supported-format conversion failures block this pilot. Large sidecars are
-split deterministically below 900 KiB, without truncation.
+All valid supported-format conversion failures block this pilot. Input format
+is detected from bytes: binary legacy Office can carry modern extensions;
+plain UTF-8 content with an Office extension is retained verbatim in a sidecar.
+Empty inputs and invalid original archives are inventoried, never silently
+claimed as converted. Sidecars above the unchanged 1 MiB index cap stay whole
+and are reported as too large for indexing; no splitting or truncation. All
+four required Task 328 sidecars are below 40 KiB.
 
 The original Task 328 PPT TXT lacks the departmental chart series. The new
 sidecars add those source values and their category associations, including the

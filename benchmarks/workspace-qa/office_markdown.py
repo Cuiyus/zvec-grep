@@ -21,7 +21,8 @@ import zipfile
 VARIANT = "office-markdown-v1"
 SUPPORTED = {".docx", ".pptx", ".xlsx"}
 LEGACY = {".doc", ".ppt", ".xls"}
-PART_BYTES = 900 * 1024
+INDEX_MAX_BYTES = 1024 * 1024
+OLE_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
       "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
       "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
@@ -30,7 +31,7 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
 TEXT_TAGS = {f"{{{NS[n]}}}t" for n in ("w", "a", "s")}
 DATA_TAGS = TEXT_TAGS | {f"{{{NS[n]}}}{t}" for n in ("c", "s") for t in ("v", "f")}
 COMMON_NOTICE = ("This workspace has deterministic Markdown sidecars for nonempty DOCX, PPTX and XLSX files, "
-    "named <original filename>.md (large outputs use .partNNN.md). Original files and existing TXT files are retained. "
+    "named <original filename>.md. Original files and existing TXT files are retained. "
     "Sidecars preserve structured text, tables, chart caches and worksheet cells; images, audio, legacy Office and PDF "
     "are not OCR-transcribed. Both comparison profiles receive exactly the same prepared workspace.\n")
 
@@ -187,8 +188,11 @@ class Document:
         labels = {}
         if "ppt/presentation.xml" in names:
             rels = relationships(self.z, "ppt/presentation.xml")
-            ids = [e.get(f"{{{NS['r']}}}id") for e in ET.fromstring(self.z.read("ppt/presentation.xml")).iter()
-                   if local(e.tag) == "sldId"]
+            presentation = ET.fromstring(self.z.read("ppt/presentation.xml"))
+            # Only the main slide list defines presentation order; extension
+            # sections/custom shows also contain unrelated sldId elements.
+            ids = [e.get(f"{{{NS['r']}}}id") for group in presentation if local(group.tag) == "sldIdLst"
+                   for e in group if local(e.tag) == "sldId"]
             for i, rid in enumerate(ids, 1):
                 _, name, external = rels[rid]
                 if external:
@@ -240,19 +244,21 @@ def convert_file(path: Path, relative: str) -> tuple[str, dict]:
     return heading + body, {"path": relative, "source_sha256": sha(data), "source_bytes": len(data), **audit}
 
 
-def chunks(text: str) -> list[str]:
-    # Stable UTF-8 chunks; no truncation and no file exceeds the experiment cap.
-    result, current, size = [], [], 0
-    for line in text.splitlines(keepends=True):
-        for start in range(0, len(line), PART_BYTES // 4):
-            bit = line[start:start + PART_BYTES // 4]
-            n = len(bit.encode())
-            if size + n > PART_BYTES and current:
-                result.append("".join(current)); current, size = [], 0
-            current.append(bit); size += n
-    if current:
-        result.append("".join(current))
-    return result
+def input_format(path: Path) -> str:
+    data = path.read_bytes()
+    if not data:
+        return "empty_original"
+    if data.startswith(OLE_MAGIC):
+        return "legacy_unsupported"
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        return "ooxml"
+    try:
+        text = data.decode("utf-8-sig")
+        if any(ord(c) < 32 and not c.isspace() for c in text):
+            raise ValueError("Not plain text")
+        return "plain_text"
+    except (UnicodeDecodeError, ValueError):
+        return "invalid_original"
 
 
 def convert_workspace(source: Path, output: Path) -> dict:
@@ -262,13 +268,23 @@ def convert_workspace(source: Path, output: Path) -> dict:
                        and p.suffix.lower() in SUPPORTED | LEGACY)
     for i, path in enumerate(originals, 1):
         relative = path.relative_to(source).as_posix()
-        if not path.stat().st_size or path.suffix.lower() not in SUPPORTED:
+        kind = input_format(path)
+        if kind not in {"ooxml", "plain_text"}:
             rows.append({"path": relative, "source_sha256": sha(path.read_bytes()), "source_bytes": path.stat().st_size,
-                         "status": "empty_original" if not path.stat().st_size else "legacy_unsupported"})
+                         "status": kind, "first16_hex": path.read_bytes()[:16].hex()})
             continue
         try:
-            text, audit = convert_file(path, relative)
-            pieces = chunks(text)
+            if kind == "plain_text":
+                raw = path.read_bytes()
+                text = f"# {path.name}\n\nOriginal: `{relative}`\n\nDetected plain UTF-8 text despite Office extension; verbatim content follows.\n\n" + raw.decode("utf-8-sig")
+                audit = {"path": relative, "source_sha256": sha(raw), "source_bytes": len(raw), "input_format": kind,
+                         "counts": {}, "parts": [], "embedded_workbooks": [], "media": [], "missing_atoms": 0}
+            else:
+                text, audit = convert_file(path, relative)
+                audit["input_format"] = kind
+            # Keep the existing document-level index cap. Do not silently turn a
+            # multi-megabyte workbook into hundreds of newly indexable fragments.
+            pieces = [text]
             targets = []
             for n, piece in enumerate(pieces, 1):
                 suffix = ".md" if n == 1 else f".part{n:03}.md"
@@ -276,7 +292,8 @@ def convert_workspace(source: Path, output: Path) -> dict:
                 if target.exists():
                     raise FileExistsError("Refusing to replace an original sidecar")
                 target.write_text(piece, encoding="utf-8")
-                targets.append({"path": target.relative_to(source).as_posix(), "sha256": sha(piece.encode()), "size_bytes": len(piece.encode())})
+                targets.append({"path": target.relative_to(source).as_posix(), "sha256": sha(piece.encode()), "size_bytes": len(piece.encode()),
+                                "index_eligible_by_size": len(piece.encode()) <= INDEX_MAX_BYTES})
             audit.update(status="converted", outputs=targets)
             rows.append(audit)
         except (zipfile.BadZipFile, ET.ParseError, KeyError, ValueError) as exc:
@@ -287,8 +304,11 @@ def convert_workspace(source: Path, output: Path) -> dict:
     result = {"variant": VARIANT, "converter_sha256": sha(Path(__file__).read_bytes()),
               "scope": "all nonempty .docx/.pptx/.xlsx in full persona, independent of task/rubrics; originals and TXT retained",
               "status_counts": dict(Counter(r["status"] for r in rows)), "files": rows,
+              "oversize_markdown_files": sum(not f["index_eligible_by_size"] for r in rows for f in r.get("outputs", [])),
+              "index_eligible_markdown_bytes": sum(f["size_bytes"] for r in rows for f in r.get("outputs", []) if f["index_eligible_by_size"]),
               "wall_seconds": time.monotonic() - started, "included_in_agent_metrics": False,
-              "limitations": ["No raster OCR or visual layout equivalence", "Legacy .doc/.xls/.ppt and PDF not converted",
+              "limitations": ["No raster OCR or visual layout equivalence", "Detected legacy binary Office, invalid archives and PDF not converted",
+                              "Complete sidecars above 1 MiB remain available to both agents but exceed the unchanged index cap; no splitting or truncation",
                               "Worksheet cached values preserved without recalculation; raw values and number formats reported"]}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
