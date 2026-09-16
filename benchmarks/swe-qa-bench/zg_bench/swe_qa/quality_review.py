@@ -162,7 +162,7 @@ def consensus(judgments: dict[str, dict[str, Any]], calibration: dict[str, dict[
 
 
 def _markdown(report: dict[str, Any]) -> str:
-    lines = [f"# Calibrated two-model QA review: {report['case_id']}", "",
+    lines = [f"# Calibrated two-model QA scores: {report['case_id']}", "",
              "Single-case development review. Calibration was authored after earlier answers were inspected; it is not held-out validation.",
              "GLM candidates include a GLM self-judge; Qwen candidates include a Qwen self-judge. The pair is two fallible models, not independent human verification.",
              "A missing or mismatched response model remains unscored. Only case-insensitive IDs and the optional openai/ prefix are accepted aliases.",
@@ -171,14 +171,18 @@ def _markdown(report: dict[str, Any]) -> str:
     for model in MODELS:
         row = report["calibration"][model]
         lines.append(f"| {model} | {row['status']} | {row.get('matched_examples', 0)}/{row['planned_examples']} |")
-    lines += ["", "| Trial | Profile | GLM | Qwen | Raw consensus | Reportable status | Criterion disagreement |",
-              "|---|---|---|---|---|---|---|"]
+    lines += ["", "Each judge cell gives factual correctness / necessary completeness / evidence support; each score is 0, 1 or ?.", "",
+              "| Trial | Profile | GLM scores | Qwen scores | Execution |",
+              "|---|---|---|---|---|"]
     for row in report["trials"]:
-        values = [row["trial_id"], row["profile"], *[row.get("judgments", {}).get(m, {}).get("quality", "unscored") for m in MODELS],
-                  row.get("raw_consensus", "unscored"), row.get("consensus_status", "unscored"), str(row.get("flags", {}).get("criterion_disagreement", False))]
+        def scores(model: str) -> str:
+            assessment = row.get("judgments", {}).get(model, {}).get("assessment") or {}
+            return "/".join(str((assessment.get(criterion) or {}).get("score", "?"))
+                            for criterion in CRITERIA)
+        values = [row["trial_id"], row["profile"], *[scores(model) for model in MODELS],
+                  row.get("execution_status", "unknown")]
         lines.append("| " + " | ".join(str(v).replace("|", "\\|").replace("\n", " ") for v in values) + " |")
-    lines += ["", "A reportable pass requires both calibrated judges to pass and the QA execution to have completed.",
-              "Calibration failures, disagreement, uncertainty and missing answers remain explicit; no majority vote or forced pass.",
+    lines += ["", "The two judges' scores remain separate; unknown scores and missing answers are not converted to zero.",
               "Source support does not measure the candidate's observed retrieval evidence. Tokens/costs are never shown to judges.",
               "All prompts, responses, criterion reasons, model identities and failed attempts are retained in JSON.", ""]
     return "\n".join(lines)

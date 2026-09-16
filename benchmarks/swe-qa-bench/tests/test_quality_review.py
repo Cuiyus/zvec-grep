@@ -110,7 +110,10 @@ class QualityReviewTest(unittest.TestCase):
             for forbidden in ("PRIVATE_USER_CONTEXT", "PROGRESS_NOT_AN_ANSWER", "HIDDEN_TOOL_OBSERVATION", "HIDDEN_AGENT_REASONING", "HIDDEN_JUDGE_REASONING", "private-test-key"):
                 self.assertNotIn(forbidden, saved)
             self.assertEqual(legacy.read_text(), "KEEP_EXISTING_JUDGMENT")
-            self.assertIn("not held-out", output.with_suffix(".md").read_text())
+            markdown = output.with_suffix(".md").read_text()
+            self.assertIn("not held-out", markdown)
+            self.assertIn("GLM scores | Qwen scores", markdown)
+            self.assertNotIn("Reportable status", markdown)
             attempt = report["trials"][0]["judgments"][MODELS[1]]["attempts"][0]
             self.assertEqual(attempt["resolved_model"], "qwen3.8-max")
             self.assertEqual(attempt["usage"]["input_tokens"], 100)
