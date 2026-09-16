@@ -99,6 +99,21 @@ jobs:
           docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
           -f benchmarks/workspace-qa/Dockerfile
           -t zg-readonly-qa:0.2.2 benchmarks
+      - name: Verify the CI account exposes GLM-5.2 before model generation
+        env:
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/workspace-qa-probe"
+          docker run --rm --env QODER_PERSONAL_ACCESS_TOKEN zg-readonly-qa:0.2.2 \
+            qodercli --list-models > "$RUNNER_TEMP/workspace-qa-probe/qoder-models.txt"
+          cat "$RUNNER_TEMP/workspace-qa-probe/qoder-models.txt"
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          catalog = (Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-probe/qoder-models.txt').read_text()
+          if not re.search(r'(?i)\bGLM-5\.2\b', catalog):
+              raise SystemExit('GLM-5.2 is absent from the CI account model catalog; automatic model fallback is forbidden.')
+          PY
       - name: Check remote embedding and real Qoder MCP retrieval on one tiny file
         env:
           QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
@@ -143,6 +158,7 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ runner.temp }}/workspace-qa-probe/result.json
+            ${{ runner.temp }}/workspace-qa-probe/qoder-models.txt
             ${{ runner.temp }}/workspace-qa-probe/embedding-preflight.json
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/runtime/
             ${{ runner.temp }}/workspace-qa-probe/sdk-preflight/qoder/
