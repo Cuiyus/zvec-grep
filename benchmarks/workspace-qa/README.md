@@ -2,6 +2,10 @@
 
 ## Task 328 Markdown smoke (2026-09-16)
 
+Completed result: [conversion audit and one-pair observations](reports/task-328-markdown-smoke-2026-09-16.md).
+Both trials completed and read Markdown, but the with-zg QA trial made zero zg
+calls. This validates preprocessing/integration, not zg retrieval efficacy.
+
 `workspace-qa-markdown-smoke.yml` is a separate opt-in workflow: **Task 328 only,
 one baseline + one with-zg**. Dispatch it on this branch, or push a reviewed
 commit containing `[workspace-qa-markdown-smoke]`. It does not start the five-pair
