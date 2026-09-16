@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from urllib import request, error
+import runner
 
 HERE = Path(__file__).resolve().parent
 PROTOCOL = "workspace-qa-qoder-native-install-v3"
@@ -240,6 +241,8 @@ def main(argv=None):
     if args.shared_preflight and not continuing:
         raise ValueError("Shared source-run preflight is only valid for an audited continuation")
     lock = json.loads((HERE / "data/lock.json").read_text())
+    if lock["experiment"]["requested_model"] != runner.MODEL:
+        raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     if args.repetitions < 1:
         raise ValueError("repetitions must be positive")

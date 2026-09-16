@@ -133,7 +133,7 @@ class SmokeGateTests(unittest.TestCase):
         self.fixture(statuses)
         self.probe_fixture()
         code = self.root / "fake-code"
-        dump(code / "data/lock.json", {"experiment": {"protocol": PROTOCOL}, "tasks": [{"task_id": "3", "answer_filename": "answer.md"}]})
+        dump(code / "data/lock.json", {"experiment": {"protocol": PROTOCOL, "requested_model": module.runner.MODEL}, "tasks": [{"task_id": "3", "answer_filename": "answer.md"}]})
         def subprocess_run(command, **kwargs):
             if str(command[1]).endswith("report.py"):
                 output = self.root / "report"
@@ -193,7 +193,7 @@ class ContinuationTaskTests(unittest.TestCase):
         self.prior = self.root / "original-artifact"
         self.review = self.root / "code-review.json"
         self.commands = []
-        dump(self.code / "data/lock.json", {"experiment": {"protocol": PROTOCOL},
+        dump(self.code / "data/lock.json", {"experiment": {"protocol": PROTOCOL, "requested_model": module.runner.MODEL},
             "tasks": [{"task_id": "3", "answer_filename": "answer.md"}]})
         dump(self.review, {"status": "verified"})
 

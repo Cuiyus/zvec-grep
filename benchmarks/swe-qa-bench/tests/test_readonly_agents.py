@@ -63,7 +63,7 @@ class ReadonlyAgentTests(unittest.TestCase):
         self.assertEqual(spec.version, "1.1.45")
         self.assertEqual(spec.cli_model, "Qwen3.8-Max")
         self.assertEqual(spec.credential_env, "QODER_PERSONAL_ACCESS_TOKEN")
-        for args in (("qodercli", "auto"), ("qodercli", "glm-5.2"), ("unknown", "qwen3.8-max")):
+        for args in (("qodercli", "auto"), ("qodercli", "unsupported-model"), ("unknown", "qwen3.8-max")):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 agent_spec(*args)
         for kwargs in ({"base_url": "https://example.com/v1"}, {"api_key_env": "OPENAI_API_KEY"}):
@@ -84,6 +84,17 @@ class ReadonlyAgentTests(unittest.TestCase):
         self.assertTrue(controls["temperature_wire_verification_required"])
         self.assertNotIn("mcp", cfg)
         self.assertEqual(cfg["permission"]["*"], "deny")
+
+    def test_glm_native_model_and_sampling_controls_do_not_claim_determinism(self):
+        spec = agent_spec("qodercli", "GLM-5.2")
+        self.assertEqual(spec.model, "glm-5.2")
+        self.assertEqual(spec.cli_model, "GLM-5.2")
+        controls = control_manifest(spec, max_model_turns=60)
+        self.assertIsNone(controls["temperature"])
+        self.assertIsNone(controls["model_sampling_seed"])
+        self.assertEqual(controls["seed_control"], "not_exposed")
+        self.assertTrue(_qoder_identity(qoder_events(model="GLM-5.2", result_model="glm-5.2"), spec)["valid"])
+        self.assertFalse(_qoder_identity(qoder_events(), spec)["valid"])
 
     def test_qoder_config_and_argv_remove_write_and_external_tools(self):
         spec = agent_spec("qodercli", "qwen3.8-max")

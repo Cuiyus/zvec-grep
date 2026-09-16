@@ -34,7 +34,7 @@ class ProbeEntryTests(unittest.TestCase):
                 calls.append(("sdk", path))
                 (path / "qoder").mkdir(parents=True)
                 (path / "qoder/result.json").write_text(json.dumps({
-                    "model_identity": {"valid": True, "observed_models": ["qwen3.8-max"]}}))
+                    "model_identity": {"valid": True, "observed_models": [run_probe.runner.MODEL]}}))
 
             with patch.object(run_probe.run_task, "embedding_preflight", side_effect=embedding), \
                     patch.object(run_probe.run_task, "sdk_preflight", side_effect=sdk), \
@@ -50,7 +50,7 @@ class ProbeEntryTests(unittest.TestCase):
             self.assertEqual(result["protocol"], "workspace-qa-qoder-native-install-v3")
             self.assertEqual(result["status"], "completed")
             self.assertFalse(result["included_in_benchmark"])
-            self.assertEqual(result["model"], "qwen3.8-max")
+            self.assertEqual(result["model"], run_probe.runner.MODEL)
             self.assertEqual(result["embedding_model"], "qwen/qwen3.7-text-embedding")
             self.assertEqual(result["resolved_embedding_model"], "qwen3.7-text-embedding")
             self.assertTrue(result["model_identity"]["valid"])

@@ -20,7 +20,8 @@ from urllib.parse import urlsplit
 PROTOCOL = "workspace-qa-qoder-native-install-v3"
 ZG_VERSION = "0.2.2"
 QODER_VERSION = "1.1.45"
-MODEL = "Qwen3.8-Max"
+MODEL = "Qwen3.8-Max" if os.environ.get("WORKSPACE_QA_MODEL") == "qwen3.8-max" else "GLM-5.2"
+SUPPORTED_MODELS = {"Qwen3.8-Max", "GLM-5.2"}
 EMBEDDING_MODEL = "qwen/qwen3.7-text-embedding"
 QODER_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"
 READ_TOOLS = ("Read", "Grep", "Glob")
@@ -73,7 +74,7 @@ def validate_spec(spec: dict) -> None:
         raise ValueError("native session protocol mismatch")
     if spec.get("profile") not in {"baseline", "with-zg"}:
         raise ValueError("native session profile must be baseline or with-zg")
-    if spec.get("model") != MODEL or spec.get("embedding_model") != EMBEDDING_MODEL:
+    if spec.get("model") not in SUPPORTED_MODELS or spec.get("embedding_model") != EMBEDDING_MODEL:
         raise ValueError("native session requires the pinned agent and embedding models")
     if not isinstance(spec.get("prompt"), str) or not spec["prompt"].strip():
         raise ValueError("native session needs a nonempty original prompt")
@@ -99,7 +100,7 @@ def session_spec(spec: dict, log_dir: Path) -> dict:
                "--permission-mode", "dont_ask", "--tools", ",".join(READ_TOOLS),
                "--allowed-tools", ",".join(allowed), "--disallowed-tools", ",".join(DENY_TOOLS),
                "--max-model-request-retries", "0", "--max-turns", str(spec["limits"]["model_requests"]),
-               "--model", MODEL, "--", spec["prompt"]]
+               "--model", spec["model"], "--", spec["prompt"]]
     return {"command": command, "env": {"QODER_EXPOSE_TOKEN_USAGE": "1", "QODER_MCP_LAZY": "0"},
             "limits": spec["limits"], "log_dir": str(log_dir), "native_name": "qodercli-stream.jsonl"}
 

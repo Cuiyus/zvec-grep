@@ -48,7 +48,7 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
     zg = profile == "with-zg"
     if zg != (index is not None):
         raise ValueError("Only the with-zg profile receives an index")
-    spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": "Qwen3.8-Max",
+    spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": r.SPEC.cli_model,
             "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits}
     r.write_json(agent / "native-spec.json", spec)
     command = r.docker_command(image, source, agent, cache, index=index) + ["--init"]
@@ -156,6 +156,7 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "task_id": args.task_id, "created_at": r.now(), "package": r.PACKAGE, "embedding_model": r.EMBEDDING,
         "embedding_endpoint": r.embedding_endpoint(), "agent": r.SPEC.name, "agent_version": r.SPEC.version,
         "model": r.MODEL, "agent_spec": r.SPEC.to_dict(), "source_git_commit": commit,
+        "model_controls": r.control_manifest(r.SPEC, max_model_turns=limits["model_requests"]),
         "source_files": before, "question_sha256": r.sha256(question_path), "answer_filename": filename,
         "run_limits": limits, "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
         "gold_visible_to_agent": False, "corpus_readonly_mount": True,

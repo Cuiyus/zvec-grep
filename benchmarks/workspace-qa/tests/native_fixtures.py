@@ -1,4 +1,5 @@
 """Offline consumers' fixtures; installer validation has its own dedicated tests."""
+import runner
 import hashlib
 import json
 from pathlib import Path
@@ -28,7 +29,7 @@ def installation_stub(agent, *, profile="with-zg"):
 
 def write_native(agent, outcomes=(True,), *, marker=MARKER, vector=True):
     agent.mkdir(parents=True, exist_ok=True)
-    events = [{"type": "system", "subtype": "init", "qodercli_version": "1.1.45", "model": "Qwen3.8-Max",
+    events = [{"type": "system", "subtype": "init", "qodercli_version": "1.1.45", "model": runner.SPEC.cli_model,
                "tools": [TOOL], "mcp_servers": [{"name": "zvec_grep", "status": "connected"}]}]
     for index, success in enumerate(outcomes):
         key = str(index)
@@ -49,7 +50,7 @@ def write_probe(output, outcomes=(True,), **kwargs):
     write_native(agent, outcomes, **kwargs)
     result = {"protocol": PROTOCOL, "phase": "setup_qoder_mcp_probe", "status": "completed",
               "included_in_benchmark": False, "embedding_model": "qwen/qwen3.7-text-embedding",
-              "model": "qwen3.8-max", "model_identity": {"valid": True}, "source_unchanged": True,
+              "model": runner.MODEL, "model_identity": {"valid": True}, "source_unchanged": True,
               "input_tokens": 123, "tool_calls": len(outcomes), "zg_tool_calls": len(outcomes),
               "zg_tool_calls_successful": sum(value is True for value in outcomes), "installation": installation}
     dump(output / "result.json", result)

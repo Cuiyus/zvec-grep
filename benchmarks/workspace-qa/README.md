@@ -1,23 +1,39 @@
-# Qoder + Qwen3.8-Max Workspace QA
+# Qoder Workspace QA
 
-**Current status: the documented `zg install` integration passed its fresh
-[native probe](https://github.com/Cuiyus/zvec-grep/actions/runs/34919506961) and
-[task-3 smoke](https://github.com/Cuiyus/zvec-grep/actions/runs/34919707888).
-The separate 200-trial formal matrix is running in the latter workflow; no
-completed standard-installation efficacy result is available.**
+## Current execution model (2026-09-16)
 
-The earlier implementation used released zg 0.2.2 through a benchmark-managed
-MCP bridge and manually assembled Qoder configuration. That did not satisfy the
-requested standard installation. All earlier probe, smoke, judge-recovery and
-full-run observations are now **legacy bridge diagnostics only**. They cannot
-validate, populate, or be combined with the new standard-installation experiment.
-The original artifacts remain intact; the classification is recorded in
-[legacy-bridge-runs.json](data/legacy-bridge-runs.json).
+New runs default to **Qoder CLI 1.1.45 + GLM-5.2**, selected explicitly with
+`--model GLM-5.2`. Both baseline and with-zg use the same model. The standard
+`zg install --target qoder --yes` integration, zg 0.2.2, remote
+`qwen/qwen3.7-text-embedding`, and GLM-5.2 rubric judge are unchanged.
+The model switch is a new experiment, not a relabeling of past results.
 
-The corrected experiment restarts **all 200 formal trials**: the same 10 tasks,
-10 repetitions per arm, baseline and with-zg. Its task selection, model versions,
-remote embedding, index size cap, QA budgets, source data and judge remain fixed.
-Old baseline observations are excluded as well as old with-zg observations.
+The completed Qwen run tested original tasks 328 and 116, five repetitions per
+arm (20 trials). Its original lock and evidence remain unchanged. The fresh
+GLM workflow uses `official-tasks-328-116-glm52-five-run-lock.json` and distinct
+artifact names. DeepSWE has been researched but is not implemented in this QA
+harness; switching the model does not start a DeepSWE benchmark.
+
+Sampling controls:
+
+- **Agent temperature:** not explicitly set; no verified temperature control
+  is exposed by the pinned Qoder CLI. The effective service value is unknown.
+- **Agent sampling seed:** not set; no verified model-seed control is exposed.
+- **Pair order seed:** 1729 only shuffles balanced baseline/with-zg order.
+- **Judge:** HTTP requests explicitly send `temperature: 0`, with no sampling
+  seed. Its separate `--seed` only shuffles grading order.
+
+Model controls are saved in each runtime manifest. A fixed order seed does not
+make model generation deterministic. Do not add undocumented sampling fields
+or claim service-side determinism without request-level evidence.
+
+`WORKSPACE_QA_MODEL=qwen3.8-max` is retained for historical continuation only;
+its workflow restores `qwen38-legacy-lock.json`. Model/lock mismatches and mixed
+model report inputs fail closed. New GLM runs still require a live CI probe to
+verify the account's model availability and native response model identity.
+
+The earlier benchmark-managed MCP bridge runs remain legacy diagnostics;
+see [legacy-bridge-runs.json](data/legacy-bridge-runs.json).
 
 ## Standard installation contract
 
@@ -67,10 +83,10 @@ that the installed MCP server can perform the authorized embedding operation.
 New validation must exercise that installed path. No local embedding or model
 fallback is allowed.
 
-## Frozen benchmark and controls
+## Historical 10-task Qwen benchmark and controls
 
 The [selection protocol](../../docs/benchmark-protocols/qoder-workspace-lite-cn-selection.zh-CN.md)
-compares the five requested candidates. [lock.json](data/lock.json) freezes the
+compares the five requested candidates. [qwen38-legacy-lock.json](data/qwen38-legacy-lock.json) freezes the
 Workspace-Bench Lite CN subset, dataset/workspace revisions and input hashes:
 
 - Code QA: 3, 127, 128.

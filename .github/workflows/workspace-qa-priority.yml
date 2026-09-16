@@ -1,5 +1,5 @@
-name: Qualified zg Workspace QA
-run-name: "Official Lite CN tasks 328 + 116 · 5 pairs each · ${{ github.ref_name }}"
+name: Qualified zg Workspace QA · GLM-5.2
+run-name: "GLM-5.2 · Official Lite CN tasks 328 + 116 · 5 pairs each · ${{ github.ref_name }}"
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: workspace-qa-priority-five-pairs-${{ github.ref }}
+  group: workspace-qa-priority-glm52-five-pairs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -41,7 +41,8 @@ jobs:
           import json, os
           from pathlib import Path
           root = Path('benchmarks/workspace-qa/data')
-          lock = json.loads((root / 'official-tasks-328-116-five-run-lock.json').read_text())
+          lock = json.loads((root / 'official-tasks-328-116-glm52-five-run-lock.json').read_text())
+          assert lock['experiment']['requested_model'] == 'glm-5.2'
           tasks = [task['task_id'] for task in lock['tasks']]
           locked = {task['task_id'] for task in lock['tasks']}
           repetitions = lock.get('repetitions')
@@ -76,14 +77,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the isolated two-task lock
-        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
+        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-glm52-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
           repetitions: ${{ needs.validate.outputs.repetitions }}
           shard-repetition: '1'
           artifact-suffix: '-r01'
-          artifact-prefix: workspace-qa-priority-five-pairs
+          artifact-prefix: workspace-qa-priority-glm52-five-pairs
           phase: batch
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
@@ -104,14 +105,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the isolated two-task lock
-        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json benchmarks/workspace-qa/data/lock.json
+        run: cp benchmarks/workspace-qa/data/official-tasks-328-116-glm52-five-run-lock.json benchmarks/workspace-qa/data/lock.json
       - uses: ./.github/actions/workspace-qa
         with:
           task-id: ${{ matrix.task }}
           repetitions: ${{ needs.validate.outputs.repetitions }}
           shard-repetition: ${{ matrix.repetition }}
           artifact-suffix: '-r${{ matrix.repetition }}'
-          artifact-prefix: workspace-qa-priority-five-pairs
+          artifact-prefix: workspace-qa-priority-glm52-five-pairs
           phase: batch
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
@@ -131,7 +132,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: workspace-qa-priority-five-pairs-batch-*
+          pattern: workspace-qa-priority-glm52-five-pairs-batch-*
           path: results
       - name: Keep the latest artifact attempt for each task pair
         run: |
@@ -160,7 +161,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          path = Path('benchmarks/workspace-qa/data/official-tasks-328-116-five-run-lock.json')
+          path = Path('benchmarks/workspace-qa/data/official-tasks-328-116-glm52-five-run-lock.json')
           lock = json.loads(path.read_text())
           selected = set(json.loads(os.environ['TASKS']))
           lock['tasks'] = [task for task in lock['tasks'] if task['task_id'] in selected]
@@ -187,6 +188,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: workspace-qa-priority-five-pairs-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: workspace-qa-priority-glm52-five-pairs-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: report/
           if-no-files-found: error

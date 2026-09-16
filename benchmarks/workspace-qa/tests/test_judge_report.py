@@ -380,6 +380,34 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.ReportError, "old or mixed"):
             report.load_rows(self.runs, manifest_path=self.manifest)
 
+    def test_model_selection_cannot_merge_qwen_observations_into_glm_report(self):
+        self.write_task("128")
+        lock = report.read_object(self.manifest)
+        lock["experiment"]["requested_model"] = "glm-5.2"
+        dump(self.manifest, lock)
+        path = self.runs / "128/trial-results.json"
+        ledger = report.read_object(path)
+        for trial in ledger["trials"]:
+            trial["model"] = "glm-5.2"
+        dump(path, ledger)
+        result = report.write_report(runs_dir=self.runs, output=self.root / "report", manifest_path=self.manifest)
+        self.assertEqual(result["plan"]["agent_model"], "glm-5.2")
+        self.assertIn("Qoder + glm-5.2", (self.root / "report/summary.md").read_text())
+        ledger["trials"][0]["model"] = "qwen3.8-max"
+        dump(path, ledger)
+        with self.assertRaisesRegex(report.ReportError, "mixed agent models"):
+            report.load_rows(self.runs, manifest_path=self.manifest)
+
+    def test_mixed_model_runtime_manifests_are_rejected_without_selection_file(self):
+        for task, model in (("128", "qwen3.8-max"), ("76", "glm-5.2")):
+            self.write_task(task)
+            path = self.runs / task / "manifest.json"
+            manifest = report.read_object(path)
+            manifest["model"] = model
+            dump(path, manifest)
+        with self.assertRaisesRegex(report.ReportError, "mixed agent models"):
+            report.load_rows(self.runs)
+
     def test_rejects_old_selection_and_runtime_manifest(self):
         self.write_task("128")
         old = report.read_object(self.manifest)

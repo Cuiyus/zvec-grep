@@ -105,7 +105,7 @@ def native_mcp_evidence(agent: Path) -> dict:
             raise ValueError("Native trace must contain objects")
         if event.get("type") == "system" and event.get("subtype") == "init":
             initialized.append(event.get("qodercli_version") == "1.1.45"
-                and event.get("model") == "Qwen3.8-Max"
+                and event.get("model") == runner.SPEC.cli_model
                 and ZG_SEARCH_TOOL in event.get("tools", [])
                 and any(server.get("name") == "zvec_grep" and server.get("status") == "connected"
                         for server in event.get("mcp_servers", []) if isinstance(server, dict)))

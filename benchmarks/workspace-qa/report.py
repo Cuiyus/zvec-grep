@@ -69,6 +69,18 @@ def manifest_plan(manifest_path: Path | None) -> tuple[dict[str, str], int | Non
 
 def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     selected, manifest_repetitions = manifest_plan(manifest_path)
+    expected_model = (read_object(manifest_path).get("experiment", {}).get("requested_model")
+                      if manifest_path else None)
+    models = set()
+    def record_model(model):
+        if model is None:
+            return
+        if not isinstance(model, str) or not model.strip():
+            raise ReportError("invalid agent model identity")
+        models.add(model.lower())
+        if len(models) > 1:
+            raise ReportError("mixed agent models or model differs from the selected experiment")
+    record_model(expected_model)
     if repetitions is not None and (type(repetitions) is not int or repetitions < 1):
         raise ReportError("repetitions must be a positive integer")
     repetitions = repetitions if repetitions is not None else manifest_repetitions
@@ -87,6 +99,13 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
         runtime_manifest = read_object(runtime_manifest_path) if runtime_manifest_path.is_file() else None
         if runtime_manifest is not None and runtime_manifest.get("protocol") != PROTOCOL:
             raise ReportError("runtime manifest protocol differs from the native installation protocol")
+        record_model(ledger.get("model"))
+        if runtime_manifest is not None:
+            record_model(runtime_manifest.get("model"))
+            agent_spec = runtime_manifest.get("agent_spec", {})
+            if not isinstance(agent_spec, dict):
+                raise ReportError("invalid runtime agent spec")
+            record_model(agent_spec.get("model"))
         task_id, expected = ledger.get("task_id"), ledger.get("repetitions_per_profile")
         if not isinstance(task_id, str) or not task_id or type(expected) is not int or expected < 1:
             raise ReportError(f"invalid trial-results declaration: {path}")
@@ -125,6 +144,9 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
         for trial in ledger["trials"]:
             if not isinstance(trial, dict) or trial.get("task_id") != task_id or trial.get("profile") not in PROFILES:
                 raise ReportError("trial identity does not match ledger")
+            record_model(trial.get("model"))
+            if expected_model and trial.get("status") in SUCCESS_STATUSES and not trial.get("model"):
+                raise ReportError("completed trial is missing its agent model identity")
             rep, trial_id = trial.get("repetition"), trial.get("trial_id")
             if type(rep) is not int or not 1 <= rep <= expected:
                 raise ReportError("repetition is outside the declared plan")
@@ -225,6 +247,7 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
                     **{metric: None for metric in METRICS if metric != "rubric_score"}}
                 if trial is not None:
                     row.update(trial_id=trial["trial_id"], execution_status=trial.get("status", "unknown"),
+                               model=trial.get("model"),
                                execution_attempted=trial["execution_attempted"], terminal_recorded=trial["terminal_recorded"],
                                ledger_path=trial["ledger_path"], model_identity=trial.get("model_identity"),
                                provenance=trial.get("provenance"), error=trial.get("error"),
@@ -265,6 +288,7 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
                             row.update(rubric_count=count, rubrics_passed=passed, rubric_score=score)
                 rows.append(row)
     plan = {"protocol": PROTOCOL, "continuations": continuations, "task_ids": sorted(selected), "expected_tasks": len(selected), "expected_trials": len(rows),
+            "agent_model": next(iter(models), None),
             "expected_pairs": len(rows) // 2, "repetitions_per_task": {task: declarations.get(task, repetitions) for task in sorted(selected)},
             "task_plan_source": "manifest" if manifest_path else "observed_ledgers_only",
             "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest() if manifest_path else None,
@@ -333,7 +357,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     execution = summary["execution"]
     def fmt(value: Any) -> str:
         return "N/A" if value is None else f"{value:.3f}"
-    lines = ["# Workspace Lite CN · Qoder + Qwen3.8-max QA comparison", "",
+    model = plan.get("agent_model") or "unspecified model"
+    lines = [f"# Workspace Lite CN · Qoder + {model} QA comparison", "",
         "Custom Qoder QA rubric adapter; original rubrics retained in full. This is not the official ClaudeCode judge or a leaderboard result.", "",
         f"Integration: standard zg 0.2.2 install; protocol {PROTOCOL}. Original installation artifacts are hash-verified for completed trials.", "",
         f"Planned: {plan['expected_tasks']} tasks × 2 profiles = {plan['expected_trials']} trials ({plan['expected_pairs']} paired repetitions).",
@@ -395,7 +420,7 @@ def write_report(*, runs_dir: Path, output: Path, manifest_path: Path | None = N
     output.mkdir(parents=True, exist_ok=True)
     (output / "summary.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
     (output / "rows.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
-    columns = ["task_id", "slice", "profile", "repetition", "trial_id", "execution_status", "judge_status", *METRICS,
+    columns = ["task_id", "slice", "profile", "repetition", "trial_id", "model", "execution_status", "judge_status", *METRICS,
                "rubrics_passed", "rubric_count", "judge_model", "judge_latency_seconds", "model_identity", "candidate_output_path", "ledger_path", "judgment_path", "observed_metrics", "execution_attempted", "terminal_recorded", "preserved_from_original", "effective_manifest_path", "provenance", "installation", "installation_evidence", "error"]
     with (output / "rows.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")

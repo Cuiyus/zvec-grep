@@ -391,7 +391,7 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertEqual(result["installation"]["installed"], profile == "with-zg")
                 self.assertEqual(spec["profile"], profile)
                 self.assertEqual(spec["prompt"], "原始提示")
-                self.assertEqual(spec["model"], "Qwen3.8-Max")
+                self.assertEqual(spec["model"], runner.SPEC.cli_model)
                 self.assertEqual(spec["limits"], LIMITS)
                 self.assertIn("/opt/qa/native-session.py", command)
                 self.assertEqual(command.count("--init"), 1)

@@ -44,7 +44,7 @@ from zg_bench.settings import ZVEC_GREP_EMBEDDING_ENDPOINT  # noqa: E402
 
 PROFILES = ("baseline", "with-zg")
 PROTOCOL = "workspace-qa-qoder-native-install-v3"
-MODEL = "qwen3.8-max"
+MODEL = os.environ.get("WORKSPACE_QA_MODEL", "glm-5.2").lower()
 EMBEDDING = "qwen/qwen3.7-text-embedding"
 INDEX_MAX_FILE_SIZE_BYTES = 1048576
 SPEC = agent_spec("qodercli", MODEL)
@@ -114,6 +114,7 @@ def make_plan(task_id: str, repetitions: int, seed: int = 1729,
                            "repetition": repetition, "block_id": repetition, "status": "planned",
                            "trajectory_path": f"{trial_id}/agent/trajectory.json"})
     plan = {"schema_version": 1, "protocol": PROTOCOL, "task_id": task_id,
+            "model": MODEL,
             "repetitions_per_profile": repetitions, "order_seed": seed,
             "order_policy": "balanced AB/BA blocks, shuffled before execution", "trials": trials}
     if shard_repetitions is not None:
@@ -193,6 +194,7 @@ def collect_results(output: Path, plan: dict[str, Any]) -> dict[str, Any]:
                     "tool_calls", "zg_tool_calls", "wall_seconds", "answer", "candidate_output_path"))}
         rows.append(row)
     report = {"schema_version": 1, "protocol": PROTOCOL, "task_id": plan["task_id"],
+              "model": plan.get("model", MODEL),
               "repetitions_per_profile": plan["repetitions_per_profile"], "trials": rows}
     if "shard_repetitions" in plan:
         report["shard_repetitions"] = plan["shard_repetitions"]

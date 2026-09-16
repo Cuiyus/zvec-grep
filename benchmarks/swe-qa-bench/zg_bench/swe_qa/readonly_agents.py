@@ -59,12 +59,14 @@ def agent_spec(
     name = "qodercli" if agent in {"qoder", "qodercli"} else agent
     model_id = model.removeprefix("custom-openai/")
     if name == "qodercli":
-        if model_id.lower() != "qwen3.8-max":
-            raise ValueError("Qoder experiment requires the exact qwen3.8-max model")
+        models = {"qwen3.8-max": "Qwen3.8-Max", "glm-5.2": "GLM-5.2"}
+        model_id = model_id.lower()
+        if model_id not in models:
+            raise ValueError("Qoder experiment requires an exact supported model: qwen3.8-max or glm-5.2")
         if base_url is not None or api_key_env not in {None, "QODER_PERSONAL_ACCESS_TOKEN"}:
             raise ValueError("Qoder uses native PAT authentication; BYOK is not configured here")
-        return AgentSpec(name, QODER_VERSION, "qwen3.8-max", "Qwen3.8-Max",
-                         "qwen3.8-max", "QODER_PERSONAL_ACCESS_TOKEN",
+        return AgentSpec(name, QODER_VERSION, model_id, models[model_id],
+                         model_id, "QODER_PERSONAL_ACCESS_TOKEN",
                          "qodercli-stream.jsonl", "qoder.json", None, "qoder-native-pat")
     if name != "opencode" or model_id.lower() not in {"glm-5.2", "qwen3.8-max"}:
         raise ValueError("Unsupported fixed-case agent/model combination")
@@ -103,6 +105,7 @@ def control_manifest(spec: AgentSpec, *, max_model_turns: int) -> dict[str, Any]
         "external_budget_enforcement_required": True,
         "qoder_model_request_retries": 0 if spec.name == "qodercli" else None,
         "seed_control": "not_exposed",
+        "model_sampling_seed": None,
     }
 
 

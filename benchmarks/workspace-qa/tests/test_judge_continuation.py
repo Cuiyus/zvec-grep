@@ -41,6 +41,7 @@ class JudgeContinuationTests(unittest.TestCase):
         self.rows = copy.deepcopy(plan["trials"])
         old_manifest = {field: "fixture" for field in continuation.RUNTIME_FIELDS}
         old_manifest.update(schema_version=2, protocol=continuation.PROTOCOL, integration_method="zg_install",
+            model=runner.MODEL, agent_spec=runner.SPEC.to_dict(),
             install_command=continuation.INSTALL_COMMAND, task_id="3", gold_visible_to_agent=False,
             corpus_readonly_mount=True, source_files={"source.md": digest(self.task / "data/source.md")},
             source_git_commit="source-old", question_sha256=hashlib.sha256(b"question").hexdigest(),

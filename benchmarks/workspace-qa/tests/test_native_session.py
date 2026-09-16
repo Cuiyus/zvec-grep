@@ -26,6 +26,19 @@ GUIDANCE_FIXTURE = b"<!-- ZVEC_GREP_START -->\nstandard installed guidance\n<!--
 
 
 class NativeSessionTests(unittest.TestCase):
+    def test_both_pinned_models_use_the_requested_cli_model_without_sampling_flags(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, logs, _, value = self.fixture(temp)
+            for model in ("GLM-5.2", "Qwen3.8-Max"):
+                value["model"] = model
+                command = native.session_spec(value, logs)["command"]
+                self.assertEqual(command[command.index("--model") + 1], model)
+                self.assertNotIn("--temperature", command)
+                self.assertNotIn("--seed", command)
+            value["model"] = "auto"
+            with self.assertRaises(ValueError):
+                native.session_spec(value, logs)
+
     def fixture(self, temp, profile="with-zg"):
         base = Path(temp)
         home, root, logs = base / "home", base / "app", base / "logs"
@@ -146,7 +159,7 @@ class NativeSessionTests(unittest.TestCase):
                 self.assertNotIn(blocked, command)
             self.assertNotIn("QODER_CONFIG_DIR", session["env"])
             self.assertEqual(command[command.index("--tools") + 1], "Read,Grep,Glob")
-            self.assertEqual(command[command.index("--model") + 1], "Qwen3.8-Max")
+            self.assertEqual(command[command.index("--model") + 1], native.MODEL)
             with_zg = command[command.index("--allowed-tools") + 1]
             value["profile"] = "baseline"
             baseline = native.session_spec(value, logs)["command"]
