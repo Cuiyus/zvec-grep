@@ -73,6 +73,38 @@ In the Aggregate row:
   changes, not a ratio of the aggregate sums.
 - An `N/A` task is excluded only from the affected Aggregate metric.
 
+## GitHub Actions
+
+The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
+five-task smoke benchmark on pushes to the repository's `main` branch and on
+same-repository pull requests targeting `main`, except Dependabot pull
+requests. External-fork and Dependabot pull requests run validation only.
+Use `workflow_dispatch` to select `smoke` (5 tasks) or `all-full` (20 tasks).
+
+CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
+`local/potion-code-16m-v2` embedding model, and three trials per task and
+profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
+execution and judging. The Claude Code configuration above describes the
+published local protocol.
+
+Both OpenCode profiles and the GLM-5.2 judge use `temperature = 0` and
+`seed = 42`, shared in `zg_bench/settings.py`. The same seed is used for every
+trial and retry. OpenCode declares the model's temperature capability and
+passes the seed through every built-in agent's provider options, including
+subagents, compaction, and title/summary generation. Judge reports
+record both parameters, and aggregation rejects reports with different seeds
+or a mix of seeded and legacy unseeded reports. These settings reduce sampling
+variance; identical responses still depend on the model service.
+
+CI also checks the pinned OpenCode binary against a local fake provider to
+verify the sampling parameters in consecutive tool-calling requests, without
+using GLM credentials.
+
+Each task runs Baseline and zvec-grep on the same runner, judges the paired
+results, and uploads Harbor evidence and an independent task report as
+artifacts. Complete runs also produce an aggregate report; report summaries
+appear in the Actions Job Summary.
+
 ## Local setup
 
 Harbor runs the pinned task environments in Docker. Use the same host platform,

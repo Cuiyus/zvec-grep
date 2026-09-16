@@ -675,6 +675,7 @@ class JudgeTests(unittest.TestCase):
 
             self.assertEqual(len(requests), 6)
             self.assertTrue(all(call["temperature"] == 0 for call in requests))
+            self.assertTrue(all(call["seed"] == 42 for call in requests))
             self.assertTrue(
                 all(call["model"] == "openai/glm-5.2" for call in requests)
             )
@@ -684,6 +685,8 @@ class JudgeTests(unittest.TestCase):
             self.assertEqual(report["schema_version"], 2)
             self.assertEqual(report["judge"]["label"], SELF_JUDGE_LABEL)
             self.assertTrue(report["judge"]["self_judge"])
+            self.assertEqual(report["judge"]["temperature"], 0)
+            self.assertEqual(report["judge"]["seed"], 42)
             self.assertEqual(report["judge"]["usage"]["calls"], 6)
             self.assertEqual(report["judge"]["usage"]["input_tokens"], 300)
             self.assertEqual(report["judge"]["usage"]["output_tokens"], 30)
@@ -1063,6 +1066,46 @@ class JudgeTests(unittest.TestCase):
 
 
 class AggregateReportTests(unittest.TestCase):
+    def test_aggregate_preserves_seed_and_rejects_mixed_sampling(self) -> None:
+        for second_seed in (42, 7, None):
+            with (
+                self.subTest(second_seed=second_seed),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                first = _judged_task_report("reflex:6")
+                first["judge"]["seed"] = 42
+                second = _judged_task_report("sqlfluff:2", 1)
+                if second_seed is not None:
+                    second["judge"]["seed"] = second_seed
+                _write_json(root / "reports" / "first" / "report.json", first)
+                _write_json(root / "reports" / "second" / "report.json", second)
+                if second_seed == 42:
+                    report = aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+                    self.assertEqual(report["judge"]["seed"], 42)
+                else:
+                    with self.assertRaisesRegex(
+                        SweQaError, "incompatible judge metadata"
+                    ):
+                        aggregate_reports(
+                            reports_root=root / "reports",
+                            output_dir=root / "combined",
+                        )
+
+    def test_aggregate_rejects_invalid_seed_metadata(self) -> None:
+        for seed in (True, 42.5, "42", None):
+            with self.subTest(seed=seed), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                report = _judged_task_report("reflex:6")
+                report["judge"]["seed"] = seed
+                _write_json(root / "reports" / "report.json", report)
+                with self.assertRaisesRegex(SweQaError, "invalid judge seed"):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+
     def test_cli_aggregates_single_report_without_glm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

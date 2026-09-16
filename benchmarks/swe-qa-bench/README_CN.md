@@ -55,6 +55,18 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 - 展示的效率变化是任务级变化的等权平均值，而不是聚合总和的比值。
 - 结果为 `N/A` 的任务只会从受影响的 Aggregate 指标中排除。
 
+## GitHub Actions
+
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行 5 题 smoke benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。通过 `workflow_dispatch` 可选择 `smoke`（5 题）或 `all-full`（20 题）。
+
+CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 3 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。上文的 Claude Code 配置对应已发布的本地测试协议。
+
+OpenCode 的两个 profile 和 GLM-5.2 评审统一使用 `temperature = 0`、`seed = 42`，常量位于 `zg_bench/settings.py`，所有 trial 和重试都使用同一个 seed。OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录这两个参数；聚合时拒绝混用不同 seed，或将新报告与未记录 seed 的旧报告混用。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
+
+CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续工具调用请求中的采样参数，不需要 GLM 凭证。
+
+每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。完整运行还会生成聚合报告，报告摘要展示在 Actions Job Summary 中。
+
 ## 本地配置
 
 Harbor 使用 Docker 运行锁定的任务环境。为了得到可比较的结果，请保持主机平台、Claude Code 版本和模型服务配置一致。

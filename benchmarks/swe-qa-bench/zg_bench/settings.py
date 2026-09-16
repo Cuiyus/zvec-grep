@@ -9,6 +9,9 @@ CLAUDE_OPUS_5_MODEL = "claude-opus-5"
 CLAUDE_CODE_REASONING_EFFORT = "high"
 CLAUDE_CODE_MAX_BUDGET_USD = 4.0
 OPENCODE_VERSION = "1.18.4"
+# Keep sampling identical across profiles, repetitions, and judge retries.
+BENCHMARK_TEMPERATURE = 0
+BENCHMARK_SEED = 42
 DASHSCOPE_QWEN_3_7_MAX_MODEL = "qwen3.7-max"
 OPENCODE_ALIYUN_GLM_MODEL = "aliyun-glm-5.2"
 OPENCODE_ALIYUN_GLM_MODEL_ID = "glm-5.2"

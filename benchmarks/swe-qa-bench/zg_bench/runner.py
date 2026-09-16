@@ -16,6 +16,8 @@ import yaml
 
 from .settings import (
     AGENT_SETUP_TIMEOUT_MULTIPLIER,
+    BENCHMARK_SEED,
+    BENCHMARK_TEMPERATURE,
     CLAUDE_CODE_MAX_BUDGET_USD,
     CLAUDE_CODE_REASONING_EFFORT,
     CLAUDE_CODE_VERSION,
@@ -773,6 +775,18 @@ def build_harbor_command(
     elif agent == _OPENCODE_AGENT:
         harbor_agent = OPENCODE_IMPORT_PATH
         agent_kwargs.append(f"version={OPENCODE_VERSION}")
+        # Cover every built-in agent in pinned OpenCode, including delegated
+        # tasks and compaction/title/summary requests. The model also needs
+        # temperature capability enabled below, or 1.18.4 silently omits it.
+        sampling_config = {
+            name: {
+                "temperature": BENCHMARK_TEMPERATURE,
+                "options": {"seed": BENCHMARK_SEED},
+            }
+            for name in (
+                "build", "plan", "general", "explore", "compaction", "title", "summary"
+            )
+        }
         opencode_model_id = _opencode_dashscope_model_id(agent, model)
         if opencode_model_id is not None:
             harbor_model = f"dashscope/{opencode_model_id}"
@@ -782,14 +796,18 @@ def build_harbor_command(
                         "npm": OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
                         "name": "DashScope OpenAI Compatible",
                         "models": {
-                            opencode_model_id: {"options": {"enable_thinking": False}}
+                            opencode_model_id: {
+                                "temperature": True,
+                                "options": {"enable_thinking": False},
+                            }
                         },
                         "options": {
                             "apiKey": "{env:OPENAI_API_KEY}",
                             "baseURL": OPENCODE_DASHSCOPE_BASE_URL,
                         },
                     }
-                }
+                },
+                "agent": sampling_config,
             }
             if profile == "zvec-grep":
                 # ZvecGrepMixin provisions this entry during setup, but the
@@ -823,11 +841,13 @@ def build_harbor_command(
                         "models": {
                             OPENCODE_CUSTOM_GLM_MODEL_ID: {
                                 "name": "GLM 5.2",
+                                "temperature": True,
                             }
                         },
                     }
                 },
                 "model": OPENCODE_CUSTOM_GLM_MODEL,
+                "agent": sampling_config,
             }
             if profile == "zvec-grep":
                 opencode_config["mcp"] = {

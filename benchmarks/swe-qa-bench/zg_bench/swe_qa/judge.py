@@ -10,7 +10,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from ..settings import OPENCODE_CUSTOM_GLM_BASE_URL
+from ..settings import (
+    BENCHMARK_SEED,
+    BENCHMARK_TEMPERATURE,
+    OPENCODE_CUSTOM_GLM_BASE_URL,
+)
 from . import SELF_JUDGE_LABEL, SweQaError
 
 SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence")
@@ -353,7 +357,8 @@ def _judge_candidate(
                 model=JUDGE_MODEL,
                 api_key=api_key,
                 api_base=api_base,
-                temperature=0,
+                temperature=BENCHMARK_TEMPERATURE,
+                seed=BENCHMARK_SEED,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 extra_body={"enable_thinking": False},
@@ -908,10 +913,14 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
         judge.get("label") != SELF_JUDGE_LABEL
         or judge.get("model") != "glm-5.2"
         or judge.get("self_judge") is not True
-        or judge.get("temperature") != 0
+        or judge.get("temperature") != BENCHMARK_TEMPERATURE
         or judge.get("rubric") != list(SCORE_KEYS)
     ):
         raise SweQaError(f"{prefix}: incompatible judge metadata")
+    if "seed" in judge and (
+        isinstance(judge["seed"], bool) or not isinstance(judge["seed"], int)
+    ):
+        raise SweQaError(f"{prefix}: invalid judge seed")
     usage = judge.get("usage")
     if not isinstance(usage, dict):
         raise SweQaError(f"{prefix}: missing judge usage")
@@ -986,9 +995,16 @@ def _combined_judge(reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
     first = reports[0]["judge"]
     metadata_keys = ("label", "model", "self_judge", "temperature", "rubric")
     metadata = {key: first[key] for key in metadata_keys}
+    # Legacy reports without a seed remain readable, but must not be mixed
+    # with seeded reports or reports produced with a different seed.
+    if "seed" in first:
+        metadata["seed"] = first["seed"]
     for report in reports[1:]:
         judge = report["judge"]
-        if any(judge.get(key) != metadata[key] for key in metadata_keys):
+        if (
+            any(judge.get(key) != metadata[key] for key in metadata_keys)
+            or judge.get("seed") != first.get("seed")
+        ):
             raise SweQaError("per-task reports use incompatible judge metadata")
 
     usages = [report["judge"]["usage"] for report in reports]
@@ -1165,7 +1181,8 @@ def judge_pairs(
             "label": SELF_JUDGE_LABEL,
             "model": "glm-5.2",
             "self_judge": True,
-            "temperature": 0,
+            "temperature": BENCHMARK_TEMPERATURE,
+            "seed": BENCHMARK_SEED,
             "rubric": list(SCORE_KEYS),
             "usage": judge_usage,
         },
