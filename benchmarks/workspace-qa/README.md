@@ -2,16 +2,17 @@
 
 ## Current execution model (2026-09-16)
 
-New runs default to **Qoder CLI 1.1.45 + GLM-5.2**, selected explicitly with
-`--model GLM-5.2`. Both baseline and with-zg use the same model. The standard
+New runs default to **Qoder CLI 1.1.45 + Qwen3.8-Max**, selected explicitly with
+`--model Qwen3.8-Max`. Both baseline and with-zg use the same model. The standard
 `zg install --target qoder --yes` integration, zg 0.2.2, remote
 `qwen/qwen3.7-text-embedding`, and GLM-5.2 rubric judge are unchanged.
-The model switch is a new experiment, not a relabeling of past results.
+The requested GLM-5.2 switch was withdrawn after its availability check failed;
+Qwen3.8-Max is restored for both execution arms.
 
 The completed Qwen run tested original tasks 328 and 116, five repetitions per
 arm (20 trials). Its original lock and evidence remain unchanged. The fresh
-GLM workflow uses `official-tasks-328-116-glm52-five-run-lock.json` and distinct
-artifact names. DeepSWE has been researched but is not implemented in this QA
+Qwen workflow uses `official-tasks-328-116-five-run-lock.json` and the
+`workspace-qa-priority-qwen38-five-pairs` artifact namespace. DeepSWE has been researched but is not implemented in this QA
 harness; switching the model does not start a DeepSWE benchmark.
 
 Sampling controls:
@@ -27,19 +28,19 @@ Model controls are saved in each runtime manifest. A fixed order seed does not
 make model generation deterministic. Do not add undocumented sampling fields
 or claim service-side determinism without request-level evidence.
 
-**Live availability is currently blocked:** the 2026-09-16 CI account catalog
+**Historical GLM-5.2 availability check:** the 2026-09-16 CI account catalog
 lists GLM-5.3 and GLM-5.3-Flash, but no GLM-5.2. The first
 [probe](https://github.com/Cuiyus/zvec-grep/actions/runs/35090489722) was rejected
 because Qoder fell back to Auto. The follow-up
 [catalog check](https://github.com/Cuiyus/zvec-grep/actions/runs/35090940911)
 stopped before generation. Neither run is a GLM-5.2 benchmark observation.
-Keep the requested GLM-5.2 model until access is restored or another model is
-explicitly selected; do not substitute GLM-5.3 or accept Auto as GLM-5.2.
+The user subsequently selected Qwen3.8-Max, which is present in that catalog.
+The failed GLM probe and unused GLM task lock remain historical evidence.
 
-`WORKSPACE_QA_MODEL=qwen3.8-max` is retained for historical continuation only;
-its workflow restores `qwen38-legacy-lock.json`. Model/lock mismatches and mixed
-model report inputs fail closed. New GLM runs still require a live CI probe to
-verify the account's model availability and native response model identity.
+`WORKSPACE_QA_MODEL` defaults to `qwen3.8-max`; historical continuation also
+explicitly pins that model and restores `qwen38-legacy-lock.json`. Model/lock
+mismatches and mixed-model report inputs fail closed. Model availability and
+native response identity checks remain enabled, with no automatic fallback.
 
 The earlier benchmark-managed MCP bridge runs remain legacy diagnostics;
 see [legacy-bridge-runs.json](data/legacy-bridge-runs.json).

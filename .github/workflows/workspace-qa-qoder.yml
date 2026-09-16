@@ -1,5 +1,5 @@
-name: Qoder GLM-5.2 Workspace QA
-run-name: "GLM-5.2 · Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || contains(github.event.head_commit.message, '[workspace-qa-rejudge]') && 'rejudge' || 'validate') }} · ${{ github.ref_name }}"
+name: Qoder Qwen3.8-Max Workspace QA
+run-name: "Qwen3.8-Max · Workspace QA · ${{ inputs.scope || (contains(github.event.head_commit.message, '[workspace-qa-full]') && 'full' || contains(github.event.head_commit.message, '[workspace-qa-smoke]') && 'smoke' || contains(github.event.head_commit.message, '[workspace-qa-probe]') && 'probe' || contains(github.event.head_commit.message, '[workspace-qa-rejudge]') && 'rejudge' || 'validate') }} · ${{ github.ref_name }}"
 
 on:
   push:
@@ -72,7 +72,7 @@ jobs:
           assert lock['repetitions'] == 10 and lock['smoke_task_id'] == '3'
           assert lock['experiment']['embedding']['model'] == 'qwen/qwen3.7-text-embedding'
           assert lock['experiment']['zg_version'] == '0.2.2'
-          assert lock['experiment']['requested_model'] == runner.MODEL == 'glm-5.2'
+          assert lock['experiment']['requested_model'] == runner.MODEL == 'qwen3.8-max'
           assert lock['experiment']['protocol'] == runner.PROTOCOL
           assert lock['experiment']['index']['max_file_size_bytes'] == runner.INDEX_MAX_FILE_SIZE_BYTES == 1048576
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -99,7 +99,7 @@ jobs:
           docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)"
           -f benchmarks/workspace-qa/Dockerfile
           -t zg-readonly-qa:0.2.2 benchmarks
-      - name: Verify the CI account exposes GLM-5.2 before model generation
+      - name: Verify the CI account exposes Qwen3.8-Max before model generation
         env:
           QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
         run: |
@@ -108,11 +108,14 @@ jobs:
             qodercli --list-models > "$RUNNER_TEMP/workspace-qa-probe/qoder-models.txt"
           cat "$RUNNER_TEMP/workspace-qa-probe/qoder-models.txt"
           python - <<'PY'
-          import os, re
+          import os, sys
           from pathlib import Path
+          sys.path.insert(0, "benchmarks/workspace-qa")
+          import runner
           catalog = (Path(os.environ['RUNNER_TEMP']) / 'workspace-qa-probe/qoder-models.txt').read_text()
-          if not re.search(r'(?i)\bGLM-5\.2\b', catalog):
-              raise SystemExit('GLM-5.2 is absent from the CI account model catalog; automatic model fallback is forbidden.')
+          available = {line.strip().casefold() for line in catalog.splitlines()}
+          if runner.SPEC.cli_model.casefold() not in available:
+              raise SystemExit(f'{runner.SPEC.cli_model} is absent from the CI account model catalog; automatic model fallback is forbidden.')
           PY
       - name: Check remote embedding and real Qoder MCP retrieval on one tiny file
         env:

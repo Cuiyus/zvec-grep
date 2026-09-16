@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 PROTOCOL = "workspace-qa-qoder-native-install-v3"
 ZG_VERSION = "0.2.2"
 QODER_VERSION = "1.1.45"
-MODEL = "Qwen3.8-Max" if os.environ.get("WORKSPACE_QA_MODEL") == "qwen3.8-max" else "GLM-5.2"
+MODEL = "Qwen3.8-Max" if os.environ.get("WORKSPACE_QA_MODEL", "qwen3.8-max") == "qwen3.8-max" else "GLM-5.2"
 SUPPORTED_MODELS = {"Qwen3.8-Max", "GLM-5.2"}
 EMBEDDING_MODEL = "qwen/qwen3.7-text-embedding"
 QODER_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"

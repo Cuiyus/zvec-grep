@@ -44,7 +44,7 @@ from zg_bench.settings import ZVEC_GREP_EMBEDDING_ENDPOINT  # noqa: E402
 
 PROFILES = ("baseline", "with-zg")
 PROTOCOL = "workspace-qa-qoder-native-install-v3"
-MODEL = os.environ.get("WORKSPACE_QA_MODEL", "glm-5.2").lower()
+MODEL = os.environ.get("WORKSPACE_QA_MODEL", "qwen3.8-max").lower()
 EMBEDDING = "qwen/qwen3.7-text-embedding"
 INDEX_MAX_FILE_SIZE_BYTES = 1048576
 SPEC = agent_spec("qodercli", MODEL)
