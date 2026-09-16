@@ -1,5 +1,46 @@
 # Qoder Workspace QA
 
+## Task 328 Markdown smoke (2026-09-16)
+
+`workspace-qa-markdown-smoke.yml` is a separate opt-in workflow: **Task 328 only,
+one baseline + one with-zg**. Dispatch it on this branch, or push a reviewed
+commit containing `[workspace-qa-markdown-smoke]`. It does not start the five-pair
+or ten-task matrix. Qoder Qwen3.8-Max, zg 0.2.2 installed by `zg install`, and
+remote Qwen3.7 embedding remain pinned.
+
+The `office-markdown-v1` variant converts every nonempty DOCX/PPTX/XLSX in the
+full persona using the same deterministic converter, without consulting the
+task/rubrics. Originals and existing TXT remain. Both profiles mount the same
+frozen Git snapshot and receive the same sidecar mapping notice. The official
+question and rubrics are unchanged. These are **preprocessed-workspace smoke
+observations**, not official raw-workspace scores or formal efficacy estimates.
+
+The Task 328 conversion gate covers four original Office inputs: 78 slides,
+16 tables, seven charts and six embedded workbooks. It checks pinned source
+hashes, text/data coverage, structural counts, output hashes and the 1 MiB
+index cap before trials start. A local inspection covered all 47 embedded
+raster images (decorative photos, backgrounds, illustrations and media icons).
+This is not full visual/audio equivalence: audio is retained without
+transcription; legacy DOC/XLS/PPT and PDF are inventoried but not converted.
+Worksheet values/formulas and number formats are retained without recalculation.
+All supported-format conversion failures block this pilot. Large sidecars are
+split deterministically below 900 KiB, without truncation.
+
+The original Task 328 PPT TXT lacks the departmental chart series. The new
+sidecars add those source values and their category associations, including the
+administration department's entry/exit data. The blind GLM judge uses the same
+structured extractor on its original Office inputs so chart facts are visible
+to grading for both arms. Its model, temperature and original rubrics are
+unchanged. Judge extraction identity is recorded; raw and converted variants
+cannot be merged by the reporter.
+
+Conversion happens once per prepared workspace, before its Git snapshot and
+index, with a separate duration and completeness report. Download ranges are
+reused; converted indexes have separate cache identities bound to converter
+code and actual source hashes. Trial costs exclude conversion/index setup.
+Artifacts retain `dataset/office-markdown-manifest.json`, the verification
+report and the four reviewed sidecars, along with all existing traces/metrics.
+
 ## Current execution model (2026-09-16)
 
 New runs default to **Qoder CLI 1.1.45 + Qwen3.8-Max**, selected explicitly with

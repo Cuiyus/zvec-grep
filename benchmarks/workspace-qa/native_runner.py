@@ -158,6 +158,8 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "model": r.MODEL, "agent_spec": r.SPEC.to_dict(), "source_git_commit": commit,
         "model_controls": r.control_manifest(r.SPEC, max_model_turns=limits["model_requests"]),
         "source_files": before, "question_sha256": r.sha256(question_path), "answer_filename": filename,
+        "corpus_variant": os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original"),
+        "preprocessing_manifest_sha256": os.environ.get("WORKSPACE_QA_PREPROCESSING_SHA256"),
         "run_limits": limits, "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
         "gold_visible_to_agent": False, "corpus_readonly_mount": True,
         "index_options": {"root": "/app", "maxFileSizeBytes": r.INDEX_MAX_FILE_SIZE_BYTES},

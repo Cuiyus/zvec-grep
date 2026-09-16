@@ -299,6 +299,24 @@ def prepare(lock: dict, task_id: str, destination: Path, upstream: Path) -> dict
         if not matches:
             raise RuntimeError(f"Original full workspace lacks matching input: {item['filename']}")
         matched.append({"filename": item["filename"], "paths": [p.relative_to(source).as_posix() for p in matches]})
+    preprocessing = lock.get("experiment", {}).get("preprocessing", "original")
+    if preprocessing != "original":
+        from office_markdown import VARIANT, convert_workspace
+        from markdown_audit import verify
+        if preprocessing != VARIANT or task_id != "328":
+            raise ValueError("Only the reviewed Task 328 Markdown smoke is enabled")
+        print("::group::Convert full-persona OOXML to shared Markdown sidecars", flush=True)
+        conversion = convert_workspace(source, destination / "office-markdown-manifest.json")
+        print("::endgroup::", flush=True)
+        print("::group::Task 328 conversion completeness gate", flush=True)
+        audit = verify(source, conversion, destination / "markdown-audit")
+        print(json.dumps({"phase": "conversion_gate", "status": audit["status"],
+                          "corpus_status_counts": conversion["status_counts"]}), flush=True)
+        print("::endgroup::", flush=True)
+        manifest["preprocessing"] = {"variant": preprocessing,
+            "manifest_sha256": digest(destination / "office-markdown-manifest.json"),
+            "converter_sha256": conversion["converter_sha256"], "status_counts": conversion["status_counts"],
+            "gate": audit["status"], "wall_seconds": conversion["wall_seconds"]}
     print(json.dumps({"phase": "source_git_snapshot", "status": "starting"}), flush=True)
     # This is an ephemeral identity snapshot. Store uncompressed loose objects
     # and disable background repacking; Git object IDs and source bytes agree.

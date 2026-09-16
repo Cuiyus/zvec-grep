@@ -408,6 +408,18 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.ReportError, "mixed agent models"):
             report.load_rows(self.runs)
 
+    def test_markdown_observations_cannot_mix_with_original_corpus(self):
+        self.write_task("128")
+        self.write_task("76")
+        path = self.runs / "76/manifest.json"
+        manifest = report.read_object(path)
+        manifest["corpus_variant"] = "office-markdown-v1"
+        dump(path, manifest)
+        with self.assertRaisesRegex(report.ReportError, "mixed original/Markdown"):
+            report.load_rows(self.runs)
+        with self.assertRaisesRegex(report.ReportError, "mixed original/Markdown"):
+            report.load_rows(self.runs, manifest_path=self.manifest)
+
     def test_rejects_old_selection_and_runtime_manifest(self):
         self.write_task("128")
         old = report.read_object(self.manifest)

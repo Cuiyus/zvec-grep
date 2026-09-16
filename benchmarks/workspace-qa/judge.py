@@ -90,6 +90,13 @@ def settings() -> tuple[str, str]:
 
 def source_text(source: Path, raw: bytes) -> str:
     suffix = source.suffix.lower()
+    if (os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original") == "office-markdown-v1"
+            and suffix in {".docx", ".pptx", ".xlsx"}):
+        from office_markdown import convert_file
+        content, audit = convert_file(source, source.name)
+        if audit["missing_atoms"]:
+            raise JudgeError("Markdown judge evidence has missing source atoms")
+        return content
     if suffix in TEXT_SUFFIXES:
         try:
             content = raw.decode("utf-8")
@@ -483,6 +490,8 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     previous = read_object(continue_from_judgements) if continuing else read_object(output) if resume else None
     locked = set()
     report: dict[str, Any] = {"schema_version": 1, "adapter": ADAPTER,
+        "corpus_variant": os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original"),
+        "source_extraction": "office-markdown-v1" if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "office-markdown-v1" else "original-text-extractor",
         "score_label": "original-rubric boolean mean (custom adapter)",
         "official_judge": False, "leaderboard_comparable": False,
         # A sharded CI ledger intentionally contains only the selected pair.  Judge

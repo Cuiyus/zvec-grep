@@ -241,6 +241,11 @@ def main(argv=None):
     if args.shared_preflight and not continuing:
         raise ValueError("Shared source-run preflight is only valid for an audited continuation")
     lock = json.loads((HERE / "data/lock.json").read_text())
+    variant = lock.get("experiment", {}).get("preprocessing", "original")
+    if variant != "original":
+        if variant != "office-markdown-v1" or args.task_id != "328" or args.phase != "smoke" or args.repetitions != 1 or continuing:
+            raise ValueError("Markdown pilot requires Task 328, smoke, exactly one fresh pair")
+    os.environ["WORKSPACE_QA_CORPUS_VARIANT"] = variant
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
@@ -284,6 +289,12 @@ def main(argv=None):
         print(json.dumps({"phase": "dataset_preparation", "status": "starting"}), flush=True)
         subprocess.run([sys.executable, str(HERE / "dataset.py"), "--task-id", args.task_id,
                         "--output", str(preparation), "--upstream", str(args.upstream)], check=True)
+        if variant != "original":
+            conversion_path = preparation / "office-markdown-manifest.json"
+            os.environ["WORKSPACE_QA_PREPROCESSING_SHA256"] = hashlib.sha256(conversion_path.read_bytes()).hexdigest()
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                    summary.write((preparation / "markdown-audit/summary.md").read_text())
         print(json.dumps({"phase": "paired_trials", "status": "starting"}), flush=True)
         runner_command = [sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),

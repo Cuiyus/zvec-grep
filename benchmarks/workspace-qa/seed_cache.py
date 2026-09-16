@@ -18,6 +18,7 @@ BUILD_FILES = (
     "benchmarks/workspace-qa/native_session.py",
     "benchmarks/swe-qa-bench/zg_bench/swe_qa/readonly_run.py",
     "benchmarks/workspace-qa/dataset.py",
+    "benchmarks/workspace-qa/office_markdown.py",
     "benchmarks/workspace-qa/runner.py",
     "benchmarks/workspace-qa/seed_cache.py",
 )

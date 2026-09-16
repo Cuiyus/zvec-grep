@@ -141,6 +141,7 @@ def cache_plan(lock: dict[str, Any], task_id: str, cache_root: Path, *,
                       "zg_version": version, "embedding_model": model, "embedding_endpoint": endpoint,
                       "embedding_type": embedding.get("type"), "allow_local_fallback": embedding.get("allow_local_fallback"),
                       "max_file_size_bytes": configured_cap, "source_mount": "/app",
+                      "preprocessing": experiment.get("preprocessing", "original"),
                       "corpus_policy": experiment.get("corpus_policy"), "build": build}
     root = cache_root.expanduser().resolve()
     required_string(str(root), "cache-root")

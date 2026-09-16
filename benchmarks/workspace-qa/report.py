@@ -72,6 +72,11 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
     expected_model = (read_object(manifest_path).get("experiment", {}).get("requested_model")
                       if manifest_path else None)
     models = set()
+    variants = set()
+    expected_variant = (read_object(manifest_path).get("experiment", {}).get("preprocessing", "original")
+                        if manifest_path else None)
+    if expected_variant:
+        variants.add(expected_variant)
     def record_model(model):
         if model is None:
             return
@@ -101,6 +106,9 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
             raise ReportError("runtime manifest protocol differs from the native installation protocol")
         record_model(ledger.get("model"))
         if runtime_manifest is not None:
+            variants.add(runtime_manifest.get("corpus_variant", "original"))
+            if len(variants) > 1:
+                raise ReportError("mixed original/Markdown corpus variants; report separately")
             record_model(runtime_manifest.get("model"))
             agent_spec = runtime_manifest.get("agent_spec", {})
             if not isinstance(agent_spec, dict):
@@ -289,6 +297,7 @@ def load_rows(runs_dir: Path, *, manifest_path: Path | None = None, repetitions:
                 rows.append(row)
     plan = {"protocol": PROTOCOL, "continuations": continuations, "task_ids": sorted(selected), "expected_tasks": len(selected), "expected_trials": len(rows),
             "agent_model": next(iter(models), None),
+            "corpus_variant": next(iter(variants), "original"),
             "expected_pairs": len(rows) // 2, "repetitions_per_task": {task: declarations.get(task, repetitions) for task in sorted(selected)},
             "task_plan_source": "manifest" if manifest_path else "observed_ledgers_only",
             "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest() if manifest_path else None,
@@ -359,6 +368,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         return "N/A" if value is None else f"{value:.3f}"
     model = plan.get("agent_model") or "unspecified model"
     lines = [f"# Workspace Lite CN · Qoder + {model} QA comparison", "",
+        f"Corpus variant: **{plan.get('corpus_variant', 'original')}**. Both profiles use the same frozen corpus.", "",
         "Custom Qoder QA rubric adapter; original rubrics retained in full. This is not the official ClaudeCode judge or a leaderboard result.", "",
         f"Integration: standard zg 0.2.2 install; protocol {PROTOCOL}. Original installation artifacts are hash-verified for completed trials.", "",
         f"Planned: {plan['expected_tasks']} tasks × 2 profiles = {plan['expected_trials']} trials ({plan['expected_pairs']} paired repetitions).",
