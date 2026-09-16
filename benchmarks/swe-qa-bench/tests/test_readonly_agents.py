@@ -92,6 +92,15 @@ class ReadonlyAgentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_agent_config(agent_spec("qodercli", "qwen3.8-max"), zg=False, model_seed=1)
 
+    def test_optional_turn_limit_can_be_removed_from_native_controls(self):
+        spec = agent_spec("opencode", "glm-5.2", base_url="https://example.com/v1")
+        cfg = build_agent_config(spec, zg=False, max_model_turns=None, model_seed=20260915)
+        self.assertNotIn("steps", cfg["agent"]["build"])
+        controls = control_manifest(spec, max_model_turns=None, model_seed=20260915)
+        self.assertIsNone(controls["model_turn_limit"])
+        self.assertEqual(controls["native_model_turn_limit"], "not_configured")
+        self.assertFalse(controls["external_budget_enforcement_required"])
+
     def test_qoder_config_and_argv_remove_write_and_external_tools(self):
         spec = agent_spec("qodercli", "qwen3.8-max")
         cfg = build_agent_config(spec, zg=True, mcp_command=["node", "/bridge.mjs", "serve"])

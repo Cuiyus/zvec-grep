@@ -69,6 +69,8 @@ def validate_spec(spec):
         raise ValueError("Native retrieval replay requires the installed zg arm")
     if not isinstance(spec.get("base_config"), dict):
         raise ValueError("base_config must contain the common native agent/model settings")
+    if not isinstance(spec.get("limits", {}), dict):
+        raise ValueError("limits must be an object")
     if spec["agent"] == "qodercli" and spec.get("model") != "qwen3.8-max":
         raise ValueError("Pinned Qoder combination requires qwen3.8-max")
     if spec["agent"] == "opencode" and spec.get("model") not in {"glm-5.2", "qwen3.8-max"}:
@@ -125,8 +127,11 @@ def agent_command(spec, config_path, config_root, guidance_text):
                "--settings", str(config_path), "--mcp-config", str(config_path), "--strict-mcp-config",
                "--disable-builtin-skills", "--permission-mode", "dont_ask", "--tools", "Read,Grep,Glob",
                "--allowed-tools", ",".join(allowed), "--disallowed-tools", ",".join(DENIED),
-               "--max-model-request-retries", "0", "--max-turns", str(spec["limits"]["model_requests"]),
-               "--model", "Qwen3.8-Max"]
+               "--max-model-request-retries", "0"]
+    model_requests = spec.get("limits", {}).get("model_requests")
+    if model_requests is not None:
+        command += ["--max-turns", str(model_requests)]
+    command += ["--model", "Qwen3.8-Max"]
     # Pinned Qoder 1.1.45: --setting-sources '' -> [''] -> allowedAgentSources=[];
     # discoverMemoryPaths therefore omits global/project AGENTS.md. Append the
     # exact installed file once, while preserving the isolated setting sources.
@@ -326,7 +331,7 @@ def prepare(spec):
     save(root / "native-install.json", manifest)
     session = {"command": command, "config_path": str(config_path), "log_dir": str(root),
                "native_name": "opencode.txt" if agent == "opencode" else "qodercli-stream.jsonl",
-               "limits": spec["limits"], "env": {key: value for key, value in env.items() if os.environ.get(key) != value}}
+               "limits": spec.get("limits", {}), "env": {key: value for key, value in env.items() if os.environ.get(key) != value}}
     if spec.get("tap_upstream"):
         session["tap_upstream"] = spec["tap_upstream"]
     # Saved env is names/config only. Credentials are inherited, never archived.

@@ -92,6 +92,23 @@ class SessionTest(unittest.TestCase):
             self.assertEqual(report["status"], "launch_failure")
             self.assertEqual(report["error_type"], "FileNotFoundError")
 
+    def test_empty_limits_observe_usage_without_terminating_the_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = (
+                'import json; '
+                'print(json.dumps({"type":"tool_use","part":{"callID":"t1"}}),flush=True); '
+                'print(json.dumps({"type":"step_finish","part":{"id":"s1","tokens":{"input":400000,"cache":{"read":0,"write":0}}}}),flush=True)'
+            )
+            result = session.run({"log_dir": tmp, "command": [sys.executable, "-c", code], "limits": {}})
+            self.assertEqual(result, 0)
+            report = json.loads((Path(tmp) / "session.json").read_text())
+            self.assertEqual(report["status"], "completed")
+            self.assertIsNone(report["limit_reason"])
+            self.assertEqual(report["limits"], {})
+            self.assertEqual(report["observed"]["input_tokens"], 400000)
+            self.assertEqual(report["observed"]["tool_calls"], 1)
+            self.assertIn("without budget termination", report["limit_semantics"])
+
     def test_wire_tap_preserves_request_and_sse_and_redacts_saved_secrets(self):
         received = []
         response = b'data: {"id":"x","model":"glm-5.2","usage":{"prompt_tokens":8,"completion_tokens":2}}\n\ndata: [DONE]\n\n'

@@ -31,8 +31,11 @@ GROUPS = {
     "opencode-glm52": ("opencode", "glm-5.2"),
     "opencode-qwen38max": ("opencode", "qwen3.8-max"),
 }
-PROTOCOL = "native-install-e2e-prompt-v1"
-LIMITS = {"model_requests": 30, "tool_calls": 60, "input_tokens": 300000, "wall_seconds": 900}
+PROTOCOL = "native-install-e2e-prompt-v2-unbounded"
+# This benchmark observes usage without imposing a Harness session budget.
+# The GitHub job timeout remains infrastructure failure protection and is not
+# reported as an Agent budget or used as a quality/cost eligibility threshold.
+LIMITS: dict[str, int] = {}
 MODEL_SEED = e2e_stability.MODEL_SEED
 SCREEN_WORKERS_PER_GROUP = 2
 
@@ -83,7 +86,7 @@ def runtime_spec(group: str, case: dict, *, zg: bool, variant: str = "P00",
         raise ValueError("Invalid native prompt variant")
     agent, model = GROUPS[group]
     spec = agent_spec(agent, model, base_url=OPENCODE_CUSTOM_BASE_URL if agent == "opencode" else None)
-    config = build_agent_config(spec, zg=False, max_model_turns=LIMITS["model_requests"],
+    config = build_agent_config(spec, zg=False, max_model_turns=None,
                                 model_seed=model_seed)
     value = {"agent": agent, "model": model, "arm": "zg" if zg else "baseline",
              "prompt_variant": variant, "instruction": instruction(case), "workspace": "/app",
@@ -115,7 +118,7 @@ def frozen_overrides(candidate: str | None, case: dict) -> dict:
 
 def launch(*, image: str, source: Path, logs: Path, cache: Path, workspace: Path,
            spec: dict, script: str = "native-agent-session.py", credential: str | None = None,
-           timeout: int = 3000) -> int:
+           timeout: int | None = None) -> int:
     logs.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
     session_source = workspace / "source"
@@ -253,7 +256,7 @@ def run_group(args: argparse.Namespace) -> int:
     manifest = {"protocol": PROTOCOL, "group": args.group, "case_id": case["case_id"],
                 "case_sha256": sha256(args.case), "source": case["repo"], "package": PACKAGE,
                 "embedding": EMBEDDING, "agent": spec.to_dict(),
-                "controls": control_manifest(spec, max_model_turns=30, model_seed=MODEL_SEED),
+                "controls": control_manifest(spec, max_model_turns=None, model_seed=MODEL_SEED),
                 "index_policy": "fresh independent index for each zg trial; no frozen identity requirement",
                 "prompt_selection": selection, "started_at": datetime.now(UTC).isoformat(),
                 "ci": {k: os.environ.get(k) for k in ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_RUN_ATTEMPT")}}

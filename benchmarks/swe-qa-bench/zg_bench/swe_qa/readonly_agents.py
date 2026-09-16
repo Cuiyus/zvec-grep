@@ -89,9 +89,14 @@ def expected_tools(spec: AgentSpec, *, zg: bool) -> list[str]:
     return ["read", "glob", "grep", *(["zvec_grep_zvec_grep_search"] if zg else [])]
 
 
-def control_manifest(spec: AgentSpec, *, max_model_turns: int, model_seed: int | None = None) -> dict[str, Any]:
-    if isinstance(max_model_turns, bool) or not isinstance(max_model_turns, int) or max_model_turns < 1:
-        raise ValueError("max_model_turns must be a positive integer")
+def control_manifest(spec: AgentSpec, *, max_model_turns: int | None,
+                     model_seed: int | None = None) -> dict[str, Any]:
+    if max_model_turns is not None and (
+        isinstance(max_model_turns, bool)
+        or not isinstance(max_model_turns, int)
+        or max_model_turns < 1
+    ):
+        raise ValueError("max_model_turns must be a positive integer or None")
     if model_seed is not None and (type(model_seed) is not int or not 0 <= model_seed <= 2**31 - 1):
         raise ValueError("model_seed must be a 32-bit non-negative integer")
     if model_seed is not None and spec.name != "opencode":
@@ -102,8 +107,14 @@ def control_manifest(spec: AgentSpec, *, max_model_turns: int, model_seed: int |
         else "not_configured_native_effective_value_unverified",
         "temperature_wire_verification_required": spec.name == "opencode",
         "model_turn_limit": max_model_turns,
-        "native_model_turn_limit": "agent.build.steps" if spec.name == "opencode" else "--max-turns (pinned bundle verified)",
-        "external_budget_enforcement_required": True,
+        "native_model_turn_limit": (
+            "not_configured"
+            if max_model_turns is None
+            else "agent.build.steps"
+            if spec.name == "opencode"
+            else "--max-turns (pinned bundle verified)"
+        ),
+        "external_budget_enforcement_required": max_model_turns is not None,
         "model_seed": model_seed,
         "seed_control": "agent.build.options.seed -> provider request body" if model_seed is not None else "not_configured",
         "seed_wire_verification_required": model_seed is not None,
@@ -118,7 +129,7 @@ def build_agent_config(
     *,
     zg: bool,
     mcp_command: list[str] | None = None,
-    max_model_turns: int = 30,
+    max_model_turns: int | None = 30,
     model_seed: int | None = None,
 ) -> dict[str, Any]:
     """Generate public configuration; the caller writes it outside the corpus."""
@@ -141,8 +152,11 @@ def build_agent_config(
             }},
             # OpenCode 1.18.4 merges agent options into providerOptions. The
             # pinned openai-compatible provider forwards seed to the request.
-            "agent": {"build": {"temperature": 0, "steps": max_model_turns,
-                                  **({"options": {"seed": model_seed}} if model_seed is not None else {})}},
+            "agent": {"build": {
+                "temperature": 0,
+                **({"steps": max_model_turns} if max_model_turns is not None else {}),
+                **({"options": {"seed": model_seed}} if model_seed is not None else {}),
+            }},
             "permission": {"*": "deny", "read": "allow", "glob": "allow", "grep": "allow"},
         }
         if zg:
@@ -185,13 +199,13 @@ def agent_environment(spec: AgentSpec, *, config_path: str) -> dict[str, str]:
 
 def build_agent_command(
     spec: AgentSpec, instruction: str, *, config_path: str, zg: bool = False,
-    max_model_turns: int = 30,
+    max_model_turns: int | None = 30,
 ) -> list[str]:
     """Return argv, not shell text; no prompt or credential is reinterpreted."""
     control_manifest(spec, max_model_turns=max_model_turns)
     if spec.name == "opencode":
         return ["opencode", "--model", spec.cli_model, "run", "--format", "json", "--thinking", "--", instruction]
-    return [
+    command = [
         "qodercli", "--print", "--output-format", "stream-json", "--no-session-persistence",
         "--config-dir", "/tmp/qa-qoder-config", "--setting-sources", "",
         "--settings", config_path, "--mcp-config", config_path, "--strict-mcp-config",
@@ -199,9 +213,11 @@ def build_agent_command(
         "--permission-mode", "dont_ask", "--tools", ",".join(QODER_READ_TOOLS),
         "--allowed-tools", ",".join(expected_tools(spec, zg=zg)),
         "--disallowed-tools", ",".join(QODER_DENY_TOOLS),
-        "--max-model-request-retries", "0", "--max-turns", str(max_model_turns),
-        "--model", spec.cli_model, "--", instruction,
+        "--max-model-request-retries", "0",
     ]
+    if max_model_turns is not None:
+        command += ["--max-turns", str(max_model_turns)]
+    return [*command, "--model", spec.cli_model, "--", instruction]
 
 
 def read_native_events(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:

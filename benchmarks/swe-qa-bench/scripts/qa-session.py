@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run one fresh agent session with observable limits and an optional HTTP tap.
+"""Run one fresh agent session with optional observable limits and an HTTP tap.
 
 The tap preserves request/response bytes; it never repairs tool calls or retries
 the model. Only the explicitly configured OpenAI-compatible endpoint is used.
-Limits stop after an observed threshold, so an in-flight turn may overshoot.
+Configured limits stop after an observed threshold, so an in-flight turn may
+overshoot. An empty limits object records usage without stopping the agent.
 """
 from __future__ import annotations
 
@@ -223,6 +224,9 @@ def run(spec):
     root = Path(spec.get("log_dir", "/logs"))
     root.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    limits = spec.get("limits") or {}
+    if not isinstance(limits, dict):
+        raise ValueError("limits must be an object")
     tap = None
     env = dict(os.environ)
     env.update(spec.get("env", {}))
@@ -244,7 +248,7 @@ def run(spec):
             tap.server.shutdown()
             tap.server.server_close()
         save(root / "session.json", {"status": "launch_failure", "returncode": None,
-             "error_type": type(error).__name__, "limits": spec["limits"], "observed": counters.snapshot(),
+             "error_type": type(error).__name__, "limits": limits, "observed": counters.snapshot(),
              "wall_seconds": time.monotonic() - started, "wire_available": tap is not None})
         return 127
 
@@ -274,10 +278,11 @@ def run(spec):
             pass
         if process.poll() is not None and lines.empty():
             break
-        if time.monotonic() - started > spec["limits"]["wall_seconds"]:
+        wall_limit = limits.get("wall_seconds")
+        if wall_limit is not None and time.monotonic() - started > wall_limit:
             limit_reason = "wall_seconds"
         else:
-            limit_reason = counters.exceeded(spec["limits"])
+            limit_reason = counters.exceeded(limits)
         if limit_reason:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -312,14 +317,18 @@ def run(spec):
         observed = counters.snapshot()
         observed["input_tokens"] = observed["input_tokens_observed_lower_bound"]
         limit_reason = next((key for key in ("model_requests", "tool_calls", "input_tokens")
-                             if key in spec["limits"] and observed[key] > spec["limits"][key]), None)
+                             if key in limits and observed[key] > limits[key]), None)
     if tap:
         tap.server.shutdown()
         tap.server.server_close()
     result = {"status": "budget_exhausted" if limit_reason else "completed" if returncode == 0 else "failed",
-              "returncode": returncode, "limit_reason": limit_reason, "limits": spec["limits"],
+              "returncode": returncode, "limit_reason": limit_reason, "limits": limits,
               "observed": counters.snapshot(), "wall_seconds": time.monotonic() - started,
-              "limit_semantics": "Stop after a native threshold is observed; in-flight/batched work may overshoot.",
+              "limit_semantics": (
+                  "Stop after a native threshold is observed; in-flight/batched work may overshoot."
+                  if limits
+                  else "No Harness session budget is configured; usage is observed without budget termination."
+              ),
               "wire_available": tap is not None}
     save(root / "session.json", result)
     print(json.dumps(result), flush=True)

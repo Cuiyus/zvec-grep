@@ -76,6 +76,7 @@ class NativeBenchmarkTests(unittest.TestCase):
                 if agent == "opencode":
                     self.assertEqual(runtime["base_config"]["agent"]["build"]["temperature"], 0)
                     self.assertEqual(runtime["base_config"]["agent"]["build"]["options"]["seed"], nb.MODEL_SEED)
+                    self.assertNotIn("steps", runtime["base_config"]["agent"]["build"])
                     self.assertEqual(runtime["model_seed"], nb.MODEL_SEED)
             _, baseline = nb.runtime_spec(group, CASE, zg=False)
             self.assertEqual(baseline["arm"], "baseline")
@@ -230,7 +231,7 @@ class NativeBenchmarkTests(unittest.TestCase):
         _, runtime = nb.runtime_spec("opencode-glm52", CASE, zg=False)
         process = Mock()
         def mutate(*, timeout):
-            self.assertEqual(timeout, 3000)
+            self.assertIsNone(timeout)
             (self.root / "workspace/source/source.py").write_text("changed\n")
             return 0
         process.wait.side_effect = mutate
