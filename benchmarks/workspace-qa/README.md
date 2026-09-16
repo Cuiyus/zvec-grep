@@ -27,6 +27,15 @@ Model controls are saved in each runtime manifest. A fixed order seed does not
 make model generation deterministic. Do not add undocumented sampling fields
 or claim service-side determinism without request-level evidence.
 
+**Live availability is currently blocked:** the 2026-09-16 CI account catalog
+lists GLM-5.3 and GLM-5.3-Flash, but no GLM-5.2. The first
+[probe](https://github.com/Cuiyus/zvec-grep/actions/runs/35090489722) was rejected
+because Qoder fell back to Auto. The follow-up
+[catalog check](https://github.com/Cuiyus/zvec-grep/actions/runs/35090940911)
+stopped before generation. Neither run is a GLM-5.2 benchmark observation.
+Keep the requested GLM-5.2 model until access is restored or another model is
+explicitly selected; do not substitute GLM-5.3 or accept Auto as GLM-5.2.
+
 `WORKSPACE_QA_MODEL=qwen3.8-max` is retained for historical continuation only;
 its workflow restores `qwen38-legacy-lock.json`. Model/lock mismatches and mixed
 model report inputs fail closed. New GLM runs still require a live CI probe to
