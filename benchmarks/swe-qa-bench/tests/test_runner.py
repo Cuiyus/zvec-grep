@@ -496,6 +496,45 @@ class RunValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(command[command.index("--n-attempts") + 1], "3")
+        self.assertEqual(command[command.index("--max-retries") + 1], "0")
+        self.assertNotIn("--plugin", command)
+
+    def test_failed_trial_retries_include_timeouts_and_preserve_evidence(self) -> None:
+        suite = runner.load_suite(self.suite_name, tier="smoke")
+
+        command = runner.build_harbor_command(
+            suite,
+            profile="baseline",
+            agent="opencode",
+            model="custom-openai/glm-5.2",
+            job_name="five-trials-with-retries",
+            n_attempts=5,
+            max_retries=2,
+        )
+
+        self.assertEqual(command[command.index("--n-attempts") + 1], "5")
+        self.assertEqual(command[command.index("--max-retries") + 1], "2")
+        self.assertEqual(command[command.index("--retry-exclude") + 1], "ApiUsageLimitError")
+        self.assertEqual(
+            command[command.index("--plugin") + 1],
+            "zg_bench.retries:FailedTrialArchivePlugin",
+        )
+        self.assertNotIn("--retry-include", command)
+
+    def test_retry_limit_rejects_invalid_values(self) -> None:
+        suite = runner.load_suite(self.suite_name, tier="smoke")
+        for invalid in (-1, True, 1.5, "2"):
+            with self.subTest(value=invalid), self.assertRaisesRegex(
+                ValueError, "non-negative integer"
+            ):
+                runner.build_harbor_command(
+                    suite,
+                    profile="baseline",
+                    agent="opencode",
+                    model="custom-openai/glm-5.2",
+                    job_name="invalid-retries",
+                    max_retries=invalid,
+                )
 
     def test_harbor_command_rejects_non_positive_trial_count(self) -> None:
         suite = runner.load_suite(self.suite_name, tier="smoke")

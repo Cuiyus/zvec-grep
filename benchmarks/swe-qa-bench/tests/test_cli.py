@@ -183,6 +183,55 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(args.n_attempts, 3)
+        self.assertEqual(args.max_retries, 0)
+
+    def test_retry_limit_is_forwarded_to_dry_run_and_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch("zg_bench.cli.collect_checks", return_value=[]),
+                patch("zg_bench.cli.print_report", return_value=0),
+                patch("zg_bench.cli.prepare_setup_cache", return_value=None),
+                patch(
+                    "zg_bench.cli.build_harbor_command", return_value=["harbor"]
+                ) as build,
+                patch("zg_bench.cli.execute", return_value=0),
+                patch("zg_bench.cli.job_has_exceptions", return_value=False),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                return_code = main(
+                    [
+                        "run", self.suite_name,
+                        "--agent", "opencode",
+                        "--model", "aliyun-glm-5.2",
+                        "--profile", "baseline",
+                        "--n-attempts", "5",
+                        "--max-retries", "2",
+                        "--jobs-dir", temp_dir,
+                    ]
+                )
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(len(build.call_args_list), 2)
+        for call in build.call_args_list:
+            self.assertEqual(call.kwargs["n_attempts"], 5)
+            self.assertEqual(call.kwargs["max_retries"], 2)
+
+    def test_negative_retry_limit_fails_before_preflight(self) -> None:
+        with (
+            patch("zg_bench.cli.collect_checks") as preflight,
+            self.assertRaisesRegex(SystemExit, "non-negative integer"),
+        ):
+            main(
+                [
+                    "run", self.suite_name,
+                    "--agent", "opencode",
+                    "--model", "aliyun-glm-5.2",
+                    "--profile", "baseline",
+                    "--max-retries", "-1",
+                ]
+            )
+
+        preflight.assert_not_called()
 
     def test_legacy_package_fails_before_harbor(self) -> None:
         with self.assertRaisesRegex(SystemExit, "does not support"):

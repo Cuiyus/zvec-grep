@@ -462,6 +462,80 @@ class CollectTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(output.read_text()), pair)
 
+    def test_retry_history_does_not_add_trials_or_hide_final_errors(self) -> None:
+        for exhausted in (False, True):
+            with (
+                self.subTest(exhausted=exhausted),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                for profile in ("baseline", "zvec-grep"):
+                    _write_harbor_job(
+                        root,
+                        profile=profile,
+                        trials=[
+                            _harbor_trial(
+                                f"reflex-6-{profile}-{index}",
+                                answer="terminal answer",
+                                input_tokens=100,
+                                output_tokens=10,
+                                tool_calls=2,
+                                agent_wall_seconds=5,
+                                cost_usd=None,
+                            )
+                            for index in range(1, 6)
+                        ],
+                    )
+                    job_dir = root / f"fixture-reflex-6-{profile}"
+                    trial_dir = job_dir / f"reflex-6-{profile}-1"
+                    failure = json.loads((trial_dir / "result.json").read_text())
+                    failure["exception_info"] = {
+                        "exception_type": "AgentTimeoutError"
+                    }
+                    failure["agent_result"]["n_input_tokens"] = 1000
+                    for attempt in (1, 2):
+                        archive = (
+                            job_dir
+                            / ".retry-history"
+                            / trial_dir.name
+                            / f"attempt-{attempt}"
+                        )
+                        shutil.copytree(trial_dir, archive)
+                        _write_json(archive / "result.json", failure)
+
+                    has_final_error = exhausted and profile == "baseline"
+                    if has_final_error:
+                        _write_json(trial_dir / "result.json", failure)
+                    job_result = json.loads((job_dir / "result.json").read_text())
+                    job_result["stats"].update(
+                        n_retries=2, n_errored_trials=int(has_final_error)
+                    )
+                    _write_json(job_dir / "result.json", job_result)
+
+                output = root / "pair.json"
+                if exhausted:
+                    with self.assertRaisesRegex(SweQaError, "errored trials"):
+                        collect_pair(
+                            runs_dir=root,
+                            task="reflex:6",
+                            output=output,
+                            expected_trials=5,
+                        )
+                    self.assertFalse(output.exists())
+                else:
+                    pair = collect_pair(
+                        runs_dir=root,
+                        task="reflex:6",
+                        output=output,
+                        expected_trials=5,
+                    )
+                    for profile in pair["profiles"].values():
+                        self.assertEqual(profile["trial_count"], 5)
+                        self.assertEqual(
+                            [trial["input_tokens"] for trial in profile["trials"]],
+                            [100] * 5,
+                        )
+
     def test_empty_final_answer_fails_collection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

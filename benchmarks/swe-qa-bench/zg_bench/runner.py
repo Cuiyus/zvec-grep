@@ -742,6 +742,7 @@ def build_harbor_command(
     jobs_dir: Path = DEFAULT_RUNS_DIR,
     job_name: str,
     n_attempts: int = 1,
+    max_retries: int = 0,
     harbor_executable: str = "harbor",
     zvec_grep_package: str = ZVEC_GREP_PACKAGE,
     zvec_grep_package_sha256: str | None = None,
@@ -756,6 +757,12 @@ def build_harbor_command(
         or n_attempts < 1
     ):
         raise ValueError("n_attempts must be a positive integer")
+    if (
+        isinstance(max_retries, bool)
+        or not isinstance(max_retries, int)
+        or max_retries < 0
+    ):
+        raise ValueError("max_retries must be a non-negative integer")
     resolve_agent_model(agent, model)
 
     harbor_agent = agent
@@ -903,6 +910,8 @@ def build_harbor_command(
         "docker",
         "--n-attempts",
         str(n_attempts),
+        "--max-retries",
+        str(max_retries),
         "--n-concurrent",
         "1",
         "--agent-setup-timeout-multiplier",
@@ -912,6 +921,19 @@ def build_harbor_command(
         "--job-name",
         job_name,
     ]
+
+    if max_retries:
+        # Harbor excludes timeouts by default. Retain only its usage-limit
+        # exclusion so failed executions (including timeouts) are eligible.
+        # The native queue replaces a failed attempt in the same trial slot.
+        command.extend(
+            [
+                "--retry-exclude",
+                "ApiUsageLimitError",
+                "--plugin",
+                "zg_bench.retries:FailedTrialArchivePlugin",
+            ]
+        )
 
     if suite.tasks is not None:
         for task in suite.tasks:

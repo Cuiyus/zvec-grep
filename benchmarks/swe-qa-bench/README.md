@@ -76,16 +76,31 @@ In the Aggregate row:
 ## GitHub Actions
 
 The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
-five-task smoke benchmark on pushes to the repository's `main` branch and on
+20-task full benchmark on pushes to the repository's `main` branch and on
 same-repository pull requests targeting `main`, except Dependabot pull
 requests. External-fork and Dependabot pull requests run validation only.
-Use `workflow_dispatch` to select `smoke` (5 tasks) or `all-full` (20 tasks).
+`workflow_dispatch` defaults to `all-full` (20 tasks); `smoke` (5 tasks) remains
+available for smaller checks.
 
 CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
-`local/potion-code-16m-v2` embedding model, and three trials per task and
+`local/potion-code-16m-v2` embedding model, and five trials per task and
 profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
 execution and judging. The Claude Code configuration above describes the
 published local protocol.
+
+The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
+trials. CI passes `--max-retries 2`: an exception, including an agent timeout,
+can trigger at most two additional attempts of the same trial. API usage-limit
+errors are not retried. Successful trials and low scores are not retried, and
+retry attempts do not increase the five-trial sample count. Local runs default
+to no retries unless `--max-retries` is supplied.
+
+Failed attempts are preserved under each Harbor job's `.retry-history/` and
+uploaded with the raw evidence. Job summaries show retry counts and remaining
+errors. Report token, tool-call, time, and cost metrics describe the final
+successful attempt of each trial; they exclude failed-attempt overhead, which
+remains in the archived evidence. Exhausted retries still fail the task.
+Each task job has a six-hour ceiling, including setup and retries.
 
 Both OpenCode profiles and the GLM-5.2 judge use `temperature = 0` and
 `seed = 42`, shared in `zg_bench/settings.py`. The same seed is used for every
@@ -102,8 +117,10 @@ using GLM credentials.
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired
 results, and uploads Harbor evidence and an independent task report as
-artifacts. Complete runs also produce an aggregate report; report summaries
-appear in the Actions Job Summary.
+artifacts. Complete runs also produce an aggregate report. If some tasks fail,
+the summary still shows completed task reports without presenting a partial
+set as the full benchmark. Reports from separate GitHub run attempts are kept
+separate; automatic trial retries happen within one attempt.
 
 ## Local setup
 

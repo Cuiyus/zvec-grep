@@ -10,18 +10,19 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Run the five-task smoke benchmark or the 20-task All-Full benchmark
+        description: Run all 20 tasks (default) or the five-task smoke benchmark
         required: true
-        default: smoke
+        default: all-full
         type: choice
         options:
-          - smoke
           - all-full
+          - smoke
 
 permissions: {}
 
 env:
-  SWE_QA_TRIALS_PER_PROFILE: "3"
+  SWE_QA_TRIALS_PER_PROFILE: "5"
+  SWE_QA_MAX_RETRIES: "2"
 
 concurrency:
   group: swe-qa-bench-${{ github.run_id }}-${{ github.run_attempt }}
@@ -76,9 +77,9 @@ jobs:
           tasks = selection["tasks"]
           tasks_by_id = {task["task_id"]: task for task in tasks}
           scope = os.environ["SCOPE"]
-          if scope in {"smoke", "auto"}:
+          if scope == "smoke":
               task_ids = selection["gate"]["auto_tasks"]
-          elif scope in {"all-full", "gate-20"}:
+          elif scope in {"all-full", "gate-20", "auto"}:
               # gate-20 remains accepted for legacy API/CLI dispatches.
               task_ids = [task["task_id"] for task in tasks]
           else:
@@ -113,11 +114,12 @@ jobs:
         run: >-
           uv run --project benchmarks/swe-qa-bench zg-bench run
           swe-qa-bench
-          --tier smoke
+          --tier full
           --agent opencode
           --model custom-openai/glm-5.2
           --profile all
           --n-attempts "$SWE_QA_TRIALS_PER_PROFILE"
+          --max-retries "$SWE_QA_MAX_RETRIES"
           --embedding-model local/potion-code-16m-v2
           --zvec-grep-package "$GITHUB_WORKSPACE"
           --job-name preflight
@@ -133,7 +135,7 @@ jobs:
         github.actor != 'dependabot[bot]'
       )
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     permissions:
       contents: read
     strategy:
@@ -183,6 +185,7 @@ jobs:
             --model custom-openai/glm-5.2 \
             --profile all \
             --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
+            --max-retries "$SWE_QA_MAX_RETRIES" \
             --embedding-model local/potion-code-16m-v2 \
             --zvec-grep-package "$GITHUB_WORKSPACE" \
             --jobs-dir "$runs_dir" \
@@ -203,6 +206,43 @@ jobs:
             --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json \
             --output-dir "$RUNNER_TEMP/swe-qa-task-report/${TASK_NAME}" \
             --expected "$TASK_NAME"
+      - name: Summarize trial retries
+        if: always()
+        env:
+          TASK_NAME: ${{ matrix.task }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "swe-qa-runs" / os.environ["TASK_NAME"]
+          trials = int(os.environ["SWE_QA_TRIALS_PER_PROFILE"])
+          retries = int(os.environ["SWE_QA_MAX_RETRIES"])
+          lines = [
+              "## Trial retries",
+              "",
+              f"Each profile has {trials} independent trials. Failed trials receive at most {retries} additional attempts within the job deadline; successful trials and low scores are not retried.",
+              "Report metrics cover the final successful attempt of each trial and exclude failed-attempt overhead. Failed attempts are preserved in the Harbor evidence artifact under `.retry-history/`.",
+              "",
+              "| Profile | Successful trials | Retry attempts | Final errors |",
+              "|---|---:|---:|---:|",
+          ]
+          for profile in ("baseline", "zvec-grep"):
+              paths = list(root.glob(f"*-{profile}/result.json"))
+              if len(paths) != 1:
+                  lines.append(f"| {profile} | unavailable | unavailable | unavailable |")
+                  continue
+              result = json.loads(paths[0].read_text())
+              stats = result["stats"]
+              errors = stats["n_errored_trials"]
+              successes = stats["n_completed_trials"] - errors
+              lines.append(
+                  f"| {profile} | {successes}/{result['n_total_trials']} | {stats['n_retries']} | {errors} |"
+              )
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("\n".join(lines) + "\n")
+          PY
       - name: Reject secret leakage in artifacts
         id: secret-scan
         if: always()
@@ -245,6 +285,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: swe-qa-pair-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
           path: |
             ${{ runner.temp }}/pair-${{ matrix.task }}.json
             ${{ runner.temp }}/swe-qa-runs/${{ matrix.task }}/
@@ -271,7 +312,7 @@ jobs:
     if: >-
       always() &&
       needs.validate.result == 'success' &&
-      needs.run-pair.result == 'success'
+      needs.run-pair.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -331,7 +372,7 @@ jobs:
           {
             echo "## SWE-QA Aggregate"
             echo
-            echo "**Partial rerun:** attempt ${GITHUB_RUN_ATTEMPT} contains ${actual_count} of ${expected_count} task reports. The cross-task Aggregate was intentionally skipped to avoid mixing workflow attempts, and no partial Aggregate artifact was generated."
+            echo "**Incomplete report set:** attempt ${GITHUB_RUN_ATTEMPT} contains ${actual_count} of ${expected_count} task reports. The cross-task Aggregate was skipped, and no partial Aggregate artifact was generated."
             echo
             echo "The independent task report(s) produced by this attempt are shown below. Any Aggregate row inside an embedded report covers that task only."
 
