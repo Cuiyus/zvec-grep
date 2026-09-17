@@ -104,7 +104,9 @@ Each task job has a six-hour ceiling, including setup and retries.
 
 Both OpenCode profiles and the GLM-5.2 judge use `temperature = 0` and
 `seed = 42`, shared in `zg_bench/settings.py`. The same seed is used for every
-trial and retry. OpenCode declares the model's temperature capability and
+trial and retry. Both profiles also set the model option
+`enable_thinking = false`; the judge sends the same option in its request body.
+OpenCode declares the model's temperature capability and
 passes the seed through every built-in agent's provider options, including
 subagents, compaction, and title/summary generation. Judge reports
 record both parameters, and aggregation rejects reports with different seeds
@@ -112,7 +114,8 @@ or a mix of seeded and legacy unseeded reports. These settings reduce sampling
 variance; identical responses still depend on the model service.
 
 CI also checks the pinned OpenCode binary against a local fake provider to
-verify the sampling parameters in consecutive tool-calling requests, without
+verify the sampling parameters and disabled thinking in consecutive
+tool-calling requests, without
 using GLM credentials.
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired

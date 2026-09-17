@@ -849,6 +849,7 @@ def build_harbor_command(
                             OPENCODE_CUSTOM_GLM_MODEL_ID: {
                                 "name": "GLM 5.2",
                                 "temperature": True,
+                                "options": {"enable_thinking": False},
                             }
                         },
                     }

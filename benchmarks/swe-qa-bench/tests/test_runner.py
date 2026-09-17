@@ -716,6 +716,11 @@ class RunValidationTests(unittest.TestCase):
                     self.assertTrue(
                         config["provider"][provider_id]["models"][model_id]["temperature"]
                     )
+                    self.assertIs(
+                        config["provider"][provider_id]["models"][model_id]
+                        ["options"]["enable_thinking"],
+                        False,
+                    )
                     for name in (
                         "build", "plan", "general", "explore",
                         "compaction", "title", "summary",

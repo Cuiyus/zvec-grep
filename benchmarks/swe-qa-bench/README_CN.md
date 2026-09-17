@@ -65,9 +65,9 @@ CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型
 
 每次失败的日志和轨迹保存在 Harbor job 的 `.retry-history/` 下，并随原始证据上传；Job Summary 展示重试次数和最终错误数。报告中的 token、工具调用、耗时及费用仅统计每个 trial 最终成功的那次执行，不包含失败尝试的额外开销；这些开销可在归档证据中查看。用尽重试次数仍失败时，该任务保持失败。每个任务 job 的总时限为 6 小时，包含准备和重试时间。
 
-OpenCode 的两个 profile 和 GLM-5.2 评审统一使用 `temperature = 0`、`seed = 42`，常量位于 `zg_bench/settings.py`，所有 trial 和重试都使用同一个 seed。OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录这两个参数；聚合时拒绝混用不同 seed，或将新报告与未记录 seed 的旧报告混用。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
+OpenCode 的两个 profile 和 GLM-5.2 评审统一使用 `temperature = 0`、`seed = 42`，常量位于 `zg_bench/settings.py`，所有 trial 和重试都使用同一个 seed。两个 profile 还统一在模型选项中设置 `enable_thinking = false`，评审请求也发送相同设置。OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录温度和 seed；聚合时拒绝混用不同 seed，或将新报告与未记录 seed 的旧报告混用。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
 
-CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续工具调用请求中的采样参数，不需要 GLM 凭证。
+CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续工具调用请求中的采样参数及关闭 thinking 的设置，不需要 GLM 凭证。
 
 每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。全部任务完成后生成聚合报告；部分任务失败时，Summary 仍展示已完成任务的报告，不将不完整结果作为完整 benchmark 聚合。不同 GitHub run attempt 的报告保持隔离，自动 trial 重试发生在同一 attempt 内。
 

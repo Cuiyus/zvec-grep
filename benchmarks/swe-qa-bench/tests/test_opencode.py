@@ -257,6 +257,7 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         self.assertEqual(request["model"], "glm-5.2")
                         self.assertEqual(request.get("temperature"), 0)
                         self.assertEqual(request.get("seed"), 42)
+                        self.assertIs(request.get("enable_thinking"), False)
                 finally:
                     server.shutdown()
                     server.server_close()
