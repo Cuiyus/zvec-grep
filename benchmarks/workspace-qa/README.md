@@ -2,14 +2,20 @@
 
 ## Task 192 PDF text smoke (2026-09-17)
 
-Pilot result: [conversion audit, all attempted runs, and failure diagnosis](reports/task-192-pdf-smoke-2026-09-17.md).
-The five-report PDF gate passed, but the latest pair hit the 30-minute wall limit in both
-arms after native Qoder `compacting`; with-zg first exceeded its native output limit.
-Across three calibration pairs, each arm has three attempts and zero completed/judged
-answers; QA zg calls are zero in every with-zg attempt. Setup/integration was verified,
-but retrieval efficacy was not measured. Those observations remain unchanged.
+Latest result: [completed pair, metrics, tool paths, and judge audit](reports/task-192-pdf-concise-result-2026-09-17.md).
+Run 35212857152 completed **baseline 1 + with-zg 1** in a 33-minute job. QA input tokens
+were 1,074,721 / 1,833,878; QA wall time 607.75 / 462.15 seconds; **QA zg calls 0 / 0**.
+Standard installation/MCP and a separate vector probe passed, but retrieval efficacy was
+not measured. Baseline selected the wrong companies; with-zg selected the target five.
+Raw GLM scores were 0/17 and 17/17, with confirmed grading errors documented in the report;
+they are not reliable quality estimates or official leaderboard scores. No score-based rerun.
 
-The next one-pair condition is **concise-report-v1**: both arms receive the same generic
+[Earlier attempts and failure diagnosis](reports/task-192-pdf-smoke-2026-09-17.md) remain
+unchanged: three failed pairs precede this separate prompt/output condition. Across all
+conditions, each arm has four attempts, one completed answer and one judged answer;
+different configurations are not pooled. The one-pair pilot is complete; no expansion is scheduled.
+
+The completed one-pair condition is **concise-report-v1**: both arms receive the same generic
 report-delivery guidance, targeting 2,500–4,500 Chinese characters while preserving task
 coverage, concise evidence extracts, and complete final delivery. Both use the native
 `--max-output-tokens 16384` flag. The original question, all rubrics, source corpus and
