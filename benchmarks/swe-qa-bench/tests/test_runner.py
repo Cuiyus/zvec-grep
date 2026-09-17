@@ -719,8 +719,18 @@ class RunValidationTests(unittest.TestCase):
                     self.assertIs(
                         config["provider"][provider_id]["models"][model_id]
                         ["options"]["enable_thinking"],
-                        False,
+                        model_id == "glm-5.2",
                     )
+                    model_options = (
+                        config["provider"][provider_id]["models"][model_id]["options"]
+                    )
+                    if model_id == "glm-5.2":
+                        # The compatible SDK maps this option to the API's
+                        # snake_case reasoning_effort field on the wire.
+                        self.assertEqual(model_options["reasoningEffort"], "high")
+                    else:
+                        self.assertNotIn("reasoningEffort", model_options)
+                    self.assertNotIn("reasoning_effort", model_options)
                     self.assertEqual(
                         config["permission"],
                         {"websearch": "deny", "webfetch": "deny"},

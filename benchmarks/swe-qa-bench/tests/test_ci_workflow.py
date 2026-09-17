@@ -30,11 +30,18 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         )
         python_script = script.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
         default_scope = workflow["on"]["workflow_dispatch"]["inputs"]["scope"]["default"]
-        self.assertEqual(default_scope, "all-full")
+        self.assertEqual(default_scope, "repro-3")
         trials = int(workflow["env"]["SWE_QA_TRIALS_PER_PROFILE"])
         self.assertEqual(trials, 5)
         tasks_by_id = {task["task_id"]: task for task in selection["tasks"]}
-        for scope in ("auto", default_scope, "smoke"):
+        scopes = {
+            "auto": list(tasks_by_id),
+            "all-full": list(tasks_by_id),
+            "gate-20": list(tasks_by_id),
+            "smoke": selection["gate"]["auto_tasks"],
+            "repro-3": ["reflex:6", "requests:16", "conan:39"],
+        }
+        for scope, expected_ids in scopes.items():
             with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "outputs"
                 subprocess.run(
@@ -46,16 +53,11 @@ class BenchmarkWorkflowTests(unittest.TestCase):
                     text=True,
                 )
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                expected_ids = (
-                    selection["gate"]["auto_tasks"]
-                    if scope == "smoke"
-                    else list(tasks_by_id)
-                )
                 self.assertEqual(json.loads(values["task_ids_json"]), expected_ids)
                 self.assertEqual(
                     json.loads(values["tasks"]),
                     [tasks_by_id[task_id]["task_slug"] for task_id in expected_ids],
                 )
                 count = int(values["count"])
-                self.assertEqual(count, 5 if scope == "smoke" else 20)
-                self.assertEqual(count * 2 * trials, 50 if scope == "smoke" else 200)
+                self.assertEqual(count, len(expected_ids))
+                self.assertEqual(count * 2 * trials, len(expected_ids) * 10)

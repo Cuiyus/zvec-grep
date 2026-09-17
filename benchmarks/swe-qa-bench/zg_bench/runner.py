@@ -31,6 +31,8 @@ from .settings import (
     OPENCODE_CUSTOM_GLM_MODEL,
     OPENCODE_CUSTOM_GLM_MODEL_ID,
     OPENCODE_DASHSCOPE_BASE_URL,
+    OPENCODE_GLM_ENABLE_THINKING,
+    OPENCODE_GLM_REASONING_EFFORT,
     OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
     OPENCODE_VERSION,
     ZVEC_GREP_API_KEY_ENV_VARS,
@@ -788,6 +790,12 @@ def build_harbor_command(
         # Deny web tools for primary and delegated agents. These explicit
         # denials still hide the tools when Harbor uses --auto/skip-permissions.
         web_permissions = {"websearch": "deny", "webfetch": "deny"}
+        # The OpenAI-compatible SDK maps reasoningEffort to reasoning_effort
+        # in the HTTP body. A snake_case config option can be overwritten.
+        glm_model_options = {
+            "enable_thinking": OPENCODE_GLM_ENABLE_THINKING,
+            "reasoningEffort": OPENCODE_GLM_REASONING_EFFORT,
+        }
         agent_config = {
             name: {
                 "temperature": BENCHMARK_TEMPERATURE,
@@ -809,7 +817,11 @@ def build_harbor_command(
                         "models": {
                             opencode_model_id: {
                                 "temperature": True,
-                                "options": {"enable_thinking": False},
+                                "options": (
+                                    glm_model_options
+                                    if opencode_model_id == OPENCODE_ALIYUN_GLM_MODEL_ID
+                                    else {"enable_thinking": False}
+                                ),
                             }
                         },
                         "options": {
@@ -854,7 +866,7 @@ def build_harbor_command(
                             OPENCODE_CUSTOM_GLM_MODEL_ID: {
                                 "name": "GLM 5.2",
                                 "temperature": True,
-                                "options": {"enable_thinking": False},
+                                "options": glm_model_options,
                             }
                         },
                     }

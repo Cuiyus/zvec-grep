@@ -9,6 +9,8 @@ CLAUDE_OPUS_5_MODEL = "claude-opus-5"
 CLAUDE_CODE_REASONING_EFFORT = "high"
 CLAUDE_CODE_MAX_BUDGET_USD = 4.0
 OPENCODE_VERSION = "1.18.4"
+OPENCODE_GLM_ENABLE_THINKING = True
+OPENCODE_GLM_REASONING_EFFORT = "high"
 # Keep sampling identical across profiles, repetitions, and judge retries.
 BENCHMARK_TEMPERATURE = 0
 BENCHMARK_SEED = 42

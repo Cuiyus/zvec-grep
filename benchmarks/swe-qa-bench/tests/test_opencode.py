@@ -309,7 +309,9 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         self.assertEqual(request["model"], "glm-5.2")
                         self.assertEqual(request.get("temperature"), 0)
                         self.assertEqual(request.get("seed"), 42)
-                        self.assertIs(request.get("enable_thinking"), False)
+                        self.assertIs(request.get("enable_thinking"), True)
+                        self.assertEqual(request.get("reasoning_effort"), "high")
+                        self.assertNotIn("reasoningEffort", request)
                     for request in task_requests:
                         tool_names = {
                             tool["function"]["name"] for tool in request["tools"]

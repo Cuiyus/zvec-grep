@@ -10,11 +10,12 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Run all 20 tasks (default) or the five-task smoke benchmark
+        description: Run the low/medium/high variability trio, all 20 tasks, or smoke
         required: true
-        default: all-full
+        default: repro-3
         type: choice
         options:
+          - repro-3
           - all-full
           - smoke
 
@@ -79,6 +80,9 @@ jobs:
           scope = os.environ["SCOPE"]
           if scope == "smoke":
               task_ids = selection["gate"]["auto_tasks"]
+          elif scope == "repro-3":
+              # Relative low / medium / high variability in run 35206585943.
+              task_ids = ["reflex:6", "requests:16", "conan:39"]
           elif scope in {"all-full", "gate-20", "auto"}:
               # gate-20 remains accepted for legacy API/CLI dispatches.
               task_ids = [task["task_id"] for task in tasks]

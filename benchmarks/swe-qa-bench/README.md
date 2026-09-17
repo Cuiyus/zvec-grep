@@ -79,8 +79,26 @@ The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
 20-task full benchmark on pushes to the repository's `main` branch and on
 same-repository pull requests targeting `main`, except Dependabot pull
 requests. External-fork and Dependabot pull requests run validation only.
-`workflow_dispatch` defaults to `all-full` (20 tasks); `smoke` (5 tasks) remains
-available for smaller checks.
+`workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
+`smoke` (5 tasks) remain available.
+
+The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
+tasks were selected from [run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943)
+for small reproduction and iteration runs. Each range below covers the five
+final successful trials in that historical run:
+
+| Relative variability | Task | Baseline score / tool calls | zvec-grep score / tool calls |
+|---|---|---|---|
+| Low | `reflex:6` | 87–96 / 7–12 | 84–92 / 3–5 |
+| Medium | `requests:16` | 68–97 / 2–6 | 75–99 / 7–10 |
+| High | `conan:39` | 5–92 / 2–24 | 5–100 / 3–19 |
+
+These are descriptive historical strata based on investigation paths and score
+variation, not statistical significance levels or intrinsic model properties.
+The low group still has differing paths; one high-group baseline trial delegates
+to a subagent whose internal calls are absent from the main trace. Compare new
+trials against the same three historical tasks, and account for failed-attempt
+overhead separately.
 
 CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
 `local/potion-code-16m-v2` embedding model, and five trials per task and
@@ -104,8 +122,16 @@ Each task job has a six-hour ceiling, including setup and retries.
 
 Both OpenCode profiles and the GLM-5.2 judge use `temperature = 0` and
 `seed = 42`, shared in `zg_bench/settings.py`. The same seed is used for every
-trial and retry. Both profiles also set the model option
-`enable_thinking = false`; the judge sends the same option in its request body.
+trial and retry. For GLM-5.2, both OpenCode profiles set
+`enable_thinking = true` and `reasoningEffort = "high"` in the model options,
+using the constants in `zg_bench/settings.py`. The OpenAI-compatible SDK maps
+`reasoningEffort` to the HTTP field `reasoning_effort`. This applies to both
+custom-openai and DashScope GLM configurations, including delegated agents.
+The judge keeps `enable_thinking = false` and does not set reasoning effort so
+the scoring protocol remains comparable. The separate Qwen configuration also
+keeps thinking disabled; GLM reasoning settings are not applied to other models.
+[Alibaba Cloud's GLM documentation](https://help.aliyun.com/zh/model-studio/glm)
+lists `high` as a supported GLM-5.2 reasoning effort.
 OpenCode declares the model's temperature capability and
 passes the seed through every built-in agent's provider options, including
 subagents, compaction, and title/summary generation. Judge reports
@@ -121,7 +147,8 @@ restriction, not container network isolation; shell commands and setup/model
 connections still have network access.
 
 CI also checks the pinned OpenCode binary against a local fake provider to
-verify the sampling parameters, disabled thinking, and web-tool restrictions in
+verify the sampling parameters, enabled GLM thinking, the actual
+`reasoning_effort = "high"` request field, and web-tool restrictions in
 consecutive tool-calling requests, without
 using GLM credentials.
 
