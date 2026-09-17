@@ -90,7 +90,7 @@ class ResilientOpenCodeTests(unittest.IsolatedAsyncioTestCase):
     "requires pinned OpenCode binary; sends requests only to a local fake provider",
 )
 class OpenCodeSamplingContractTests(unittest.TestCase):
-    def test_task_and_background_requests_use_fixed_sampling(self) -> None:
+    def test_task_subagent_and_background_request_contract(self) -> None:
         requested_binary = os.environ["OPENCODE_BENCHMARK_TEST_BINARY"]
         binary = shutil.which(requested_binary) or str(
             Path(requested_binary).resolve()
@@ -102,13 +102,26 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
             runner.OPENCODE_VERSION,
         )
         suite = runner.load_suite("swe-qa-bench", tier="smoke")
-        for model in ("custom-openai/glm-5.2", "aliyun-glm-5.2"):
-            with self.subTest(model=model), tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
+        cases = (
+            ("custom-openai/glm-5.2", True),
+            ("aliyun-glm-5.2", True),
+            # Prove that neither provider defaults nor the fixture itself hide
+            # web tools: removing the benchmark denies must expose both tools.
+            ("custom-openai/glm-5.2", False),
+        )
+        for model, disable_web_tools in cases:
+            with (
+                self.subTest(model=model, disable_web_tools=disable_web_tools),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                # macOS /var is a symlink to /private/var. Match the runtime's
+                # canonical cwd so a local child read is not an external path.
+                root = Path(temp_dir).resolve()
                 corpus = root / "corpus"
                 corpus.mkdir()
                 (corpus / "README.md").write_text("The fixture value is 42.\n")
                 requests: list[dict[str, Any]] = []
+                child_requests: list[dict[str, Any]] = []
 
                 class FakeProvider(BaseHTTPRequestHandler):
                     def log_message(self, *_args: Any) -> None:
@@ -119,12 +132,38 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                             self.rfile.read(int(self.headers["Content-Length"]))
                         )
                         requests.append(body)
+                        is_child = bool(self.headers.get("x-parent-session-id"))
+                        if is_child:
+                            child_requests.append(body)
                         task = bool(body.get("tools"))
-                        after_read = any(
+                        after_tool = any(
                             message.get("role") == "tool"
                             for message in body.get("messages", [])
                         )
-                        if task and not after_read:
+                        if task and not after_tool and not is_child:
+                            delta = {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "index": index,
+                                        "id": f"delegate-{agent}",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "task",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "description": "Read local fixture value",
+                                                    "prompt": "Read README.md and report its fixture value.",
+                                                    "subagent_type": agent,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                    for index, agent in enumerate(("general", "explore"))
+                                ],
+                            }
+                            finish = "tool_calls"
+                        elif task and not after_tool:
                             delta = {
                                 "role": "assistant",
                                 "tool_calls": [
@@ -210,10 +249,15 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         f"http://127.0.0.1:{server.server_port}/v1"
                     )
                     config.update(autoupdate=False, share="disabled", lsp=False)
-                    config["permission"] = {
-                        "*": "deny", "read": "allow", "grep": "allow", "glob": "allow"
-                    }
-                    config["agent"]["build"]["steps"] = 3
+                    if not disable_web_tools:
+                        for permissions in (
+                            config["permission"],
+                            *(agent["permission"] for agent in config["agent"].values()),
+                        ):
+                            for tool in ("webfetch", "websearch"):
+                                permissions.pop(tool)
+                    for agent in ("build", "general", "explore"):
+                        config["agent"][agent]["steps"] = 3
                     config_path = root / "opencode.json"
                     config_path.write_text(json.dumps(config))
                     env = {
@@ -225,6 +269,8 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         "OPENCODE_DISABLE_MODELS_FETCH": "true",
                         "OPENCODE_DISABLE_PROJECT_CONFIG": "true",
                         "OPENCODE_DISABLE_EXTERNAL_SKILLS": "true",
+                        # websearch is otherwise absent for these providers.
+                        "OPENCODE_ENABLE_EXA": "true",
                         "XDG_CONFIG_HOME": str(root / "config"),
                         "XDG_DATA_HOME": str(root / "data"),
                         "XDG_STATE_HOME": str(root / "state"),
@@ -235,7 +281,8 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                             binary,
                             "--model",
                             command[command.index("--model") + 1],
-                            "run", "--format", "json", "--",
+                            "run", "--format", "json",
+                            "--dangerously-skip-permissions", "--",
                             "Read README.md and report its fixture value.",
                         ],
                         env=env,
@@ -247,7 +294,12 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     task_requests = [body for body in requests if body.get("tools")]
                     self.assertEqual(
-                        len(task_requests), 2, result.stdout + result.stderr
+                        len(task_requests), 6, result.stdout + result.stderr
+                    )
+                    self.assertEqual(
+                        len([body for body in child_requests if body.get("tools")]),
+                        4,
+                        "Expected a read and continuation for both general and explore",
                     )
                     self.assertGreater(
                         len(requests), len(task_requests),
@@ -258,6 +310,17 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         self.assertEqual(request.get("temperature"), 0)
                         self.assertEqual(request.get("seed"), 42)
                         self.assertIs(request.get("enable_thinking"), False)
+                    for request in task_requests:
+                        tool_names = {
+                            tool["function"]["name"] for tool in request["tools"]
+                        }
+                        self.assertTrue({"read", "grep", "glob"} <= tool_names)
+                        for tool in ("webfetch", "websearch"):
+                            self.assertEqual(
+                                tool in tool_names,
+                                not disable_web_tools,
+                                f"Unexpected {tool} availability: {sorted(tool_names)}",
+                            )
                 finally:
                     server.shutdown()
                     server.server_close()

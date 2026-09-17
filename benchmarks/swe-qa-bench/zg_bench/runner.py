@@ -785,10 +785,14 @@ def build_harbor_command(
         # Cover every built-in agent in pinned OpenCode, including delegated
         # tasks and compaction/title/summary requests. The model also needs
         # temperature capability enabled below, or 1.18.4 silently omits it.
-        sampling_config = {
+        # Deny web tools for primary and delegated agents. These explicit
+        # denials still hide the tools when Harbor uses --auto/skip-permissions.
+        web_permissions = {"websearch": "deny", "webfetch": "deny"}
+        agent_config = {
             name: {
                 "temperature": BENCHMARK_TEMPERATURE,
                 "options": {"seed": BENCHMARK_SEED},
+                "permission": dict(web_permissions),
             }
             for name in (
                 "build", "plan", "general", "explore", "compaction", "title", "summary"
@@ -814,7 +818,8 @@ def build_harbor_command(
                         },
                     }
                 },
-                "agent": sampling_config,
+                "agent": agent_config,
+                "permission": dict(web_permissions),
             }
             if profile == "zvec-grep":
                 # ZvecGrepMixin provisions this entry during setup, but the
@@ -855,7 +860,8 @@ def build_harbor_command(
                     }
                 },
                 "model": OPENCODE_CUSTOM_GLM_MODEL,
-                "agent": sampling_config,
+                "agent": agent_config,
+                "permission": dict(web_permissions),
             }
             if profile == "zvec-grep":
                 opencode_config["mcp"] = {

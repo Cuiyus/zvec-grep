@@ -689,7 +689,7 @@ class RunValidationTests(unittest.TestCase):
         self.assertNotIn("GLM_API_KEY", json.dumps(config))
         self.assertIn("mcp", config)
 
-    def test_opencode_profiles_use_identical_fixed_sampling(self) -> None:
+    def test_opencode_profiles_use_identical_sampling_and_web_restrictions(self) -> None:
         suite = runner.load_suite(self.suite_name, tier="smoke")
         for model, provider_id, model_id in (
             ("custom-openai/glm-5.2", "custom-openai", "glm-5.2"),
@@ -721,16 +721,25 @@ class RunValidationTests(unittest.TestCase):
                         ["options"]["enable_thinking"],
                         False,
                     )
+                    self.assertEqual(
+                        config["permission"],
+                        {"websearch": "deny", "webfetch": "deny"},
+                    )
                     for name in (
                         "build", "plan", "general", "explore",
                         "compaction", "title", "summary",
                     ):
                         self.assertEqual(config["agent"][name]["temperature"], 0)
                         self.assertEqual(config["agent"][name]["options"]["seed"], 42)
+                        self.assertEqual(
+                            config["agent"][name]["permission"],
+                            {"websearch": "deny", "webfetch": "deny"},
+                        )
                     self.assertEqual("mcp" in config, profile == "zvec-grep")
                     configs.append(config)
             self.assertEqual(configs[0]["provider"], configs[1]["provider"])
             self.assertEqual(configs[0]["agent"], configs[1]["agent"])
+            self.assertEqual(configs[0]["permission"], configs[1]["permission"])
 
     def test_custom_glm_environment_normalizes_and_scrubs_source_key(self) -> None:
         with patch.dict(

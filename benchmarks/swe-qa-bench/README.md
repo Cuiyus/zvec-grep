@@ -113,9 +113,16 @@ record both parameters, and aggregation rejects reports with different seeds
 or a mix of seeded and legacy unseeded reports. These settings reduce sampling
 variance; identical responses still depend on the model service.
 
+Both OpenCode profiles deny `websearch` and `webfetch` globally and for every
+built-in agent, including delegated agents. These tools are excluded from model
+requests even when Harbor skips interactive permission prompts. Local repository
+search, file reads, and the zvec-grep MCP remain available. This is a web-tool
+restriction, not container network isolation; shell commands and setup/model
+connections still have network access.
+
 CI also checks the pinned OpenCode binary against a local fake provider to
-verify the sampling parameters and disabled thinking in consecutive
-tool-calling requests, without
+verify the sampling parameters, disabled thinking, and web-tool restrictions in
+consecutive tool-calling requests, without
 using GLM credentials.
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired
