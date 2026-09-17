@@ -784,6 +784,7 @@ def build_harbor_command(
     elif agent == _OPENCODE_AGENT:
         harbor_agent = OPENCODE_IMPORT_PATH
         agent_kwargs.append(f"version={OPENCODE_VERSION}")
+        agent_kwargs.append("collect_session_usage=true")
         # Cover every built-in agent in pinned OpenCode, including delegated
         # tasks and compaction/title/summary requests. The model also needs
         # temperature capability enabled below, or 1.18.4 silently omits it.

@@ -16,6 +16,15 @@ from ..settings import (
     OPENCODE_CUSTOM_GLM_BASE_URL,
 )
 from . import SELF_JUDGE_LABEL, SweQaError
+from .collect import (
+    LEGACY_USAGE_SCOPE,
+    SESSION_USAGE_METRICS,
+    SESSION_USAGE_SCOPE,
+    _compatible_usage_scope,
+    _same_metric,
+    _usage_scope,
+    _validate_usage_metrics,
+)
 
 SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence")
 JUDGE_MODEL = "openai/glm-5.2"
@@ -158,6 +167,7 @@ def _validate_trial(
         raise SweQaError(f"{task} {profile} has invalid trial_index")
     normalized = dict(trial)
     normalized["trial_index"] = trial_index
+    normalized["usage_scope"] = _validate_usage_metrics(normalized, integer=True)
     return normalized
 
 
@@ -235,10 +245,21 @@ def _load_pairs(root: Path, expected: Sequence[str]) -> dict[str, dict[str, Any]
             raise SweQaError(f"{task_id} pair trial count does not match profiles")
         pair["expected_trials"] = expected_trials
         pair["actual_trials"] = actual_trials
+        scope = _compatible_usage_scope([
+            trial for profile in profiles.values() for trial in profile["trials"]
+        ])
+        if "usage_scope" in pair and pair["usage_scope"] != scope:
+            raise SweQaError(f"{task_id} pair usage_scope disagrees with trials")
         pairs[task_id] = pair
     missing = [task for task in expected if task not in pairs]
     if missing:
         raise SweQaError(f"hard gate is missing valid pair(s): {', '.join(missing)}")
+    _compatible_usage_scope([
+        trial
+        for pair in pairs.values()
+        for profile in pair["profiles"].values()
+        for trial in profile["trials"]
+    ])
     return pairs
 
 
@@ -437,6 +458,12 @@ def _judge_task_trials(
                     "tool_calls": trial["tool_calls"],
                     "agent_wall_seconds": trial["agent_wall_seconds"],
                     "cost_usd": trial["cost_usd"],
+                    "usage_scope": _usage_scope(trial),
+                    **{
+                        key: trial[key]
+                        for key in (*SESSION_USAGE_METRICS, "session_usage", "usage_collection_wall_seconds")
+                        if key in trial
+                    },
                 },
             }
         )
@@ -493,6 +520,28 @@ def _mean_available(
     return sum(available) / len(available), len(available)
 
 
+def _summarize_usage(
+    rows: Sequence[dict[str, Any]], *, average: bool
+) -> dict[str, Any]:
+    scope = _compatible_usage_scope(list(rows))
+    result: dict[str, Any] = {"usage_scope": scope}
+    if scope == LEGACY_USAGE_SCOPE:
+        return result
+    combine = _mean_or_none if average else _sum_or_none
+    split = {
+        part: {
+            key: combine([row["session_usage"][part][key] for row in rows])
+            for key in SESSION_USAGE_METRICS
+        }
+        for part in ("root", "descendants", "total")
+    }
+    result.update(split["total"])
+    result["session_usage"] = {
+        "scope": scope, "complete": True, **split,
+    }
+    return result
+
+
 def _summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     count = len(trials)
     scores = {
@@ -530,6 +579,7 @@ def _summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
         )
         / count,
         "cost_usd": _mean_or_none([row["cost_usd"] for row in metric_rows]),
+        **_summarize_usage(metric_rows, average=True),
     }
     return {
         "trial_count": count,
@@ -606,12 +656,17 @@ def _case_comparison(case: dict[str, Any]) -> dict[str, Any]:
 
 def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
     count = len(cases)
+    _compatible_usage_scope([
+        case["profiles"][profile]["metrics"]
+        for case in cases for profile in PROFILE_NAMES
+    ])
     profiles: dict[str, dict[str, Any]] = {}
     for profile in PROFILE_NAMES:
         profile_rows = [case["profiles"][profile] for case in cases]
         profiles[profile] = {
             "judge": sum(row["judge"]["total"] for row in profile_rows) / count,
             "input_tokens": sum(row["metrics"]["input_tokens"] for row in profile_rows),
+            "output_tokens": _sum_or_none([row["metrics"].get("output_tokens") for row in profile_rows]),
             "tool_calls": sum(row["metrics"]["tool_calls"] for row in profile_rows),
             "agent_wall_seconds": sum(
                 row["metrics"]["agent_wall_seconds"] for row in profile_rows
@@ -619,6 +674,7 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "cost_usd": _sum_or_none(
                 [row["metrics"]["cost_usd"] for row in profile_rows]
             ),
+            **_summarize_usage([row["metrics"] for row in profile_rows], average=False),
         }
     task_comparisons = [_case_comparison(case) for case in cases]
     comparison: dict[str, float | None] = {}
@@ -668,12 +724,23 @@ def _metric_cell(
 
 
 def _render_report(report: dict[str, Any]) -> str:
+    usage_scope = report.get("usage_scope", LEGACY_USAGE_SCOPE)
     lines = [
         "# SWE-QA-Bench CI report",
         "",
         f"Judge: **{SELF_JUDGE_LABEL}** (GLM-5.2 self-judge).",
         "",
         "This run is **report-only**. Numeric scores and deltas are not code-review or merge gates. The hard gate only requires every expected pair and every judge call to succeed.",
+        "",
+        f"Usage scope: **`{usage_scope}`**. " + (
+            "Tokens and tool calls include the root session and every recursively linked subagent session. "
+            "Input includes uncached, cache-read, and cache-write tokens; output includes text and reasoning tokens. "
+            "Agent wall time already includes awaited subagents and excludes usage-export overhead; child durations are not added. "
+            "The judge evaluates only the root final answer. Background title/summary calls not persisted in the session database are outside this scope, so this is not a complete provider bill."
+            if usage_scope == SESSION_USAGE_SCOPE else
+            "Legacy evidence covers the root trajectory only; subagent usage is unknown and may be omitted. "
+            "Do not interpret these resource comparisons as complete agent usage or combine them with session-tree reports."
+        ),
         "",
         "All cells use `baseline / zvec-grep / change`. Judge change is `zvec-grep - baseline`, so a gain is positive. Efficiency change is the percentage change from baseline, so lower token, tool-call, or time usage is negative.",
         "",
@@ -771,6 +838,28 @@ def _render_report(report: dict[str, Any]) -> str:
                 "",
             )
         )
+    if usage_scope == SESSION_USAGE_SCOPE:
+        lines.extend((
+            "Root/subagent usage breakdown (per-task trial means; descendants include every nesting level). "
+            "A root delegation is one root tool call, and the child's own tool calls are counted separately. "
+            "Cache reads/writes and reasoning are components of the token totals, not extra tokens to add again.",
+            "",
+            "| Case | Profile | Sessions | Input tokens | Cache read / write | Text output / reasoning | Tool calls | LLM calls |",
+            "|---|---|---|---:|---:|---:|---:|---:|",
+        ))
+        for case in report["cases"]:
+            for profile in PROFILE_NAMES:
+                usage = case["profiles"][profile]["metrics"]["session_usage"]
+                for part in ("root", "descendants"):
+                    row = usage[part]
+                    lines.append("| " + " | ".join((
+                        case["task_id"], profile, part,
+                        _fmt_number(row["input_tokens"]),
+                        f"{_fmt_number(row['cache_read_tokens'])} / {_fmt_number(row['cache_write_tokens'])}",
+                        f"{_fmt_number(row['text_output_tokens'])} / {_fmt_number(row['reasoning_tokens'])}",
+                        _fmt_number(row["tool_calls"]), _fmt_number(row["llm_calls"]),
+                    )) + " |")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -861,6 +950,7 @@ def _validate_report_metrics(value: Any, *, prefix: str) -> None:
         cost is not None and float(cost) < 0
     ):
         raise SweQaError(f"{prefix}: invalid cost_usd")
+    value["usage_scope"] = _validate_usage_metrics(value, integer=False)
 
 
 def _report_profile_trial_count(profile: dict[str, Any], *, prefix: str) -> int:
@@ -889,6 +979,23 @@ def _report_profile_trial_count(profile: dict[str, Any], *, prefix: str) -> int:
     declared = profile.get("trial_count", len(raw_trials))
     if declared != len(raw_trials):
         raise SweQaError(f"{prefix}: trial_count does not match evidence")
+    scope = _compatible_usage_scope([
+        profile["metrics"], *[trial["metrics"] for trial in raw_trials]
+    ])
+    if scope == SESSION_USAGE_SCOPE:
+        rows = [trial["metrics"] for trial in raw_trials]
+        expected = _summarize_usage(rows, average=True)
+        expected["agent_wall_seconds"] = sum(row["agent_wall_seconds"] for row in rows) / len(rows)
+        for key in (*SESSION_USAGE_METRICS, "agent_wall_seconds"):
+            if not _same_metric(profile["metrics"][key], expected[key]):
+                raise SweQaError(f"{prefix}: profile mean {key} disagrees with trials")
+        for part in ("root", "descendants", "total"):
+            for key in SESSION_USAGE_METRICS:
+                if not _same_metric(
+                    profile["metrics"]["session_usage"][part][key],
+                    expected["session_usage"][part][key],
+                ):
+                    raise SweQaError(f"{prefix}: profile session split disagrees with trials")
     return len(raw_trials)
 
 
@@ -970,6 +1077,11 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
 
     if len(set(trial_counts)) != 1:
         raise SweQaError(f"{prefix}: profile trial counts do not match")
+    usage_scope = _compatible_usage_scope([
+        profiles[name]["metrics"] for name in PROFILE_NAMES
+    ])
+    if report.get("usage_scope", LEGACY_USAGE_SCOPE) != usage_scope:
+        raise SweQaError(f"{prefix}: report usage_scope disagrees with metrics")
     declared_case_count = case.get("trial_count", trial_counts[0])
     if declared_case_count != trial_counts[0]:
         raise SweQaError(f"{prefix}: case trial_count does not match evidence")
@@ -1070,6 +1182,10 @@ def aggregate_reports(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "usage_scope": _compatible_usage_scope([
+            case["profiles"][profile]["metrics"]
+            for case in cases for profile in PROFILE_NAMES
+        ]),
         "judge": _combined_judge(source_reports),
         "gate": {
             "kind": "completion-only",
@@ -1177,6 +1293,10 @@ def judge_pairs(
     report = {
         "schema_version": 2,
         "benchmark": "peng-weihan/SWE-QA-Bench",
+        "usage_scope": _compatible_usage_scope([
+            case["profiles"][profile]["metrics"]
+            for case in cases for profile in PROFILE_NAMES
+        ]),
         "judge": {
             "label": SELF_JUDGE_LABEL,
             "model": "glm-5.2",

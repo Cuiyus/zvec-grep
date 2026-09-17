@@ -39,7 +39,7 @@ Baseline 与 zvec-grep 除工具访问外保持完全相同。索引构建单独
 
 ## 指标与报告
 
-Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 baseline 和 zvec-grep 数值是对应 profile 三次 trial 的平均值。
+Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 baseline 和 zvec-grep 数值是对应 profile 配置次数的 trial 平均值（CI 为五次）。
 
 | 指标 | 变化 | 含义 |
 | --- | --- | --- |
@@ -47,6 +47,16 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 | `input_token`、`toolcall`、Agent 执行耗时 | `(zvec-grep - baseline) / baseline` | 负值表示资源用量更低。 |
 
 如果 baseline 分母为零，对应的效率比较结果为 `N/A`。索引设置时间与 Agent 执行耗时分开统计。
+
+新 OpenCode trial 开启 `collect_session_usage=true`。适配器在环境停止前导出主会话及递归关联的全部子代理会话，保存为 `agent/session-usage.json`。采集要求导出完整；会话缺失、导出失败或总数不一致时 trial/报告失败，不能静默回退到主轨迹。JSON 和 Markdown 报告标记 `opencode-session-tree-v1` 统计口径，并展示主会话、子代理的用量拆分。
+
+- 输入 token 包含非缓存输入、缓存读取和缓存写入；输出 token 包含文本输出及 reasoning，并分别保留组成字段。
+- 工具数包含主会话的委派调用和子代理内部调用，递归覆盖更深层子代理；使用会话、消息和工具标识去重。
+- Agent 墙钟时间已经包含等待子代理的执行时间，不能再累加子代理耗时；采集导出的实测耗时会扣除。
+- Judge 仍只评分主会话的最终答案，其消耗单独统计。
+- 完整导出表示已持久化的任务会话完整，不代表完整账单：未写入会话数据库的后台标题/摘要调用无法计入；缺失的供应商费用仍记为未知。
+
+没有会话导出的历史数据保留为 `legacy-root`，其子代理 token 和工具用量未知，可能漏计。采集和报告聚合均拒绝将它与新口径混用，包括没有标记统计口径的旧报告。旧版输入/输出 token 的组成也不同，不能把新旧资源差值当作同口径比较。失败尝试仍单独保存在 `.retry-history/`，不计入最终成功 trial 的均值。
 
 在 Aggregate 行中：
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
+from harbor.agents.installed.opencode import OpenCode
+from harbor.models.agent.context import AgentContext
 
 from zg_bench import runner
 from zg_bench.agents.opencode import (
@@ -20,6 +23,7 @@ from zg_bench.agents.opencode import (
     resilient_nvm_node_install_snippet,
 )
 from zg_bench.agents.zvec_opencode import ZvecOpenCode
+from zg_bench.agents.opencode_usage import USAGE_SQL
 
 
 class _InstallHarness(ResilientOpenCode):
@@ -83,6 +87,45 @@ class ResilientOpenCodeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_zvec_profile_uses_the_same_resilient_adapter(self) -> None:
         self.assertTrue(issubclass(ZvecOpenCode, ResilientOpenCode))
+
+    async def test_snapshot_captured_in_finally_without_hiding_run_failure(self) -> None:
+        for error in (None, RuntimeError("model failed"), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as temp:
+                agent = ResilientOpenCode(logs_dir=Path(temp), collect_session_usage=True)
+                context = AgentContext()
+                with (
+                    patch.object(OpenCode, "run", new=AsyncMock(side_effect=error)),
+                    patch.object(agent, "exec_as_agent", new=AsyncMock()) as export,
+                ):
+                    if error is None:
+                        await agent.run("test", object(), context)
+                    else:
+                        with self.assertRaises(type(error)):
+                            await agent.run("test", object(), context)
+                export.assert_awaited_once()
+                self.assertIn("opencode db", export.call_args.kwargs["command"])
+                self.assertEqual(export.call_args.kwargs["timeout_sec"], 30)
+                self.assertEqual(agent._usage_capture_complete, error is None)
+                self.assertTrue(context.is_empty(), "Harbor must still run post-run parsing")
+
+    async def test_export_failure_marks_incomplete_and_preserves_execution_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            agent = ResilientOpenCode(logs_dir=Path(temp), collect_session_usage=True)
+            context = AgentContext()
+            with (
+                patch.object(OpenCode, "run", new=AsyncMock(side_effect=ValueError("original"))),
+                patch.object(agent, "exec_as_agent", new=AsyncMock(side_effect=TimeoutError())),
+                self.assertRaisesRegex(ValueError, "original"),
+            ):
+                await agent.run("test", object(), context)
+            agent.populate_context_post_run(context)
+            usage = json.loads((Path(temp) / "session-usage.json").read_text())
+            self.assertFalse(usage["complete"])
+            self.assertIn("snapshot_capture_failed:TimeoutError", usage["errors"])
+
+    def test_usage_capture_flag_requires_actual_boolean(self) -> None:
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            ResilientOpenCode(logs_dir=Path("unused"), collect_session_usage="false")
 
 
 @unittest.skipUnless(
@@ -206,9 +249,11 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                                     {"index": 0, "delta": {}, "finish_reason": finish}
                                 ],
                                 "usage": {
-                                    "prompt_tokens": 10,
-                                    "completion_tokens": 5,
-                                    "total_tokens": 15,
+                                    "prompt_tokens": 100,
+                                    "completion_tokens": 50,
+                                    "total_tokens": 150,
+                                    "prompt_tokens_details": {"cached_tokens": 60},
+                                    "completion_tokens_details": {"reasoning_tokens": 20},
                                 },
                             },
                         ]
@@ -292,6 +337,35 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         timeout=60,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("collect_session_usage=true", command)
+                    snapshot = subprocess.check_output(
+                        [binary, "db", USAGE_SQL, "--format", "json"],
+                        env=env, cwd=corpus, text=True, timeout=30,
+                    )
+                    logs_dir = root / "agent"
+                    logs_dir.mkdir()
+                    (logs_dir / "opencode.txt").write_text(result.stdout)
+                    (logs_dir / "opencode-session-snapshot.json").write_text(snapshot)
+                    agent = ResilientOpenCode(
+                        logs_dir=logs_dir, model_name=command[command.index("--model") + 1],
+                        collect_session_usage=True,
+                    )
+                    agent._usage_capture_complete = True
+                    context = AgentContext()
+                    agent.populate_context_post_run(context)
+                    usage = json.loads((logs_dir / "session-usage.json").read_text())
+                    self.assertTrue(usage["complete"], usage["errors"])
+                    self.assertEqual(len(usage["sessions"]), 3)
+                    self.assertEqual(usage["root"]["input_tokens"], 200)
+                    self.assertEqual(usage["descendants"]["input_tokens"], 400)
+                    self.assertEqual(usage["total"]["tool_calls"], 4)
+                    self.assertEqual(usage["total"]["llm_calls"], 6)
+                    self.assertEqual(context.n_input_tokens, 600)
+                    self.assertEqual(context.n_output_tokens, 300)
+                    self.assertEqual(context.n_cache_tokens, 360)
+                    self.assertEqual(usage["total"]["reasoning_tokens"], 120)
+                    self.assertEqual(usage["total"]["text_output_tokens"], 180)
+                    self.assertTrue((logs_dir / "trajectory.json").exists())
                     task_requests = [body for body in requests if body.get("tools")]
                     self.assertEqual(
                         len(task_requests), 6, result.stdout + result.stderr

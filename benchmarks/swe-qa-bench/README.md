@@ -54,7 +54,7 @@ profiles.
 ## Metrics and reporting
 
 Job Summary cells use `baseline / zvec-grep / change`. Each task's baseline and
-zvec-grep values are profile means across the three trials.
+zvec-grep values are profile means across its configured trials (five in CI).
 
 | Metric | Change | Interpretation |
 | --- | --- | --- |
@@ -63,6 +63,32 @@ zvec-grep values are profile means across the three trials.
 
 A zero baseline denominator produces `N/A` for that efficiency comparison.
 Index setup time is retained separately from agent wall time.
+
+New OpenCode trials use `collect_session_usage=true`. Before the environment
+stops, the adapter exports the root session and every recursively linked
+subagent session to `agent/session-usage.json`. Collection requires a complete
+export; missing sessions or inconsistent totals fail the trial/report instead
+of falling back to the root trajectory. JSON and Markdown reports mark this
+scope as `opencode-session-tree-v1` and show root/subagent usage separately.
+
+- Input tokens include uncached input, cache reads, and cache writes. Output
+  tokens include text output and reasoning; their components are retained.
+- Tool calls include the root delegation and each child's own calls, including
+  nested descendants. Session/message/tool identities prevent double counting.
+- Agent wall time already includes awaited subagent execution. Child durations
+  are not added; the measured session-export overhead is subtracted.
+- The judge still scores only the root's final answer. Judge usage is separate.
+- A complete session export covers persisted task sessions, not the provider's
+  entire bill: background title/summary calls that are not stored in the
+  session database cannot be counted. Missing provider costs remain unknown.
+
+Historical artifacts without session exports remain readable as `legacy-root`:
+their child token/tool usage is unknown and may be omitted. They are rejected
+when mixed with session-tree trials or reports, including old reports without
+an explicit scope. Older input/output totals also used a different token
+breakdown, so resource deltas must not be compared across these scopes as if
+their accounting were identical. Failed attempts remain archived separately
+under `.retry-history/` and are not included in final-success trial means.
 
 In the Aggregate row:
 
