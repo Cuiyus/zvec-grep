@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "sympy:38",
+  "question_sha256": "ef3d65caf1ba3d0a223b3acd3286d053466268d62694afcdcb27db56b3ab8520",
+  "repository": "sympy/sympy",
+  "repository_commit": "3c817ed8ab551d71e36907ce869afe5e4ca789ff",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "deprecated-minor-entry",
+      "path": "sympy/matrices/matrices.py",
+      "symbol": "MatrixDeprecated.minorEntry",
+      "relevance_reason": "Direct deprecated entry named in the question; forwards indices and method to self.minor.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "8aa822ef1edc8e72d3e8eb91a7a4d88e839b26d52d6dc3e97864ce0be12787d4",
+      "anchors": [
+        {
+          "start_line": 675,
+          "end_line": 675,
+          "text": "    def minorEntry(self, i, j, method=\"berkowitz\"):",
+          "sha256": "4c78cc371a9ee83c003d04569034a0ea5bc263556e37ef47ff9e0db4fa28f785"
+        },
+        {
+          "start_line": 675,
+          "end_line": 676,
+          "text": "    def minorEntry(self, i, j, method=\"berkowitz\"):\n        return self.minor(i, j, method=method)",
+          "sha256": "af7405746091ceb128a117bc62ca00b345dc80a0af15683deebec9c9d75fced7"
+        }
+      ]
+    },
+    {
+      "id": "matrix-minor-dispatch",
+      "path": "sympy/matrices/matrices.py",
+      "symbol": "MatrixDeterminant.minor",
+      "relevance_reason": "The matrix determinant class forwarding method dispatches to the determinant module _minor function.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "8aa822ef1edc8e72d3e8eb91a7a4d88e839b26d52d6dc3e97864ce0be12787d4",
+      "anchors": [
+        {
+          "start_line": 87,
+          "end_line": 87,
+          "text": "    def minor(self, i, j, method=\"berkowitz\"):",
+          "sha256": "88cfb5f9cdda952e99f244d6bb1cfe6f3dc91d881fc6c02be43b6650e9e5c502"
+        },
+        {
+          "start_line": 87,
+          "end_line": 88,
+          "text": "    def minor(self, i, j, method=\"berkowitz\"):\n        return _minor(self, i, j, method=method)",
+          "sha256": "052fbe83833d0282e0b56bfea06d4e5ff5a62e8e7033228b36fd9e9fc04184c4"
+        }
+      ]
+    },
+    {
+      "id": "determinant-minor",
+      "path": "sympy/matrices/determinant.py",
+      "symbol": "_minor",
+      "relevance_reason": "The determinant-module endpoint computes the minor by obtaining a submatrix and invoking det(method=method).",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "ea8efe98b8f4e6be2af9b21a3309b02647cef1ac99f7c514f6a4c473663bad8e",
+      "anchors": [
+        {
+          "start_line": 970,
+          "end_line": 970,
+          "text": "def _minor(M, i, j, method=\"berkowitz\"):",
+          "sha256": "e99c53551b6e897e52d0618387c457009ad2c7b27ab426ccef71cabd07056990"
+        },
+        {
+          "start_line": 970,
+          "end_line": 973,
+          "text": "def _minor(M, i, j, method=\"berkowitz\"):\n    \"\"\"Return the (i,j) minor of ``M``.  That is,\n    return the determinant of the matrix obtained by deleting\n    the `i`th row and `j`th column from ``M``.",
+          "sha256": "e3e3e831a91a25c3e5daba033ac8d9d56ce12ba97647e640551ffd848e44876c"
+        },
+        {
+          "start_line": 1001,
+          "end_line": 1004,
+          "text": "    if not M.is_square:\n        raise NonSquareMatrixError()\n\n    return M.minor_submatrix(i, j).det(method=method)",
+          "sha256": "c8be166b87265850973929f409c13121300e80dc79a52ebc3cf08dca0b48b2f8"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Three separately useful stages of the exact deprecated-entry forwarding chain, verified in source.",
+    "groups": [
+      {
+        "id": "deprecated-entry",
+        "target_ids": ["deprecated-minor-entry"]
+      },
+      {
+        "id": "class-dispatch",
+        "target_ids": ["matrix-minor-dispatch"]
+      },
+      {
+        "id": "module-computation",
+        "target_ids": ["determinant-minor"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "These are OR-acceptable source entries. nDCG groups measure distinct known chain stages; they do not claim exhaustive relevance judgments or complete answer evidence. Independent audit_token source review: Read MatrixDeprecated.minorEntry, MatrixDeterminant.minor and determinant._minor; verified forwarding arguments and minor_submatrix(...).det(...). The three groups represent distinct dispatch/computation stages. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

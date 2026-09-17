@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "conan:39",
+  "question_sha256": "b20d9dbfaa3224708ee4c38d25350ce2b61542a272c560f51abb9e9c141d495e",
+  "repository": "conan-io/conan",
+  "repository_commit": "52f43d98fe44ab92d01317110488d0670c3e9e64",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "remote-filter-update-test",
+      "path": "test/integration/remote/multi_remote_test.py",
+      "kind": "symbol",
+      "source_sha256": "c61e4c04299620264d80d90cb26d9a62ba13ab4438b22d593de5793d8bea5c60",
+      "anchors": [
+        {
+          "start_line": 117,
+          "end_line": 117,
+          "text": "    def test_conan_install_update(self):",
+          "sha256": "ff33ba709b3ca25178c42c952680de1b51ae06dff5a97462846c10f09b448655"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "TestMultiRemotes.test_conan_install_update (117 onward) creates/uploads the older default revision, sleeps at 128, uploads a later revision to local at 133, updates the cache at 139–140, and then runs --update -r default and asserts the cached local_remote_rev is Newer at 142–144. This is the exact integration-test control flow requested.",
+      "symbol": "TestMultiRemotes.test_conan_install_update"
+    },
+    {
+      "id": "filtered-update-newer-assertion",
+      "path": "test/integration/remote/multi_remote_test.py",
+      "kind": "code_span",
+      "source_sha256": "c61e4c04299620264d80d90cb26d9a62ba13ab4438b22d593de5793d8bea5c60",
+      "anchors": [
+        {
+          "start_line": 142,
+          "end_line": 144,
+          "text": "        client.run(\"install --requires=hello0/0.0@lasote/stable --update -r default\")\n        assert f\"hello0/0.0@lasote/stable#{local_remote_rev} - Newer\" \\\n                      in client.out",
+          "sha256": "e63ff6d91028751d052fdf62875b998e4367661067ff9c4abab92f4709ba10f3"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "This exact body span is the final remote-filtered install and Newer assertion inside test_conan_install_update. It is an alternative valid entry if a returned chunk shows the decisive assertion but omits the test definition."
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Only one directly verified evidence group; OR alternatives do not establish complementary coverage.",
+    "groups": [
+      {
+        "id": "remote-filtered-update-scenario",
+        "target_ids": [
+          "remote-filter-update-test",
+          "filtered-update-newer-assertion"
+        ]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "Definition and decisive body span are OR entrances to the same test scenario, so cannot create multiple nDCG gains. Source correction to reference_answer: the initial non-update install loads default_remote_rev (line 138); local_remote_rev appears only after the subsequent --update (line 140). The reference labels the former incorrectly in one prose paragraph. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}

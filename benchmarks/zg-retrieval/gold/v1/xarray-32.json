@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "xarray:32",
+  "question_sha256": "3131c6f8efc05a9ff8d703da758970b9422a163245f632e4b2d74aeb0fb56735",
+  "repository": "pydata/xarray",
+  "repository_commit": "40119bf35c53fc222934894d842cfc07b2e264bf",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "coordinate-index-factory",
+      "path": "xarray/core/coordinates.py",
+      "symbol": "Coordinates.from_xindex",
+      "relevance_reason": "Direct conversion of an existing index to variables and Coordinates through create_variables.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "dee192049c76de3cb7b80769d9d7e7482ec442e6758f1b6446aa33e806977f62",
+      "anchors": [
+        {
+          "start_line": 363,
+          "end_line": 363,
+          "text": "    def from_xindex(cls, index: Index) -> Self:",
+          "sha256": "03f973d9d8fb4336e9c2c13345ea12d5742d8d6f8a7ef7f5e5f52a7fcea3c27a"
+        },
+        {
+          "start_line": 363,
+          "end_line": 364,
+          "text": "    def from_xindex(cls, index: Index) -> Self:\n        \"\"\"Create Xarray coordinates from an existing Xarray index.",
+          "sha256": "48a800ee8be028fe5337ef9de5bd32226b4b996aae938bcac3510ab54444f080"
+        },
+        {
+          "start_line": 378,
+          "end_line": 389,
+          "text": "        variables = index.create_variables()\n\n        if not variables:\n            raise ValueError(\n                \"`Coordinates.from_xindex()` only supports index objects that can generate \"\n                \"new coordinate variables from scratch. The given index (shown below) did not \"\n                f\"create any coordinate.\\n{index!r}\"\n            )\n\n        indexes = dict.fromkeys(variables, index)\n\n        return cls(coords=variables, indexes=indexes)",
+          "sha256": "659463768d3a4ab80dae3c80568b579e8550da26f5b37aa021ea265490f44f71"
+        }
+      ]
+    },
+    {
+      "id": "coordinate-assignment",
+      "path": "xarray/core/common.py",
+      "symbol": "DataWithCoords.assign_coords",
+      "relevance_reason": "Direct coordinate-assignment entry; shallow copies the object and passes supplied Coordinates to coords.update.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "732a2152fbbf61d3a0aca80da6c23aa4efb73d805d88491d11896c89f6023a24",
+      "anchors": [
+        {
+          "start_line": 520,
+          "end_line": 524,
+          "text": "    def assign_coords(\n        self,\n        coords: Mapping | None = None,\n        **coords_kwargs: Any,\n    ) -> Self:",
+          "sha256": "203a28f4edcaec56213612fea6ccae18c8e1307af7724264590a36f146c1873c"
+        },
+        {
+          "start_line": 520,
+          "end_line": 525,
+          "text": "    def assign_coords(\n        self,\n        coords: Mapping | None = None,\n        **coords_kwargs: Any,\n    ) -> Self:\n        \"\"\"Assign new coordinates to this object.",
+          "sha256": "caae3c9ebfc43a5961948522cde6459e95fb6ec37fe79b601a7ce83820bb53ea"
+        },
+        {
+          "start_line": 653,
+          "end_line": 665,
+          "text": "        from xarray.core.coordinates import Coordinates\n\n        coords_combined = either_dict_or_kwargs(coords, coords_kwargs, \"assign_coords\")\n        data = self.copy(deep=False)\n\n        results: Coordinates | dict[Hashable, Any]\n        if isinstance(coords, Coordinates):\n            results = coords\n        else:\n            results = self._calc_assign_results(coords_combined)\n\n        data.coords.update(results)\n        return data",
+          "sha256": "3704e4f3392c1331ac406597a867f74198ac72eded31c2876228817ceed6817a"
+        }
+      ]
+    },
+    {
+      "id": "factory-pattern-test",
+      "path": "xarray/tests/test_indexes.py",
+      "symbol": "test_set_xindex_factory_method_pattern",
+      "relevance_reason": "An executable source example contains the exact from_variables -> from_xindex -> assign_coords sequence in the query.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "24f4b615b33a35772aa9c9c3412ff00a2eba95b3e6a226ea73660f638c75d5f8",
+      "anchors": [
+        {
+          "start_line": 771,
+          "end_line": 771,
+          "text": "def test_set_xindex_factory_method_pattern() -> None:",
+          "sha256": "c968adc0180175b2777729d132080c06ea72fff106d925956389c97e38cd105b"
+        },
+        {
+          "start_line": 771,
+          "end_line": 782,
+          "text": "def test_set_xindex_factory_method_pattern() -> None:\n    ds = xr.Dataset(coords={\"time\": [1, 2, 3]}).reset_index(\"time\")\n\n    # Test the recommended factory method pattern\n    coord_vars = {\"time\": ds._variables[\"time\"]}\n    index = IndexWithExtraVariables.from_variables(coord_vars)\n    coords = xr.Coordinates.from_xindex(index)\n    result = ds.assign_coords(coords)\n\n    assert \"time\" in result.variables\n    assert \"valid_time\" in result.variables\n    assert_array_equal(result.valid_time.data, result.time.data + 1)",
+          "sha256": "72faa9da141d32ecd239279457cceeab1f1ab4362fccfee1e5f45832624dca36"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Disabled: source localizes the factory sequence, but the question/reference includes unmeasured performance and materialization premises.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Reference correction: Index.from_variables is abstract; base create_variables can pass supplied variables through or return empty, and assign_coords reuses a Coordinates object before update. Source alone does not substantiate 2-3x materialization, large-dataset throughput, or a general direct-assignment speedup. Positive labels identify the queried entry sequence, not endorsement of these performance claims. Independent audit_token source review: Read Coordinates.from_xindex, DataWithCoords.assign_coords and the exact factory-pattern regression test; verified create_variables, shallow copy and coordinate update. Unmeasured throughput/materialization claims remain excluded. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

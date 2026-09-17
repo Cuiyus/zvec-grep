@@ -1,0 +1,201 @@
+name: Retrieval-only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "package*.json"
+      - "benchmarks/zg-retrieval/**"
+      - ".github/workflows/retrieval-only.yml"
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - "src/**"
+      - "package*.json"
+      - "benchmarks/zg-retrieval/**"
+      - ".github/workflows/retrieval-only.yml"
+      - "!**/*.md"
+  workflow_dispatch:
+    inputs:
+      modes:
+        description: Retrieval modes (all use the unchanged original question)
+        type: choice
+        default: hybrid
+        options:
+          - hybrid
+          - "hybrid,fts,vector"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RETRIEVAL_MODES: ${{ inputs.modes || 'hybrid' }}
+
+jobs:
+  quality-contract:
+    name: retrieval contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Test the protocol and scorer with Node built-ins
+        run: node --test benchmarks/zg-retrieval/test/*.test.mjs
+
+  package-candidate:
+    name: package retrieval candidate
+    needs: quality-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Read all repositories from the frozen suite
+        id: matrix
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const lock = JSON.parse(readFileSync('benchmarks/zg-retrieval/data/source.lock.json', 'utf8'));
+          assert.equal(lock.repositories.length, 11);
+          assert.equal(lock.tasks.length, 20);
+          const include = lock.repositories.map(({ repository }) => {
+            assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
+            return { repository, slug: repository.replace('/', '__') };
+          });
+          assert.equal(new Set(include.map(({ repository }) => repository)).size, 11);
+          assert.equal(new Set(include.map(({ slug }) => slug)).size, 11);
+          assert.ok(lock.tasks.every(task => include.some(row => row.repository === task.repository)));
+          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
+          NODE
+      - run: npm ci
+      - name: Build and pack the candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --json --pack-destination "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package/*.tgz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  retrieval:
+    name: retrieval (${{ matrix.repository }})
+    needs: package-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.package-candidate.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Cache model artifacts only
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/model-cache
+          key: retrieval-model-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/engine/models/catalog.ts', 'package-lock.json') }}
+      - name: Run original questions against the packed product
+        env:
+          RETRIEVAL_REPOSITORY: ${{ matrix.repository }}
+        run: |
+          node benchmarks/zg-retrieval/run.mjs \
+            --package "$RUNNER_TEMP/package" \
+            --output "$RUNNER_TEMP/retrieval" \
+            --corpus "$RUNNER_TEMP/corpus" \
+            --repository "$RETRIEVAL_REPOSITORY" \
+            --model-cache "$RUNNER_TEMP/model-cache" \
+            --candidate-commit "$GITHUB_SHA" \
+            --modes "$RETRIEVAL_MODES"
+      - name: Publish repository summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/retrieval/report.md" ]; then
+            cat "$RUNNER_TEMP/retrieval/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No repository report was produced; inspect the failed preparation step.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve repository evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-data-${{ matrix.slug }}
+          path: |
+            ${{ runner.temp }}/retrieval/
+            !${{ runner.temp }}/retrieval/consumer/**
+            !${{ runner.temp }}/retrieval/**/runtime-home/**
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  aggregate:
+    name: complete retrieval report
+    if: always()
+    needs: retrieval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Prepare aggregate directory
+        if: always()
+        run: mkdir -p "$RUNNER_TEMP/retrieval-combined"
+      - name: Download repository evidence without merging shard roots
+        uses: actions/download-artifact@v8
+        with:
+          pattern: retrieval-data-*
+          path: ${{ runner.temp }}/retrieval-combined
+          merge-multiple: false
+      - name: Require all 20 questions and valid execution evidence
+        if: always()
+        run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
+      - name: Publish full-suite summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/retrieval-combined/report.md" ]; then
+            cat "$RUNNER_TEMP/retrieval-combined/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No complete report was produced; this run is not a valid quality baseline.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve combined summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-summary
+          path: |
+            ${{ runner.temp }}/retrieval-combined/report.md
+            ${{ runner.temp }}/retrieval-combined/report.json
+            ${{ runner.temp }}/retrieval-combined/scores.jsonl
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14

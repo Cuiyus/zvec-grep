@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "django:32",
+  "question_sha256": "507a46dcc4f740e6fe3c22186ea393228aeded3ac2ca6eed5d83a103304c1038",
+  "repository": "django/django",
+  "repository_commit": "14fc2e97036fc9d7acb55ada4f16f1aa3bdc5ec7",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "username-unique-field",
+      "path": "django/contrib/auth/models.py",
+      "relevance_reason": "Exact AbstractUser.username field definition carrying unique=True; avoids accepting the entire large parent class.",
+      "role": "accepted",
+      "kind": "code_span",
+      "source_sha256": "954643c99b589d8799e902951fcccd6e81404a587a1780a0e5a32830cb240a6c",
+      "anchors": [
+        {
+          "start_line": 456,
+          "end_line": 467,
+          "text": "    username = models.CharField(\n        _(\"username\"),\n        max_length=150,\n        unique=True,\n        help_text=_(\n            \"Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.\"\n        ),\n        validators=[username_validator],\n        error_messages={\n            \"unique\": _(\"A user with that username already exists.\"),\n        },\n    )",
+          "sha256": "7cf000163964738aee6172dd8bc25d3c40d3c7c521e078d6fc2911e7ea6d9a89"
+        }
+      ]
+    },
+    {
+      "id": "formset-unique-validation",
+      "path": "django/forms/models.py",
+      "symbol": "BaseModelFormSet.validate_unique",
+      "relevance_reason": "Direct formset entry gathers model uniqueness checks and checks duplicate cleaned data across valid forms.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "c565a46c3af495ddc0ada728ada08f52249b67eb2e7a6d7d59ca1200b95a87bb",
+      "anchors": [
+        {
+          "start_line": 821,
+          "end_line": 821,
+          "text": "    def validate_unique(self):",
+          "sha256": "bea615701b4a2ba76db080c01a465fd6e82fdfddfaaf93b7c9634588e44312a4"
+        },
+        {
+          "start_line": 821,
+          "end_line": 838,
+          "text": "    def validate_unique(self):\n        # Collect unique_checks and date_checks to run from all the forms.\n        all_unique_checks = set()\n        all_date_checks = set()\n        forms_to_delete = self.deleted_forms\n        valid_forms = [\n            form\n            for form in self.forms\n            if form.is_valid() and form not in forms_to_delete\n        ]\n        for form in valid_forms:\n            exclude = form._get_validation_exclusions()\n            unique_checks, date_checks = form.instance._get_unique_checks(\n                exclude=exclude,\n                include_meta_constraints=True,\n            )\n            all_unique_checks.update(unique_checks)\n            all_date_checks.update(date_checks)",
+          "sha256": "5b768cd1be9fa78de8780391a6dd51de0ad8246824a0aca181b736305c9e91f7"
+        },
+        {
+          "start_line": 840,
+          "end_line": 851,
+          "text": "        errors = []\n        # Do each of the unique checks (unique and unique_together)\n        for uclass, unique_check in all_unique_checks:\n            seen_data = set()\n            for form in valid_forms:\n                # Get the data for the set of fields that must be unique among\n                # the forms.\n                row_data = (\n                    field if field in self.unique_fields else form.cleaned_data[field]\n                    for field in unique_check\n                    if field in form.cleaned_data\n                )",
+          "sha256": "f471fe48e805b0bbf9c11689339fed2296f9b423a4ef09aa28f77cc5c8a4045c"
+        }
+      ]
+    },
+    {
+      "id": "formset-save-dispatch",
+      "path": "django/forms/models.py",
+      "symbol": "BaseModelFormSet.save",
+      "relevance_reason": "Direct bulk formset save entry; shows calls to existing/new object saving without introducing an atomic block.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "c565a46c3af495ddc0ada728ada08f52249b67eb2e7a6d7d59ca1200b95a87bb",
+      "anchors": [
+        {
+          "start_line": 798,
+          "end_line": 798,
+          "text": "    def save(self, commit=True):",
+          "sha256": "79e38a663a528d6e8c3970fcd0c93477c15b451969aeb9cbaf874d0f23606b74"
+        },
+        {
+          "start_line": 798,
+          "end_line": 814,
+          "text": "    def save(self, commit=True):\n        \"\"\"\n        Save model instances for every form, adding and changing instances\n        as necessary, and return the list of instances.\n        \"\"\"\n        if not commit:\n            self.saved_forms = []\n\n            def save_m2m():\n                for form in self.saved_forms:\n                    form.save_m2m()\n\n            self.save_m2m = save_m2m\n        if self.edit_only:\n            return self.save_existing_objects(commit)\n        else:\n            return self.save_existing_objects(commit) + self.save_new_objects(commit)",
+          "sha256": "51f2ed6ea1790febd98c4935292884eec8ce1249d6d0cda0e9aaa389276f114f"
+        }
+      ]
+    },
+    {
+      "id": "atomic-exit-rollback",
+      "path": "django/db/transaction.py",
+      "symbol": "Atomic.__exit__",
+      "relevance_reason": "Transaction exit implements rollback or savepoint rollback when a caller has actually established an atomic context.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "c217206480449d535a3ebc5dc5ebe18ecdcad7a29637ac8902721734ff3eb8bc",
+      "anchors": [
+        {
+          "start_line": 224,
+          "end_line": 224,
+          "text": "    def __exit__(self, exc_type, exc_value, traceback):",
+          "sha256": "36b1571be4075c70a938db3044cea7a651d0795f8338dc06e816b676cd93c43f"
+        },
+        {
+          "start_line": 224,
+          "end_line": 234,
+          "text": "    def __exit__(self, exc_type, exc_value, traceback):\n        connection = get_connection(self.using)\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.pop()\n\n        if connection.savepoint_ids:\n            sid = connection.savepoint_ids.pop()\n        else:\n            # Prematurely unset this flag to allow using commit or rollback.\n            connection.in_atomic_block = False",
+          "sha256": "28bf5fde0c930dd2a24953194bc417b08a619e784b7bf815be181e4b75757f85"
+        },
+        {
+          "start_line": 272,
+          "end_line": 295,
+          "text": "            else:\n                # This flag will be set to True again if there isn't a savepoint\n                # allowing to perform the rollback at this level.\n                connection.needs_rollback = False\n                if connection.in_atomic_block:\n                    # Roll back to savepoint if there is one, mark for rollback\n                    # otherwise.\n                    if sid is None:\n                        connection.needs_rollback = True\n                    else:\n                        try:\n                            connection.savepoint_rollback(sid)\n                            # The savepoint won't be reused. Release it to\n                            # minimize overhead for the database server.\n                            connection.savepoint_commit(sid)\n                        except Error:\n                            # If rolling back to a savepoint fails, mark for\n                            # rollback at a higher level and avoid shadowing\n                            # the original exception.\n                            connection.needs_rollback = True\n                else:\n                    # Roll back transaction\n                    try:\n                        connection.rollback()",
+          "sha256": "e0cfda1e0f1f589c09c12e7d5d804f0e86d09ffd6e78c1aca2979204fd32e421"
+        }
+      ]
+    },
+    {
+      "id": "auth-username-uniqueness-check",
+      "path": "django/contrib/auth/checks.py",
+      "symbol": "check_user_model",
+      "relevance_reason": "Direct authentication model check distinguishes uniqueness requirements for ModelBackend from custom-backend warnings.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "a3165a71c343b733cc4aa233cca89be7c3d69371bc5b24e0830a1747b9bb283c",
+      "anchors": [
+        {
+          "start_line": 28,
+          "end_line": 28,
+          "text": "def check_user_model(app_configs, **kwargs):",
+          "sha256": "9badd9cad48a21e0df22b708ecdb02afcbdbd3069a39e6aec327b497abad4680"
+        },
+        {
+          "start_line": 28,
+          "end_line": 29,
+          "text": "def check_user_model(app_configs, **kwargs):\n    if app_configs is None:",
+          "sha256": "c7f1efa91c5913100eee34e5bf3e10f43961ea437e0ab39ab722867f4c23b818"
+        },
+        {
+          "start_line": 71,
+          "end_line": 98,
+          "text": "    # Check that the username field is unique\n    if not cls._meta.get_field(cls.USERNAME_FIELD).unique and not any(\n        constraint.fields == (cls.USERNAME_FIELD,)\n        for constraint in cls._meta.total_unique_constraints\n    ):\n        if settings.AUTHENTICATION_BACKENDS == [\n            \"django.contrib.auth.backends.ModelBackend\"\n        ]:\n            errors.append(\n                checks.Error(\n                    \"'%s.%s' must be unique because it is named as the \"\n                    \"'USERNAME_FIELD'.\" % (cls._meta.object_name, cls.USERNAME_FIELD),\n                    obj=cls,\n                    id=\"auth.E003\",\n                )\n            )\n        else:\n            errors.append(\n                checks.Warning(\n                    \"'%s.%s' is named as the 'USERNAME_FIELD', but it is not unique.\"\n                    % (cls._meta.object_name, cls.USERNAME_FIELD),\n                    hint=(\n                        \"Ensure that your authentication backend(s) can handle \"\n                        \"non-unique usernames.\"\n                    ),\n                    obj=cls,\n                    id=\"auth.W004\",\n                )",
+          "sha256": "a6b5edb9f87a1bbf3ec93c2acac11418559ef0ed932475324c0c9d57e8a7f384"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Disabled: the hypothetical removal scenario and several reference claims are not source-established; maintain conservative OR-positive entry labels only.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Reference corrections: BaseModelFormSet.save does not itself wrap all saves in Atomic; model save does not automatically call full_clean/validate_unique. Removing a uniqueness constraint does not inherently require duplicate cleanup (adding one may). The source entries help inspect actual constraint/validation/transaction behavior; no gold assertion that the reference causal narrative is correct. Independent audit_token source review: Read AbstractUser.username, formset validate_unique/save, Atomic.__exit__ and auth uniqueness checks. Accepted entries locate the actual mechanisms; no automatic formset-wide atomic block, automatic full_clean or unmeasured removal consequence is asserted. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

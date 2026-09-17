@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "reflex:6",
+  "question_sha256": "407e64429f98aed767e195179f8aa4076050601ba35a36d1c22b6170a5aa83be",
+  "repository": "reflex-dev/reflex",
+  "repository_commit": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "getter-accessor",
+      "path": "reflex/vars/base.py",
+      "kind": "symbol",
+      "source_sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d",
+      "anchors": [
+        {
+          "start_line": 2525,
+          "end_line": 2525,
+          "text": "    def fget(self) -> Callable[[BaseState], RETURN_TYPE]:",
+          "sha256": "300fa81cd4554293d7053b111185504d3ad54183b075e411a487b41f3a7d91ff"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "ComputedVar.fget (2525–2531) returns the stored _fget callable. It is the accessor explicitly named by the question, establishing callable identity rather than a computed value.",
+      "symbol": "ComputedVar.fget"
+    },
+    {
+      "id": "dependency-discovery",
+      "path": "reflex/vars/base.py",
+      "kind": "symbol",
+      "source_sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d",
+      "anchors": [
+        {
+          "start_line": 2411,
+          "end_line": 2415,
+          "text": "    def _deps(\n        self,\n        objclass: type[BaseState],\n        obj: FunctionType | CodeType | None = None,\n    ) -> dict[str, set[str]]:",
+          "sha256": "ad8f4cc4b45794ff1ce1ee5fed9466cbb3838683cc27139c07e9df2b8dadbe0d"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "ComputedVar._deps (2411–2460) uses _fget as the default function and passes it with the state class into DependencyTracker; the returned mapping names state variables accessed by the computation.",
+      "symbol": "ComputedVar._deps"
+    },
+    {
+      "id": "value-recomputation",
+      "path": "reflex/vars/base.py",
+      "kind": "symbol",
+      "source_sha256": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d",
+      "anchors": [
+        {
+          "start_line": 2357,
+          "end_line": 2357,
+          "text": "    def __get__(self, instance: BaseState | None, owner: type):",
+          "sha256": "e733c1bc39cd680b9650ceb2f6d8eae44dd4d75b87806872f6a26151d0fca9c7"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "The runtime ComputedVar.__get__ implementation (2357–2402), not its overload stubs, calls self.fget(instance) for uncached values and when its cache is absent or expired. This is the computation side complementary to dependency discovery.",
+      "symbol": "ComputedVar.__get__"
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "The groups name complementary source responsibilities; alternatives within a group receive no additional coverage credit.",
+    "groups": [
+      {
+        "id": "callable-identity",
+        "target_ids": ["getter-accessor"]
+      },
+      {
+        "id": "dependency-discovery",
+        "target_ids": ["dependency-discovery"]
+      },
+      {
+        "id": "recomputation",
+        "target_ids": ["value-recomputation"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "Source correction to the reference: needs_update (2272–2286) checks the time interval, not dependency changes. mark_dirty (2462–2469) removes the cached value; the later __get__ recomputes it. DependencyTracker._populate_dependencies (dep_tracking.py:296–334) disassembles the callable, and load_attr_or_method (93–147) records variable access. No claim of complete state-propagation coverage is made. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "conan:19",
+  "question_sha256": "67fc4f56434dd3ba2a5f49a2fe639c47a6e7463db4007574f84e21989852154c",
+  "repository": "conan-io/conan",
+  "repository_commit": "52f43d98fe44ab92d01317110488d0670c3e9e64",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "context-aware-requirement-identity",
+      "path": "conan/internal/model/requires.py",
+      "kind": "symbol",
+      "source_sha256": "0bf10c68c6871fdcd478866b8a7c4382d13fa65712d3c8044148be83bc609636",
+      "anchors": [
+        {
+          "start_line": 223,
+          "end_line": 223,
+          "text": "    def __eq__(self, other):",
+          "sha256": "e4e446887e8206742aab33ceb82941296b24782fce34a88690c47e7eccb945c5"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Requirement.__eq__ (223–233) requires matching package name AND build flag before trait/reference conditions can make requirements equal; neighboring __hash__ (220–221) hashes the same (name, build) identity. A host and a build requirement are therefore not merged merely because their package name matches.",
+      "symbol": "Requirement.__eq__"
+    },
+    {
+      "id": "same-context-trait-aggregation",
+      "path": "conan/internal/model/requires.py",
+      "kind": "symbol",
+      "source_sha256": "0bf10c68c6871fdcd478866b8a7c4382d13fa65712d3c8044148be83bc609636",
+      "anchors": [
+        {
+          "start_line": 235,
+          "end_line": 235,
+          "text": "    def aggregate(self, other):",
+          "sha256": "f3d36cebbacfa89ab776ebefc8c3eec1d79b37e52cd17f5505650f01b497276c"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Requirement.aggregate (235–265) asserts equal build flags and merges headers/libs/run/visibility/directness and required_nodes. Node.propagate_downstream (graph.py:116–146) finds an existing transitive requirement, calls aggregate, then replaces its dictionary entry. This directly explains deduplication within a context while retaining traits.",
+      "symbol": "Requirement.aggregate"
+    },
+    {
+      "id": "new-node-context",
+      "path": "conan/internal/graph/graph_builder.py",
+      "kind": "symbol",
+      "source_sha256": "f39d254f4af7790aabbaf6bf505960edac00c3c5bda34d8959920c3a3eb42c41",
+      "anchors": [
+        {
+          "start_line": 362,
+          "end_line": 362,
+          "text": "    def _create_new_node(self, node, require, graph, profile_host, profile_build, graph_lock):",
+          "sha256": "8402a7400f89bc6cc31fb4bd7679eedd543e7bfde840342f501ccb8a798ab45d"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "DepsGraphBuilder._create_new_node (362 onward; particularly 385–389) initializes the profile using the parent context and build trait, chooses CONTEXT_BUILD for a build requirement or otherwise inherits node.context, and constructs the dependency Node with that context.",
+      "symbol": "DepsGraphBuilder._create_new_node"
+    },
+    {
+      "id": "final-host-dependency-view",
+      "path": "conan/internal/model/dependencies.py",
+      "kind": "symbol",
+      "source_sha256": "0245ab9dd177d0affa960713eefb6cb20b8e2fcb3795461e4c966c9c6b1337cc",
+      "anchors": [
+        {
+          "start_line": 162,
+          "end_line": 162,
+          "text": "    def host(self):",
+          "sha256": "336acbd8b402eb0043624f545bb997bbe86338e0efed35f0a73a280e3043e4f5"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "ConanFileDependencies.host (162–163) filters the final dependency mapping to build=False, test=False, skip=False. from_node (91–108) constructs that mapping from transitive_deps, connecting resolved graph requirements to the target-platform dependency set.",
+      "symbol": "ConanFileDependencies.host"
+    },
+    {
+      "id": "final-build-dependency-view",
+      "path": "conan/internal/model/dependencies.py",
+      "kind": "symbol",
+      "source_sha256": "0245ab9dd177d0affa960713eefb6cb20b8e2fcb3795461e4c966c9c6b1337cc",
+      "anchors": [
+        {
+          "start_line": 172,
+          "end_line": 172,
+          "text": "    def build(self):",
+          "sha256": "90c53d17091068e77d134ea0db599ec671599946eeea2271f5c3b4ecbc91f770"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "ConanFileDependencies.build (172–173) selects build=True from the same resolved mapping, preserving the tool dependency as a distinct build-context view. It is an alternative entry into final context filtering, not a second credit for the same group.",
+      "symbol": "ConanFileDependencies.build"
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "The groups name complementary source responsibilities; alternatives within a group receive no additional coverage credit.",
+    "groups": [
+      {
+        "id": "context-aware-identity",
+        "target_ids": ["context-aware-requirement-identity"]
+      },
+      {
+        "id": "same-context-aggregation",
+        "target_ids": ["same-context-trait-aggregation"]
+      },
+      {
+        "id": "graph-context-construction",
+        "target_ids": ["new-node-context"]
+      },
+      {
+        "id": "final-context-views",
+        "target_ids": [
+          "final-host-dependency-view",
+          "final-build-dependency-view"
+        ]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "The same package legitimately has a host and a build occurrence; deduplication is within compatible context/trait identity, not global package-name deduplication. The reference claim that distinct inputs necessarily have different hash values is not used: hash collisions are possible, and equality is the decisive contract. Supplemental groups represent distinct responsibilities, not complete dependency-graph proof obligations. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}

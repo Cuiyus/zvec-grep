@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "conan:1",
+  "question_sha256": "01b1b685c02cdde40aa9db7ed758bfb4c7b034eef69e72ccb66d32073965350f",
+  "repository": "conan-io/conan",
+  "repository_commit": "52f43d98fe44ab92d01317110488d0670c3e9e64",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "authorization-plugin-wrapper",
+      "path": "conans/server/rest/bottle_plugins/authorization_header.py",
+      "kind": "symbol",
+      "source_sha256": "5392236e572a898f0e46789d105e23cf16a417e3a6ebb894e1950d4dadd1888c",
+      "anchors": [
+        {
+          "start_line": 28,
+          "end_line": 28,
+          "text": "    def apply(self, callback, context):",
+          "sha256": "831cbb5e9b753b654daf68d73d5bb2cbd6affee0a8c0034a098e2177086c85b6"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "AuthorizationHeader.apply (28–46) implements the Bottle plugin wrapper: it checks whether the route accepts self.keyword, obtains the authorization value through the base method, dispatches to the subclass parser, injects the returned mapping into kwargs, and invokes the callback.",
+      "symbol": "AuthorizationHeader.apply"
+    },
+    {
+      "id": "basic-credential-parser",
+      "path": "conans/server/rest/bottle_plugins/http_basic_authentication.py",
+      "kind": "symbol",
+      "source_sha256": "42211e4d73d1ac364d1558f9250c68ac6c3c6673752cad9555f78493b7b47968",
+      "anchors": [
+        {
+          "start_line": 28,
+          "end_line": 28,
+          "text": "    def parse_authorization_value(self, header_value):",
+          "sha256": "f99f03d23125f698d62c229f88713b7c72541831446de9f2a5cdd0821b24c197"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "HttpBasicAuthentication inherits AuthorizationHeader (14), uses http_basic_credentials as the default keyword (20–22), and parse_authorization_value (28–36) decodes the Basic value into UserPasswordPair and returns {self.keyword: ret}. This is the concrete half of the base-class/plugin contract.",
+      "symbol": "HttpBasicAuthentication.parse_authorization_value"
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "The groups name complementary source responsibilities; alternatives within a group receive no additional coverage credit.",
+    "groups": [
+      {
+        "id": "plugin-template-and-injection",
+        "target_ids": ["authorization-plugin-wrapper"]
+      },
+      {
+        "id": "basic-credential-specialization",
+        "target_ids": ["basic-credential-parser"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "These two groups cover complementary template and specialization responsibilities. Header-type rejection and Basic challenge response were read in the same source files, but are not independently required retrieval targets for this integration question. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}
