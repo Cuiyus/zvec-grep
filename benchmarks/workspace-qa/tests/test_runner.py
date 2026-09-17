@@ -71,6 +71,18 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(a.startswith(q))
         self.assertEqual(a, b.replace(", " + runner.QODER_SEARCH_TOOL, ""))
 
+    def test_concise_delivery_is_opt_in_symmetric_and_preserves_original_question(self):
+        question = "保留原题，不添加评分点。\n"
+        original = runner.instruction(question, "报告.md", zg=False)
+        baseline = runner.instruction(question, "报告.md", zg=False, delivery_policy="concise-report-v1")
+        with_zg = runner.instruction(question, "报告.md", zg=True, delivery_policy="concise-report-v1")
+        self.assertTrue(baseline.startswith(original + "\n\n"))
+        self.assertEqual(baseline, with_zg.replace(", " + runner.QODER_SEARCH_TOOL, ""))
+        self.assertNotIn("2,500", original)
+        self.assertIn("not permission to omit requirements", baseline)
+        with self.assertRaises(ValueError):
+            runner.instruction(question, "报告.md", zg=False, delivery_policy="unreviewed")
+
     def test_dry_run_preserves_all_missing_trials_without_runtime_or_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp), repetitions=10, dry_run=True)

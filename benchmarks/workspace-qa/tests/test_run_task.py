@@ -197,7 +197,7 @@ class ContinuationTaskTests(unittest.TestCase):
             "tasks": [{"task_id": "3", "answer_filename": "answer.md"}]})
         dump(self.review, {"status": "verified"})
 
-    def run_main(self, *, runner_status=1, judge_status=1, report_status=0, dataset_failure=False):
+    def run_main(self, *, runner_status=1, judge_status=1, report_status=0, dataset_failure=False, fresh=False):
         from runner import collect_results, make_plan
         def invoke(command, **kwargs):
             name = Path(command[1]).name
@@ -226,8 +226,30 @@ class ContinuationTaskTests(unittest.TestCase):
                 patch.dict("os.environ", {"QODER_PERSONAL_ACCESS_TOKEN": "fixture", "GLM_API_KEY": "fixture", "QWEN_API_KEY": "fixture"}), \
                 redirect_stdout(io.StringIO()):
             return module.main(["--task-id", "3", "--repetitions", "10", "--phase", "batch",
-                "--output", str(self.output), "--upstream", str(self.root / "upstream"),
-                "--continue-from", str(self.prior), "--continuation-code-review", str(self.review)])
+                "--output", str(self.output), "--upstream", str(self.root / "upstream")]
+                + ([] if fresh else ["--continue-from", str(self.prior), "--continuation-code-review", str(self.review)]))
+
+    def test_locked_output_controls_are_forwarded_for_a_fresh_run(self):
+        lock_path = self.code / "data/lock.json"
+        lock = json.loads(lock_path.read_text())
+        policy = "concise-report-v1"
+        lock["experiment"].update(qa_max_output_tokens=16384, qa_delivery_policy=policy,
+            qa_delivery_policy_sha256=module.hashlib.sha256(module.runner.DELIVERY_POLICIES[policy].encode()).hexdigest())
+        dump(lock_path, lock)
+        self.assertEqual(self.run_main(fresh=True), 1)  # The fixture retains an execution failure.
+        command = next(command for name, command, _ in self.commands if name == "runner.py")
+        self.assertEqual(command[command.index("--max-output-tokens") + 1], "16384")
+        self.assertEqual(command[command.index("--delivery-policy") + 1], policy)
+        self.assertNotIn("--continue-from", command)
+
+    def test_changed_delivery_text_is_rejected_before_preparation(self):
+        lock_path = self.code / "data/lock.json"
+        lock = json.loads(lock_path.read_text())
+        lock["experiment"].update(qa_delivery_policy="concise-report-v1", qa_delivery_policy_sha256="different")
+        dump(lock_path, lock)
+        with self.assertRaisesRegex(ValueError, "text hash differs"):
+            self.run_main(fresh=True)
+        self.assertEqual(self.commands, [])
 
     def test_report_execution_gate_decides_completion_with_preserved_runner_and_judge_failure(self):
         self.assertEqual(self.run_main(), 0)

@@ -41,9 +41,23 @@ def native_index(source: Path, index: Path, logs: Path, cache: Path, *, image: s
     return result
 
 
+def native_progress(agent: Path) -> dict:
+    try:
+        progress = json.loads((agent / "native-progress.json").read_text())
+        now = time.time()
+        return {"native_event_number": progress["event_number"],
+                "native_event_type": progress["event_type"],
+                "native_status": progress["native_status"],
+                "seconds_since_native_event": round(max(0, now - progress["received_unix"]), 1),
+                "active_compaction_seconds": (round(max(0, now - progress["compacting_since_unix"]), 1)
+                    if progress["compacting_since_unix"] is not None else None)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"native_status": "not_yet_observed"}
+
+
 def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path, *,
                      prompt: str, profile: str, limits: dict, image: str = IMAGE,
-                     model_request_retries: int = 0) -> dict:
+                     model_request_retries: int = 0, max_output_tokens: int | None = None) -> dict:
     """Installation is setup; all model and MCP runtime work is timed by qa-session."""
     agent.mkdir(parents=True, exist_ok=True)
     zg = profile == "with-zg"
@@ -52,6 +66,8 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
     spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": r.SPEC.cli_model,
             "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits,
             "model_request_retries": model_request_retries}
+    if max_output_tokens is not None:
+        spec["max_output_tokens"] = max_output_tokens
     r.write_json(agent / "native-spec.json", spec)
     command = r.docker_command(image, source, agent, cache, index=index) + ["--init"]
     if zg:
@@ -79,7 +95,7 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
                         raise
                     print(json.dumps({"phase": "agent_trial_heartbeat", "profile": profile,
                         "status": "running", "container_elapsed_seconds": round(elapsed, 1),
-                        "qa_input_token_limit": limits["input_tokens"]}), flush=True)
+                        "qa_input_token_limit": limits["input_tokens"], **native_progress(agent)}), flush=True)
             result["status"] = "completed" if result["returncode"] == 0 else "failed"
         except subprocess.TimeoutExpired:
             result["status"] = "timeout"
@@ -157,6 +173,8 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
     before = r.directory_identity(source, skip_git=True)
     limits = {"model_requests": 60, "tool_calls": 120,
               "input_tokens": getattr(args, "input_token_limit", 600000), "wall_seconds": args.timeout}
+    delivery_policy = getattr(args, "delivery_policy", "original")
+    output_limit = getattr(args, "max_output_tokens", None)
     prepared = output / "preparation"
     index, cache, logs = prepared / "index", prepared / "model-cache", prepared / "runtime"
     index.mkdir(parents=True)
@@ -184,6 +202,12 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "wall_seconds_scope": "qa-session agent interval including native MCP startup/search; native install, index preparation and host integrity checks are recorded separately",
         "answer_delivery": "Harness saves terminal response verbatim outside corpus to requested report path",
         "ci_identity": {k: os.environ.get(k) for k in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")}, **identity}
+    manifest["delivery_policy"] = delivery_policy
+    manifest["delivery_policy_sha256"] = hashlib.sha256(r.DELIVERY_POLICIES[delivery_policy].encode()).hexdigest()
+    if output_limit is not None:
+        manifest["model_controls"].update(max_output_tokens=output_limit,
+            max_output_tokens_control="--max-output-tokens (Qoder 1.1.45 CLI); native continuation may follow truncation",
+            max_output_tokens_wire_verified=False)
     preserved = set()
     if getattr(args, "continuation_code_review", None):
         manifest["continuation_code_review"] = json.loads(args.continuation_code_review.read_text())
@@ -239,7 +263,7 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         root = output / trial["trial_id"]
         root.mkdir()
         zg = trial["profile"] == "with-zg"
-        prompt = r.instruction(question, filename, zg=zg)
+        prompt = r.instruction(question, filename, zg=zg, delivery_policy=delivery_policy)
         r.write_json(root / "instruction.json", {"text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
         working = r.working_index(index, prepared / "working-indexes" / trial["trial_id"]) if zg else None
         index_before = r.directory_identity(working) if zg else None
@@ -249,7 +273,7 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         print(json.dumps({"phase": "agent_trial", "trial_id": trial["trial_id"], "status": "running"}), flush=True)
         result = {**trial, **run_native_trial(source, root / "agent", working, cache,
                   prompt=prompt, profile=trial["profile"], limits=limits, image=args.image,
-                  model_request_retries=getattr(args, "model_request_retries", 0)),
+                  model_request_retries=getattr(args, "model_request_retries", 0), max_output_tokens=output_limit),
                   "candidate_output_path": None, "provenance": {"manifest_path": "manifest.json",
                   "source_git_commit": commit, "question_sha256": manifest["question_sha256"], "image_id": identity["image_id"]}}
         if result.get("answer"):

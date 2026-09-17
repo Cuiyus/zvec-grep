@@ -222,6 +222,46 @@ class Counters:
         return None
 
 
+class ProgressObserver:
+    """Best-effort event timing with no prompt, answer, tool arguments or reasoning text."""
+    def __init__(self, root):
+        self.root = root
+        self.count = self.write_errors = 0
+        self.compacting_since = None
+        self.completed_compaction_seconds = 0.0
+
+    def observe(self, line, elapsed, received_unix):
+        try:
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                return
+            kind = event.get("type")
+            kind = kind if isinstance(kind, str) and kind in {
+                "system", "assistant", "user", "result", "stream_event", "tool_use", "tool_result", "step_finish"
+            } else "other"
+            if kind == "system" and event.get("subtype") == "status":
+                if event.get("status") == "compacting" and self.compacting_since is None:
+                    self.compacting_since = received_unix
+                elif event.get("status") is None and self.compacting_since is not None:
+                    self.completed_compaction_seconds += max(0, received_unix - self.compacting_since)
+                    self.compacting_since = None
+            self.count += 1
+            row = {"schema_version": 1, "event_number": self.count,
+                   "elapsed_seconds": round(elapsed, 6), "received_unix": received_unix,
+                   "event_type": kind, "native_status": "compacting" if self.compacting_since is not None else None,
+                   "compacting_since_unix": self.compacting_since,
+                   "completed_compaction_seconds": round(self.completed_compaction_seconds, 6)}
+            with (self.root / "native-event-timing.jsonl").open("a") as out:
+                out.write(json.dumps(row) + "\n")
+            pending = self.root / "native-progress.json.tmp"
+            pending.write_text(json.dumps(row) + "\n")
+            pending.replace(self.root / "native-progress.json")
+        except (ValueError, TypeError):
+            pass  # Non-JSON/partial native lines are still preserved in the raw stream.
+        except OSError:
+            self.write_errors += 1  # Observability failure must not interrupt the actual session.
+
+
 def run(spec):
     root = Path(spec.get("log_dir", "/logs"))
     root.mkdir(parents=True, exist_ok=True)
@@ -251,13 +291,16 @@ def run(spec):
              "wall_seconds": time.monotonic() - started, "wire_available": tap is not None})
         return 127
 
+    progress = ProgressObserver(root)
     def reader(stream, name, observe):
         with (root / name).open("w") as out:
             for line in stream:
+                arrived = (time.monotonic() - started, time.time()) if observe else None
                 out.write(scrub(line))
                 out.flush()
                 if observe:
                     lines.put(line)
+                    progress.observe(line, *arrived)
 
     workers = [threading.Thread(target=reader, args=(process.stdout, native_name, True), daemon=True),
                threading.Thread(target=reader, args=(process.stderr, "stderr.txt", False), daemon=True)]
@@ -324,6 +367,7 @@ def run(spec):
               "observed": counters.snapshot(), "wall_seconds": time.monotonic() - started,
               "limit_semantics": "Stop after a native threshold is observed; in-flight/batched work may overshoot.",
               "wire_available": tap is not None}
+    result["native_timing_write_errors"] = progress.write_errors
     save(root / "session.json", result)
     print(json.dumps(result), flush=True)
     return 3 if limit_reason else returncode

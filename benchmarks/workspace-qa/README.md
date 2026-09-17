@@ -7,7 +7,18 @@ The five-report PDF gate passed, but the latest pair hit the 30-minute wall limi
 arms after native Qoder `compacting`; with-zg first exceeded its native output limit.
 Across three calibration pairs, each arm has three attempts and zero completed/judged
 answers; QA zg calls are zero in every with-zg attempt. Setup/integration was verified,
-but retrieval efficacy was not measured. No additional pair is automatically scheduled.
+but retrieval efficacy was not measured. Those observations remain unchanged.
+
+The next one-pair condition is **concise-report-v1**: both arms receive the same generic
+report-delivery guidance, targeting 2,500–4,500 Chinese characters while preserving task
+coverage, concise evidence extracts, and complete final delivery. Both use the native
+`--max-output-tokens 16384` flag. The original question, all rubrics, source corpus and
+overall resource limits remain unchanged. This is an explicit harness/prompt condition,
+not an upstream compaction fix or a result directly comparable with the earlier prompts.
+The lock pins the common guidance hash; the manifest records it and the output cap.
+Original instruction bytes remain the default for other experiments. Native Qoder can
+still auto-continue after truncation, so the cap alone is not assumed to solve the issue.
+See the [pinned CLI audit and experiment rationale](reports/task-192-concise-harness-2026-09-17.md).
 
 `workspace-qa-pdf-smoke.yml` is opt-in: Task 192 only, **baseline 1 + with-zg 1**,
 Qoder 1.1.45 / Qwen3.8-Max, zg 0.2.2 installed through `zg install --target qoder --yes`,

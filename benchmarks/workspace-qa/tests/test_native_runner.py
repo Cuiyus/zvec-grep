@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import redirect_stdout
 import io
 import json
@@ -147,6 +148,29 @@ class NativeRunnerTests(unittest.TestCase):
             args = self.args(Path(tmp), repetitions=1)
             args.input_token_limit = 0
             with self.assertRaises(ValueError):
+                self.execute(args)
+
+    def test_output_controls_reach_both_native_trials_and_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), repetitions=1)
+            args.delivery_policy = "concise-report-v1"
+            args.max_output_tokens = 16384
+            status, calls, _ = self.execute(args)
+            self.assertEqual(status, 0)
+            self.assertEqual({c["profile"] for c in calls}, {"baseline", "with-zg"})
+            self.assertTrue(all(c["max_output_tokens"] == 16384 for c in calls))
+            self.assertTrue(all(c["prompt"].endswith(runner.DELIVERY_POLICIES[args.delivery_policy]) for c in calls))
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(manifest["delivery_policy"], args.delivery_policy)
+            self.assertEqual(manifest["delivery_policy_sha256"], hashlib.sha256(
+                runner.DELIVERY_POLICIES[args.delivery_policy].encode()).hexdigest())
+            self.assertEqual(manifest["model_controls"]["max_output_tokens"], 16384)
+            self.assertFalse(manifest["model_controls"]["max_output_tokens_wire_verified"])
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), repetitions=1)
+            args.max_output_tokens = 16384
+            args.continue_from = Path(tmp) / "old-results"
+            with self.assertRaisesRegex(ValueError, "fresh pair"):
                 self.execute(args)
 
     def continuation_fixture(self, root):
@@ -405,6 +429,20 @@ class NativeRunnerTests(unittest.TestCase):
             validate.assert_called_once_with(agent, profile=profile)
             startup.assert_called_once_with(agent)
         return result, captured[0], json.loads((agent / "native-spec.json").read_text())
+
+    def test_native_progress_reports_state_and_event_age_without_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(native_runner.native_progress(root), {"native_status": "not_yet_observed"})
+            runner.write_json(root / "native-progress.json", {"event_number": 9, "event_type": "system",
+                "native_status": "compacting", "received_unix": 210, "compacting_since_unix": 200,
+                "message": "do-not-emit-content"})
+            with patch.object(native_runner.time, "time", return_value=250):
+                progress = native_runner.native_progress(root)
+            self.assertEqual(progress["seconds_since_native_event"], 40)
+            self.assertEqual(progress["active_compaction_seconds"], 50)
+            self.assertEqual(progress["native_status"], "compacting")
+            self.assertNotIn("do-not-emit", json.dumps(progress))
 
     def test_heartbeat_reports_liveness_without_interrupting_a_running_trial(self):
         output = io.StringIO()

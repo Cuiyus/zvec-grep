@@ -18,6 +18,34 @@ spec.loader.exec_module(session)
 
 
 class SessionTest(unittest.TestCase):
+    def test_progress_timing_tracks_compaction_without_persisting_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            observer = session.ProgressObserver(root)
+            observer.observe(json.dumps({"type": "system", "subtype": "status", "status": "compacting"}), 1, 100)
+            observer.observe(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": "private-text-must-not-be-recorded"}]} }), 11, 110)
+            active = json.loads((root / "native-progress.json").read_text())
+            self.assertEqual(active["native_status"], "compacting")
+            self.assertEqual(active["compacting_since_unix"], 100)
+            observer.observe(json.dumps({"type": "system", "subtype": "status", "status": None}), 21, 120)
+            final = json.loads((root / "native-progress.json").read_text())
+            self.assertIsNone(final["native_status"])
+            self.assertEqual(final["completed_compaction_seconds"], 20)
+            rows = (root / "native-event-timing.jsonl").read_text()
+            self.assertEqual(len(rows.splitlines()), 3)
+            self.assertNotIn("private-text", rows)
+            self.assertNotIn("private-text", json.dumps(final))
+
+    def test_timing_write_failure_does_not_raise_or_change_budget_counters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observer = session.ProgressObserver(Path(tmp))
+            observer.observe("invalid partial line", 1, 100)
+            self.assertEqual(observer.count, 0)
+            with patch.object(Path, "open", side_effect=OSError("fixture disk error")):
+                observer.observe('{"type":"assistant"}', 1, 100)
+            self.assertEqual(observer.write_errors, 1)
+
     def test_native_counts_deduplicate_and_include_cached_input_once(self):
         counter = session.Counters()
         event = {"type": "step_finish", "part": {"id": "s1", "tokens": {"input": 30, "cache": {"read": 100, "write": 4}}}}
@@ -159,3 +187,7 @@ class SessionTest(unittest.TestCase):
             self.assertEqual(report["limit_reason"], "tool_calls")
             self.assertIsNone(report["observed"]["input_tokens"])
             self.assertEqual(report["observed"]["tool_calls"], 1)
+            timing = [json.loads(line) for line in (Path(tmp) / "native-event-timing.jsonl").read_text().splitlines()]
+            self.assertEqual(timing[0]["event_type"], "tool_use")
+            self.assertGreaterEqual(timing[0]["elapsed_seconds"], 0)
+            self.assertEqual(report["native_timing_write_errors"], 0)

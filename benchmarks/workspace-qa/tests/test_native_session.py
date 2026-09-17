@@ -26,6 +26,21 @@ GUIDANCE_FIXTURE = b"<!-- ZVEC_GREP_START -->\nstandard installed guidance\n<!--
 
 
 class NativeSessionTests(unittest.TestCase):
+    def test_native_output_cap_is_optional_validated_and_before_prompt_separator(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, logs, _, value = self.fixture(temp)
+            self.assertNotIn("--max-output-tokens", native.session_spec(value, logs)["command"])
+            for profile in ("baseline", "with-zg"):
+                value.update(profile=profile, max_output_tokens=16384)
+                command = native.session_spec(value, logs)["command"]
+                self.assertEqual(command[command.index("--max-output-tokens") + 1], "16384")
+                self.assertLess(command.index("--max-output-tokens"), command.index("--"))
+                self.assertEqual(command[-1], value["prompt"])
+            for invalid in (True, 0, -1, 32769, "16384", 16384.0):
+                value["max_output_tokens"] = invalid
+                with self.assertRaises(ValueError):
+                    native.session_spec(value, logs)
+
     def test_native_request_retry_setting_is_explicit_and_validated(self):
         with tempfile.TemporaryDirectory() as temp:
             _, _, logs, _, value = self.fixture(temp)

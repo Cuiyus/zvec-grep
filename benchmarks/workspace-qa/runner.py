@@ -122,7 +122,24 @@ def make_plan(task_id: str, repetitions: int, seed: int = 1729,
     return plan
 
 
-def instruction(question: str, filename: str, *, zg: bool) -> str:
+DELIVERY_POLICIES = {
+    "original": "",
+    "concise-report-v1": (
+        "Report delivery policy (concise-report-v1, identical for both comparison profiles): "
+        "Write a concise, complete report in one final response. Aim for 2,500–4,500 Chinese characters; "
+        "this is a style target, not permission to omit requirements or cut the report short. "
+        "Use compact tables for key findings, short causal explanations, and source references. "
+        "Avoid long quotations, repeated restatements, and large appendices. Keep evidence collection "
+        "focused on the original task: avoid broad content dumps and repeated reading of the same "
+        "passages; collect additional material when it resolves a remaining question. Once the "
+        "requested analysis is supported, deliver the complete report instead of expanding its scope."
+    ),
+}
+
+
+def instruction(question: str, filename: str, *, zg: bool, delivery_policy: str = "original") -> str:
+    if delivery_policy not in DELIVERY_POLICIES:
+        raise ValueError("Unknown report delivery policy")
     if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original") == "office-markdown-v1":
         from office_markdown import COMMON_NOTICE
         question += "\n\n" + COMMON_NOTICE
@@ -136,7 +153,8 @@ def instruction(question: str, filename: str, *, zg: bool) -> str:
             + "; include the complete requested report in your final response. "
             "Use source file references where useful.\n\nTools registered for this session: "
             + ", ".join(expected_tools(SPEC, zg=zg))
-            + ". Use their exact identifiers when making tool calls.")
+            + ". Use their exact identifiers when making tool calls."
+            + ("\n\n" + DELIVERY_POLICIES[delivery_policy] if DELIVERY_POLICIES[delivery_policy] else ""))
 
 
 def number(value: Any) -> int | float | None:
@@ -337,6 +355,14 @@ def execute(args: argparse.Namespace) -> int:
     retries = getattr(args, "model_request_retries", 0)
     if type(retries) is not int or not 0 <= retries <= 3:
         raise ValueError("model-request-retries must be an integer from 0 to 3")
+    output_limit = getattr(args, "max_output_tokens", None)
+    if output_limit is not None and (type(output_limit) is not int or not 1 <= output_limit <= 32768):
+        raise ValueError("max-output-tokens must be an integer from 1 to 32768")
+    delivery_policy = getattr(args, "delivery_policy", "original")
+    if delivery_policy not in DELIVERY_POLICIES:
+        raise ValueError("Unknown report delivery policy")
+    if getattr(args, "continue_from", None) and (output_limit is not None or delivery_policy != "original"):
+        raise ValueError("Explicit output controls require a fresh pair, not continuation of older trials")
     filename = answer_filename(args.answer_filename) if args.answer_filename else None
     if not filename and not args.dry_run:
         raise ValueError("--answer-filename is required for an actual run")
@@ -391,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-request-retries", type=int, default=0,
                         help="Pinned Qoder request retry ceiling, identical for both profiles")
     parser.add_argument("--order-seed", type=int, default=1729)
+    parser.add_argument("--max-output-tokens", type=int,
+                        help="Explicit native single-response cap; omitted by default")
+    parser.add_argument("--delivery-policy", choices=tuple(DELIVERY_POLICIES), default="original")
     parser.add_argument("--shard-repetition", type=int,
                         help="Execute one repetition from the full deterministic plan")
     parser.add_argument("--continue-from", type=Path,

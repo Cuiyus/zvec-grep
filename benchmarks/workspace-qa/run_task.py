@@ -256,6 +256,15 @@ def main(argv=None):
         raise ValueError("Locked QA wall limit must be a positive integer")
     if type(retries) is not int or not 0 <= retries <= 3:
         raise ValueError("Locked request retries must be an integer from 0 to 3")
+    output_limit = lock.get("experiment", {}).get("qa_max_output_tokens")
+    delivery_policy = lock.get("experiment", {}).get("qa_delivery_policy", "original")
+    if output_limit is not None and (type(output_limit) is not int or not 1 <= output_limit <= 32768):
+        raise ValueError("Locked max output tokens must be an integer from 1 to 32768")
+    if delivery_policy not in runner.DELIVERY_POLICIES:
+        raise ValueError("Unknown locked report delivery policy")
+    if delivery_policy != "original" and lock["experiment"].get("qa_delivery_policy_sha256") != hashlib.sha256(
+            runner.DELIVERY_POLICIES[delivery_policy].encode()).hexdigest():
+        raise ValueError("Locked report delivery policy text hash differs")
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
@@ -320,7 +329,10 @@ def main(argv=None):
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
                                  "--repetitions", str(args.repetitions), "--timeout", str(wall_limit),
-                                 "--input-token-limit", str(input_limit), "--model-request-retries", str(retries)]
+                                 "--input-token-limit", str(input_limit), "--model-request-retries", str(retries),
+                                 "--delivery-policy", delivery_policy]
+        if output_limit is not None:
+            runner_command += ["--max-output-tokens", str(output_limit)]
         if args.shard_repetition is not None:
             runner_command += ["--shard-repetition", str(args.shard_repetition)]
         if args.continue_from:

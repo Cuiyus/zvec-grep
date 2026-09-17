@@ -91,7 +91,11 @@ def validate_spec(spec: dict) -> None:
     retries = spec.get("model_request_retries", 0)
     if type(retries) is not int or not 0 <= retries <= 3:
         raise ValueError("native model request retries must be an integer from 0 to 3")
-    allowed = {"protocol", "profile", "prompt", "model", "embedding_model", "root", "limits", "model_request_retries"}
+    output_limit = spec.get("max_output_tokens")
+    if output_limit is not None and (type(output_limit) is not int or not 1 <= output_limit <= 32768):
+        raise ValueError("native max output tokens must be an integer from 1 to 32768")
+    allowed = {"protocol", "profile", "prompt", "model", "embedding_model", "root", "limits",
+               "model_request_retries", "max_output_tokens"}
     if set(spec) - allowed:
         raise ValueError("native session spec contains unsupported overrides")
 
@@ -104,7 +108,10 @@ def session_spec(spec: dict, log_dir: Path) -> dict:
                "--allowed-tools", ",".join(allowed), "--disallowed-tools", ",".join(DENY_TOOLS),
                "--max-model-request-retries", str(spec.get("model_request_retries", 0)),
                "--max-turns", str(spec["limits"]["model_requests"]),
-               "--model", spec["model"], "--", spec["prompt"]]
+               "--model", spec["model"]]
+    if spec.get("max_output_tokens") is not None:
+        command += ["--max-output-tokens", str(spec["max_output_tokens"])]
+    command += ["--", spec["prompt"]]
     return {"command": command, "env": {"QODER_EXPOSE_TOKEN_USAGE": "1", "QODER_MCP_LAZY": "0"},
             "limits": spec["limits"], "log_dir": str(log_dir), "native_name": "qodercli-stream.jsonl"}
 

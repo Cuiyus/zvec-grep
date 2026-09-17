@@ -1,5 +1,5 @@
 name: Task 192 · PDF text conversion + one Qwen3.8-Max pair
-run-name: "Task 192 · PDF→text · 6M input/arm · baseline 1 + zg 1 · ${{ github.ref_name }}"
+run-name: "Task 192 · concise-report-v1 · 16k output · baseline 1 + zg 1 · ${{ github.ref_name }}"
 
 on:
   push:
@@ -35,6 +35,7 @@ jobs:
       - name: Validate harness and freeze exactly one original Task 192 pair
         run: |
           python -m unittest discover -s benchmarks/workspace-qa/tests -v
+          python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_qa_session.py -v
           cp benchmarks/workspace-qa/data/task-192-pdf-smoke-lock.json benchmarks/workspace-qa/data/lock.json
           python - <<'PY'
           import json, os
@@ -49,9 +50,14 @@ jobs:
           assert lock['experiment']['qa_input_token_limit'] == 6000000
           assert lock['experiment']['qa_wall_seconds'] == 1800
           assert lock['experiment']['qa_model_request_retries'] == 2
+          assert lock['experiment']['qa_max_output_tokens'] == 16384
+          assert lock['experiment']['qa_delivery_policy'] == 'concise-report-v1'
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('Task 192 only; baseline **1** + with-zg **1**; **6,000,000 input tokens/arm; 1,800s; up to 2 native request retries**. '
-                        'Prior 600k run 35197461214 is retained: both arms hit input budget with no final answer. '
+                        '**New common delivery condition: concise-report-v1; 2,500–4,500 Chinese-character style target; explicit native max-output-tokens 16,384.** '
+                        'Completeness takes priority over the style target; no task/rubric rewriting or forced zg usage. '
+                        'Previous three pairs remain failed observations; latest 35203011829 ended in compacting/output-limit recovery and wall exhaustion. '
+                        'This fresh pair is not pooled with those different delivery/budget conditions. '
                         'All full-persona PDFs receive uniform text-layer conversion; originals retained. '
                         'Independent coverage gate before QA. Original question and 17 rubrics. '
                         'Candidate-blind judge page selection reads every complete report before either arm runs. '
@@ -62,7 +68,7 @@ jobs:
           task-id: '192'
           repetitions: '1'
           phase: smoke
-          artifact-prefix: workspace-qa-task192-pdf-text-v1-6m
+          artifact-prefix: workspace-qa-task192-pdf-text-v1-concise-v1
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
           embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
