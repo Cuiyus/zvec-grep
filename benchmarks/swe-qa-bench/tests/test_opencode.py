@@ -385,6 +385,8 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         self.assertEqual(request.get("seed"), 42)
                         self.assertIs(request.get("enable_thinking"), True)
                         self.assertEqual(request.get("reasoning_effort"), "high")
+                        self.assertEqual(request.get("max_tokens"), 32000)
+                        self.assertNotIn("response_format", request)
                         self.assertNotIn("reasoningEffort", request)
                     for request in task_requests:
                         tool_names = {

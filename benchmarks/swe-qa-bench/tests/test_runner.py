@@ -728,6 +728,16 @@ class RunValidationTests(unittest.TestCase):
                         # The compatible SDK maps this option to the API's
                         # snake_case reasoning_effort field on the wire.
                         self.assertEqual(model_options["reasoningEffort"], "high")
+                        self.assertEqual(
+                            config["provider"][provider_id]["models"][model_id]
+                            ["limit"]["output"],
+                            32000,
+                        )
+                        self.assertEqual(
+                            config["provider"][provider_id]["models"][model_id]
+                            ["limit"]["context"],
+                            0,
+                        )
                     else:
                         self.assertNotIn("reasoningEffort", model_options)
                     self.assertNotIn("reasoning_effort", model_options)

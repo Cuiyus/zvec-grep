@@ -146,24 +146,43 @@ successful attempt of each trial; they exclude failed-attempt overhead, which
 remains in the archived evidence. Exhausted retries still fail the task.
 Each task job has a six-hour ceiling, including setup and retries.
 
-Both OpenCode profiles and the GLM-5.2 judge use `temperature = 0` and
-`seed = 42`, shared in `zg_bench/settings.py`. The same seed is used for every
-trial and retry. For GLM-5.2, both OpenCode profiles set
-`enable_thinking = true` and `reasoningEffort = "high"` in the model options,
-using the constants in `zg_bench/settings.py`. The OpenAI-compatible SDK maps
-`reasoningEffort` to the HTTP field `reasoning_effort`. This applies to both
-custom-openai and DashScope GLM configurations, including delegated agents.
-The judge keeps `enable_thinking = false` and does not set reasoning effort so
-the scoring protocol remains comparable. The separate Qwen configuration also
-keeps thinking disabled; GLM reasoning settings are not applied to other models.
+Both OpenCode profiles, their delegated agents, and the GLM-5.2 judge use the
+following settings, shared in `zg_bench/settings.py`:
+
+| Parameter | GLM-5.2 execution and judging |
+| --- | --- |
+| `temperature` | `0` |
+| `seed` | `42` |
+| `enable_thinking` | `true` |
+| `reasoning_effort` | `"high"` |
+| `max_tokens` | `32000` |
+| `response_format` | Omitted |
+
+The same seed is used for every trial and retry. Both custom-openai and
+DashScope GLM execution configurations set `reasoningEffort = "high"`; the
+OpenAI-compatible SDK maps this to the HTTP field `reasoning_effort`.
+Execution sets the model's `limit.output` explicitly, and the judge uses the
+same `BENCHMARK_MAX_OUTPUT_TOKENS` constant for `max_tokens`.
+Both execution and judging omit `response_format`:
+[Alibaba Cloud's GLM feature table](https://help.aliyun.com/zh/model-studio/glm)
+lists structured output for GLM-5.2 only in non-thinking mode. The judge's
+prompt still requires JSON, with strict score parsing and retries on invalid
+responses. Its report metadata records `response_format = null` to indicate
+that the request does not force a response format.
+The separate Qwen configuration keeps thinking disabled; GLM reasoning
+settings are not applied to other models.
 [Alibaba Cloud's GLM documentation](https://help.aliyun.com/zh/model-studio/glm)
 lists `high` as a supported GLM-5.2 reasoning effort.
 OpenCode declares the model's temperature capability and
 passes the seed through every built-in agent's provider options, including
-subagents, compaction, and title/summary generation. Judge reports
-record both parameters, and aggregation rejects reports with different seeds
-or a mix of seeded and legacy unseeded reports. These settings reduce sampling
-variance; identical responses still depend on the model service.
+subagents, compaction, and title/summary generation. Judge reports record
+temperature, seed, thinking, reasoning effort, output limit, and response
+format. Aggregation rejects mismatched judge settings and a mix of new reports
+with legacy reports missing the new settings; compatible legacy reports can
+still be aggregated together. Earlier reports used a judge with thinking
+disabled, so their scores should not be mixed with the new judging protocol.
+These settings reduce sampling variance; identical responses still depend on
+the model service.
 
 Both OpenCode profiles deny `websearch` and `webfetch` globally and for every
 built-in agent, including delegated agents. These tools are excluded from model

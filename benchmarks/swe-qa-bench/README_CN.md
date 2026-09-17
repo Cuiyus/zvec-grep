@@ -85,9 +85,22 @@ CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型
 
 每次失败的日志和轨迹保存在 Harbor job 的 `.retry-history/` 下，并随原始证据上传；Job Summary 展示重试次数和最终错误数。报告中的 token、工具调用、耗时及费用仅统计每个 trial 最终成功的那次执行，不包含失败尝试的额外开销；这些开销可在归档证据中查看。用尽重试次数仍失败时，该任务保持失败。每个任务 job 的总时限为 6 小时，包含准备和重试时间。
 
-OpenCode 的两个 profile 和 GLM-5.2 评审统一使用 `temperature = 0`、`seed = 42`，常量位于 `zg_bench/settings.py`，所有 trial 和重试都使用同一个 seed。GLM-5.2 的两个执行 profile 在模型选项中统一设置 `enable_thinking = true`、`reasoningEffort = "high"`，对应常量也位于 `settings.py`。OpenAI-compatible SDK 会将 `reasoningEffort` 映射为 HTTP 请求中的 `reasoning_effort`。custom-openai、DashScope 两种 GLM 配置及子代理均使用此设置。[百炼 GLM 文档](https://help.aliyun.com/zh/model-studio/glm) 明确支持 GLM-5.2 的 `high` 强度。
+OpenCode 的两个 profile、子代理和 GLM-5.2 评审统一使用以下参数，常量位于 `zg_bench/settings.py`：
 
-为保持评分口径可比较，评审仍发送 `enable_thinking = false`，不设置推理强度。单独的 Qwen 配置也保持关闭 thinking，不套用 GLM 的推理设置。OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录温度和 seed；聚合时拒绝混用不同 seed，或将新报告与未记录 seed 的旧报告混用。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
+| 参数 | GLM-5.2 执行与评审设置 |
+| --- | --- |
+| `temperature` | `0` |
+| `seed` | `42` |
+| `enable_thinking` | `true` |
+| `reasoning_effort` | `"high"` |
+| `max_tokens` | `32000` |
+| `response_format` | 不传入 |
+
+所有 trial 和重试使用同一个 seed。custom-openai、DashScope 两种 GLM 执行配置均设置 `reasoningEffort = "high"`，OpenAI-compatible SDK 会将其映射为 HTTP 请求中的 `reasoning_effort`。执行模型显式声明 `limit.output`，评审请求的 `max_tokens` 使用同一个 `BENCHMARK_MAX_OUTPUT_TOKENS` 常量。单独的 Qwen 配置保持关闭 thinking，不套用 GLM 的推理设置。[百炼 GLM 文档](https://help.aliyun.com/zh/model-studio/glm) 明确支持 GLM-5.2 的 `high` 强度。
+
+执行和评审请求均不传入 `response_format`：[百炼 GLM 功能表](https://help.aliyun.com/zh/model-studio/glm) 列明 GLM-5.2 仅在非思考模式支持结构化输出。评审提示词仍要求 JSON，并保留严格的评分解析与格式错误重试；报告元数据记录 `response_format = null`，表示请求未强制响应格式。
+
+OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录温度、seed、thinking、推理强度、输出上限及响应格式；聚合时拒绝混用不一致的评审配置，也拒绝将新报告与缺少新增配置字段的旧报告混用。配置兼容的旧报告仍可彼此聚合。早期报告使用关闭 thinking 的评审模型，其分数不应直接混入新的评审口径。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
 
 两个 OpenCode profile 在全局及全部内置 agent（包含子代理）统一禁止 `websearch` 和 `webfetch`。即使 Harbor 跳过交互式权限确认，这两个工具也不会出现在发给模型的工具列表中。本地仓库搜索、文件读取和 zvec-grep MCP 仍可使用。这是网页工具限制，并非容器网络隔离；shell 命令及安装、模型连接仍可访问网络。
 

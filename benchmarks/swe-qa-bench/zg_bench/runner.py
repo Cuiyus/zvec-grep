@@ -16,6 +16,7 @@ import yaml
 
 from .settings import (
     AGENT_SETUP_TIMEOUT_MULTIPLIER,
+    BENCHMARK_MAX_OUTPUT_TOKENS,
     BENCHMARK_SEED,
     BENCHMARK_TEMPERATURE,
     CLAUDE_CODE_MAX_BUDGET_USD,
@@ -818,6 +819,11 @@ def build_harbor_command(
                         "models": {
                             opencode_model_id: {
                                 "temperature": True,
+                                **(
+                                    {"limit": {"context": 0, "output": BENCHMARK_MAX_OUTPUT_TOKENS}}
+                                    if opencode_model_id == OPENCODE_ALIYUN_GLM_MODEL_ID
+                                    else {}
+                                ),
                                 "options": (
                                     glm_model_options
                                     if opencode_model_id == OPENCODE_ALIYUN_GLM_MODEL_ID
@@ -867,6 +873,9 @@ def build_harbor_command(
                             OPENCODE_CUSTOM_GLM_MODEL_ID: {
                                 "name": "GLM 5.2",
                                 "temperature": True,
+                                # Keep the previous unknown context limit (0);
+                                # pin only the already-used output allowance.
+                                "limit": {"context": 0, "output": BENCHMARK_MAX_OUTPUT_TOKENS},
                                 "options": glm_model_options,
                             }
                         },

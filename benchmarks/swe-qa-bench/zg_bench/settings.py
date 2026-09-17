@@ -14,6 +14,7 @@ OPENCODE_GLM_REASONING_EFFORT = "high"
 # Keep sampling identical across profiles, repetitions, and judge retries.
 BENCHMARK_TEMPERATURE = 0
 BENCHMARK_SEED = 42
+BENCHMARK_MAX_OUTPUT_TOKENS = 32_000
 DASHSCOPE_QWEN_3_7_MAX_MODEL = "qwen3.7-max"
 OPENCODE_ALIYUN_GLM_MODEL = "aliyun-glm-5.2"
 OPENCODE_ALIYUN_GLM_MODEL_ID = "glm-5.2"

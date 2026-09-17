@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ..settings import (
+    BENCHMARK_MAX_OUTPUT_TOKENS,
     BENCHMARK_SEED,
     BENCHMARK_TEMPERATURE,
     OPENCODE_CUSTOM_GLM_BASE_URL,
+    OPENCODE_GLM_ENABLE_THINKING,
+    OPENCODE_GLM_REASONING_EFFORT,
 )
 from . import SELF_JUDGE_LABEL, SweQaError
 from .collect import (
@@ -39,8 +42,40 @@ COMPARISON_KEYS = (
 DEFAULT_JUDGE_CONCURRENCY = 3
 MAX_JUDGE_CONCURRENCY = 8
 JUDGE_CONCURRENCY_ENV = "SWE_QA_JUDGE_CONCURRENCY"
+JUDGE_GENERATION_METADATA_KEYS = (
+    "enable_thinking", "reasoning_effort", "max_tokens", "response_format",
+)
 
 Completion = Callable[..., Any]
+
+
+def _judge_generation_metadata() -> dict[str, Any]:
+    return {
+        "enable_thinking": OPENCODE_GLM_ENABLE_THINKING,
+        "reasoning_effort": OPENCODE_GLM_REASONING_EFFORT,
+        "max_tokens": BENCHMARK_MAX_OUTPUT_TOKENS,
+        # GLM-5.2 supports API-enforced JSON only without thinking. The rubric
+        # prompt still requests JSON, and parsing/retries enforce valid scores.
+        "response_format": None,
+    }
+
+
+def _validate_judge_generation_metadata(judge: dict[str, Any], prefix: str) -> None:
+    present = [key in judge for key in JUDGE_GENERATION_METADATA_KEYS]
+    if not any(present):
+        return  # Legacy reports remain readable, but cannot mix with new ones.
+    effort = judge.get("reasoning_effort")
+    tokens = judge.get("max_tokens")
+    if (
+        not all(present)
+        or not isinstance(judge.get("enable_thinking"), bool)
+        or (effort is not None and (not isinstance(effort, str) or not effort.strip()))
+        or isinstance(tokens, bool)
+        or not isinstance(tokens, int)
+        or tokens <= 0
+        or judge.get("response_format") not in (None, {"type": "json_object"})
+    ):
+        raise SweQaError(f"{prefix}: invalid judge generation metadata")
 
 
 def _judge_concurrency(value: int | None = None) -> int:
@@ -380,9 +415,13 @@ def _judge_candidate(
                 api_base=api_base,
                 temperature=BENCHMARK_TEMPERATURE,
                 seed=BENCHMARK_SEED,
+                reasoning_effort=OPENCODE_GLM_REASONING_EFFORT,
+                # LiteLLM's OpenAI model registry does not know GLM's support.
+                # Explicitly forward it rather than silently dropping it.
+                allowed_openai_params=["reasoning_effort"],
+                max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                extra_body={"enable_thinking": False},
+                extra_body={"enable_thinking": OPENCODE_GLM_ENABLE_THINKING},
             )
         except Exception as error:  # Provider errors have no shared stable base.
             last_failure = f"transport error ({type(error).__name__})"
@@ -395,6 +434,7 @@ def _judge_candidate(
                 return {
                     "label": SELF_JUDGE_LABEL,
                     "model": "glm-5.2",
+                    **_judge_generation_metadata(),
                     "scores": scores,
                     "total": sum(scores.values()),
                     "latency_seconds": time.monotonic() - started,
@@ -725,10 +765,24 @@ def _metric_cell(
 
 def _render_report(report: dict[str, Any]) -> str:
     usage_scope = report.get("usage_scope", LEGACY_USAGE_SCOPE)
+    judge_metadata = report["judge"]
+    generation_description = (
+        "Judge generation: "
+        f"`temperature={judge_metadata['temperature']}`, "
+        f"`seed={judge_metadata.get('seed', 'unrecorded')}`, "
+        f"`enable_thinking={str(judge_metadata['enable_thinking']).lower()}`, "
+        f"`reasoning_effort={judge_metadata['reasoning_effort']}`, "
+        f"`max_tokens={judge_metadata['max_tokens']}`, "
+        f"`response_format={(judge_metadata['response_format'] or {}).get('type', 'unset')}`."
+        if "enable_thinking" in judge_metadata else
+        "Legacy report: judge thinking, reasoning effort, and output limit were not recorded."
+    )
     lines = [
         "# SWE-QA-Bench CI report",
         "",
         f"Judge: **{SELF_JUDGE_LABEL}** (GLM-5.2 self-judge).",
+        "",
+        generation_description,
         "",
         "This run is **report-only**. Numeric scores and deltas are not code-review or merge gates. The hard gate only requires every expected pair and every judge call to succeed.",
         "",
@@ -1028,6 +1082,7 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
         isinstance(judge["seed"], bool) or not isinstance(judge["seed"], int)
     ):
         raise SweQaError(f"{prefix}: invalid judge seed")
+    _validate_judge_generation_metadata(judge, prefix)
     usage = judge.get("usage")
     if not isinstance(usage, dict):
         raise SweQaError(f"{prefix}: missing judge usage")
@@ -1109,13 +1164,18 @@ def _combined_judge(reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
     metadata = {key: first[key] for key in metadata_keys}
     # Legacy reports without a seed remain readable, but must not be mixed
     # with seeded reports or reports produced with a different seed.
-    if "seed" in first:
-        metadata["seed"] = first["seed"]
+    optional_keys = ("seed", *JUDGE_GENERATION_METADATA_KEYS)
+    for key in optional_keys:
+        if key in first:
+            metadata[key] = first[key]
     for report in reports[1:]:
         judge = report["judge"]
         if (
             any(judge.get(key) != metadata[key] for key in metadata_keys)
-            or judge.get("seed") != first.get("seed")
+            or any(
+                (key in judge) != (key in first) or judge.get(key) != first.get(key)
+                for key in optional_keys
+            )
         ):
             raise SweQaError("per-task reports use incompatible judge metadata")
 
@@ -1303,6 +1363,7 @@ def judge_pairs(
             "self_judge": True,
             "temperature": BENCHMARK_TEMPERATURE,
             "seed": BENCHMARK_SEED,
+            **_judge_generation_metadata(),
             "rubric": list(SCORE_KEYS),
             "usage": judge_usage,
         },

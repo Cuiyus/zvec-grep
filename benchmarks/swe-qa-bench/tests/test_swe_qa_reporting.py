@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -16,6 +17,8 @@ from zg_bench.swe_qa.collect import SESSION_USAGE_METRICS, SESSION_USAGE_SCOPE, 
 from zg_bench.swe_qa.judge import (
     MAX_JUDGE_CONCURRENCY,
     _aggregate,
+    _default_completion,
+    _judge_candidate,
     _metric_cell,
     aggregate_reports,
     judge_pairs,
@@ -48,6 +51,13 @@ EXPECTED_TASK_IDS = (
     "sympy:26",
     "conan:27",
 )
+
+JUDGE_GENERATION_METADATA = {
+    "enable_thinking": True,
+    "reasoning_effort": "high",
+    "max_tokens": 32000,
+    "response_format": None,
+}
 
 
 _summary_environment = patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""})
@@ -989,6 +999,11 @@ class JudgeTests(unittest.TestCase):
             self.assertEqual(len(requests), 6)
             self.assertTrue(all(call["temperature"] == 0 for call in requests))
             self.assertTrue(all(call["seed"] == 42 for call in requests))
+            for call in requests:
+                self.assertEqual(call["extra_body"], {"enable_thinking": True})
+                self.assertEqual(call["reasoning_effort"], "high")
+                self.assertEqual(call["max_tokens"], 32000)
+                self.assertNotIn("response_format", call)
             self.assertTrue(
                 all(call["model"] == "openai/glm-5.2" for call in requests)
             )
@@ -1000,6 +1015,8 @@ class JudgeTests(unittest.TestCase):
             self.assertTrue(report["judge"]["self_judge"])
             self.assertEqual(report["judge"]["temperature"], 0)
             self.assertEqual(report["judge"]["seed"], 42)
+            for key, value in JUDGE_GENERATION_METADATA.items():
+                self.assertEqual(report["judge"][key], value)
             self.assertEqual(report["judge"]["usage"]["calls"], 6)
             self.assertEqual(report["judge"]["usage"]["input_tokens"], 300)
             self.assertEqual(report["judge"]["usage"]["output_tokens"], 30)
@@ -1068,6 +1085,113 @@ class JudgeTests(unittest.TestCase):
             serialized = (output_dir / "report.json").read_text()
             self.assertNotIn("judge-only reference", serialized)
             self.assertNotIn("test-secret", serialized)
+
+    def test_judge_retries_preserve_generation_parameters_and_prompt(self) -> None:
+        requests: list[dict[str, Any]] = []
+
+        def completion(**kwargs: Any) -> dict[str, Any]:
+            requests.append(copy.deepcopy(kwargs))
+            if len(requests) == 1:
+                raise ConnectionError("temporary transport failure")
+            content = (
+                "invalid JSON" if len(requests) == 2 else json.dumps(
+                    {key: 10 for key in (
+                        "correctness", "completeness", "relevance",
+                        "clarity", "coherence",
+                    )}
+                )
+            )
+            return {"choices": [{"message": {"content": content}}]}
+
+        with patch("zg_bench.swe_qa.judge.time.sleep"):
+            result = _judge_candidate(
+                completion_fn=completion,
+                api_key="test-secret",
+                api_base="https://example.invalid/v1",
+                question="question",
+                reference="reference",
+                candidate="candidate",
+                attempts=3,
+            )
+        self.assertEqual(result["total"], 50)
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(requests[0], requests[1])
+        self.assertEqual(requests[1], requests[2])
+        self.assertEqual(requests[0]["temperature"], 0)
+        self.assertEqual(requests[0]["seed"], 42)
+        self.assertEqual(requests[0]["extra_body"], {"enable_thinking": True})
+        self.assertEqual(requests[0]["reasoning_effort"], "high")
+        self.assertEqual(requests[0]["max_tokens"], 32000)
+        self.assertNotIn("response_format", requests[0])
+
+    def test_litellm_forwards_judge_generation_parameters_to_http(self) -> None:
+        requests: list[dict[str, Any]] = []
+        content = json.dumps({key: 10 for key in (
+            "correctness", "completeness", "relevance", "clarity", "coherence"
+        )})
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                length = int(self.headers["Content-Length"])
+                requests.append(json.loads(self.rfile.read(length)))
+                body = json.dumps({
+                    "id": "local-judge-response",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "glm-5.2",
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content},
+                    }],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 10,
+                        "total_tokens": 30,
+                    },
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.dict("os.environ", {
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"
+            }):
+                result = _judge_candidate(
+                    completion_fn=_default_completion(),
+                    api_key="local-test-key",
+                    api_base=f"http://127.0.0.1:{server.server_port}/v1",
+                    question="question",
+                    reference="reference",
+                    candidate="candidate",
+                    attempts=1,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(result["total"], 50)
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request["model"], "glm-5.2")
+        self.assertEqual(request["temperature"], 0)
+        self.assertEqual(request["seed"], 42)
+        self.assertIs(request["enable_thinking"], True)
+        self.assertEqual(request["reasoning_effort"], "high")
+        self.assertEqual(request["max_tokens"], 32000)
+        self.assertNotIn("response_format", request)
+        self.assertNotIn("extra_body", request)
+        self.assertNotIn("reasoningEffort", request)
 
     def test_default_and_environment_judge_concurrency_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1379,6 +1503,118 @@ class JudgeTests(unittest.TestCase):
 
 
 class AggregateReportTests(unittest.TestCase):
+    def test_aggregate_preserves_generation_metadata_and_rejects_mixing(self) -> None:
+        variants = [
+            {},
+            {"enable_thinking": False},
+            {"reasoning_effort": "medium"},
+            {"reasoning_effort": None},
+            {"max_tokens": 16000},
+            {"response_format": {"type": "json_object"}},
+            None,
+        ]
+        for overrides in variants:
+            for legacy_first in (False, True):
+                with (
+                    self.subTest(overrides=overrides, legacy_first=legacy_first),
+                    tempfile.TemporaryDirectory() as temp_dir,
+                ):
+                    root = Path(temp_dir)
+                    first = _judged_task_report("reflex:6")
+                    second = _judged_task_report("sqlfluff:2", 1)
+                    first["judge"].update(
+                        copy.deepcopy(JUDGE_GENERATION_METADATA)
+                    )
+                    if overrides is not None:
+                        second["judge"].update(
+                            copy.deepcopy(JUDGE_GENERATION_METADATA)
+                        )
+                        second["judge"].update(overrides)
+                    if legacy_first:
+                        first, second = second, first
+                    _write_json(root / "reports" / "first" / "report.json", first)
+                    _write_json(root / "reports" / "second" / "report.json", second)
+                    if overrides == {}:
+                        report = aggregate_reports(
+                            reports_root=root / "reports",
+                            output_dir=root / "combined",
+                        )
+                        persisted = json.loads(
+                            (root / "combined" / "report.json").read_text()
+                        )
+                        for key, value in JUDGE_GENERATION_METADATA.items():
+                            self.assertEqual(report["judge"][key], value)
+                            self.assertEqual(persisted["judge"][key], value)
+                    else:
+                        with self.assertRaisesRegex(
+                            SweQaError, "incompatible judge metadata"
+                        ):
+                            aggregate_reports(
+                                reports_root=root / "reports",
+                                output_dir=root / "combined",
+                            )
+
+    def test_aggregate_preserves_explicit_thinking_false_and_unknown_legacy(self) -> None:
+        for metadata in (
+            {},
+            {**JUDGE_GENERATION_METADATA,
+             "enable_thinking": False, "reasoning_effort": None},
+            {**JUDGE_GENERATION_METADATA,
+             "enable_thinking": False, "reasoning_effort": None,
+             "response_format": {"type": "json_object"}},
+        ):
+            with (
+                self.subTest(metadata=metadata),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                for index, task_id in enumerate(("reflex:6", "sqlfluff:2")):
+                    report = _judged_task_report(task_id, index)
+                    report["judge"].update(copy.deepcopy(metadata))
+                    _write_json(root / "reports" / str(index) / "report.json", report)
+                combined = aggregate_reports(
+                    reports_root=root / "reports", output_dir=root / "combined"
+                )
+                for key in JUDGE_GENERATION_METADATA:
+                    if metadata:
+                        self.assertEqual(combined["judge"][key], metadata[key])
+                    else:
+                        self.assertNotIn(key, combined["judge"])
+
+    def test_aggregate_rejects_partial_or_invalid_generation_metadata(self) -> None:
+        invalid: list[dict[str, Any]] = []
+        for key, value in JUDGE_GENERATION_METADATA.items():
+            invalid.append({key: value})
+            invalid.append({
+                name: item for name, item in JUDGE_GENERATION_METADATA.items()
+                if name != key
+            })
+        for key, values in (
+            ("enable_thinking", (None, 0, 1, "true")),
+            ("reasoning_effort", ("", True, 4)),
+            ("max_tokens", (None, True, 0, -1, 32000.0, "32000")),
+            ("response_format", (
+                "json_object", {}, {"type": "text"},
+                {"type": "json_object", "other": True},
+            )),
+        ):
+            invalid.extend(
+                {**JUDGE_GENERATION_METADATA, key: value} for value in values
+            )
+        for metadata in invalid:
+            with (
+                self.subTest(metadata=metadata),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                report = _judged_task_report("reflex:6")
+                report["judge"].update(copy.deepcopy(metadata))
+                _write_json(root / "reports" / "report.json", report)
+                with self.assertRaises(SweQaError):
+                    aggregate_reports(
+                        reports_root=root / "reports", output_dir=root / "combined"
+                    )
+
     def test_aggregate_preserves_seed_and_rejects_mixed_sampling(self) -> None:
         for second_seed in (42, 7, None):
             with (
