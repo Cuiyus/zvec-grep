@@ -301,20 +301,32 @@ def prepare(lock: dict, task_id: str, destination: Path, upstream: Path) -> dict
         matched.append({"filename": item["filename"], "paths": [p.relative_to(source).as_posix() for p in matches]})
     preprocessing = lock.get("experiment", {}).get("preprocessing", "original")
     if preprocessing != "original":
-        from office_markdown import VARIANT, convert_workspace
-        from markdown_audit import verify
-        if preprocessing != VARIANT or task_id != "328":
-            raise ValueError("Only the reviewed Task 328 Markdown smoke is enabled")
-        print("::group::Convert full-persona OOXML to shared Markdown sidecars", flush=True)
-        conversion = convert_workspace(source, destination / "office-markdown-manifest.json")
-        print("::endgroup::", flush=True)
-        print("::group::Task 328 conversion completeness gate", flush=True)
-        audit = verify(source, conversion, destination / "markdown-audit")
+        if preprocessing == "office-markdown-v1" and task_id == "328":
+            from office_markdown import convert_workspace
+            from markdown_audit import verify
+            conversion_name, audit_dir = "office-markdown-manifest.json", "markdown-audit"
+            print("::group::Convert full-persona OOXML to shared Markdown sidecars", flush=True)
+            conversion = convert_workspace(source, destination / conversion_name)
+            print("::endgroup::", flush=True)
+            print("::group::Task 328 conversion completeness gate", flush=True)
+            audit = verify(source, conversion, destination / audit_dir)
+        elif preprocessing == "pdf-text-v1" and task_id == "192":
+            from pdf_text import convert_workspace
+            from pdf_audit import verify
+            conversion_name, audit_dir = "pdf-text-manifest.json", "pdf-audit"
+            print("::group::Convert all full-persona PDFs to shared text sidecars", flush=True)
+            conversion = convert_workspace(source, destination / conversion_name)
+            print("::endgroup::", flush=True)
+            print("::group::Task 192 independent PDF text coverage gate", flush=True)
+            review = json.loads((HERE / "data/task-192-pdf-review.json").read_text())
+            audit = verify(source, conversion, destination / audit_dir, review)
+        else:
+            raise ValueError("Only the reviewed Task 328 Office and Task 192 PDF pilots are enabled")
         print(json.dumps({"phase": "conversion_gate", "status": audit["status"],
                           "corpus_status_counts": conversion["status_counts"]}), flush=True)
         print("::endgroup::", flush=True)
         manifest["preprocessing"] = {"variant": preprocessing,
-            "manifest_sha256": digest(destination / "office-markdown-manifest.json"),
+            "manifest_sha256": digest(destination / conversion_name),
             "converter_sha256": conversion["converter_sha256"], "status_counts": conversion["status_counts"],
             "gate": audit["status"], "wall_seconds": conversion["wall_seconds"]}
     print(json.dumps({"phase": "source_git_snapshot", "status": "starting"}), flush=True)

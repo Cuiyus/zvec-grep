@@ -139,6 +139,13 @@ def source_text(source: Path, raw: bytes) -> str:
 
 def load_evidence(metadata_path: Path, task_dir: Path, *, max_source_bytes: int = MAX_SOURCE_BYTES) -> dict[str, Any]:
     """Read every listed source in manifest order; never truncate or skip a file."""
+    if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "pdf-text-v1":
+        from pdf_judge_evidence import load_verified
+        packet = Path(os.environ.get("WORKSPACE_QA_PDF_EVIDENCE", ""))
+        expected = os.environ.get("WORKSPACE_QA_PDF_EVIDENCE_SHA256", "")
+        if not packet.is_file() or not expected or sha256(packet.read_bytes()) != expected:
+            raise JudgeError("PDF pilot requires the candidate-blind packet frozen before QA")
+        return load_verified(packet, metadata_path, task_dir, max_source_bytes)
     metadata = read_object(metadata_path)
     if not isinstance(metadata.get("task"), str) or not metadata["task"].strip():
         raise JudgeError("metadata task must be a nonempty string")
@@ -191,7 +198,14 @@ def build_messages(evidence: dict[str, Any], answer: str, candidate_outputs: lis
                            for i, rubric in enumerate(metadata["rubrics"])],
                "source_files": evidence["sources"], "candidate_answer": answer,
                "candidate_outputs": candidate_outputs or []}
-    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+    system = SYSTEM_PROMPT
+    if "source_selection" in evidence:
+        payload["source_selection"] = evidence["source_selection"]
+        system = system.replace("complete input source files", "verified original pages selected from every input source before any candidate ran")
+        system += ("\nThe source packet contains original full pages, not full documents. Every full document was read by a "
+                   "candidate-blind page selector. A missing detail may be a selection omission: explain insufficient "
+                   "evidence, never treat absence in this packet as proof that the original document lacks it.\n")
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     if len(json.dumps(messages, ensure_ascii=False).encode("utf-8")) > max_prompt_bytes:
         raise JudgeError(f"complete judge prompt exceeds {max_prompt_bytes} byte ceiling; no truncation performed")
@@ -491,7 +505,9 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     locked = set()
     report: dict[str, Any] = {"schema_version": 1, "adapter": ADAPTER,
         "corpus_variant": os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original"),
-        "source_extraction": "office-markdown-v1" if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "office-markdown-v1" else "original-text-extractor",
+        "source_extraction": (os.environ["WORKSPACE_QA_CORPUS_VARIANT"]
+            if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") in {"office-markdown-v1", "pdf-text-v1"}
+            else "original-text-extractor"),
         "score_label": "original-rubric boolean mean (custom adapter)",
         "official_judge": False, "leaderboard_comparable": False,
         # A sharded CI ledger intentionally contains only the selected pair.  Judge
@@ -533,6 +549,10 @@ def judge_runs(*, metadata_path: Path, task_dir: Path, runs_dir: Path, output: P
     report.update(metadata_sha256=evidence["metadata_sha256"], source_bytes=evidence["source_bytes"],
                   source_hashes=[{k: s[k] for k in ("stored_relpath", "sha256", "bytes")} for s in evidence["sources"]],
                   rubrics=evidence["metadata"]["rubrics"], rubric_types=evidence["metadata"]["rubric_types"])
+    if "source_selection" in evidence:
+        report["source_selection"] = evidence["source_selection"]
+        report["pdf_evidence_sha256"] = os.environ["WORKSPACE_QA_PDF_EVIDENCE_SHA256"]
+        report["limitations"].append("Final judge sees candidate-blind selected original pages; selector omissions can affect scores. Not comparable to the full-source Office pilot.")
     if continuing:
         locked = import_continued_judgements(previous, report, ledger, continue_from_ledger,
             continue_from_judgements, evidence, runs_dir, max_prompt_bytes, attempts)

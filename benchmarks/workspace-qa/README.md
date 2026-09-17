@@ -1,5 +1,28 @@
 # Qoder Workspace QA
 
+## Task 192 PDF text smoke (2026-09-17)
+
+`workspace-qa-pdf-smoke.yml` is opt-in: Task 192 only, **baseline 1 + with-zg 1**,
+Qoder 1.1.45 / Qwen3.8-Max, zg 0.2.2 installed through `zg install --target qoder --yes`,
+remote `qwen/qwen3.7-text-embedding`. The original task and all 17 rubrics remain unchanged.
+Trigger explicitly by dispatch or a HEAD commit containing `[workspace-qa-pdf-smoke]`.
+
+`pdf-text-v1` converts every readable PDF in the full Operations Manager workspace
+to `<original filename>.txt`, retains originals and existing text, and preserves physical page
+numbers and layout spacing. No relevance filtering, OCR, source truncation or file splitting.
+Files over the uniform 1 MiB cap remain readable in both arms and are not indexed.
+The five required reports have 886 pages and pass independent PDFium text-coverage checks
+plus seven visually reviewed table/disclosure samples before any QA starts.
+
+The full five-report text exceeds the existing final-judge context budget. Before QA,
+five candidate-blind GLM calls each read one **complete** report and the unchanged rubric,
+and return only evidence page numbers. The final custom judge receives those original full
+pages after source/hash checks, not model-written summaries. The frozen packet is shared by both
+arms, excluded from the workspace and index, and uploaded with all selector requests/responses.
+Selection can omit useful pages; scores require human calibration and are not official leaderboard
+results or directly comparable with the previous full-source Office judge. Selection, conversion
+and index setup costs are reported separately from agent measurements. No QA call is forced to use zg.
+
 ## Task 328 Markdown smoke (2026-09-16)
 
 Completed result: [conversion audit and one-pair observations](reports/task-328-markdown-smoke-2026-09-16.md).

@@ -62,6 +62,9 @@ runs:
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
+        if python -c "import json,sys; sys.exit(json.load(open('benchmarks/workspace-qa/data/lock.json')).get('experiment',{}).get('preprocessing') != 'pdf-text-v1')"; then
+          uv pip install --python benchmarks/swe-qa-bench/.venv/bin/python -r benchmarks/workspace-qa/pdf-requirements.txt
+        fi
     - name: Reserve disk for complete original persona workspace
       shell: bash
       run: |
@@ -95,7 +98,7 @@ runs:
     - name: Read actual runtime identity for index compatibility
       shell: bash
       run: |
-        uv run --project benchmarks/swe-qa-bench python - <<'PY'
+        uv run --no-sync --project benchmarks/swe-qa-bench python - <<'PY'
         import json, os, sys
         from pathlib import Path
         sys.path.insert(0, 'benchmarks/workspace-qa')
@@ -163,7 +166,7 @@ runs:
         if [ -n "$SHARD_REPETITION" ]; then
           continuation_args+=(--shard-repetition "$SHARD_REPETITION")
         fi
-        uv run --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py \
+        uv run --no-sync --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/run_task.py \
           --task-id "$TASK_ID" --repetitions "$REPETITIONS" --phase "$QA_PHASE" \
           --upstream "$GITHUB_WORKSPACE/.workspace-bench-upstream" \
           --output "$RUNNER_TEMP/workspace-qa" "${continuation_args[@]}"
@@ -243,7 +246,7 @@ runs:
         from pathlib import Path
         root = Path(os.environ['RUNNER_TEMP']) / 'workspace-qa'
         secrets = [os.environ[k].encode() for k in ('QODER_PERSONAL_ACCESS_TOKEN','GLM_API_KEY','QWEN_API_KEY') if os.environ.get(k)]
-        for folder in ('runs','report','sdk-preflight'):
+        for folder in ('runs','report','sdk-preflight','pdf-judge-evidence'):
             for path in (root / folder).rglob('*'):
                 if not path.is_file() or 'working-indexes' in path.parts or 'model-cache' in path.parts or 'index' in path.parts:
                     continue
@@ -270,6 +273,9 @@ runs:
           ${{ runner.temp }}/workspace-qa/dataset/dataset-manifest.json
           ${{ runner.temp }}/workspace-qa/dataset/office-markdown-manifest.json
           ${{ runner.temp }}/workspace-qa/dataset/markdown-audit/
+          ${{ runner.temp }}/workspace-qa/dataset/pdf-text-manifest.json
+          ${{ runner.temp }}/workspace-qa/dataset/pdf-audit/
+          ${{ runner.temp }}/workspace-qa/pdf-judge-evidence/
           ${{ runner.temp }}/workspace-qa/dataset/range-cache-metrics.json
           ${{ runner.temp }}/workspace-qa/report/
           ${{ runner.temp }}/workspace-qa/runs/*.json

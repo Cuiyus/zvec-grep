@@ -126,6 +126,9 @@ def instruction(question: str, filename: str, *, zg: bool) -> str:
     if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original") == "office-markdown-v1":
         from office_markdown import COMMON_NOTICE
         question += "\n\n" + COMMON_NOTICE
+    elif os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original") == "pdf-text-v1":
+        from pdf_text import COMMON_NOTICE
+        question += "\n\n" + COMMON_NOTICE
     return (question + "\n\nThe complete task workspace is available at /app. "
             "This run uses read-only workspace QA: read the files needed to answer the task. "
             "Do not modify the workspace. The harness will save your final response verbatim to "

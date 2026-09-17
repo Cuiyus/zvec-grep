@@ -1,0 +1,64 @@
+name: Task 192 · PDF text conversion + one Qwen3.8-Max pair
+run-name: "Task 192 · PDF→text audit → baseline 1 + zg 1 · ${{ github.ref_name }}"
+
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - '.github/workflows/workspace-qa-pdf-smoke.yml'
+      - '.github/actions/workspace-qa/**'
+      - 'benchmarks/workspace-qa/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-qa-task192-pdf-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[workspace-qa-pdf-smoke]')
+    name: "192 · PDF gate → frozen judge evidence → baseline 1 + zg 1 → judge"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned PDF extraction and independent audit engines
+        run: python -m pip install -r benchmarks/workspace-qa/pdf-requirements.txt
+      - name: Validate harness and freeze exactly one original Task 192 pair
+        run: |
+          python -m unittest discover -s benchmarks/workspace-qa/tests -v
+          cp benchmarks/workspace-qa/data/task-192-pdf-smoke-lock.json benchmarks/workspace-qa/data/lock.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          lock = json.loads(Path('benchmarks/workspace-qa/data/lock.json').read_text())
+          assert [t['task_id'] for t in lock['tasks']] == ['192']
+          assert lock['repetitions'] == 1
+          assert lock['experiment']['preprocessing'] == 'pdf-text-v1'
+          assert lock['experiment']['requested_model'] == 'qwen3.8-max'
+          assert lock['experiment']['task_count'] == 1
+          assert lock['experiment']['rubric_count'] == 17
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Task 192 only; baseline **1** + with-zg **1**. '
+                        'All full-persona PDFs receive uniform text-layer conversion; originals retained. '
+                        'Independent coverage gate before QA. Original question and 17 rubrics. '
+                        'Candidate-blind judge page selection reads every complete report before either arm runs. '
+                        'Custom GLM judge; descriptive smoke, not a leaderboard score.\n')
+          PY
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: '192'
+          repetitions: '1'
+          phase: smoke
+          artifact-prefix: workspace-qa-task192-pdf-text-v1
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
