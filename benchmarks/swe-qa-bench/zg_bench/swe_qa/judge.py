@@ -695,14 +695,61 @@ def _case_comparison(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    count = len(cases)
-    _compatible_usage_scope([
+    # Validate every case before filtering. An excluded task must not hide a
+    # mixture of legacy root-only and complete session-tree accounting.
+    usage_scope = _compatible_usage_scope([
         case["profiles"][profile]["metrics"]
         for case in cases for profile in PROFILE_NAMES
     ])
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for case in cases:
+        baseline_input = case["profiles"]["baseline"]["metrics"]["input_tokens"]
+        zvec_input = case["profiles"]["zvec-grep"]["metrics"]["input_tokens"]
+        if baseline_input == 0:
+            change = 0.0 if zvec_input == 0 else None
+        else:
+            change = (zvec_input - baseline_input) / baseline_input * 100.0
+        if change is None or change < -100.0 or change > 100.0:
+            excluded.append({
+                "task_id": case["task_id"],
+                "baseline_input_tokens": baseline_input,
+                "zvec_grep_input_tokens": zvec_input,
+                "change_pct": change,
+                "reason": (
+                    "undefined_baseline" if change is None
+                    else "input_token_change_outside_range"
+                ),
+            })
+        else:
+            included.append(case)
+
+    count = len(included)
     profiles: dict[str, dict[str, Any]] = {}
     for profile in PROFILE_NAMES:
-        profile_rows = [case["profiles"][profile] for case in cases]
+        profile_rows = [case["profiles"][profile] for case in included]
+        if not profile_rows:
+            # A single-task report can legitimately have no included tasks.
+            # Keep its raw case available for merging, but do not present zero
+            # usage or zero quality as a measurement of an empty population.
+            profiles[profile] = {
+                key: None for key in (
+                    "judge", "input_tokens", "output_tokens", "tool_calls",
+                    "agent_wall_seconds", "cost_usd",
+                )
+            }
+            profiles[profile]["usage_scope"] = usage_scope
+            if usage_scope == SESSION_USAGE_SCOPE:
+                profiles[profile].update({key: None for key in SESSION_USAGE_METRICS})
+                profiles[profile]["session_usage"] = {
+                    "scope": usage_scope,
+                    "complete": True,
+                    **{
+                        part: {key: None for key in SESSION_USAGE_METRICS}
+                        for part in ("root", "descendants", "total")
+                    },
+                }
+            continue
         profiles[profile] = {
             "judge": sum(row["judge"]["total"] for row in profile_rows) / count,
             "input_tokens": sum(row["metrics"]["input_tokens"] for row in profile_rows),
@@ -716,19 +763,34 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
             ),
             **_summarize_usage([row["metrics"] for row in profile_rows], average=False),
         }
-    task_comparisons = [_case_comparison(case) for case in cases]
-    comparison: dict[str, float | None] = {}
-    comparison_samples: dict[str, int] = {}
-    for key in COMPARISON_KEYS:
-        value, sample_count = _mean_available(
-            [task_comparison[key] for task_comparison in task_comparisons]
+    # Efficiency percentages must describe the displayed aggregate sums, not
+    # an average of task percentages that can disagree even in direction.
+    if count:
+        comparison = _comparison(
+            profiles["baseline"], profiles["zvec-grep"],
+            profiles["baseline"]["judge"], profiles["zvec-grep"]["judge"],
         )
-        comparison[key] = value
-        comparison_samples[key] = sample_count
+    else:
+        comparison = {key: None for key in COMPARISON_KEYS}
+    comparison_samples = {
+        key: count if value is not None else 0
+        for key, value in comparison.items()
+    }
     return {
         "profiles": profiles,
         "comparison": comparison,
         "comparison_samples": comparison_samples,
+        "comparison_basis": "ratio_of_aggregate_profile_means",
+        "filter": {
+            "metric": "input_tokens",
+            "min_change_pct": -100.0,
+            "max_change_pct": 100.0,
+            "total_count": len(cases),
+            "included_count": count,
+            "excluded_count": len(excluded),
+            "included_task_ids": [case["task_id"] for case in included],
+            "excluded_tasks": excluded,
+        },
     }
 
 
@@ -765,6 +827,102 @@ def _metric_cell(
 
 def _render_report(report: dict[str, Any]) -> str:
     usage_scope = report.get("usage_scope", LEGACY_USAGE_SCOPE)
+    aggregate = report["aggregate"]
+    filtering = aggregate.get("filter", {})
+    included = set(filtering.get(
+        "included_task_ids", [case["task_id"] for case in report["cases"]]
+    ))
+
+    def table_row(
+        label: str, baseline: dict[str, Any], zvec: dict[str, Any],
+        judge_b: float | None, judge_z: float | None,
+        comparison: dict[str, Any],
+    ) -> str:
+        judge_cell = (
+            "N/A" if judge_b is None or judge_z is None else
+            f"{judge_b:.2f} / {judge_z:.2f} / {_fmt_delta(comparison['judge_delta'])}"
+        )
+        cells = [label, judge_cell]
+        for metric, change in (
+            ("input_tokens", "input_token_reduction_pct"),
+            ("tool_calls", "toolcall_reduction_pct"),
+            ("agent_wall_seconds", "time_reduction_pct"),
+        ):
+            cells.append(_metric_cell(baseline[metric], zvec[metric], comparison[change]))
+        return "| " + " | ".join(cells) + " |"
+
+    baseline = aggregate["profiles"]["baseline"]
+    zvec = aggregate["profiles"]["zvec-grep"]
+    lines = [
+        "# SWE-QA-Bench CI report",
+        "",
+        "All cells use `baseline / zvec-grep / change`. Resource savings are negative; Judge gains are positive.",
+        "",
+        "| Case | Judge self-judge | input_token | toolcall | time (s) |",
+        "|---|---:|---:|---:|---:|",
+        table_row(
+            "**Aggregate**", baseline, zvec,
+            baseline["judge"], zvec["judge"], aggregate["comparison"],
+        ),
+    ]
+    for case in report["cases"]:
+        if case["task_id"] not in included:
+            continue
+        baseline = case["profiles"]["baseline"]
+        zvec = case["profiles"]["zvec-grep"]
+        lines.append(table_row(
+            str(case["task_id"]), baseline["metrics"], zvec["metrics"],
+            baseline["judge"]["total"], zvec["judge"]["total"], case["comparison"],
+        ))
+    lines.append("")
+    if filtering:
+        lines.extend((
+            f"Aggregate includes **{filtering['included_count']}/{filtering['total_count']} tasks**. "
+            "A task is excluded from every Aggregate metric and the table above when its input-token change "
+            "`(zvec-grep mean - baseline mean) / baseline mean` is strictly outside **[-100%, +100%]**. "
+            "The filter uses each profile's trial mean and is applied independently to each workflow run. "
+            "All tasks are still executed, judged, and retained in the JSON evidence.",
+            "",
+        ))
+        excluded = filtering.get("excluded_tasks", [])
+        if excluded:
+            descriptions = []
+            for row in excluded:
+                change = row["change_pct"]
+                descriptions.append(
+                    f"`{row['task_id']}` (input "
+                    + (
+                        "N/A: baseline is zero, zvec-grep is positive"
+                        if change is None else _fmt_delta(change, suffix="%")
+                    )
+                    + ")"
+                )
+            lines.extend(("Excluded tasks: " + "; ".join(descriptions) + ".", ""))
+        if not included:
+            lines.extend(("No tasks remain after filtering; Aggregate is N/A. This does not invalidate completed trials.", ""))
+
+    lines.extend((
+        "Each task's baseline and zvec-grep values are arithmetic means across its trials. "
+        "Aggregate resource values are sums of the included task means; Judge values are equal-weight means across included tasks. "
+        "Every Aggregate change is calculated directly from the displayed Aggregate values, not an average of task percentages. "
+        "A zero Aggregate baseline denominator produces N/A; zero-baseline tasks in other metrics still contribute to the sums. "
+        "For the input filter, two zero means are retained, while a zero baseline with positive zvec-grep is excluded.",
+        "",
+        "Nonnegative input tokens cannot decrease by more than 100%; this threshold therefore removes high-overhead tasks. "
+        "Filtered statistics are a sensitivity analysis and do not imply the excluded results are invalid.",
+        "",
+    ))
+    samples = aggregate.get("comparison_samples")
+    if isinstance(samples, dict):
+        task_count = len(included)
+        lines.extend((
+            "Aggregate comparison sample counts: "
+            f"Judge n={samples.get('judge_delta', 0)}/{task_count}, "
+            f"input_token n={samples.get('input_token_reduction_pct', 0)}/{task_count}, "
+            f"toolcall n={samples.get('toolcall_reduction_pct', 0)}/{task_count}, "
+            f"time n={samples.get('time_reduction_pct', 0)}/{task_count}.",
+            "",
+        ))
     judge_metadata = report["judge"]
     generation_description = (
         "Judge generation: "
@@ -777,18 +935,18 @@ def _render_report(report: dict[str, Any]) -> str:
         if "enable_thinking" in judge_metadata else
         "Legacy report: judge thinking, reasoning effort, and output limit were not recorded."
     )
-    lines = [
-        "# SWE-QA-Bench CI report",
-        "",
+    lines.extend((
         f"Judge: **{SELF_JUDGE_LABEL}** (GLM-5.2 self-judge).",
         "",
         generation_description,
         "",
-        "This run is **report-only**. Numeric scores and deltas are not code-review or merge gates. The hard gate only requires every expected pair and every judge call to succeed.",
+        "This run is **report-only**. Numeric scores and the Aggregate filter are not code-review or merge gates. "
+        "The hard gate still requires every expected pair and every judge call to succeed, including excluded tasks.",
         "",
         f"Usage scope: **`{usage_scope}`**. " + (
             "Tokens and tool calls include the root session and every recursively linked subagent session. "
             "Input includes uncached, cache-read, and cache-write tokens; output includes text and reasoning tokens. "
+            "Per-session detail remains in JSON evidence. "
             "Agent wall time already includes awaited subagents and excludes usage-export overhead; child durations are not added. "
             "The judge evaluates only the root final answer. Background title/summary calls not persisted in the session database are outside this scope, so this is not a complete provider bill."
             if usage_scope == SESSION_USAGE_SCOPE else
@@ -796,124 +954,7 @@ def _render_report(report: dict[str, Any]) -> str:
             "Do not interpret these resource comparisons as complete agent usage or combine them with session-tree reports."
         ),
         "",
-        "All cells use `baseline / zvec-grep / change`. Judge change is `zvec-grep - baseline`, so a gain is positive. Efficiency change is the percentage change from baseline, so lower token, tool-call, or time usage is negative.",
-        "",
-        "Each task's baseline and zvec-grep values are arithmetic means across that profile's trials. Its third value is calculated directly from those two displayed profile means.",
-        "",
-        "In the Aggregate row, baseline and zvec-grep efficiency values are sums of the per-task profile means (Judge is the equal-weight task mean), while the third value is the equal-weight arithmetic mean of task changes, not a ratio of totals. A task whose baseline denominator is zero has an N/A percentage change and is excluded only from that Aggregate metric.",
-        "",
-        "| Case | Judge self-judge | input_token | toolcall | time (s) |",
-        "|---|---:|---:|---:|---:|",
-    ]
-    for case in report["cases"]:
-        baseline = case["profiles"]["baseline"]
-        zvec = case["profiles"]["zvec-grep"]
-        comparison = case["comparison"]
-        judge_cell = (
-            f"{baseline['judge']['total']:.2f} / {zvec['judge']['total']:.2f} / "
-            f"{_fmt_delta(comparison['judge_delta'])}"
-        )
-        lines.append(
-            "| "
-            + " | ".join(
-                (
-                    str(case["task_id"]),
-                    judge_cell,
-                    _metric_cell(
-                        baseline["metrics"]["input_tokens"],
-                        zvec["metrics"]["input_tokens"],
-                        comparison["input_token_reduction_pct"],
-                        decimals=2,
-                    ),
-                    _metric_cell(
-                        baseline["metrics"]["tool_calls"],
-                        zvec["metrics"]["tool_calls"],
-                        comparison["toolcall_reduction_pct"],
-                        decimals=2,
-                    ),
-                    _metric_cell(
-                        baseline["metrics"]["agent_wall_seconds"],
-                        zvec["metrics"]["agent_wall_seconds"],
-                        comparison["time_reduction_pct"],
-                        decimals=2,
-                    ),
-                )
-            )
-            + " |"
-        )
-
-    aggregate = report["aggregate"]
-    baseline = aggregate["profiles"]["baseline"]
-    zvec = aggregate["profiles"]["zvec-grep"]
-    comparison = aggregate["comparison"]
-    judge_cell = (
-        f"{baseline['judge']:.2f} / {zvec['judge']:.2f} / "
-        f"{_fmt_delta(comparison['judge_delta'])}"
-    )
-    lines.append(
-        "| "
-        + " | ".join(
-            (
-                "**Aggregate**",
-                judge_cell,
-                _metric_cell(
-                    baseline["input_tokens"],
-                    zvec["input_tokens"],
-                    comparison["input_token_reduction_pct"],
-                    decimals=2,
-                ),
-                _metric_cell(
-                    baseline["tool_calls"],
-                    zvec["tool_calls"],
-                    comparison["toolcall_reduction_pct"],
-                    decimals=2,
-                ),
-                _metric_cell(
-                    baseline["agent_wall_seconds"],
-                    zvec["agent_wall_seconds"],
-                    comparison["time_reduction_pct"],
-                    decimals=2,
-                ),
-            )
-        )
-        + " |"
-    )
-    lines.append("")
-    samples = aggregate.get("comparison_samples")
-    if isinstance(samples, dict):
-        task_count = len(report["cases"])
-        lines.extend(
-            (
-                "Aggregate comparison sample counts: "
-                f"Judge n={samples.get('judge_delta', 0)}/{task_count}, "
-                f"input_token n={samples.get('input_token_reduction_pct', 0)}/{task_count}, "
-                f"toolcall n={samples.get('toolcall_reduction_pct', 0)}/{task_count}, "
-                f"time n={samples.get('time_reduction_pct', 0)}/{task_count}.",
-                "",
-            )
-        )
-    if usage_scope == SESSION_USAGE_SCOPE:
-        lines.extend((
-            "Root/subagent usage breakdown (per-task trial means; descendants include every nesting level). "
-            "A root delegation is one root tool call, and the child's own tool calls are counted separately. "
-            "Cache reads/writes and reasoning are components of the token totals, not extra tokens to add again.",
-            "",
-            "| Case | Profile | Sessions | Input tokens | Cache read / write | Text output / reasoning | Tool calls | LLM calls |",
-            "|---|---|---|---:|---:|---:|---:|---:|",
-        ))
-        for case in report["cases"]:
-            for profile in PROFILE_NAMES:
-                usage = case["profiles"][profile]["metrics"]["session_usage"]
-                for part in ("root", "descendants"):
-                    row = usage[part]
-                    lines.append("| " + " | ".join((
-                        case["task_id"], profile, part,
-                        _fmt_number(row["input_tokens"]),
-                        f"{_fmt_number(row['cache_read_tokens'])} / {_fmt_number(row['cache_write_tokens'])}",
-                        f"{_fmt_number(row['text_output_tokens'])} / {_fmt_number(row['reasoning_tokens'])}",
-                        _fmt_number(row["tool_calls"]), _fmt_number(row["llm_calls"]),
-                    )) + " |")
-        lines.append("")
+    ))
     return "\n".join(lines)
 
 

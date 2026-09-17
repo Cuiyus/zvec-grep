@@ -68,8 +68,10 @@ New OpenCode trials use `collect_session_usage=true`. Before the environment
 stops, the adapter exports the root session and every recursively linked
 subagent session to `agent/session-usage.json`. Collection requires a complete
 export; missing sessions or inconsistent totals fail the trial/report instead
-of falling back to the root trajectory. JSON and Markdown reports mark this
-scope as `opencode-session-tree-v1` and show root/subagent usage separately.
+of falling back to the root trajectory. Reports mark this scope as
+`opencode-session-tree-v1`. JSON reports and session artifacts retain the
+root/subagent breakdown; Markdown reports omit the descendants table. This
+presentation change does not remove subagent usage from the reported totals.
 
 - Input tokens include uncached input, cache reads, and cache writes. Output
   tokens include text output and reasoning; their components are retained.
@@ -90,14 +92,30 @@ breakdown, so resource deltas must not be compared across these scopes as if
 their accounting were identical. Failed attempts remain archived separately
 under `.retry-history/` and are not included in final-success trial means.
 
-In the Aggregate row:
+The Aggregate summary appears before the task details. Each workflow run
+independently filters tasks using the input-token change calculated from each
+profile's trial mean: `(zvec-grep - baseline) / baseline * 100`. A change
+strictly outside `[-100%, +100%]` excludes the entire task from every Aggregate
+metric, including Judge, and from the main results table. Exactly `-100%` or
+`+100%` remains included. With nonnegative token counts, only an increase above
+`100%` can cross this threshold. A zero baseline with positive zvec-grep input
+is excluded because its percentage change is undefined; two zero inputs remain
+included.
 
-- Judge values are equal-weight means across tasks.
-- Baseline and zvec-grep efficiency values are sums of the per-task profile
-  means.
-- The displayed efficiency change is the equal-weight mean of task-level
-  changes, not a ratio of the aggregate sums.
-- An `N/A` task is excluded only from the affected Aggregate metric.
+- Judge values are equal-weight means across the included tasks.
+- Baseline and zvec-grep efficiency values are sums of the included per-task
+  profile means. Their displayed change is calculated directly from those two
+  aggregate values, not by averaging task-level percentage changes.
+- A zero aggregate baseline denominator produces `N/A` for that efficiency
+  comparison. If no tasks remain, the Aggregate values are `N/A`.
+- An exclusion audit lists the omitted tasks and reasons. JSON `cases` and raw
+  artifacts retain every task, including excluded tasks and child usage.
+
+This is a sensitivity filter, not evidence that excluded data is invalid. All
+selected tasks still execute and must complete their required trials and judge
+calls; filtering cannot turn an incomplete benchmark into a successful one.
+For `all-full`, each round still runs 20 tasks × 2 profiles × 5 trials. An
+otherwise complete run with no tasks left after filtering may still succeed.
 
 ## GitHub Actions
 

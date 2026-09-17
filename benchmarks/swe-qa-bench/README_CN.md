@@ -48,7 +48,7 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 
 如果 baseline 分母为零，对应的效率比较结果为 `N/A`。索引设置时间与 Agent 执行耗时分开统计。
 
-新 OpenCode trial 开启 `collect_session_usage=true`。适配器在环境停止前导出主会话及递归关联的全部子代理会话，保存为 `agent/session-usage.json`。采集要求导出完整；会话缺失、导出失败或总数不一致时 trial/报告失败，不能静默回退到主轨迹。JSON 和 Markdown 报告标记 `opencode-session-tree-v1` 统计口径，并展示主会话、子代理的用量拆分。
+新 OpenCode trial 开启 `collect_session_usage=true`。适配器在环境停止前导出主会话及递归关联的全部子代理会话，保存为 `agent/session-usage.json`。采集要求导出完整；会话缺失、导出失败或总数不一致时 trial/报告失败，不能静默回退到主轨迹。报告标记 `opencode-session-tree-v1` 统计口径。JSON 报告和会话产物保留主会话、子代理的用量拆分；Markdown 报告移除 descendants 表格，但总量仍完整计入子代理用量。
 
 - 输入 token 包含非缓存输入、缓存读取和缓存写入；输出 token 包含文本输出及 reasoning，并分别保留组成字段。
 - 工具数包含主会话的委派调用和子代理内部调用，递归覆盖更深层子代理；使用会话、消息和工具标识去重。
@@ -58,12 +58,14 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 
 没有会话导出的历史数据保留为 `legacy-root`，其子代理 token 和工具用量未知，可能漏计。采集和报告聚合均拒绝将它与新口径混用，包括没有标记统计口径的旧报告。旧版输入/输出 token 的组成也不同，不能把新旧资源差值当作同口径比较。失败尝试仍单独保存在 `.retry-history/`，不计入最终成功 trial 的均值。
 
-在 Aggregate 行中：
+Aggregate 汇总放在任务明细之前。每轮 workflow 独立筛选任务，使用两个 profile 的 trial 平均输入 token 计算变化率：`(zvec-grep - baseline) / baseline * 100`。变化率严格超出 `[-100%, +100%]` 的任务，会从所有 Aggregate 指标（包括 Judge）和主结果表中整项移除；恰好等于 `-100%` 或 `+100%` 仍保留。输入 token 非负，因此实际只有涨幅超过 `100%` 能触发这个阈值。baseline 为零、zvec-grep 大于零时，变化率未定义，该任务也会被排除；两者均为零则保留。
 
-- Judge 数值是所有任务的等权平均值。
-- Baseline 和 zvec-grep 的效率数值是各任务 profile 平均值之和。
-- 展示的效率变化是任务级变化的等权平均值，而不是聚合总和的比值。
-- 结果为 `N/A` 的任务只会从受影响的 Aggregate 指标中排除。
+- Judge 数值是保留任务的等权平均值。
+- Baseline 和 zvec-grep 的效率数值是保留任务各 profile 平均值之和；展示的变化率直接由这两个汇总值计算，不再平均任务级百分比。
+- 某项效率指标的汇总 baseline 分母为零时，变化率为 `N/A`。若没有任务保留，则 Aggregate 各项数值均为 `N/A`。
+- 报告单独列出被排除的任务和原因。JSON 的 `cases` 及原始产物仍保留全部任务和子代理用量。
+
+这是敏感性筛选，不能据此认定被排除的数据有误。所有选中任务仍须执行，并完成规定的 trial 和评审调用；筛选不能让未完成的 benchmark 通过。`all-full` 每轮仍运行 20 题 × 2 个 profile × 5 次。若任务均已完成，仅因筛选后没有剩余任务，工作流仍可成功。
 
 ## GitHub Actions
 
