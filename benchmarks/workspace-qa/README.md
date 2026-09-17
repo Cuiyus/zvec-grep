@@ -5,6 +5,11 @@
 `workspace-qa-pdf-smoke.yml` is opt-in: Task 192 only, **baseline 1 + with-zg 1**,
 Qoder 1.1.45 / Qwen3.8-Max, zg 0.2.2 installed through `zg install --target qoder --yes`,
 remote `qwen/qwen3.7-text-embedding`. The original task and all 17 rubrics remain unchanged.
+The current pilot ceiling is **3,000,000 cumulative input tokens per arm**, with the same
+900-second, 60-request and 120-tool-call ceilings. Run 35197461214 exhausted the previous
+600k input ceiling in both arms (no final answers; QA zg calls 0); it remains a separate
+failed observation, not a replacement or a scored zero. Agent progress emits a 30-second
+liveness heartbeat without changing the model prompt or tool selection.
 Trigger explicitly by dispatch or a HEAD commit containing `[workspace-qa-pdf-smoke]`.
 
 `pdf-text-v1` converts every readable PDF in the full Operations Manager workspace

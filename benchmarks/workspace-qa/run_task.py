@@ -247,6 +247,9 @@ def main(argv=None):
                 or args.phase != "smoke" or args.repetitions != 1 or continuing):
             raise ValueError("Conversion pilot requires the matching reviewed task, smoke, exactly one fresh pair")
     os.environ["WORKSPACE_QA_CORPUS_VARIANT"] = variant
+    input_limit = lock.get("experiment", {}).get("qa_input_token_limit", 600000)
+    if type(input_limit) is not int or input_limit <= 0:
+        raise ValueError("Locked QA input-token limit must be a positive integer")
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
@@ -310,7 +313,8 @@ def main(argv=None):
         runner_command = [sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
-                                 "--repetitions", str(args.repetitions), "--timeout", "900"]
+                                 "--repetitions", str(args.repetitions), "--timeout", "900",
+                                 "--input-token-limit", str(input_limit)]
         if args.shard_repetition is not None:
             runner_command += ["--shard-repetition", str(args.shard_repetition)]
         if args.continue_from:

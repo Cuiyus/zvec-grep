@@ -333,6 +333,7 @@ def execute(args: argparse.Namespace) -> int:
     shard = [shard_repetition] if shard_repetition is not None else None
     plan = make_plan(args.task_id, args.repetitions, args.order_seed, shard)
     positive(args.timeout, "timeout")
+    positive(getattr(args, "input_token_limit", 600000), "input-token-limit")
     filename = answer_filename(args.answer_filename) if args.answer_filename else None
     if not filename and not args.dry_run:
         raise ValueError("--answer-filename is required for an actual run")
@@ -382,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--image", default="zg-readonly-qa:0.2.2")
     parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument("--input-token-limit", type=int, default=600000,
+                        help="Same cumulative input-token ceiling for both profiles")
     parser.add_argument("--order-seed", type=int, default=1729)
     parser.add_argument("--shard-repetition", type=int,
                         help="Execute one repetition from the full deterministic plan")

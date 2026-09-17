@@ -65,7 +65,19 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
         child = None
         try:
             child = subprocess.Popen(command, stdout=stdout, stderr=stderr)
-            result["returncode"] = child.wait(timeout=limits["wall_seconds"] + 300)
+            remaining = limits["wall_seconds"] + 300
+            while True:
+                try:
+                    result["returncode"] = child.wait(timeout=min(30, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    elapsed = time.monotonic() - started
+                    remaining = limits["wall_seconds"] + 300 - elapsed
+                    if remaining <= 0:
+                        raise
+                    print(json.dumps({"phase": "agent_trial_heartbeat", "profile": profile,
+                        "status": "running", "container_elapsed_seconds": round(elapsed, 1),
+                        "qa_input_token_limit": limits["input_tokens"]}), flush=True)
             result["status"] = "completed" if result["returncode"] == 0 else "failed"
         except subprocess.TimeoutExpired:
             result["status"] = "timeout"
@@ -141,7 +153,8 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
     if not (source / ".zvec-grep").is_dir() or any((source / ".zvec-grep").iterdir()):
         raise RuntimeError("Prepared source must contain an empty index mount directory")
     before = r.directory_identity(source, skip_git=True)
-    limits = {"model_requests": 60, "tool_calls": 120, "input_tokens": 600000, "wall_seconds": args.timeout}
+    limits = {"model_requests": 60, "tool_calls": 120,
+              "input_tokens": getattr(args, "input_token_limit", 600000), "wall_seconds": args.timeout}
     prepared = output / "preparation"
     index, cache, logs = prepared / "index", prepared / "model-cache", prepared / "runtime"
     index.mkdir(parents=True)

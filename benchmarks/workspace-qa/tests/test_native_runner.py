@@ -129,6 +129,21 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertEqual(rows[0]["input_tokens"], 120)
                 self.assertEqual([r["status"] for r in rows[1:]], ["completed"] * 3)
 
+    def test_locked_input_budget_is_identical_for_both_profiles_and_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), repetitions=1)
+            args.input_token_limit = 3000000
+            status, calls, _ = self.execute(args)
+            self.assertEqual(status, 0)
+            self.assertEqual({c["profile"] for c in calls}, {"baseline", "with-zg"})
+            self.assertTrue(all(c["limits"]["input_tokens"] == 3000000 for c in calls))
+            self.assertEqual(json.loads((args.output / "manifest.json").read_text())["run_limits"]["input_tokens"], 3000000)
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), repetitions=1)
+            args.input_token_limit = 0
+            with self.assertRaises(ValueError):
+                self.execute(args)
+
     def continuation_fixture(self, root):
         from test_continuation import fixture, QUESTION, FILENAME, NEW_COMMIT
         from native_fixtures import dump
@@ -351,7 +366,7 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertNotIn(runner.SPEC.credential_env, command)
             self.assertEqual(options["timeout"], 1800)
 
-    def trial(self, root, profile, *, invalid_proof=False, session_status="completed", startup_status="passed"):
+    def trial(self, root, profile, *, invalid_proof=False, session_status="completed", startup_status="passed", heartbeat=False):
         source, agent, cache = [root / name for name in ("source", "agent", "cache")]
         source.mkdir()
         index = root / "index" if profile == "with-zg" else None
@@ -363,12 +378,18 @@ class NativeRunnerTests(unittest.TestCase):
             captured.append(command)
             runner.write_json(agent / "install-manifest.json", {"setup_wall_seconds": 9.0})
             runner.write_json(agent / "session.json", {"status": session_status, "wall_seconds": 7.5})
-            return SimpleNamespace(wait=lambda **kw: int(session_status != "completed"))
+            waits = iter([subprocess.TimeoutExpired("fixture", 30), 0]) if heartbeat else None
+            def wait(**kw):
+                value = next(waits) if waits else int(session_status != "completed")
+                if isinstance(value, Exception):
+                    raise value
+                return value
+            return SimpleNamespace(wait=wait)
 
         proof = {"verified": True, "profile": profile, "installed": index is not None, "setup_wall_seconds": 9.0}
         with patch.dict("os.environ", {"QWEN_API_KEY": "fake-embedding-secret"}, clear=True), \
                 patch.object(native_runner.subprocess, "Popen", side_effect=launch), \
-                patch.object(native_runner.time, "monotonic", side_effect=[100.0, 120.0]), \
+                patch.object(native_runner.time, "monotonic", side_effect=[100.0, 130.0, 150.0] if heartbeat else [100.0, 120.0]), \
                 patch.object(runner, "cleanup_container"), \
                 patch("qoder_probe.native_startup_evidence", return_value={"status": startup_status}) as startup, \
                 patch.object(native_runner, "validate_installation", return_value=proof,
@@ -379,6 +400,16 @@ class NativeRunnerTests(unittest.TestCase):
             validate.assert_called_once_with(agent, profile=profile)
             startup.assert_called_once_with(agent)
         return result, captured[0], json.loads((agent / "native-spec.json").read_text())
+
+    def test_heartbeat_reports_liveness_without_interrupting_a_running_trial(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(output):
+            result, _, _ = self.trial(Path(tmp), "baseline", heartbeat=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["container_total_wall_seconds"], 50.0)
+        event = json.loads(output.getvalue())
+        self.assertEqual(event["phase"], "agent_trial_heartbeat")
+        self.assertEqual(event["container_elapsed_seconds"], 30.0)
 
     def test_native_session_profiles_isolate_embedding_and_separate_installation_wall_time(self):
         for profile in ("baseline", "with-zg"):
