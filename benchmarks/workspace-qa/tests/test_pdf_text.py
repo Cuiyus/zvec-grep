@@ -83,7 +83,8 @@ class PdfPilotTests(unittest.TestCase):
             self.assertIn("Second page", payload["complete_pdf_text"])
             self.assertNotIn("candidate_answer", payload)
             return {"model": model, "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(
-                {"criteria": [{"id": 0, "pages": []}, {"id": 1, "pages": [2]}]})}}]}
+                {"company_pages": {key: [2] for key in pe.COMPANY_SECTIONS},
+                 "criteria": [{"id": 0, "pages": []}, {"id": 1, "pages": [2]}]})}}]}
         with patch.dict(os.environ, {"GLM_API_KEY": "test-only-key"}):
             packet = pe.prepare(meta, task, self.root / "evidence", completion_fn=completion)
         evidence = pe.load_verified(packet, meta, task, judge.MAX_SOURCE_BYTES)
@@ -98,12 +99,18 @@ class PdfPilotTests(unittest.TestCase):
             pe.load_verified(packet, meta, task, judge.MAX_SOURCE_BYTES)
 
     def test_page_selector_rejects_nonexistent_pages_omitted_rubrics_and_model_changes(self):
-        def response(criteria, model="glm-test"):
+        def response(criteria, model="glm-test", company=None):
             return {"model": model, "choices": [{"finish_reason": "stop",
-                "message": {"content": json.dumps({"criteria": criteria})}}]}
-        for rows in ([{"id": 0, "pages": [3]}], [{"id": 0, "pages": [True]}], [], [{"id": 0, "pages": []}]):
+                "message": {"content": json.dumps({"criteria": criteria,
+                    "company_pages": company if company is not None else {key: [1] for key in pe.COMPANY_SECTIONS}})}}]}
+        for rows in ([{"id": 0, "pages": [3]}], [{"id": 0, "pages": [True]}], []):
             with self.assertRaises(judge.InvalidAssessmentError):
                 pe.parse_selection(response(rows), "glm-test", 1, 2)
+        for company in ({}, {key: [] for key in pe.COMPANY_SECTIONS},
+                        {key: [3] for key in pe.COMPANY_SECTIONS},
+                        {key: [True] for key in pe.COMPANY_SECTIONS}):
+            with self.assertRaises(judge.InvalidAssessmentError):
+                pe.parse_selection(response([{"id": 0, "pages": []}], company=company), "glm-test", 1, 2)
         with self.assertRaises(judge.JudgeError):
             pe.parse_selection(response([{"id": 0, "pages": [1]}], "different"), "glm-test", 1, 2)
 

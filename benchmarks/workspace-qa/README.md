@@ -16,7 +16,10 @@ plus seven visually reviewed table/disclosure samples before any QA starts.
 
 The full five-report text exceeds the existing final-judge context budget. Before QA,
 five candidate-blind GLM calls each read one **complete** report and the unchanged rubric,
-and return only evidence page numbers. The final custom judge receives those original full
+and return only evidence page numbers. Selector v2 requires financial, operational, and risk/outlook
+evidence for every company, in addition to the rubric mapping; cross-company criteria need
+each report's contribution. Run 35196251327 stopped before QA because v1 returned empty evidence
+for one company; that failed setup is retained. The final custom judge receives those original full
 pages after source/hash checks, not model-written summaries. The frozen packet is shared by both
 arms, excluded from the workspace and index, and uploaded with all selector requests/responses.
 Selection can omit useful pages; scores require human calibration and are not official leaderboard
