@@ -2,6 +2,13 @@
 
 ## Task 192 PDF text smoke (2026-09-17)
 
+Pilot result: [conversion audit, all attempted runs, and failure diagnosis](reports/task-192-pdf-smoke-2026-09-17.md).
+The five-report PDF gate passed, but the latest pair hit the 30-minute wall limit in both
+arms after native Qoder `compacting`; with-zg first exceeded its native output limit.
+Across three calibration pairs, each arm has three attempts and zero completed/judged
+answers; QA zg calls are zero in every with-zg attempt. Setup/integration was verified,
+but retrieval efficacy was not measured. No additional pair is automatically scheduled.
+
 `workspace-qa-pdf-smoke.yml` is opt-in: Task 192 only, **baseline 1 + with-zg 1**,
 Qoder 1.1.45 / Qwen3.8-Max, zg 0.2.2 installed through `zg install --target qoder --yes`,
 remote `qwen/qwen3.7-text-embedding`. The original task and all 17 rubrics remain unchanged.

@@ -142,6 +142,7 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertTrue(all(c["model_request_retries"] == 2 and c["limits"]["wall_seconds"] == 1800 for c in calls))
             self.assertEqual(json.loads((args.output / "manifest.json").read_text())["run_limits"]["input_tokens"], 3000000)
             self.assertEqual(json.loads((args.output / "manifest.json").read_text())["model_request_retries"], 2)
+            self.assertEqual(json.loads((args.output / "manifest.json").read_text())["model_controls"]["qoder_model_request_retries"], 2)
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp), repetitions=1)
             args.input_token_limit = 0
