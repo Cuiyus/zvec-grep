@@ -1,5 +1,5 @@
 name: Task 192 · PDF text conversion + one Qwen3.8-Max pair
-run-name: "Task 192 · PDF→text · 3M input/arm · baseline 1 + zg 1 · ${{ github.ref_name }}"
+run-name: "Task 192 · PDF→text · 6M input/arm · baseline 1 + zg 1 · ${{ github.ref_name }}"
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[workspace-qa-pdf-smoke]')
     name: "192 · PDF gate → frozen judge evidence → baseline 1 + zg 1 → judge"
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,9 +46,11 @@ jobs:
           assert lock['experiment']['requested_model'] == 'qwen3.8-max'
           assert lock['experiment']['task_count'] == 1
           assert lock['experiment']['rubric_count'] == 17
-          assert lock['experiment']['qa_input_token_limit'] == 3000000
+          assert lock['experiment']['qa_input_token_limit'] == 6000000
+          assert lock['experiment']['qa_wall_seconds'] == 1800
+          assert lock['experiment']['qa_model_request_retries'] == 2
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
-              out.write('Task 192 only; baseline **1** + with-zg **1**; **3,000,000 input tokens/arm**. '
+              out.write('Task 192 only; baseline **1** + with-zg **1**; **6,000,000 input tokens/arm; 1,800s; up to 2 native request retries**. '
                         'Prior 600k run 35197461214 is retained: both arms hit input budget with no final answer. '
                         'All full-persona PDFs receive uniform text-layer conversion; originals retained. '
                         'Independent coverage gate before QA. Original question and 17 rubrics. '
@@ -60,7 +62,7 @@ jobs:
           task-id: '192'
           repetitions: '1'
           phase: smoke
-          artifact-prefix: workspace-qa-task192-pdf-text-v1-3m
+          artifact-prefix: workspace-qa-task192-pdf-text-v1-6m
           qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
           judge-key: ${{ secrets.GLM_API_KEY }}
           embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}

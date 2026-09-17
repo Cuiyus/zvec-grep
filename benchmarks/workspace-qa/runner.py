@@ -334,6 +334,9 @@ def execute(args: argparse.Namespace) -> int:
     plan = make_plan(args.task_id, args.repetitions, args.order_seed, shard)
     positive(args.timeout, "timeout")
     positive(getattr(args, "input_token_limit", 600000), "input-token-limit")
+    retries = getattr(args, "model_request_retries", 0)
+    if type(retries) is not int or not 0 <= retries <= 3:
+        raise ValueError("model-request-retries must be an integer from 0 to 3")
     filename = answer_filename(args.answer_filename) if args.answer_filename else None
     if not filename and not args.dry_run:
         raise ValueError("--answer-filename is required for an actual run")
@@ -385,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--input-token-limit", type=int, default=600000,
                         help="Same cumulative input-token ceiling for both profiles")
+    parser.add_argument("--model-request-retries", type=int, default=0,
+                        help="Pinned Qoder request retry ceiling, identical for both profiles")
     parser.add_argument("--order-seed", type=int, default=1729)
     parser.add_argument("--shard-repetition", type=int,
                         help="Execute one repetition from the full deterministic plan")

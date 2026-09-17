@@ -42,14 +42,16 @@ def native_index(source: Path, index: Path, logs: Path, cache: Path, *, image: s
 
 
 def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path, *,
-                     prompt: str, profile: str, limits: dict, image: str = IMAGE) -> dict:
+                     prompt: str, profile: str, limits: dict, image: str = IMAGE,
+                     model_request_retries: int = 0) -> dict:
     """Installation is setup; all model and MCP runtime work is timed by qa-session."""
     agent.mkdir(parents=True, exist_ok=True)
     zg = profile == "with-zg"
     if zg != (index is not None):
         raise ValueError("Only the with-zg profile receives an index")
     spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": r.SPEC.cli_model,
-            "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits}
+            "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits,
+            "model_request_retries": model_request_retries}
     r.write_json(agent / "native-spec.json", spec)
     command = r.docker_command(image, source, agent, cache, index=index) + ["--init"]
     if zg:
@@ -173,7 +175,8 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "source_files": before, "question_sha256": r.sha256(question_path), "answer_filename": filename,
         "corpus_variant": os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original"),
         "preprocessing_manifest_sha256": os.environ.get("WORKSPACE_QA_PREPROCESSING_SHA256"),
-        "run_limits": limits, "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
+        "run_limits": limits, "model_request_retries": getattr(args, "model_request_retries", 0),
+        "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
         "gold_visible_to_agent": False, "corpus_readonly_mount": True,
         "index_options": {"root": "/app", "maxFileSizeBytes": r.INDEX_MAX_FILE_SIZE_BYTES},
         "index_policy": "native CLI seed; separate writable copy per with-zg trial; normal native refresh allowed",
@@ -244,7 +247,8 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         r.collect_results(output, plan)
         print(json.dumps({"phase": "agent_trial", "trial_id": trial["trial_id"], "status": "running"}), flush=True)
         result = {**trial, **run_native_trial(source, root / "agent", working, cache,
-                  prompt=prompt, profile=trial["profile"], limits=limits, image=args.image),
+                  prompt=prompt, profile=trial["profile"], limits=limits, image=args.image,
+                  model_request_retries=getattr(args, "model_request_retries", 0)),
                   "candidate_output_path": None, "provenance": {"manifest_path": "manifest.json",
                   "source_git_commit": commit, "question_sha256": manifest["question_sha256"], "image_id": identity["image_id"]}}
         if result.get("answer"):

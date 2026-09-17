@@ -26,6 +26,18 @@ GUIDANCE_FIXTURE = b"<!-- ZVEC_GREP_START -->\nstandard installed guidance\n<!--
 
 
 class NativeSessionTests(unittest.TestCase):
+    def test_native_request_retry_setting_is_explicit_and_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, logs, _, value = self.fixture(temp)
+            for retries in (0, 2):
+                value["model_request_retries"] = retries
+                command = native.session_spec(value, logs)["command"]
+                self.assertEqual(command[command.index("--max-model-request-retries") + 1], str(retries))
+            for invalid in (True, -1, 4, "2"):
+                value["model_request_retries"] = invalid
+                with self.assertRaises(ValueError):
+                    native.session_spec(value, logs)
+
     def test_both_pinned_models_use_the_requested_cli_model_without_sampling_flags(self):
         with tempfile.TemporaryDirectory() as temp:
             _, _, logs, _, value = self.fixture(temp)

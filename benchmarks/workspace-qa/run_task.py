@@ -250,6 +250,12 @@ def main(argv=None):
     input_limit = lock.get("experiment", {}).get("qa_input_token_limit", 600000)
     if type(input_limit) is not int or input_limit <= 0:
         raise ValueError("Locked QA input-token limit must be a positive integer")
+    wall_limit = lock.get("experiment", {}).get("qa_wall_seconds", 900)
+    retries = lock.get("experiment", {}).get("qa_model_request_retries", 0)
+    if type(wall_limit) is not int or wall_limit <= 0:
+        raise ValueError("Locked QA wall limit must be a positive integer")
+    if type(retries) is not int or not 0 <= retries <= 3:
+        raise ValueError("Locked request retries must be an integer from 0 to 3")
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
@@ -313,8 +319,8 @@ def main(argv=None):
         runner_command = [sys.executable, str(HERE / "runner.py"), "--task-id", args.task_id,
                                  "--source-root", str(preparation / "source"), "--question-file", str(preparation / "question.txt"),
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
-                                 "--repetitions", str(args.repetitions), "--timeout", "900",
-                                 "--input-token-limit", str(input_limit)]
+                                 "--repetitions", str(args.repetitions), "--timeout", str(wall_limit),
+                                 "--input-token-limit", str(input_limit), "--model-request-retries", str(retries)]
         if args.shard_repetition is not None:
             runner_command += ["--shard-repetition", str(args.shard_repetition)]
         if args.continue_from:

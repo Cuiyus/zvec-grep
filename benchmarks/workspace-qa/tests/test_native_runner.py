@@ -133,11 +133,15 @@ class NativeRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp), repetitions=1)
             args.input_token_limit = 3000000
+            args.model_request_retries = 2
+            args.timeout = 1800
             status, calls, _ = self.execute(args)
             self.assertEqual(status, 0)
             self.assertEqual({c["profile"] for c in calls}, {"baseline", "with-zg"})
             self.assertTrue(all(c["limits"]["input_tokens"] == 3000000 for c in calls))
+            self.assertTrue(all(c["model_request_retries"] == 2 and c["limits"]["wall_seconds"] == 1800 for c in calls))
             self.assertEqual(json.loads((args.output / "manifest.json").read_text())["run_limits"]["input_tokens"], 3000000)
+            self.assertEqual(json.loads((args.output / "manifest.json").read_text())["model_request_retries"], 2)
         with tempfile.TemporaryDirectory() as tmp:
             args = self.args(Path(tmp), repetitions=1)
             args.input_token_limit = 0
