@@ -92,15 +92,24 @@ breakdown, so resource deltas must not be compared across these scopes as if
 their accounting were identical. Failed attempts remain archived separately
 under `.retry-history/` and are not included in final-success trial means.
 
-The Aggregate summary appears before the task details. Each workflow run
-independently filters tasks using the input-token change calculated from each
-profile's trial mean: `(zvec-grep - baseline) / baseline * 100`. A change
-strictly outside `[-100%, +100%]` excludes the entire task from every Aggregate
-metric, including Judge, and from the main results table. Exactly `-100%` or
-`+100%` remains included. With nonnegative token counts, only an increase above
-`100%` can cross this threshold. A zero baseline with positive zvec-grep input
-is excluded because its percentage change is undefined; two zero inputs remain
-included.
+The Aggregate summary appears first, before the task details. Each workflow
+run independently filters tasks using each profile's trial means:
+
+- Judge difference: `zvec-grep - baseline`, measured in score points. A
+  difference strictly outside `[-10, +10]` excludes the task; exactly `-10` or
+  `+10` remains included. This threshold is a score difference, not a percentage.
+- Input-token change: `(zvec-grep - baseline) / baseline * 100`. A change
+  strictly outside `[-100%, +100%]` excludes the task; exactly `-100%` or
+  `+100%` remains included. With nonnegative token counts, only an increase
+  above `100%` can cross this threshold. A zero baseline with positive
+  zvec-grep input is excluded because its percentage change is undefined;
+  two zero inputs remain included.
+
+A task that meets either exclusion condition is removed from every Aggregate
+metric and the main results table. Tasks meeting both conditions are counted
+once. Judge exclusions appear in a separate table with baseline and zvec-grep
+mean scores, the score difference, and the exclusion reason; the report also
+identifies tasks excluded by the input-token condition.
 
 - Judge values are equal-weight means across the included tasks.
 - Baseline and zvec-grep efficiency values are sums of the included per-task
@@ -108,8 +117,8 @@ included.
   aggregate values, not by averaging task-level percentage changes.
 - A zero aggregate baseline denominator produces `N/A` for that efficiency
   comparison. If no tasks remain, the Aggregate values are `N/A`.
-- An exclusion audit lists the omitted tasks and reasons. JSON `cases` and raw
-  artifacts retain every task, including excluded tasks and child usage.
+- JSON `cases` and raw artifacts retain every task, including excluded tasks
+  and child usage.
 
 This is a sensitivity filter, not evidence that excluded data is invalid. All
 selected tasks still execute and must complete their required trials and judge

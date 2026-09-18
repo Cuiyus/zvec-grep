@@ -710,16 +710,30 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
             change = 0.0 if zvec_input == 0 else None
         else:
             change = (zvec_input - baseline_input) / baseline_input * 100.0
-        if change is None or change < -100.0 or change > 100.0:
+        baseline_judge = case["profiles"]["baseline"]["judge"]["total"]
+        zvec_judge = case["profiles"]["zvec-grep"]["judge"]["total"]
+        judge_delta = zvec_judge - baseline_judge
+        reasons = []
+        if change is None:
+            reasons.append("undefined_baseline")
+        elif change < -100.0 or change > 100.0:
+            reasons.append("input_token_change_outside_range")
+        # Profile means can introduce floating-point noise at exactly 10 points.
+        # Check both criteria so an overlap retains both reasons in the evidence.
+        if abs(judge_delta) > 10.0 and not math.isclose(
+            abs(judge_delta), 10.0, rel_tol=0.0, abs_tol=1e-9
+        ):
+            reasons.append("judge_delta_outside_range")
+        if reasons:
             excluded.append({
                 "task_id": case["task_id"],
                 "baseline_input_tokens": baseline_input,
                 "zvec_grep_input_tokens": zvec_input,
                 "change_pct": change,
-                "reason": (
-                    "undefined_baseline" if change is None
-                    else "input_token_change_outside_range"
-                ),
+                "baseline_judge": baseline_judge,
+                "zvec_grep_judge": zvec_judge,
+                "judge_delta": judge_delta,
+                "reasons": reasons,
             })
         else:
             included.append(case)
@@ -782,9 +796,10 @@ def _aggregate(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "comparison_samples": comparison_samples,
         "comparison_basis": "ratio_of_aggregate_profile_means",
         "filter": {
-            "metric": "input_tokens",
-            "min_change_pct": -100.0,
-            "max_change_pct": 100.0,
+            "criteria": [
+                {"metric": "input_tokens", "comparison": "change_pct", "min": -100.0, "max": 100.0},
+                {"metric": "judge", "comparison": "delta", "min": -10.0, "max": 10.0, "unit": "points"},
+            ],
             "total_count": len(cases),
             "included_count": count,
             "excluded_count": len(excluded),
@@ -878,16 +893,55 @@ def _render_report(report: dict[str, Any]) -> str:
     if filtering:
         lines.extend((
             f"Aggregate includes **{filtering['included_count']}/{filtering['total_count']} tasks**. "
-            "A task is excluded from every Aggregate metric and the table above when its input-token change "
-            "`(zvec-grep mean - baseline mean) / baseline mean` is strictly outside **[-100%, +100%]**. "
-            "The filter uses each profile's trial mean and is applied independently to each workflow run. "
+            "A task is excluded from every Aggregate metric and the table above if either its input-token change "
+            "`(zvec-grep mean - baseline mean) / baseline mean` is strictly outside **[-100%, +100%]**, "
+            "or its Judge difference `zvec-grep mean - baseline mean` is strictly outside **[-10, +10] score points**. "
+            "Exactly +/-10 Judge points and +/-100% input-token changes are retained. "
+            "Both filters use each profile's trial mean and are applied independently to each workflow run; "
+            "tasks matching both are excluded only once. "
             "All tasks are still executed, judged, and retained in the JSON evidence.",
             "",
         ))
         excluded = filtering.get("excluded_tasks", [])
-        if excluded:
+        judge_excluded = [
+            row for row in excluded if "judge_delta_outside_range" in row.get("reasons", [])
+        ]
+        if judge_excluded:
+            lines.extend((
+                "### Tasks excluded for Judge differences",
+                "",
+                "These are differences between the two profiles' mean scores, in points, not percentages. "
+                "Positive values favor zvec-grep; negative values favor baseline. "
+                "Every task below is excluded from all Aggregate metrics, including resource totals.",
+                "",
+                "| Task | Baseline Judge | zvec-grep Judge | Judge change (points) | Exclusion reason |",
+                "|---|---:|---:|---:|---|",
+            ))
+            for row in judge_excluded:
+                reason = (
+                    "Judge gain exceeds +10 points"
+                    if row["judge_delta"] > 0 else "Judge decline exceeds -10 points"
+                )
+                if "undefined_baseline" in row["reasons"]:
+                    reason += "; input baseline is zero while zvec-grep is positive"
+                elif "input_token_change_outside_range" in row["reasons"]:
+                    reason += f"; input change {_fmt_delta(row['change_pct'], suffix='%')} is outside [-100%, +100%]"
+                lines.append(
+                    f"| {row['task_id']} | {row['baseline_judge']:.2f} | {row['zvec_grep_judge']:.2f} "
+                    f"| {_fmt_delta(row['judge_delta'])} | {reason} |"
+                )
+            lines.append("")
+        elif any(rule.get("metric") == "judge" for rule in filtering.get("criteria", [])):
+            lines.extend(("No tasks were excluded for Judge differences outside [-10, +10] points.", ""))
+        input_excluded = [
+            row for row in excluded
+            if set(row.get("reasons", [row.get("reason")])) & {
+                "undefined_baseline", "input_token_change_outside_range"
+            }
+        ]
+        if input_excluded:
             descriptions = []
-            for row in excluded:
+            for row in input_excluded:
                 change = row["change_pct"]
                 descriptions.append(
                     f"`{row['task_id']}` (input "
@@ -897,7 +951,7 @@ def _render_report(report: dict[str, Any]) -> str:
                     )
                     + ")"
                 )
-            lines.extend(("Excluded tasks: " + "; ".join(descriptions) + ".", ""))
+            lines.extend(("Tasks excluded for input-token changes: " + "; ".join(descriptions) + ".", ""))
         if not included:
             lines.extend(("No tasks remain after filtering; Aggregate is N/A. This does not invalidate completed trials.", ""))
 

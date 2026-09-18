@@ -277,6 +277,61 @@ def _set_report_trial_metrics(
     }
 
 
+def _set_report_trial_judgements(
+    report: dict[str, Any], *, baseline: list[int], zvec: list[int]
+) -> None:
+    """Set complete, consistent Judge evidence with an arbitrary trial count."""
+    assert len(baseline) == len(zvec)
+    case = report["cases"][0]
+    count = len(baseline)
+    case["trial_count"] = count
+    for profile_name, totals in (("baseline", baseline), ("zvec-grep", zvec)):
+        profile = case["profiles"][profile_name]
+        source_trials = profile["trials"]
+        trials = []
+        for index, total in enumerate(totals, start=1):
+            trial = copy.deepcopy(source_trials[(index - 1) % len(source_trials)])
+            trial["trial_index"] = index
+            trial["trial_name"] = f"{case['task_id']}-{profile_name}-{index}"
+            quotient, remainder = divmod(total, 5)
+            trial["judge"]["scores"] = {
+                key: quotient + (position < remainder)
+                for position, key in enumerate(trial["judge"]["scores"])
+            }
+            trial["judge"]["total"] = total
+            trials.append(trial)
+        profile["trials"] = trials
+        profile["trial_count"] = count
+        profile["judge"]["total"] = sum(totals) / count
+        profile["judge"]["scores"] = {
+            key: sum(trial["judge"]["scores"][key] for trial in trials) / count
+            for key in profile["judge"]["scores"]
+        }
+        profile["judge"]["usage"] = {
+            "calls": count,
+            **{
+                key: sum(trial["judge"]["usage"][key] for trial in trials)
+                for key in ("input_tokens", "output_tokens", "cost_usd")
+            },
+        }
+    report["gate"]["successful_judgements"] = count * 2
+    report["judge"]["usage"] = {
+        key: sum(profile["judge"]["usage"][key] for profile in case["profiles"].values())
+        for key in ("calls", "input_tokens", "output_tokens", "cost_usd")
+    }
+    comparison = case["comparison"]
+    comparison["judge_delta"] = sum(zvec) / count - sum(baseline) / count
+    comparison["trials"] = [
+        {
+            "trial_index": index,
+            **{key: value for key, value in comparison.items() if key != "trials"},
+            "judge_delta": zvec_score - baseline_score,
+        }
+        for index, (baseline_score, zvec_score) in enumerate(zip(baseline, zvec, strict=True), start=1)
+    ]
+    report["aggregate"] = _aggregate([case])
+
+
 def _write_harbor_job(
     root: Path,
     *,
@@ -955,9 +1010,9 @@ class JudgeTests(unittest.TestCase):
                     "baseline candidate 1": 10,
                     "baseline candidate 2": 12,
                     "baseline candidate 3": 14,
-                    "zvec-grep candidate 1": 15,
-                    "zvec-grep candidate 2": 16,
-                    "zvec-grep candidate 3": 17,
+                    "zvec-grep candidate 1": 12,
+                    "zvec-grep candidate 2": 14,
+                    "zvec-grep candidate 3": 16,
                 }
                 score = next(
                     value
@@ -1035,15 +1090,15 @@ class JudgeTests(unittest.TestCase):
             self.assertEqual(zvec["trial_count"], 3)
             self.assertEqual(baseline["judge"]["scores"]["correctness"], 12.0)
             self.assertEqual(baseline["judge"]["total"], 60.0)
-            self.assertEqual(zvec["judge"]["scores"]["correctness"], 16.0)
-            self.assertEqual(zvec["judge"]["total"], 80.0)
+            self.assertEqual(zvec["judge"]["scores"]["correctness"], 14.0)
+            self.assertEqual(zvec["judge"]["total"], 70.0)
             self.assertEqual(
                 [trial["judge"]["total"] for trial in baseline["trials"]],
                 [50, 60, 70],
             )
             self.assertEqual(
                 [trial["judge"]["total"] for trial in zvec["trials"]],
-                [75, 80, 85],
+                [60, 70, 80],
             )
             self.assertAlmostEqual(
                 baseline["metrics"]["input_tokens"], 1100 / 3
@@ -1051,7 +1106,7 @@ class JudgeTests(unittest.TestCase):
             self.assertEqual(zvec["metrics"]["input_tokens"], 320.0)
 
             comparison = case["comparison"]
-            self.assertEqual(comparison["judge_delta"], 20.0)
+            self.assertEqual(comparison["judge_delta"], 10.0)
             self.assertEqual(
                 [trial["trial_index"] for trial in comparison["trials"]],
                 [1, 2, 3],
@@ -1076,7 +1131,7 @@ class JudgeTests(unittest.TestCase):
             markdown = (output_dir / "report.md").read_text()
             self.assertIn("Aggregate", markdown)
             self.assertIn("input_token", markdown)
-            self.assertIn("60.00 / 80.00 / +20.00", markdown)
+            self.assertIn("60.00 / 70.00 / +10.00", markdown)
             self.assertIn("366.67 / 320.00 / -12.73%", markdown)
             self.assertIn("calculated directly from the displayed Aggregate values", markdown)
             self.assertIn("not an average of task percentages", markdown)
@@ -1393,7 +1448,7 @@ class JudgeTests(unittest.TestCase):
                     "cost_usd": 0.1,
                 },
                 judge_baseline=50,
-                judge_zvec=70,
+                judge_zvec=60,
                 reductions={
                     "input_token_reduction_pct": 90.0,
                     "toolcall_reduction_pct": 90.0,
@@ -1427,7 +1482,7 @@ class JudgeTests(unittest.TestCase):
 
         aggregate = _aggregate(cases)
 
-        self.assertEqual(aggregate["comparison"]["judge_delta"], 5.0)
+        self.assertEqual(aggregate["comparison"]["judge_delta"], 0.0)
         totals_ratio = (1000 - 910) / 1000 * 100
         for key in (
             "input_token_reduction_pct", "toolcall_reduction_pct",
@@ -1504,6 +1559,56 @@ class JudgeTests(unittest.TestCase):
                 self.assertNotIn("| reflex:6 |", markdown)
                 self.assertIn("reflex:6", markdown)
 
+    def test_judge_only_filtered_task_keeps_evidence_and_can_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(root)
+            calls: list[dict[str, Any]] = []
+
+            def fake_completion(**kwargs: Any) -> dict[str, Any]:
+                calls.append(kwargs)
+                score = 15 if "Candidate answer:\nzvec-grep" in kwargs["messages"][0]["content"] else 10
+                content = json.dumps({key: score for key in (
+                    "correctness", "completeness", "relevance", "clarity", "coherence"
+                )})
+                return {
+                    "choices": [{"message": {"content": content}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }
+
+            with patch.dict("os.environ", {"GLM_API_KEY": "mock"}):
+                source = judge_pairs(
+                    pairs_root=pairs_root, references_path=references,
+                    output_dir=root / "source", expected=["reflex-6"],
+                    completion_fn=fake_completion,
+                )
+            combined = aggregate_reports(
+                reports_root=root / "source", output_dir=root / "combined",
+                expected=["reflex:6"],
+            )
+            self.assertEqual(len(calls), 6)
+            for report in (source, combined):
+                self.assertTrue(report["gate"]["passed"])
+                self.assertEqual(report["gate"]["valid_pairs"], 1)
+                self.assertEqual(report["gate"]["successful_judgements"], 6)
+                self.assertEqual(report["judge"]["usage"]["calls"], 6)
+                self.assertEqual(len(report["cases"]), 1)
+                aggregate = report["aggregate"]
+                self.assertEqual(aggregate["filter"]["included_count"], 0)
+                self.assertEqual(aggregate["filter"]["excluded_count"], 1)
+                self.assertEqual(aggregate["filter"]["excluded_tasks"][0]["reasons"], ["judge_delta_outside_range"])
+                self.assertTrue(all(value is None for value in aggregate["comparison"].values()))
+                self.assertTrue(all(value == 0 for value in aggregate["comparison_samples"].values()))
+                for profile in aggregate["profiles"].values():
+                    for metric in ("judge", "input_tokens", "output_tokens", "tool_calls", "agent_wall_seconds", "cost_usd"):
+                        self.assertIsNone(profile[metric])
+            for directory in ("source", "combined"):
+                markdown = (root / directory / "report.md").read_text()
+                main_table, excluded_section = markdown.split("### Tasks excluded for Judge differences", 1)
+                self.assertIn("| **Aggregate** | N/A | N/A | N/A | N/A |", main_table)
+                self.assertNotIn("| reflex:6 |", main_table)
+                self.assertIn("| reflex:6 | 50.00 | 75.00 | +25.00 |", excluded_section)
+
     def test_missing_expected_pair_fails_before_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1560,6 +1665,79 @@ class JudgeTests(unittest.TestCase):
 
 
 class AggregateReportTests(unittest.TestCase):
+    def test_judge_filter_uses_trial_means_and_excludes_union_once(self) -> None:
+        # Decimal means can subtract to just beyond 10 due to float rounding.
+        # Both boundary directions remain included, while real 10.2-point
+        # differences are excluded. A single divergent trial is insufficient.
+        rows = [
+            ("reflex:6", [54, 54, 54, 55, 55], [64, 64, 64, 65, 65], 100, 50),
+            ("sqlfluff:2", [64, 64, 64, 65, 65], [54, 54, 54, 55, 55], 100, 50),
+            ("conan:1", [60] * 5, [70, 70, 70, 70, 71], 100, 50),
+            ("pylint:10", [70, 70, 70, 70, 71], [60] * 5, 100, 50),
+            ("pylint:9", [60] * 5, [90, 55, 55, 55, 55], 100, 50),
+            ("sympy:38", [60] * 5, [70, 70, 70, 70, 71], 100, 300),
+            ("conan:39", [60] * 5, [60] * 5, 100, 300),
+            ("xarray:46", [70, 70, 70, 70, 71], [60] * 5, 0, 1),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for index, (task_id, baseline, zvec, input_baseline, input_zvec) in enumerate(rows):
+                source = _judged_task_report(task_id, index)
+                _set_report_trial_judgements(source, baseline=baseline, zvec=zvec)
+                _set_report_trial_metrics(
+                    source,
+                    baseline=[(input_baseline, 10, 10.0, 1.0)] * 5,
+                    zvec=[(input_zvec, 4, 5.0, 0.5)] * 5,
+                )
+                _write_json(root / "reports" / str(index) / "report.json", source)
+            report = aggregate_reports(
+                reports_root=root / "reports", output_dir=root / "combined",
+                expected=[row[0] for row in rows],
+            )
+            aggregate = report["aggregate"]
+            filtering = aggregate["filter"]
+            self.assertEqual(filtering["total_count"], 8)
+            self.assertEqual(filtering["included_count"], 3)
+            self.assertEqual(filtering["excluded_count"], 5)
+            self.assertEqual(filtering["included_task_ids"], ["reflex:6", "sqlfluff:2", "pylint:9"])
+            excluded = {row["task_id"]: row for row in filtering["excluded_tasks"]}
+            self.assertEqual(set(excluded), {"conan:1", "pylint:10", "sympy:38", "conan:39", "xarray:46"})
+            for task_id in ("conan:1", "pylint:10"):
+                self.assertEqual(excluded[task_id]["reasons"], ["judge_delta_outside_range"])
+            self.assertAlmostEqual(excluded["conan:1"]["judge_delta"], 10.2)
+            self.assertAlmostEqual(excluded["pylint:10"]["judge_delta"], -10.2)
+            self.assertEqual(excluded["sympy:38"]["reasons"], [
+                "input_token_change_outside_range", "judge_delta_outside_range",
+            ])
+            self.assertEqual(excluded["conan:39"]["reasons"], ["input_token_change_outside_range"])
+            self.assertEqual(excluded["xarray:46"]["reasons"], [
+                "undefined_baseline", "judge_delta_outside_range",
+            ])
+            self.assertAlmostEqual(aggregate["profiles"]["baseline"]["judge"], (54.4 + 64.4 + 60) / 3)
+            self.assertAlmostEqual(aggregate["profiles"]["zvec-grep"]["judge"], (64.4 + 54.4 + 62) / 3)
+            self.assertEqual(aggregate["profiles"]["baseline"]["input_tokens"], 300)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["input_tokens"], 150)
+            self.assertEqual(aggregate["profiles"]["baseline"]["tool_calls"], 30)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["tool_calls"], 12)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["agent_wall_seconds"], 15)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["cost_usd"], 1.5)
+            self.assertEqual(report["gate"]["valid_pairs"], 8)
+            self.assertEqual(report["gate"]["successful_judgements"], 80)
+            self.assertEqual(report["judge"]["usage"]["calls"], 80)
+            self.assertEqual(len(report["cases"]), 8)
+            markdown = (root / "combined" / "report.md").read_text()
+            main_table, excluded_section = markdown.split("### Tasks excluded for Judge differences", 1)
+            self.assertIn("| **Aggregate** |", main_table)
+            self.assertLess(main_table.index("| **Aggregate** |"), main_table.index("| reflex:6 |"))
+            for task_id in excluded:
+                self.assertNotIn(f"| {task_id} |", main_table)
+            self.assertIn("| Task | Baseline Judge | zvec-grep Judge | Judge change (points) | Exclusion reason |", excluded_section)
+            self.assertIn("| conan:1 | 60.00 | 70.20 | +10.20 |", excluded_section)
+            self.assertIn("| pylint:10 | 70.20 | 60.00 | -10.20 |", excluded_section)
+            self.assertIn("| sympy:38 | 60.00 | 70.20 | +10.20 |", excluded_section)
+            self.assertIn("| xarray:46 | 70.20 | 60.00 | -10.20 |", excluded_section)
+            self.assertNotIn("| conan:39 |", excluded_section)
+
     def test_input_filter_uses_task_means_and_keeps_boundary_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1589,9 +1767,10 @@ class AggregateReportTests(unittest.TestCase):
             )
             aggregate = report["aggregate"]
             filtering = aggregate["filter"]
-            self.assertEqual(filtering["metric"], "input_tokens")
-            self.assertEqual(filtering["min_change_pct"], -100.0)
-            self.assertEqual(filtering["max_change_pct"], 100.0)
+            self.assertEqual(filtering["criteria"], [
+                {"metric": "input_tokens", "comparison": "change_pct", "min": -100.0, "max": 100.0},
+                {"metric": "judge", "comparison": "delta", "min": -10.0, "max": 10.0, "unit": "points"},
+            ])
             self.assertEqual(filtering["total_count"], 6)
             self.assertEqual(filtering["included_count"], 4)
             self.assertEqual(filtering["excluded_count"], 2)
@@ -1601,12 +1780,14 @@ class AggregateReportTests(unittest.TestCase):
                 {
                     "task_id": "sqlfluff:2", "baseline_input_tokens": 100.0,
                     "zvec_grep_input_tokens": 201.0, "change_pct": 101.0,
-                    "reason": "input_token_change_outside_range",
+                    "baseline_judge": 55.0, "zvec_grep_judge": 65.0, "judge_delta": 10.0,
+                    "reasons": ["input_token_change_outside_range"],
                 },
                 {
                     "task_id": "pylint:9", "baseline_input_tokens": 0.0,
                     "zvec_grep_input_tokens": 1.0, "change_pct": None,
-                    "reason": "undefined_baseline",
+                    "baseline_judge": 70.0, "zvec_grep_judge": 80.0, "judge_delta": 10.0,
+                    "reasons": ["undefined_baseline"],
                 },
             ])
             baseline = aggregate["profiles"]["baseline"]
@@ -1992,11 +2173,18 @@ class AggregateReportTests(unittest.TestCase):
             reports_root = root / "reports"
             for index, task_id in enumerate(tasks):
                 source = _judged_task_report(task_id, index)
+                profile = source["cases"][0]["profiles"]
+                baseline_score = int(profile["baseline"]["judge"]["total"])
+                zvec_score = int(profile["zvec-grep"]["judge"]["total"])
+                _set_report_trial_judgements(
+                    source, baseline=[baseline_score] * 5,
+                    zvec=[baseline_score + 15 if task_id == "pylint:10" else zvec_score] * 5,
+                )
                 if task_id == "requests:16":
                     _set_report_trial_metrics(
                         source,
-                        baseline=[(1500, 150, 300.0, 3.0)] * 3,
-                        zvec=[(6000, 60, 150.0, 1.5)] * 3,
+                        baseline=[(1500, 150, 300.0, 3.0)] * 5,
+                        zvec=[(6000, 60, 150.0, 1.5)] * 5,
                     )
                 _write_json(
                     reports_root / f"artifact-{index}" / "report.json",
@@ -2013,33 +2201,35 @@ class AggregateReportTests(unittest.TestCase):
             self.assertEqual([case["task_id"] for case in report["cases"]], tasks)
             self.assertEqual(report["gate"]["expected_tasks"], tasks)
             self.assertEqual(report["gate"]["valid_pairs"], 20)
-            self.assertEqual(report["gate"]["successful_judgements"], 120)
-            self.assertEqual(report["judge"]["usage"]["calls"], 120)
+            self.assertEqual(report["gate"]["successful_judgements"], 200)
+            self.assertEqual(report["judge"]["usage"]["calls"], 200)
             self.assertEqual(
                 report["judge"]["usage"]["input_tokens"],
-                sum(300 * (index + 1) for index in range(20)),
+                sum(500 * (index + 1) for index in range(20)),
             )
             self.assertEqual(
                 report["aggregate"]["profiles"]["baseline"]["input_tokens"],
-                19500,
+                19100,
             )
             self.assertEqual(
                 report["aggregate"]["comparison"]["input_token_reduction_pct"],
                 50.0,
             )
             markdown = (root / "combined" / "report.md").read_text()
+            main_table, excluded_section = markdown.split("### Tasks excluded for Judge differences", 1)
             self.assertIn("/ -50.00%", markdown)
             for task_id in tasks:
-                if task_id == "requests:16":
-                    self.assertNotIn(f"| {task_id} |", markdown)
+                if task_id in ("requests:16", "pylint:10"):
+                    self.assertNotIn(f"| {task_id} |", main_table)
                     self.assertIn(task_id, markdown)
                 else:
-                    self.assertIn(f"| {task_id} |", markdown)
+                    self.assertIn(f"| {task_id} |", main_table)
+            self.assertIn("| pylint:10 | 65.00 | 80.00 | +15.00 |", excluded_section)
             self.assertIn("| **Aggregate** |", markdown)
             self.assertLess(markdown.index("| **Aggregate** |"), markdown.index("| reflex:6 |"))
             self.assertEqual(report["aggregate"]["filter"]["total_count"], 20)
-            self.assertEqual(report["aggregate"]["filter"]["included_count"], 19)
-            self.assertEqual(report["aggregate"]["filter"]["excluded_count"], 1)
+            self.assertEqual(report["aggregate"]["filter"]["included_count"], 18)
+            self.assertEqual(report["aggregate"]["filter"]["excluded_count"], 2)
 
     def test_aggregate_rejects_missing_expected_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
