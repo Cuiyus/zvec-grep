@@ -35,7 +35,6 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         self.assertEqual(trials, 5)
         tasks_by_id = {task["task_id"]: task for task in selection["tasks"]}
         scopes = {
-            "auto": list(tasks_by_id),
             "all-full": list(tasks_by_id),
             "gate-20": list(tasks_by_id),
             "smoke": selection["gate"]["auto_tasks"],

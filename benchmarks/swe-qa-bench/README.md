@@ -128,15 +128,20 @@ otherwise complete run with no tasks left after filtering may still succeed.
 
 ## GitHub Actions
 
-The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
-20-task full benchmark on pushes to the repository's `main` branch and on
-same-repository pull requests targeting `main`, except Dependabot pull
-requests. External-fork and Dependabot pull requests run validation only.
+The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs only
+through manual `workflow_dispatch`; pushes and pull requests do not trigger it.
+Core maintainers are users with the repository's exact `admin` or `maintain`
+role. The first step of every job checks both `github.actor` and
+`github.triggering_actor` against their current roles, before checkout or
+model-secret use. This also checks individual job reruns; missing permissions
+or a failed permission lookup stop execution. GitHub users with write access
+may still see and use the dispatch/rerun controls, but the workflow rejects
+unauthorized benchmark execution.
+
 `workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
 `smoke` (5 tasks) remain available. Its `model` input defaults to
 `glm-5.2`; select `qwen3.8-max` to run the same protocol with Qwen. The selected
-model is used for both execution and judging. Push and pull-request runs use
-the GLM-5.2 default.
+model is used for both execution and judging.
 
 The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
 tasks were selected from [run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943)

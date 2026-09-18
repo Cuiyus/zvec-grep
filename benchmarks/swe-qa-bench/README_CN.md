@@ -74,7 +74,9 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 ## GitHub Actions
 
-[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行原有 20 题完整 benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。Push 和 PR 运行采用 GLM-5.2 默认值。
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 仅支持通过 `workflow_dispatch` 手动运行，push 和 PR 均不触发。核心维护成员限定为仓库角色明确为 `admin` 或 `maintain` 的用户。每个 job 的第一步都会实时检查 `github.actor` 和 `github.triggering_actor` 两人的当前角色，通过后才 checkout 和使用模型密钥；单独重跑某个 job 也会重新检查。权限不足或权限查询失败时停止执行。GitHub 的 write 用户可能仍能点击手动运行或重跑按钮，但工作流会拒绝未授权的 benchmark 执行。
+
+`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。
 
 `repro-3` 固定运行 3 题 × 2 个 profile × 5 次 = 30 个 trial，供小规模复现与迭代。任务按[运行 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943) 中的调查路径和评分波动选取。下表范围均来自该轮最终成功的五次测试：
 
