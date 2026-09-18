@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       modes:
-        description: Retrieval modes (all use the unchanged original question)
+        description: Retrieval modes (each compares short and full source previews)
         type: choice
         default: hybrid
         options:
@@ -124,7 +124,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/model-cache
           key: retrieval-model-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/engine/models/catalog.ts', 'package-lock.json') }}
-      - name: Run original questions against the packed product
+      - name: Compare short and full source previews on the same index and MCP session
         env:
           RETRIEVAL_REPOSITORY: ${{ matrix.repository }}
         run: |
@@ -179,7 +179,7 @@ jobs:
           pattern: retrieval-data-*
           path: ${{ runner.temp }}/retrieval-combined
           merge-multiple: false
-      - name: Require all 20 questions and valid execution evidence
+      - name: Require all 20 questions in both preview arms and valid execution evidence
         if: always()
         run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
       - name: Publish full-suite summary

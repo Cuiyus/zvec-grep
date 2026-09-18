@@ -6,6 +6,7 @@ import test from "node:test";
 import { scoreSembleMetric } from "../semble-metrics.mjs";
 import {
   compareReports,
+  selectPreviewReport,
   markdownComparison,
   writeComparison,
 } from "../compare.mjs";
@@ -75,6 +76,89 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
     ],
   };
 }
+
+function pairedReport() {
+  const result = report();
+  result.schema_version = 2;
+  result.primary_preview = "short";
+  result.tasks = ["short", "full"].flatMap((preview) =>
+    result.tasks.map((item) => ({ ...clone(item), preview })),
+  );
+  result.previews = Object.fromEntries(
+    ["short", "full"].map((preview) => [
+      preview,
+      { modes: clone(result.modes) },
+    ]),
+  );
+  return result;
+}
+
+test("version comparisons keep preview arms separate and recompute from public rows", () => {
+  const baseline = pairedReport();
+  const candidate = clone(baseline);
+  candidate.tasks.find(
+    (item) => item.preview === "full" && item.task_id === "example:2",
+  ).first_hit_rank = 1;
+  Object.assign(
+    candidate.tasks.find(
+      (item) => item.preview === "full" && item.task_id === "example:2",
+    ),
+    {
+      hit_at_1: 1,
+      hit_at_5: 1,
+      hit_at_10: 1,
+      rr_at_10: 1,
+    },
+  );
+  const result = compareReports(baseline, candidate);
+  assert.equal(result.previews.short.modes.hybrid.summary.delta.mrr_at_10, 0);
+  assert.ok(
+    Math.abs(result.previews.full.modes.hybrid.summary.delta.mrr_at_10 - 0.45) <
+      1e-12,
+  );
+  assert.equal(result.previews.short.tasks.length, 2);
+  assert.equal(result.previews.full.tasks.length, 2);
+  assert.match(markdownComparison(result), /short source/);
+  assert.match(markdownComparison(result), /full source/);
+  assert.equal(selectPreviewReport(candidate, "full").tasks.length, 2);
+});
+
+test("version comparisons reject incomplete, duplicated or unlabeled preview matrices", () => {
+  for (const mutate of [
+    (value) => {
+      value.previews.short.modes.fts = {};
+    },
+    (value) => {
+      delete value.previews.full;
+    },
+    (value) => {
+      delete value.tasks[0].preview;
+    },
+    (value) => {
+      value.tasks.pop();
+    },
+    (value) => {
+      value.tasks.push(clone(value.tasks[0]));
+    },
+  ]) {
+    const baseline = pairedReport();
+    const changed = clone(baseline);
+    mutate(changed);
+    assert.throws(() => compareReports(baseline, changed));
+  }
+  assert.throws(
+    () => compareReports(pairedReport(), report()),
+    /preview arm sets/,
+  );
+  assert.throws(
+    () =>
+      compareReports(
+        selectPreviewReport(pairedReport(), "short"),
+        selectPreviewReport(pairedReport(), "full"),
+      ),
+    /incompatible preview arms/,
+  );
+});
 
 test("comparison pairs quality rows, retains offsetting flips and recomputes summaries", () => {
   const baseline = report([

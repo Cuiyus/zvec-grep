@@ -5,7 +5,8 @@ This regression suite uses the **20 unchanged SWE-QA questions across 11 pinned 
 ## Protocol
 
 - Hybrid search is primary, with `limit: 10`, `autoUpdate: false`, and `freshness: eventual` on a prepared index. Optional FTS/vector ablations use the **same original text**; there are no subqueries or query rewrites, answering agents or LLM judges.
-- Each question runs **five consecutive times**, matching the fixed Semble SDK quality runner. **Repetition 5** supplies quality scores; all five measure consistency. There are 20 quality samples, not 100. Hybrid alone makes 100 calls; all three modes make 300. Version 1 used the first repetition and cannot be mixed with this protocol.
+- Each question runs **five consecutive times per source-preview arm**, matching the fixed Semble SDK quality runner. **Repetition 5** supplies quality scores; all five measure consistency. There are 20 quality samples **per arm**, not 200 independent questions. Hybrid alone makes 200 calls; all three modes make 600. Protocol v3 cannot be mixed with earlier one-arm protocols.
+- Both `preview: "short"` (the product default) and `preview: "full"` run on the **same prepared index and MCP session**. Fixed order is mode → question → preview → repetition: short five times, then full five times. The only request difference is `preview`. Full displays all available retrieved-item source content and outline; it does not expand each hit into its entire file or fetch hidden source for scoring. Native extraction/chunk limits remain.
 - The new primary metric is **Semble official-algorithm nDCG@5/@10** on all 20 questions. The displayed primary aggregate is the repository macro mean, matching upstream saved JSON. Query mean and language macro mean (upstream terminal convention) are separately labeled. See the exact contract below.
 - Existing visible source-entry Hit@1/5/10 and RR@10/MRR@10 remain **diagnostics**. Accepted entries are OR alternatives. Duplicate results retain their original ranks; hidden candidate metadata cannot earn a visible anchor hit.
 - The legacy grouped nDCG diagnostic covers **12 questions** with complementary evidence groups. It is distinct from the new Semble metric and keeps its own denominator.
@@ -14,6 +15,10 @@ This regression suite uses the **20 unchanged SWE-QA questions across 11 pinned 
 - Every run builds a fresh index for each repository. Only model artifacts may be cached. Corpus, index content, and model identity are checked before/after queries. Gold, questions, and output files stay outside the search corpus.
 
 The frozen inputs are in `data/source.lock.json` and `data/queries.jsonl`, settings in `configs/protocol.json`, and labels in `gold/v1/`. The historical run used a source-built package reporting version 0.2.1; current candidate identity is recorded by commit and tarball hash, not inferred from that version number.
+
+The shared report table contains both official Semble nDCG and original anchor metrics for short/full. `paired_preview_comparison` checks ordered rank/path/range/matched-range/match-type and official nDCG for every paired repetition. It excludes displayed text and outline from retrieval identity. A mismatch is reported as an uncontrolled retrieval difference, not silently attributed to preview length. Visible UTF-8 output bytes measure response size only, not tokens, latency or answer quality. Fixed short-before-full ordering means latency differences may include warming and are not a controlled speed comparison.
+
+In report schema v2, `tasks` contains both arms, `previews.short` and `previews.full` hold separate aggregates, and `modes` aliases the primary short arm. Never aggregate all 40 quality rows as independent questions. Same-version comparisons pair matching arms; Semble comparisons show zg short, zg full and Semble full chunk in one metric table.
 
 ## Semble official metric contract
 
@@ -87,7 +92,7 @@ The comparison writes `comparison.json` and `comparison.md` with per-task rank c
 
 `semble-run.mjs` runs Semble **0.6.0 at commit `0051e000fcaac69a9c5d081ebbc8d4cb8508160b`** against these same 20 questions, 11 source commits and unchanged source Gold. It calls the native stdio MCP `search` tool with the original question, `top_k=10`, `max_snippet_lines=null` (full chunk) and `content=code`, matching SDK defaults and the official quality runner. Native hybrid ranking stays enabled. Each query runs five consecutive times in one session per repository; repetition 5 supplies quality scores. The public interface does not expose separate FTS/vector modes or an auto-update disable switch.
 
-Public JSON results feed two separately named scorers. The new Semble metric reads native file paths/ranges and ranks; the legacy visible-source diagnostics read actual displayed content and outline. Native chunks can start inside a function body and miss a frozen declaration anchor even when a file target matches. A separate **Gold-file-presence diagnostic** remains, but is not substituted for nDCG. zg's public MCP keeps its native bounded display because it has no full-chunk parameter; this does not limit the file/range metric, and no source text is filled in for its visibility diagnostics.
+Public JSON results feed two separately named scorers. The new Semble metric reads native file paths/ranges and ranks; the legacy visible-source diagnostics read actual displayed content and outline. Native chunks can start inside a function body and miss a frozen declaration anchor even when a file target matches. A separate **Gold-file-presence diagnostic** remains, but is not substituted for nDCG. zg runs both bounded `short` and complete retrieved-content `full` arms. Each visibility diagnostic scores only the public response; no source text is filled in. Identical rankings should give identical file-target nDCG even when full content reveals additional anchors.
 
 Both tools search code within the frozen repository roots. Semble applies its native supported extensions, ignores, symlink policy and 1 MB file limit. zg's code selection follows the pinned Semble extension set and size cap, while retaining native ignores/extraction. The named potion-code model family is shared, but model formats, preprocessing, chunking, ranking and rendering differ. This is an end-to-end retrieval comparison, not an isolated embedding comparison.
 
@@ -131,7 +136,7 @@ The separate [Semble CI workflow](../../.github/workflows/retrieval-semble.yml) 
 
 ## Interpretation limits
 
-These are public development/regression questions, not an unseen generalization test. Entry hits do not establish answer correctness, exhaustive relevance, or complete multi-file evidence. No byte-window hit, output-byte, first-hit-byte, or agent token-saving metric is used.
+These are public development/regression questions, not an unseen generalization test. Entry hits do not establish answer correctness, exhaustive relevance, or complete multi-file evidence. Output bytes are a response-size diagnostic only. No byte-window hit, first-hit-byte, or agent token-saving metric is used.
 
 Stage evidence covers file inventories, scanner output, persisted chunks, source mappings, and stored vector hashes. Actual embedding inputs and full candidate/fusion histories are currently unobserved; a miss is not proof of an embedding defect. Five repeats support consistency checks, not reliable tail-latency estimates.
 

@@ -11,7 +11,7 @@ import {
   inside,
   repositorySlug,
 } from "./lib.mjs";
-import { compareReports } from "./compare.mjs";
+import { compareReports, selectPreviewReport } from "./compare.mjs";
 import { scoreSembleResponse } from "./semble-scoring.mjs";
 import { scoreSembleMetric } from "./semble-metrics.mjs";
 import {
@@ -1012,6 +1012,21 @@ export async function compareSembleToZg(
   suite = undefined,
 ) {
   suite ??= await loadSuite();
+  if (baseline.previews) {
+    compareReports(baseline, baseline);
+    const zgPreviews = {};
+    for (const preview of ["short", "full"])
+      zgPreviews[preview] = await compareSembleToZg(
+        selectPreviewReport(baseline, preview),
+        candidate,
+        suite,
+      );
+    return {
+      ...zgPreviews.short,
+      primary_preview: "short",
+      zg_previews: zgPreviews,
+    };
+  }
   compareReports(baseline, baseline); // Existing zg schema/score checks, without rewriting either protocol.
   assert.equal(
     baseline.suite.protocol,
@@ -1089,6 +1104,7 @@ export async function compareSembleToZg(
   return {
     schema_version: 1,
     kind: "cross-tool-quality-observation",
+    zg_preview: baseline.preview ?? "short",
     delta_direction: "Semble minus zg",
     source: suite.identity.source,
     gold: suite.identity.gold,
@@ -1135,7 +1151,10 @@ export async function compareSembleToZg(
           "Same named model family does not establish identical artifacts, tokenization, embeddings, or runtime. Recorded model inventories remain separate.",
       },
       content: {
-        zg: "Native outline plus visible source excerpt",
+        zg:
+          baseline.preview === "full"
+            ? "Native complete available retrieved source content plus available outline; no whole-file expansion"
+            : "Native bounded outline plus short source excerpt",
         semble:
           "Native complete chunk text, no outline; fifth-call results verified against the official SDK",
       },
@@ -1224,16 +1243,34 @@ export function markdownSembleReport(report) {
   ];
   if (report.cross_tool_comparison) {
     const comparison = report.cross_tool_comparison;
+    const variants = comparison.zg_previews
+      ? [
+          ["zg MCP short", comparison.zg_previews.short, "zg"],
+          ["zg MCP full", comparison.zg_previews.full, "zg"],
+          ["Semble MCP full chunk", comparison, "semble"],
+        ]
+      : [
+          ["zg", comparison, "zg"],
+          ["Semble", comparison, "semble"],
+        ];
     lines.push(
       "",
       "## Cross-tool quality comparison",
       "",
       "Delta = Semble minus zg. Different engine protocol identities are retained; source/Gold/task coverage and scoring eligibility match.",
+      "",
+      "| Arm | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) | Anchor Hit@1 | Anchor Hit@5 | Anchor Hit@10 | Anchor MRR@10 | Grouped anchor nDCG@5 | Grouped anchor nDCG@10 | Grouped questions |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      ...variants.map(([label, entry, engine]) => {
+        const s = entry.summary[engine];
+        const official = entry.semble_official[engine].repository_macro;
+        return `| ${label} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} | ${number(s.ndcg_at_5)} | ${number(s.ndcg_at_10)} | ${s.ndcg_tasks} |`;
+      }),
       ...markdownSembleOfficialTable(
         Object.fromEntries(
-          ["zg", "semble"].map((engine) => [
-            engine,
-            { semble_official: comparison.semble_official[engine] },
+          variants.map(([label, entry, engine]) => [
+            label,
+            { semble_official: entry.semble_official[engine] },
           ]),
         ),
         { title: "Cross-tool Semble official metric" },
@@ -1244,16 +1281,22 @@ export function markdownSembleReport(report) {
       "| Engine | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@10 |",
       "| --- | --- | --- | --- | --- | --- |",
     );
-    for (const engine of ["zg", "semble"]) {
-      const s = comparison.summary[engine];
+    for (const [label, entry, engine] of variants) {
+      const s = entry.summary[engine];
       lines.push(
-        `| ${engine} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} | ${number(s.ndcg_at_10)} |`,
+        `| ${label} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} | ${number(s.ndcg_at_10)} |`,
       );
     }
     lines.push(
       "",
       `Separate Gold file presence diagnostic: zg **${comparison.diagnostics.gold_file_presence_at_10.zg_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**; Semble **${comparison.diagnostics.gold_file_presence_at_10.semble_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**. Both are recomputed from parsed public Top-10 items using the same exact accepted-file rule; neither alters primary scores.`,
       "",
+      ...(comparison.zg_previews
+        ? [
+            "The per-question table below uses zg short. Both independently validated arm comparisons, deltas and per-question rows are retained in report.json under cross_tool_comparison.zg_previews.",
+            "",
+          ]
+        : []),
       "| Task | zg official nDCG@5 / @10 | Semble official nDCG@5 / @10 | Δofficial nDCG@5 / @10 | zg / Semble target ranks | zg / Semble anchor rank | Δanchor RR@10 | Δgrouped nDCG@10 |",
       "| --- | --- | --- | --- | --- | --- | --- | --- |",
       ...comparison.tasks.map(

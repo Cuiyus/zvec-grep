@@ -292,6 +292,44 @@ function expectInvalid(report, pattern) {
   assert.match(report.integrity_errors.join("\n"), pattern);
 }
 
+test("Semble comparison retains both zg preview arms and publishes one shared metric table", async (t) => {
+  const f = await fixture(t);
+  const report = await aggregateSemble(f.directory);
+  const baseline = zgBaseline(report);
+  baseline.primary_preview = "short";
+  baseline.schema_version = 2;
+  baseline.tasks = ["short", "full"].flatMap((preview) =>
+    baseline.tasks.map((row) => ({ ...structuredClone(row), preview })),
+  );
+  baseline.previews = Object.fromEntries(
+    ["short", "full"].map((preview) => [
+      preview,
+      { modes: structuredClone(baseline.modes) },
+    ]),
+  );
+  const comparison = await compareSembleToZg(baseline, report);
+  assert.equal(comparison.zg_previews.short.tasks.length, 20);
+  assert.equal(comparison.zg_previews.full.tasks.length, 20);
+  assert.equal(comparison.zg_previews.full.zg_preview, "full");
+  assert.match(
+    comparison.zg_previews.full.differences.content.zg,
+    /no whole-file expansion/,
+  );
+  const markdown = markdownSembleReport({
+    ...report,
+    cross_tool_comparison: comparison,
+  });
+  assert.match(markdown, /\| zg MCP short \|/);
+  assert.match(markdown, /\| zg MCP full \|/);
+  assert.match(markdown, /\| Semble MCP full chunk \|/);
+  assert.match(
+    markdown,
+    /Official nDCG@10 \(repo macro\).*Anchor Hit@1.*Grouped anchor nDCG@10/,
+  );
+  baseline.tasks.pop();
+  await assert.rejects(compareSembleToZg(baseline, report), /coverage/);
+});
+
 test("offline aggregation requires all 100 calls, re-scores raw and records 12 eligible nDCG tasks", async (t) => {
   const f = await fixture(t),
     report = await aggregateSemble(f.directory);

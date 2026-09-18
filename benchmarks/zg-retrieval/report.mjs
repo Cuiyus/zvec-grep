@@ -146,6 +146,88 @@ function summarize(rows) {
   };
 }
 
+/** Compare only public retrieval identities; preview-dependent text is deliberately excluded. */
+export function summarizePreviewPairs(
+  observations,
+  {
+    primaryPreview = "short",
+    comparisonPreview = "full",
+    qualityRepetition = 5,
+  } = {},
+) {
+  const identity = (row) =>
+    objectHash(
+      row.items.map((item) => ({
+        rank: item.rank,
+        path: item.path,
+        range: item.range,
+        matched_range: item.matched_range ?? null,
+        matched_by: item.matched_by ?? null,
+      })),
+    );
+  const keyed = new Map();
+  for (const row of observations) {
+    if (![primaryPreview, comparisonPreview].includes(row.preview)) continue;
+    const key = `${row.task_id}/${row.mode}/${row.repetition}`;
+    if (!keyed.has(key)) keyed.set(key, {});
+    keyed.get(key)[row.preview] = row;
+  }
+  const pairs = [...keyed.values()].map((pair) => {
+    const primary = pair[primaryPreview],
+      comparison = pair[comparisonPreview];
+    const row = primary ?? comparison;
+    const valid = [primary, comparison].every(
+      (entry) =>
+        entry?.execution_status === "success" &&
+        entry.status !== "harness_invalid" &&
+        entry.semble_official != null &&
+        Array.isArray(entry.items),
+    );
+    return {
+      task_id: row.task_id,
+      mode: row.mode,
+      repetition: row.repetition,
+      quality_observation: row.repetition === qualityRepetition,
+      status: valid ? "compared" : "unavailable",
+      ranking_equal: valid ? identity(primary) === identity(comparison) : null,
+      official_ndcg_equal: valid
+        ? ["ndcg_at_5", "ndcg_at_10"].every(
+            (key) =>
+              primary.semble_official[key] === comparison.semble_official[key],
+          )
+        : null,
+      primary_first_anchor_rank: primary?.first_hit_rank ?? null,
+      comparison_first_anchor_rank: comparison?.first_hit_rank ?? null,
+      primary_output_bytes: primary?.visible_output_bytes ?? null,
+      comparison_output_bytes: comparison?.visible_output_bytes ?? null,
+    };
+  });
+  const counts = (rows) => ({
+    observed_pairs: rows.length,
+    compared_pairs: rows.filter((row) => row.status === "compared").length,
+    same_ranking_pairs: rows.filter((row) => row.ranking_equal === true).length,
+    different_ranking_pairs: rows.filter((row) => row.ranking_equal === false)
+      .length,
+    same_official_ndcg_pairs: rows.filter(
+      (row) => row.official_ndcg_equal === true,
+    ).length,
+    different_official_ndcg_pairs: rows.filter(
+      (row) => row.official_ndcg_equal === false,
+    ).length,
+  });
+  return {
+    primary_preview: primaryPreview,
+    comparison_preview: comparisonPreview,
+    identity_scope:
+      "ordered rank/path/range/matched range/matched-by; excludes preview-dependent source locations, text and outline; hidden entity IDs unavailable",
+    interpretation:
+      "report-only presentation control; a ranking difference is an uncontrolled retrieval difference, not proof that preview changed retrieval; artifact validity is audited separately",
+    ...counts(pairs),
+    quality: counts(pairs.filter((row) => row.quality_observation)),
+    pairs,
+  };
+}
+
 async function findRuns(directory) {
   const runs = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -382,8 +464,14 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       modeSet.some((mode) => !suite.protocol.available_modes.includes(mode))
     )
       invalid.push("invalid modes");
+    const previewSet = suite.protocol.previews;
+    if (objectHash(manifest.previews ?? null) !== objectHash(previewSet))
+      invalid.push("preview selection differs from frozen protocol");
     const plannedCount =
-      manifest.tasks.length * modeSet.length * suite.protocol.repetitions;
+      manifest.tasks.length *
+      modeSet.length *
+      previewSet.length *
+      suite.protocol.repetitions;
     if (
       calls.length !== plannedCount ||
       manifest.planned_calls !== plannedCount
@@ -417,23 +505,29 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       );
     const plannedOrder = modeSet.flatMap((mode) =>
       manifest.tasks.flatMap((task_id) =>
-        Array.from({ length: suite.protocol.repetitions }, (_, index) => ({
-          task_id,
-          mode,
-          repetition: index + 1,
-        })),
+        previewSet.flatMap((preview) =>
+          Array.from({ length: suite.protocol.repetitions }, (_, index) => ({
+            task_id,
+            mode,
+            preview,
+            repetition: index + 1,
+          })),
+        ),
       ),
     );
     if (
       objectHash(
-        calls.map(({ task_id, mode, repetition }) => ({
+        calls.map(({ task_id, mode, preview, repetition }) => ({
           task_id,
           mode,
+          preview,
           repetition,
         })),
       ) !== objectHash(plannedOrder)
     )
-      invalid.push("call order differs from mode-task-repetition protocol");
+      invalid.push(
+        "call order differs from mode-task-preview-repetition protocol",
+      );
     for (const call of calls) {
       const task = suite.lock.tasks.find(
         (task) => task.task_id === call.task_id,
@@ -442,7 +536,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         errors.push(`unknown/unplanned task ${call.task_id}`);
         continue;
       }
-      const key = `${call.task_id}/${call.mode}/${call.repetition}`;
+      const key = `${call.task_id}/${call.mode}/${call.preview}/${call.repetition}`;
       if (seen.has(key)) {
         errors.push(`duplicate call: ${key}`);
         continue;
@@ -451,11 +545,12 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       const callInvalid = [...invalid];
       if (
         !modeSet.includes(call.mode) ||
+        !previewSet.includes(call.preview) ||
         !Number.isInteger(call.repetition) ||
         call.repetition < 1 ||
         call.repetition > suite.protocol.repetitions
       )
-        callInvalid.push("unplanned mode/repetition");
+        callInvalid.push("unplanned mode/preview/repetition");
       const args = call.request?.arguments;
       const expectedRoot = manifest.corpus_root ?? "<unavailable>";
       if (expectedRoot !== "<unavailable>" && !isAbsolute(expectedRoot))
@@ -469,6 +564,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           : { [call.mode]: [task.query] }),
         limit: suite.protocol.limit,
         ...suite.protocol.request,
+        preview: call.preview,
       };
       if (
         call.request?.name !== "zvec_grep_search" ||
@@ -482,10 +578,11 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         callInvalid.push("incorrect quality repetition");
       if (call.harness_error) callInvalid.push(call.harness_error);
       let score;
+      let visibleOutputBytes = null;
       try {
         assert.equal(
           call.raw_path,
-          `raw/${task.task_slug}-${call.mode}-${call.repetition}.json`,
+          `raw/${task.task_slug}-${call.mode}-${call.preview}-${call.repetition}.json`,
           "raw response reused or mapped to the wrong call",
         );
         const path = join(runDirectory, call.raw_path);
@@ -495,7 +592,18 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           call.raw_sha256,
           "raw response changed since capture",
         );
-        score = scoreResponse(await readJson(path), suite.gold[call.task_id]);
+        const response = await readJson(path);
+        if (
+          Array.isArray(response?.content) &&
+          response.content.every(
+            (block) => block.type === "text" && typeof block.text === "string",
+          )
+        )
+          visibleOutputBytes = Buffer.byteLength(
+            response.content.map((block) => block.text).join("\n"),
+            "utf8",
+          );
+        score = scoreResponse(response, suite.gold[call.task_id]);
       } catch (error) {
         callInvalid.push(error.message);
         score = {};
@@ -504,6 +612,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       observations.push({
         ...call,
         ...score,
+        visible_output_bytes: visibleOutputBytes,
         language: suite.semble_gold[call.task_id].language,
         semble_official:
           score.status === "harness_invalid"
@@ -522,13 +631,17 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     }
     for (const taskId of manifest.tasks) {
       for (const mode of modeSet) {
-        for (
-          let repetition = 1;
-          repetition <= suite.protocol.repetitions;
-          repetition++
-        ) {
-          if (!seen.has(`${taskId}/${mode}/${repetition}`))
-            errors.push(`missing call: ${taskId}/${mode}/${repetition}`);
+        for (const preview of previewSet) {
+          for (
+            let repetition = 1;
+            repetition <= suite.protocol.repetitions;
+            repetition++
+          ) {
+            if (!seen.has(`${taskId}/${mode}/${preview}/${repetition}`))
+              errors.push(
+                `missing call: ${taskId}/${mode}/${preview}/${repetition}`,
+              );
+          }
         }
       }
       if (suite.gold[taskId])
@@ -542,15 +655,17 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     );
   }
   for (const id of expected)
-    if (
-      !observations.some(
-        (row) =>
-          row.task_id === id &&
-          row.mode === "hybrid" &&
-          row.repetition === suite.protocol.quality_repetition,
+    for (const preview of suite.protocol.previews)
+      if (
+        !observations.some(
+          (row) =>
+            row.task_id === id &&
+            row.mode === "hybrid" &&
+            row.preview === preview &&
+            row.repetition === suite.protocol.quality_repetition,
+        )
       )
-    )
-      errors.push(`missing quality observation: ${id}`);
+        errors.push(`missing quality observation: ${id}/${preview}`);
   for (const field of ["tarball_sha256"])
     if (
       new Set(manifests.map((manifest) => manifest.package?.[field])).size !== 1
@@ -575,7 +690,10 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     .filter((row) => row.repetition === suite.protocol.quality_repetition)
     .map((row) => {
       const repeats = observations.filter(
-        (item) => item.task_id === row.task_id && item.mode === row.mode,
+        (item) =>
+          item.task_id === row.task_id &&
+          item.mode === row.mode &&
+          item.preview === row.preview,
       );
       const valid =
         repeats.length === suite.protocol.repetitions &&
@@ -606,8 +724,67 @@ export async function aggregate(directory, { expectedTasks } = {}) {
   ).length;
   const complete = errors.length === 0;
   const modes = [...new Set(observations.map((row) => row.mode))];
+  const previewReports = Object.fromEntries(
+    suite.protocol.previews.map((preview) => {
+      const tasks = quality.filter((row) => row.preview === preview);
+      return [
+        preview,
+        {
+          modes: Object.fromEntries(
+            modes.map((mode) => {
+              const rows = tasks.filter((row) => row.mode === mode);
+              const outputBytes = rows
+                .filter(
+                  (row) =>
+                    row.execution_status === "success" &&
+                    row.status !== "harness_invalid",
+                )
+                .map((row) => row.visible_output_bytes)
+                .filter((value) => typeof value === "number");
+              return [
+                mode,
+                {
+                  summary: complete ? summarize(rows) : null,
+                  semble_official: complete
+                    ? summarizeSembleOfficial(rows)
+                    : null,
+                  by_category: complete
+                    ? Object.fromEntries(
+                        ["what", "where", "how", "why"].map((category) => [
+                          category,
+                          summarize(
+                            rows.filter((row) => row.category === category),
+                          ),
+                        ]),
+                      )
+                    : null,
+                  ranking_repeatable_tasks: rows.filter(
+                    (row) => row.ranking_repeatable === true,
+                  ).length,
+                  output_repeatable_tasks: rows.filter(
+                    (row) => row.output_repeatable === true,
+                  ).length,
+                  output_size: {
+                    unit: "UTF-8 bytes of the public text response, not model tokens",
+                    measured_quality_responses: outputBytes.length,
+                    quality_mean_bytes: average(outputBytes),
+                    quality_total_bytes: outputBytes.reduce(
+                      (sum, value) => sum + value,
+                      0,
+                    ),
+                  },
+                },
+              ];
+            }),
+          ),
+          tasks,
+        },
+      ];
+    }),
+  );
   const report = {
-    schema_version: 1,
+    schema_version: 2,
+    primary_preview: suite.protocol.primary_preview,
     quality_repetition: suite.protocol.quality_repetition,
     generated_at: new Date().toISOString(),
     suite: suite.identity,
@@ -621,33 +798,14 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5; Semble official nDCG on all projected targets with query/repository/language means; supplementary anchor metrics retain their declared subset",
-    modes: Object.fromEntries(
-      modes.map((mode) => {
-        const rows = quality.filter((row) => row.mode === mode);
-        return [
-          mode,
-          {
-            summary: complete ? summarize(rows) : null,
-            semble_official: complete ? summarizeSembleOfficial(rows) : null,
-            by_category: complete
-              ? Object.fromEntries(
-                  ["what", "where", "how", "why"].map((category) => [
-                    category,
-                    summarize(rows.filter((row) => row.category === category)),
-                  ]),
-                )
-              : null,
-            ranking_repeatable_tasks: rows.filter(
-              (row) => row.ranking_repeatable === true,
-            ).length,
-            output_repeatable_tasks: rows.filter(
-              (row) => row.output_repeatable === true,
-            ).length,
-          },
-        ];
-      }),
-    ),
+      "quality repetition 5 separately for each preview; Semble official nDCG on all projected targets with query/repository/language means; supplementary anchor metrics retain their declared subset",
+    modes: previewReports[suite.protocol.primary_preview].modes,
+    previews: previewReports,
+    paired_preview_comparison: summarizePreviewPairs(observations, {
+      primaryPreview: suite.protocol.primary_preview,
+      comparisonPreview: "full",
+      qualityRepetition: suite.protocol.quality_repetition,
+    }),
     repositories: manifests,
     tasks: quality,
   };
@@ -661,20 +819,67 @@ export async function aggregate(directory, { expectedTasks } = {}) {
 }
 
 export function markdownReport(report) {
+  const previewModes = Object.fromEntries(
+    Object.entries(
+      report.previews ?? { short: { modes: report.modes } },
+    ).flatMap(([preview, entry]) =>
+      Object.entries(entry.modes).map(([mode, value]) => [
+        `${mode} / ${preview}`,
+        value,
+      ]),
+    ),
+  );
+  const previewComparison = [
+    "",
+    "## Short/full comparison",
+    "",
+    "Both previews use the same frozen index, MCP session, original query and native top-10 limit. Full displays all stored source content of each returned retrieval unit, not the entire file; outline-only units remain outlines. The two arms are scored separately, with the fifth call per arm used for quality. Each row still contains the same original questions.",
+    "",
+    "| Mode / preview | Official nDCG@5 | Official nDCG@10 | Anchor Hit@1 | Anchor Hit@5 | Anchor Hit@10 | Anchor MRR@10 | Grouped anchor nDCG@5 | Grouped anchor nDCG@10 | Mean output bytes |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const [label, entry] of Object.entries(previewModes)) {
+    const s = entry.summary,
+      official = entry.semble_official?.repository_macro;
+    previewComparison.push(
+      s && official
+        ? `| ${label} | ${display(official.ndcg_at_5)} | ${display(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} | ${display(s.ndcg_at_5)} | ${display(s.ndcg_at_10)} | ${display(entry.output_size?.quality_mean_bytes)} |`
+        : `| ${label} | **Invalid experiment — aggregate quality withheld** | | | | | | | | |`,
+    );
+  }
+  previewComparison.push(
+    "",
+    "Official nDCG uses the repository macro; anchor Hit/MRR uses all scored questions; grouped anchor nDCG uses only questions with reviewed complementary groups (12 of the full 20-question suite). Output size is UTF-8 bytes of the public MCP text, not a model token estimate.",
+  );
+  if (report.paired_preview_comparison) {
+    const pair = report.paired_preview_comparison;
+    previewComparison.push(
+      "",
+      `Paired retrieval identities: **${pair.same_ranking_pairs}/${pair.compared_pairs}** equal across all successful paired repetitions; quality repetition: **${pair.quality.same_ranking_pairs}/${pair.quality.compared_pairs}**. Official nDCG is equal in **${pair.same_official_ndcg_pairs}/${pair.compared_pairs}** paired repetitions. Pairs unavailable for comparison: **${pair.observed_pairs - pair.compared_pairs}**.`,
+      "",
+      "Pairing compares ordered rank, path, range, matched range and match type. Source text, source locations and outline text are excluded because the preview is expected to change them. Hidden entity IDs are unavailable. Any ranking mismatch is reported as an uncontrolled retrieval difference; it does not by itself invalidate the saved experiment.",
+    );
+    if (pair.different_ranking_pairs)
+      previewComparison.push(
+        "",
+        `**Uncontrolled ranking differences: ${pair.different_ranking_pairs} paired repetitions.** Inspect paired_preview_comparison.pairs in report.json before attributing anchor changes solely to source visibility.`,
+      );
+  }
   const lines = [
     "# zg Retrieval-only — SWE-QA original queries",
     "",
     `Scope: **${report.scope}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
     "",
     "Quality uses repetition 5; five repeats measure stability, not five independent questions. Semble official file-target nDCG is reported first. The separate source-anchor Hit/MRR and grouped nDCG remain supplementary and are not answer accuracy. Quality thresholds are report-only.",
-    ...markdownSembleOfficialTable(report.modes),
+    ...previewComparison,
+    ...markdownSembleOfficialTable(previewModes),
     "",
     "## Supplementary source-anchor metrics",
     "",
     "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
-  for (const [mode, result] of Object.entries(report.modes)) {
+  for (const [mode, result] of Object.entries(previewModes)) {
     const s = result.summary;
     lines.push(
       s
@@ -686,12 +891,12 @@ export function markdownReport(report) {
     "",
     "## Per task",
     "",
-    "| Task / mode | Official nDCG@5 / @10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
+    "| Task / mode / preview | Official nDCG@5 / @10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const task of report.tasks) {
     lines.push(
-      `| ${task.task_id} / ${task.mode} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
+      `| ${task.task_id} / ${task.mode} / ${task.preview ?? report.primary_preview ?? "short"} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
     );
   }
   lines.push(
@@ -701,7 +906,7 @@ export function markdownReport(report) {
     "| Mode / category | Scored / planned | Hit@10 | MRR@10 |",
     "| --- | --- | --- | --- |",
   );
-  for (const [mode, result] of Object.entries(report.modes))
+  for (const [mode, result] of Object.entries(previewModes))
     for (const [category, s] of Object.entries(result.by_category ?? {}))
       lines.push(
         `| ${mode} / ${category} | ${s.scored_tasks}/${s.planned_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} |`,
@@ -710,7 +915,7 @@ export function markdownReport(report) {
     "",
     "## Preparation and latency",
     "",
-    "Index timing includes CLI startup and model loading/download where necessary; no index cache is restored. Individual MCP latencies, session-first-query flags and freshness values are in report.json/scores.jsonl. Five repetitions are insufficient to characterize tail latency.",
+    "Index timing includes CLI startup and model loading/download where necessary; no index cache is restored. Individual MCP latencies, session-first-query flags and freshness values are in report.json/scores.jsonl. Each query runs five short calls followed by five full calls; cache/order effects prevent treating this as an unbiased short/full speed comparison. Five repetitions are insufficient to characterize tail latency.",
     "",
     "| Repository | Preparation | Full index seconds | MCP connect ms | Post-run integrity |",
     "| --- | --- | --- | --- | --- |",

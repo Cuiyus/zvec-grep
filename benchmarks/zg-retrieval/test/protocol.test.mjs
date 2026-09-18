@@ -225,7 +225,7 @@ test("each mode receives the unmodified original question exactly once, without 
     const field = mode === "hybrid" ? "query" : mode;
     assert.deepEqual(
       Object.keys(args).sort(),
-      ["root", field, "limit", "autoUpdate", "freshness"].sort(),
+      ["root", field, "limit", "autoUpdate", "freshness", "preview"].sort(),
     );
     assert.deepEqual(
       args[field],
@@ -234,31 +234,54 @@ test("each mode receives the unmodified original question exactly once, without 
     assert.equal(args.autoUpdate, false);
     assert.equal(args.freshness, "eventual");
     assert.equal(args.limit, 10);
+    assert.equal(args.preview, "short");
+    const full = requestArguments(task, "/app", mode, suite.protocol, "full");
+    assert.deepEqual(full, { ...args, preview: "full" });
   }
   assert.throws(
     () => requestArguments(task, "/app", "expanded", suite.protocol),
     /unknown mode/,
   );
+  assert.throws(
+    () => requestArguments(task, "/app", "hybrid", suite.protocol, "none"),
+    /unknown preview/,
+  );
 });
 
-test("the SDK-aligned plan runs five consecutive calls per question and scores the last, not best, result", () => {
+test("the SDK-aligned plan runs five consecutive calls per question and preview, scoring each arm's last result", () => {
   const tasks = suite.lock.tasks;
   const modes = ["hybrid", "fts", "vector"];
   const plan = callPlan(tasks, modes, suite.protocol);
-  assert.equal(plan.length, 300);
-  assert.ok(plan.slice(0, 100).every((call) => call.mode === "hybrid"));
+  assert.equal(plan.length, 600);
+  assert.equal(callPlan(tasks, ["hybrid"], suite.protocol).length, 200);
+  assert.ok(plan.slice(0, 200).every((call) => call.mode === "hybrid"));
   for (const mode of modes) {
     const modeCalls = plan.filter((call) => call.mode === mode);
     assert.equal(
       modeCalls.filter((call) => call.quality_observation).length,
-      20,
+      40,
     );
     for (const [index, task] of tasks.entries()) {
-      const round = modeCalls.slice(index * 5, (index + 1) * 5);
+      const round = modeCalls.slice(index * 10, (index + 1) * 10);
       assert.ok(round.every((call) => call.task.task_id === task.task_id));
       assert.deepEqual(
         round.map((call) => call.repetition),
-        [1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
+      );
+      assert.deepEqual(
+        round.map((call) => call.preview),
+        [
+          "short",
+          "short",
+          "short",
+          "short",
+          "short",
+          "full",
+          "full",
+          "full",
+          "full",
+          "full",
+        ],
       );
       assert.ok(
         round.every(
@@ -345,6 +368,7 @@ async function reportFixture(t) {
     index_content_sha256: "e".repeat(64),
     tasks: [fixedTask.task_id],
     modes,
+    previews: suite.protocol.previews,
     planned_calls: plan.length,
     invalid_reasons: [],
     preparation_status: "index_failed",
@@ -353,17 +377,24 @@ async function reportFixture(t) {
   const calls = plan.map((call, index) => ({
     task_id: call.task.task_id,
     mode: call.mode,
+    preview: call.preview,
     repetition: call.repetition,
     quality_observation: call.quality_observation,
     session_first_query: index === 0,
     latency_ms: 1,
     request: {
       name: "zvec_grep_search",
-      arguments: requestArguments(call.task, root, call.mode, suite.protocol),
+      arguments: requestArguments(
+        call.task,
+        root,
+        call.mode,
+        suite.protocol,
+        call.preview,
+      ),
     },
     transport_error: null,
     preparation_error: manifest.preparation_error,
-    raw_path: `raw/${fixedTask.task_slug}-${call.mode}-${call.repetition}.json`,
+    raw_path: `raw/${fixedTask.task_slug}-${call.mode}-${call.preview}-${call.repetition}.json`,
   }));
   for (const call of calls) {
     await writeJson(join(shard, call.raw_path), {
@@ -403,22 +434,31 @@ function assertNoHeadline(report) {
     assert.equal(mode.summary, null);
     assert.equal(mode.by_category, null);
   }
+  for (const preview of Object.values(report.previews)) {
+    for (const mode of Object.values(preview.modes)) {
+      assert.equal(mode.summary, null);
+      assert.equal(mode.by_category, null);
+    }
+  }
 }
 
 test("complete product-error observations retain a zero score and denominator but fail operational integrity", async (t) => {
   const fixture = await reportFixture(t);
   const report = await fixture.score();
   assert.equal(report.scope, "explicit-subset");
-  assert.equal(report.observed_calls, 5);
+  assert.equal(report.observed_calls, 10);
   assert.equal(
     report.quality_score_valid,
     true,
     JSON.stringify(report.integrity_errors),
   );
   assert.equal(report.integrity_passed, false);
-  assert.equal(report.product_error_calls, 5);
+  assert.equal(report.product_error_calls, 10);
   assert.deepEqual(report.integrity_errors, []);
-  assert.equal(report.tasks.length, 1);
+  assert.equal(report.tasks.length, 2);
+  assert.equal(report.primary_preview, "short");
+  assert.deepEqual(report.previews.short.tasks, [report.tasks[0]]);
+  assert.deepEqual(report.previews.full.tasks, [report.tasks[1]]);
   assert.equal(report.tasks[0].repetition, 5);
   assert.equal(report.tasks[0].ranking_repeatable, null);
   assert.equal(report.tasks[0].output_repeatable, null);
@@ -470,7 +510,48 @@ test("a duplicate cannot replace a missing repetition even if the call count sti
   );
 });
 
+test("a missing full-preview arm cannot silently become a valid short-only run", async (t) => {
+  const fixture = await reportFixture(t);
+  fixture.calls.splice(5);
+  await fixture.save();
+  const report = await fixture.score();
+  assertNoHeadline(report);
+  assert.ok(
+    report.integrity_errors.some((error) => /missing call/.test(error)),
+  );
+});
+
 for (const [label, mutate] of [
+  [
+    "missing preview identity",
+    (fixture) => {
+      delete fixture.calls[1].preview;
+    },
+  ],
+  [
+    "unknown preview identity",
+    (fixture) => {
+      fixture.calls[1].preview = "none";
+    },
+  ],
+  [
+    "mismatched preview request",
+    (fixture) => {
+      fixture.calls[1].request.arguments.preview = "full";
+    },
+  ],
+  [
+    "reused raw response across preview arms",
+    (fixture) => {
+      fixture.calls[5].raw_path = fixture.calls[0].raw_path;
+    },
+  ],
+  [
+    "missing manifest preview arm",
+    (fixture) => {
+      fixture.manifest.previews = ["short"];
+    },
+  ],
   [
     "wrong corpus root",
     (fixture) => {
@@ -541,7 +622,7 @@ test("raw response tampering is detected before scoring even when replacement is
   const report = await fixture.score();
   assertNoHeadline(report);
   assert.match(
-    report.tasks[0].invalid_reason,
+    report.tasks.find((task) => task.preview === "full").invalid_reason,
     /raw response changed since capture/,
   );
 });

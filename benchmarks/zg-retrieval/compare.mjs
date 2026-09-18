@@ -36,8 +36,44 @@ function uniqueStrings(values, label) {
   return [...values].sort();
 }
 
+/** Select a presentation arm without treating repeated questions as new samples. */
+export function selectPreviewReport(report, preview) {
+  assert.ok(report.previews, "report has no preview arms");
+  const names = uniqueStrings(Object.keys(report.previews), "preview arms");
+  assert.deepEqual(names, ["full", "short"], "incomplete preview arm set");
+  assert.equal(report.primary_preview, "short", "invalid primary preview");
+  assert.deepEqual(
+    uniqueStrings(Object.keys(report.previews.short.modes), "short modes"),
+    uniqueStrings(Object.keys(report.previews.full.modes), "full modes"),
+    "incompatible mode sets across preview arms",
+  );
+  assert.ok(names.includes(preview), "unknown preview arm");
+  assert.ok(
+    report.tasks.every((row) => names.includes(row.preview)),
+    "unplanned or missing preview in quality rows",
+  );
+  // Cached arm tasks/summaries are not scoring inputs. The ordinary report
+  // validator checks the selected public rows and recomputes their metrics.
+  const selected = {
+    ...report,
+    preview,
+    modes: report.previews[preview].modes,
+    tasks: report.tasks.filter((row) => row.preview === preview),
+  };
+  delete selected.previews;
+  return selected;
+}
+
 function validateReport(report, label) {
-  assert.equal(report.schema_version, 1, `${label}: unsupported report schema`);
+  assert.ok(
+    [1, 2].includes(report.schema_version),
+    `${label}: unsupported report schema`,
+  );
+  if (report.schema_version === 2)
+    assert.ok(
+      ["short", "full"].includes(report.preview),
+      `${label}: missing selected preview`,
+    );
   assert.equal(
     report.quality_repetition,
     5,
@@ -104,6 +140,8 @@ function validateReport(report, label) {
   const rows = new Map();
   for (const row of report.tasks) {
     const context = `${label}: ${row.task_id}/${row.mode}`;
+    if (report.preview !== undefined)
+      assert.equal(row.preview, report.preview, `${context}: preview mismatch`);
     assert.ok(
       ids.includes(row.task_id) && modes.includes(row.mode),
       `${context}: unexpected task/mode`,
@@ -371,6 +409,27 @@ function reportIdentity(report) {
 
 /** Compare validated quality rows; task ordering and cached aggregate summaries are not score inputs. */
 export function compareReports(baseline, candidate) {
+  if (baseline.previews || candidate.previews) {
+    assert.ok(
+      baseline.previews && candidate.previews,
+      "incompatible preview arm sets",
+    );
+    const previews = Object.fromEntries(
+      ["short", "full"].map((preview) => [
+        preview,
+        compareReports(
+          selectPreviewReport(baseline, preview),
+          selectPreviewReport(candidate, preview),
+        ),
+      ]),
+    );
+    return { ...previews.short, primary_preview: "short", previews };
+  }
+  assert.equal(
+    baseline.preview,
+    candidate.preview,
+    "incompatible preview arms",
+  );
   const before = validateReport(baseline, "baseline");
   const after = validateReport(candidate, "candidate");
   for (const field of ["source", "gold", "semble_gold", "protocol"])
@@ -451,6 +510,7 @@ export function compareReports(baseline, candidate) {
     }
   return {
     schema_version: 1,
+    ...(baseline.preview === undefined ? {} : { preview: baseline.preview }),
     quality_repetition: 5,
     suite: structuredClone(baseline.suite),
     scope: baseline.scope,
@@ -511,6 +571,15 @@ const signed = (value) =>
 const change = (before, after) => `${cell(before)} → ${cell(after)}`;
 
 export function markdownComparison(result) {
+  if (result.previews)
+    return ["short", "full"]
+      .map((preview) =>
+        markdownComparison(result.previews[preview]).replace(
+          "# zg Retrieval-only version comparison",
+          `# zg Retrieval-only version comparison — ${preview} source`,
+        ),
+      )
+      .join("\n");
   const lines = [
     "# zg Retrieval-only version comparison",
     "",

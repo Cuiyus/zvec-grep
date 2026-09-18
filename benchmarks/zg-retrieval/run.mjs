@@ -30,13 +30,21 @@ import {
 } from "./lib.mjs";
 import { aggregate } from "./report.mjs";
 
-export function requestArguments(task, root, mode, protocol) {
+export function requestArguments(
+  task,
+  root,
+  mode,
+  protocol,
+  preview = "short",
+) {
   assert.ok(protocol.available_modes.includes(mode), `unknown mode: ${mode}`);
+  assert.ok(protocol.previews.includes(preview), `unknown preview: ${preview}`);
   return {
     root,
     ...(mode === "hybrid" ? { query: task.query } : { [mode]: [task.query] }),
     limit: protocol.limit,
     ...protocol.request,
+    preview,
   };
 }
 
@@ -44,18 +52,28 @@ export function callPlan(tasks, modes, protocol) {
   assert.equal(modes[0], "hybrid");
   assert.equal(new Set(modes).size, modes.length);
   modes.forEach((mode) => assert.ok(protocol.available_modes.includes(mode)));
+  assert.deepEqual(protocol.previews, ["short", "full"]);
+  assert.equal(protocol.primary_preview, "short");
   const plan = [];
-  // Match Semble's quality runner: five consecutive searches per original query.
+  // Match Semble's quality runner: five consecutive searches per original query
+  // and preview arm. The same index and MCP session serve both presentation arms.
   // All hybrid queries precede optional ablations; no best-mode selection.
   for (const mode of modes) {
     for (const task of tasks) {
-      for (let repetition = 1; repetition <= protocol.repetitions; repetition++)
-        plan.push({
-          task,
-          mode,
-          repetition,
-          quality_observation: repetition === protocol.quality_repetition,
-        });
+      for (const preview of protocol.previews) {
+        for (
+          let repetition = 1;
+          repetition <= protocol.repetitions;
+          repetition++
+        )
+          plan.push({
+            task,
+            mode,
+            preview,
+            repetition,
+            quality_observation: repetition === protocol.quality_repetition,
+          });
+      }
     }
   }
   return plan;
@@ -190,6 +208,7 @@ async function runRepository({
     },
     tasks: tasks.map((task) => task.task_id),
     modes,
+    previews: protocol.previews,
     planned_calls: planned.length,
     invalid_reasons: [],
     preparation_status: "pending",
@@ -371,6 +390,7 @@ async function runRepository({
       "limit",
       "autoUpdate",
       "freshness",
+      "preview",
       ...modes.filter((mode) => mode !== "hybrid"),
     ]) {
       assert.ok(fields?.[field], `candidate search schema lacks ${field}`);
@@ -380,6 +400,12 @@ async function runRepository({
     assert.equal(fields.autoUpdate.type, "boolean");
     assert.ok(["number", "integer"].includes(fields.limit.type));
     assert.ok(fields.freshness.enum?.includes(protocol.request.freshness));
+    assert.ok(
+      protocol.previews.every((preview) =>
+        fields.preview.enum?.includes(preview),
+      ),
+      "candidate search schema must support both short and full previews",
+    );
     assert.ok(
       (fields.limit.minimum ?? 1) <= protocol.limit &&
         (fields.limit.maximum ?? Infinity) >= protocol.limit,
@@ -413,7 +439,13 @@ async function runRepository({
     await writeJson(join(output, "installation/tools.json"), tools);
     phase = "replay";
     for (const [index, call] of planned.entries()) {
-      const args = requestArguments(call.task, root, call.mode, protocol);
+      const args = requestArguments(
+        call.task,
+        root,
+        call.mode,
+        protocol,
+        call.preview,
+      );
       const start = performance.now();
       let response, error;
       try {
@@ -429,13 +461,14 @@ async function runRepository({
       const record = {
         task_id: call.task.task_id,
         mode: call.mode,
+        preview: call.preview,
         repetition: call.repetition,
         quality_observation: call.quality_observation,
         session_first_query: index === 0,
         latency_ms: performance.now() - start,
         request: { name: "zvec_grep_search", arguments: args },
         transport_error: error ?? null,
-        raw_path: `raw/${call.task.task_slug}-${call.mode}-${call.repetition}.json`,
+        raw_path: `raw/${call.task.task_slug}-${call.mode}-${call.preview}-${call.repetition}.json`,
       };
       await writeJson(join(output, record.raw_path), response);
       record.raw_sha256 = await fileHash(join(output, record.raw_path));
@@ -527,6 +560,7 @@ async function runRepository({
       const record = {
         task_id: call.task.task_id,
         mode: call.mode,
+        preview: call.preview,
         repetition: call.repetition,
         quality_observation: call.quality_observation,
         session_first_query: false,
@@ -538,13 +572,14 @@ async function runRepository({
             root ?? "<unavailable>",
             call.mode,
             protocol,
+            call.preview,
           ),
         },
         preparation_error: productFailure ?? null,
         harness_error: productFailure
           ? null
           : manifest.invalid_reasons.join("; "),
-        raw_path: `raw/${call.task.task_slug}-${call.mode}-${call.repetition}.json`,
+        raw_path: `raw/${call.task.task_slug}-${call.mode}-${call.preview}-${call.repetition}.json`,
       };
       await writeJson(join(output, record.raw_path), {
         isError: true,
