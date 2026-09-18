@@ -358,7 +358,11 @@ function stableJson(value) {
 }
 
 /** Score saved public output only. Source/commit validation remains the runner's mandatory preflight. */
-export function scoreResponse(response, gold) {
+export function scoreResponse(
+  response,
+  gold,
+  { parseResponse = parseVisibleResponse } = {},
+) {
   const result = {
     status: "harness_invalid",
     execution_status: "unknown",
@@ -392,15 +396,21 @@ export function scoreResponse(response, gold) {
     result.invalid_reason = `gold_invalid: ${error.message}`;
     return result;
   }
-  const productError = response?.isError === true;
+  let productError = response?.isError === true;
   let parsed;
   if (!productError) {
     try {
-      parsed = parseVisibleResponse(response);
+      parsed = parseResponse(response);
     } catch (error) {
       result.invalid_reason = `format_unknown: ${error.message}`;
       return result;
     }
+    // Some public tools return a documented product failure as plain text with
+    // isError unset. Adapters must recognize that exact format explicitly.
+    productError = parsed.execution_status === "product_error";
+    if (productError) result.product_error_reason = parsed.product_error_reason;
+  }
+  if (parsed && !productError) {
     result.items = parsed.items;
     result.freshness = parsed.freshness;
     result.empty_reason = parsed.empty_reason;

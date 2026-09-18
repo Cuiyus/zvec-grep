@@ -68,6 +68,50 @@ node benchmarks/zg-retrieval/compare.mjs baseline/report.json candidate/report.j
 
 The comparison writes `comparison.json` and `comparison.md` with per-task rank changes, Hit flips, MRR/nDCG deltas and failure/recovery transitions. It rejects invalid experiments, missing/duplicate tasks and incompatible label or protocol identities. Product-error zeros remain in the denominator with an explicit operational warning. Comparisons are report-only; the tool does not impose a quality threshold.
 
+## Semble baseline on the same questions
+
+`semble-run.mjs` runs Semble **0.6.0 at commit `0051e000fcaac69a9c5d081ebbc8d4cb8508160b`** against these same 20 questions, 11 source commits and unchanged Gold. It calls the native stdio MCP `search` tool with the original question, `top_k=10`, `max_snippet_lines=10` and `content=all`. Native hybrid ranking stays enabled. Five repetitions run in one session per repository; repetition 1 supplies quality scores. The public interface does not expose separate FTS/vector modes or an auto-update disable switch.
+
+The public JSON snippet is parsed into the same visible-source scorer. No chunk-range-only credit, source completion, query rewrite or Gold change is applied. Native chunks often start inside a function body; returning such a chunk without a frozen declaration/body anchor receives no entry credit. Reports therefore include a separate **Gold-file-presence diagnostic**, which checks only whether an accepted target's exact file path occurs in the top ten. This diagnostic does not contribute to Hit/MRR/nDCG or establish that the required code was visible.
+
+`content=all` is an explicit whole-repository choice; Semble's default is code only. Semble still applies its own supported extensions, ignores, symlink policy and 1 MB file limit. Its code/docs/config scope excludes DATA formats such as JSON and CSV. The named potion-code model family is shared with zg, but model formats, preprocessing, chunking, ranking and rendering differ. This measures delivered source-entry retrieval under each product's public interface, not an isolated embedding comparison.
+
+Use Python 3.12 and Node 24. Run from this repository root:
+
+```sh
+npm ci
+semble_work="$(mktemp -d)"
+git clone https://github.com/MinishLab/semble.git "$semble_work/source"
+git -C "$semble_work/source" checkout --detach 0051e000fcaac69a9c5d081ebbc8d4cb8508160b
+python3 -m venv "$semble_work/venv"
+"$semble_work/venv/bin/python" -m pip install \
+  -c benchmarks/zg-retrieval/configs/semble-requirements.txt \
+  "$semble_work/source[mcp]"
+mkdir -p "$semble_work/model"
+HF_HOME="$semble_work/hf-cache" "$semble_work/venv/bin/python" \
+  benchmarks/zg-retrieval/semble-prepare.py model \
+  --revision e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b \
+  --model-directory "$semble_work/model/weights" \
+  --output "$semble_work/model/model.json"
+node benchmarks/zg-retrieval/semble-run.mjs \
+  --python "$semble_work/venv/bin/python" \
+  --source "$semble_work/source" \
+  --model "$semble_work/model/weights" \
+  --model-info "$semble_work/model/model.json" \
+  --output "$semble_work/results" \
+  --corpus "$semble_work/corpus"
+
+# Offline re-score; the optional second argument adds a compatible zg comparison.
+node benchmarks/zg-retrieval/semble-report.mjs \
+  "$semble_work/results" /absolute/path/to/zg/report.json
+```
+
+`--repository reflex-dev/reflex` selects an explicitly labeled smoke run. Full comparison requires all 20 questions. The Semble report keeps its own protocol identity and compares only common Gold quality; it does not bypass the same-engine protocol checks in `compare.mjs`, and it does not compute speed ratios across environments.
+
+Preparation uses the unmodified public `SembleIndex.from_path` API and persists a fresh external index. Installed Python source files are checked against the pinned checkout. Model files are frozen across the entire experiment, and corpus/model/index inventories are checked before and after each session. Returned snippets are bound to persisted chunks and their source positions without adding unseen content to scoring. Semble's UTF-8 replacement decoding is retained when auditing non-UTF-8 source fixtures.
+
+The separate [Semble CI workflow](../../.github/workflows/retrieval-semble.yml) runs on relevant baseline/shared-protocol changes and manual dispatch. It pins source, model revision and Python dependency constraints, caches only model downloads, and executes all 100 calls. Its `retrieval-semble-evidence` artifact contains the reports, requests, raw responses, runtime identity, source audits, inventories, chunks and metadata. Large BM25/vector payloads and external model weights are excluded; their captured file hashes remain in the inventories. Local runs retain the complete persisted index. Evidence is retained for 14 days, including failed runs.
+
 ## Interpretation limits
 
 These are public development/regression questions, not an unseen generalization test. Entry hits do not establish answer correctness, exhaustive relevance, or complete multi-file evidence. No byte-window hit, output-byte, first-hit-byte, or agent token-saving metric is used.
