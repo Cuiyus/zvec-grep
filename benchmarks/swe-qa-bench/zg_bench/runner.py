@@ -31,10 +31,16 @@ from .settings import (
     OPENCODE_CUSTOM_GLM_BASE_URL,
     OPENCODE_CUSTOM_GLM_MODEL,
     OPENCODE_CUSTOM_GLM_MODEL_ID,
+    OPENCODE_CUSTOM_QWEN_BASE_URL,
+    OPENCODE_CUSTOM_QWEN_MODEL,
+    OPENCODE_CUSTOM_QWEN_MODEL_ID,
     OPENCODE_DASHSCOPE_BASE_URL,
     OPENCODE_GLM_ENABLE_THINKING,
     OPENCODE_GLM_REASONING_EFFORT,
     OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
+    OPENCODE_QWEN_ENABLE_THINKING,
+    OPENCODE_QWEN_REASONING_EFFORT,
+    OPENCODE_QWEN_TEMPERATURE,
     OPENCODE_VERSION,
     ZVEC_GREP_API_KEY_ENV_VARS,
     ZVEC_GREP_BINDING_PACKAGE,
@@ -138,6 +144,10 @@ _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT = AgentModelSupport(
     _OPENCODE_AGENT,
     OPENCODE_CUSTOM_GLM_MODEL,
 )
+_OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT = AgentModelSupport(
+    _OPENCODE_AGENT,
+    OPENCODE_CUSTOM_QWEN_MODEL,
+)
 AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
     # Codex owns its model catalog and receives the selected model unchanged.
     _CODEX_MODEL_SUPPORT,
@@ -145,6 +155,7 @@ AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
     _OPENCODE_GLM_MODEL_SUPPORT,
     _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT,
     _OPENCODE_QWEN_MODEL_SUPPORT,
+    _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT,
 )
 
 
@@ -319,6 +330,18 @@ def _is_opencode_custom_glm_model(agent: str, model: str) -> bool:
     return _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT.matches(agent, model)
 
 
+def _is_opencode_custom_qwen_model(agent: str, model: str) -> bool:
+    return _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT.matches(agent, model)
+
+
+def _opencode_custom_base_url(agent: str, model: str) -> str | None:
+    if _is_opencode_custom_glm_model(agent, model):
+        return OPENCODE_CUSTOM_GLM_BASE_URL
+    if _is_opencode_custom_qwen_model(agent, model):
+        return OPENCODE_CUSTOM_QWEN_BASE_URL
+    return None
+
+
 def _opencode_dashscope_model_id(agent: str, model: str) -> str | None:
     if _is_opencode_aliyun_glm_model(agent, model):
         return OPENCODE_ALIYUN_GLM_MODEL_ID
@@ -358,7 +381,7 @@ def validate_profile_credentials(
                 f"{model} requires a DashScope API key; " f"export one of: {accepted}"
             )
 
-    if _is_opencode_custom_glm_model(agent, model):
+    if _opencode_custom_base_url(agent, model) is not None:
         if _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY")) is None:
             raise ValueError(
                 f"{model} requires an API key; export GLM_API_KEY or " "OPENAI_API_KEY"
@@ -436,12 +459,13 @@ def execution_environment(*, agent: str, model: str) -> dict[str, str]:
             _, api_key = credential
             environment["OPENAI_API_KEY"] = api_key
         environment["OPENAI_BASE_URL"] = OPENCODE_DASHSCOPE_BASE_URL
-    if _is_opencode_custom_glm_model(agent, model):
+    custom_base_url = _opencode_custom_base_url(agent, model)
+    if custom_base_url is not None:
         credential = _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY"))
         if credential is not None:
             _, api_key = credential
             environment["OPENAI_API_KEY"] = api_key
-        environment["OPENAI_BASE_URL"] = OPENCODE_CUSTOM_GLM_BASE_URL
+        environment["OPENAI_BASE_URL"] = custom_base_url
         # Harbor only needs the normalized OpenAI variable. Avoid forwarding
         # the provider-specific source variable to every subprocess as well.
         environment.pop("GLM_API_KEY", None)
@@ -798,9 +822,11 @@ def build_harbor_command(
             "enable_thinking": OPENCODE_GLM_ENABLE_THINKING,
             "reasoningEffort": OPENCODE_GLM_REASONING_EFFORT,
         }
+        custom_qwen = _is_opencode_custom_qwen_model(agent, model)
+        temperature = OPENCODE_QWEN_TEMPERATURE if custom_qwen else BENCHMARK_TEMPERATURE
         agent_config = {
             name: {
-                "temperature": BENCHMARK_TEMPERATURE,
+                "temperature": temperature,
                 "options": {"seed": BENCHMARK_SEED},
                 "permission": dict(web_permissions),
             }
@@ -857,8 +883,19 @@ def build_harbor_command(
             agent_kwargs.append(
                 "opencode_config=" + json.dumps(opencode_config, separators=(",", ":"))
             )
-        elif _is_opencode_custom_glm_model(agent, model):
-            harbor_model = OPENCODE_CUSTOM_GLM_MODEL
+        elif _opencode_custom_base_url(agent, model) is not None:
+            harbor_model = model
+            custom_model_id = (
+                OPENCODE_CUSTOM_QWEN_MODEL_ID if custom_qwen else OPENCODE_CUSTOM_GLM_MODEL_ID
+            )
+            model_options = (
+                {
+                    "enable_thinking": OPENCODE_QWEN_ENABLE_THINKING,
+                    "reasoningEffort": OPENCODE_QWEN_REASONING_EFFORT,
+                }
+                if custom_qwen
+                else glm_model_options
+            )
             opencode_config = {
                 "$schema": "https://opencode.ai/config.json",
                 "provider": {
@@ -867,21 +904,29 @@ def build_harbor_command(
                         "name": "Custom OpenAI Compatible",
                         "options": {
                             "apiKey": "{env:OPENAI_API_KEY}",
-                            "baseURL": OPENCODE_CUSTOM_GLM_BASE_URL,
+                            "baseURL": _opencode_custom_base_url(agent, model),
                         },
                         "models": {
-                            OPENCODE_CUSTOM_GLM_MODEL_ID: {
-                                "name": "GLM 5.2",
+                            custom_model_id: {
+                                "name": "Qwen 3.8 Max" if custom_qwen else "GLM 5.2",
                                 "temperature": True,
+                                # Qwen preserves thinking across tool calls by
+                                # default. Replay it as the API's assistant
+                                # reasoning_content field instead of discarding it.
+                                **(
+                                    {"interleaved": {"field": "reasoning_content"}}
+                                    if custom_qwen
+                                    else {}
+                                ),
                                 # Keep the previous unknown context limit (0);
                                 # pin only the already-used output allowance.
                                 "limit": {"context": 0, "output": BENCHMARK_MAX_OUTPUT_TOKENS},
-                                "options": glm_model_options,
+                                "options": model_options,
                             }
                         },
                     }
                 },
-                "model": OPENCODE_CUSTOM_GLM_MODEL,
+                "model": model,
                 "agent": agent_config,
                 "permission": dict(web_permissions),
             }

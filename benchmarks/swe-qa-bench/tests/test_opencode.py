@@ -147,6 +147,7 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
         suite = runner.load_suite("swe-qa-bench", tier="smoke")
         cases = (
             ("custom-openai/glm-5.2", True),
+            ("custom-openai/qwen3.8-max", True),
             ("aliyun-glm-5.2", True),
             # Prove that neither provider defaults nor the fixture itself hide
             # web tools: removing the benchmark denies must expose both tools.
@@ -237,6 +238,20 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                             "model": body["model"],
                         }
                         chunks = [
+                            # This synthetic value verifies that Qwen reasoning
+                            # survives a tool round-trip without real model data.
+                            *(
+                                [{
+                                    **envelope,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"role": "assistant", "reasoning_content": "fixture-reasoning"},
+                                        "finish_reason": None,
+                                    }],
+                                }]
+                                if body["model"] == "qwen3.8-max"
+                                else []
+                            ),
                             {
                                 **envelope,
                                 "choices": [
@@ -380,14 +395,31 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         "Expected a title/summary request",
                     )
                     for request in requests:
-                        self.assertEqual(request["model"], "glm-5.2")
-                        self.assertEqual(request.get("temperature"), 0)
+                        is_qwen = model == "custom-openai/qwen3.8-max"
+                        self.assertEqual(request["model"], "qwen3.8-max" if is_qwen else "glm-5.2")
+                        self.assertEqual(
+                            request.get("temperature"), runner.OPENCODE_QWEN_TEMPERATURE if is_qwen else 0
+                        )
                         self.assertEqual(request.get("seed"), 42)
-                        self.assertIs(request.get("enable_thinking"), True)
-                        self.assertEqual(request.get("reasoning_effort"), "high")
+                        self.assertIs(
+                            request.get("enable_thinking"), runner.OPENCODE_QWEN_ENABLE_THINKING if is_qwen else True
+                        )
+                        self.assertEqual(
+                            request.get("reasoning_effort"), runner.OPENCODE_QWEN_REASONING_EFFORT if is_qwen else "high"
+                        )
                         self.assertEqual(request.get("max_tokens"), 32000)
                         self.assertNotIn("response_format", request)
                         self.assertNotIn("reasoningEffort", request)
+                    if model == "custom-openai/qwen3.8-max":
+                        replayed_assistants = [
+                            message
+                            for request in task_requests
+                            for message in request["messages"]
+                            if message.get("role") == "assistant" and message.get("tool_calls")
+                        ]
+                        self.assertEqual(len(replayed_assistants), 3)
+                        for message in replayed_assistants:
+                            self.assertEqual(message.get("reasoning_content"), "fixture-reasoning")
                     for request in task_requests:
                         tool_names = {
                             tool["function"]["name"] for tool in request["tools"]

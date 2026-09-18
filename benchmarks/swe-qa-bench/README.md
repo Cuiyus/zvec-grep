@@ -133,7 +133,10 @@ The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs the
 same-repository pull requests targeting `main`, except Dependabot pull
 requests. External-fork and Dependabot pull requests run validation only.
 `workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
-`smoke` (5 tasks) remain available.
+`smoke` (5 tasks) remain available. Its `model` input defaults to
+`qwen3.8-max`; select `glm-5.2` to run the same protocol with GLM. The selected
+model is used for both execution and judging. Push and pull-request runs use
+the Qwen3.8 Max default.
 
 The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
 tasks were selected from [run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943)
@@ -153,11 +156,12 @@ to a subagent whose internal calls are absent from the main trace. Compare new
 trials against the same three historical tasks, and account for failed-attempt
 overhead separately.
 
-CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2`, the local
+CI uses OpenCode `1.18.4` with `custom-openai/qwen3.8-max` by default, the local
 `local/potion-code-16m-v2` embedding model, and five trials per task and
 profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
-execution and judging. The Claude Code configuration above describes the
-published local protocol.
+execution and judging. The existing secret name is retained for both models;
+its Bailian business-space API key must have access to the selected model.
+The Claude Code configuration above describes the published local protocol.
 
 The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
 trials. CI passes `--max-retries 2`: an exception, including an agent timeout,
@@ -173,10 +177,10 @@ successful attempt of each trial; they exclude failed-attempt overhead, which
 remains in the archived evidence. Exhausted retries still fail the task.
 Each task job has a six-hour ceiling, including setup and retries.
 
-Both OpenCode profiles, their delegated agents, and the GLM-5.2 judge use the
-following settings, shared in `zg_bench/settings.py`:
+Both OpenCode profiles, their delegated agents, and the judge use the selected
+model with the following requested settings, shared in `zg_bench/settings.py`:
 
-| Parameter | GLM-5.2 execution and judging |
+| Parameter | Qwen3.8 Max / GLM-5.2 execution and judging |
 | --- | --- |
 | `temperature` | `0` |
 | `seed` | `42` |
@@ -185,21 +189,32 @@ following settings, shared in `zg_bench/settings.py`:
 | `max_tokens` | `32000` |
 | `response_format` | Omitted |
 
-The same seed is used for every trial and retry. Both custom-openai and
-DashScope GLM execution configurations set `reasoningEffort = "high"`; the
+The same seed is used for every trial and retry. The custom-openai Qwen3.8 Max
+and GLM configurations and the DashScope GLM configuration set `reasoningEffort = "high"`; the
 OpenAI-compatible SDK maps this to the HTTP field `reasoning_effort`.
 Execution sets the model's `limit.output` explicitly, and the judge uses the
 same `BENCHMARK_MAX_OUTPUT_TOKENS` constant for `max_tokens`.
-Both execution and judging omit `response_format`:
-[Alibaba Cloud's GLM feature table](https://help.aliyun.com/zh/model-studio/glm)
-lists structured output for GLM-5.2 only in non-thinking mode. The judge's
-prompt still requires JSON, with strict score parsing and retries on invalid
-responses. Its report metadata records `response_format = null` to indicate
-that the request does not force a response format.
-The separate Qwen configuration keeps thinking disabled; GLM reasoning
-settings are not applied to other models.
-[Alibaba Cloud's GLM documentation](https://help.aliyun.com/zh/model-studio/glm)
-lists `high` as a supported GLM-5.2 reasoning effort.
+
+The [Bailian Chat Completions reference](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
+documents model-specific behavior: Qwen3.8 Max raises a requested temperature
+below `0.6` to `0.6` in thinking mode, and maps `high` reasoning effort to
+`xhigh`. These requests therefore do **not** give Qwen an effective temperature
+of zero. Also, `max_tokens=32000` limits Qwen's final answer, excluding thinking;
+for GLM-5.2 without `thinking_budget`, it limits thinking and the answer together.
+The benchmark retains the same requested fields across these models, but their
+effective sampling settings and token budgets are not identical.
+
+Qwen3.8 Max enables `preserve_thinking` by default. Its OpenCode model config
+sets `interleaved: {"field": "reasoning_content"}` so historical reasoning is
+returned in the separate `reasoning_content` field, rather than concatenated
+into answer content. See the [thinking guide](https://help.aliyun.com/zh/model-studio/deep-thinking)
+and [Qwen3.8 Max model information](https://help.aliyun.com/zh/model-studio/qwen3-8-max).
+The older, separate Qwen3.7 configuration still keeps thinking disabled.
+
+Both execution and judging omit `response_format`. The judge's prompt still
+requires JSON, with strict score parsing and retries on invalid responses.
+Its report metadata records `response_format = null` to indicate that the
+request does not force a response format.
 OpenCode declares the model's temperature capability and
 passes the seed through every built-in agent's provider options, including
 subagents, compaction, and title/summary generation. Judge reports record
@@ -219,10 +234,10 @@ restriction, not container network isolation; shell commands and setup/model
 connections still have network access.
 
 CI also checks the pinned OpenCode binary against a local fake provider to
-verify the sampling parameters, enabled GLM thinking, the actual
+verify the sampling parameters, enabled Qwen3.8 Max / GLM thinking, the actual
 `reasoning_effort = "high"` request field, and web-tool restrictions in
-consecutive tool-calling requests, without
-using GLM credentials.
+consecutive tool-calling requests, including Qwen's historical
+`reasoning_content` field, without using model credentials.
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired
 results, and uploads Harbor evidence and an independent task report as

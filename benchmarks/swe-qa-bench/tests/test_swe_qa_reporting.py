@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from zg_bench.settings import (
+    OPENCODE_QWEN_ENABLE_THINKING,
+    OPENCODE_QWEN_REASONING_EFFORT,
+    OPENCODE_QWEN_TEMPERATURE,
+)
 from zg_bench.swe_qa import SELF_JUDGE_LABEL, SweQaError
 from zg_bench.swe_qa.cli import main as swe_qa_main
 from zg_bench.swe_qa.collect import SESSION_USAGE_METRICS, SESSION_USAGE_SCOPE, collect_pair
@@ -1198,7 +1203,7 @@ class JudgeTests(unittest.TestCase):
                     "id": "local-judge-response",
                     "object": "chat.completion",
                     "created": 1,
-                    "model": "glm-5.2",
+                    "model": requests[-1]["model"],
                     "choices": [{
                         "index": 0,
                         "finish_reason": "stop",
@@ -1223,32 +1228,129 @@ class JudgeTests(unittest.TestCase):
             with patch.dict("os.environ", {
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"
             }):
-                result = _judge_candidate(
-                    completion_fn=_default_completion(),
-                    api_key="local-test-key",
-                    api_base=f"http://127.0.0.1:{server.server_port}/v1",
-                    question="question",
-                    reference="reference",
-                    candidate="candidate",
-                    attempts=1,
-                )
+                for model in ("glm-5.2", "qwen3.8-max"):
+                    with self.subTest(model=model):
+                        result = _judge_candidate(
+                            completion_fn=_default_completion(),
+                            api_key="local-test-key",
+                            api_base=f"http://127.0.0.1:{server.server_port}/v1",
+                            question="question",
+                            reference="reference",
+                            candidate="candidate",
+                            attempts=1,
+                            model=model,
+                        )
+                        self.assertEqual(result["total"], 50)
+                        self.assertEqual(result["model"], model)
+                        self.assertEqual(result["label"], f"{model}-self-judge-v1")
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
-        self.assertEqual(result["total"], 50)
-        self.assertEqual(len(requests), 1)
-        request = requests[0]
-        self.assertEqual(request["model"], "glm-5.2")
-        self.assertEqual(request["temperature"], 0)
-        self.assertEqual(request["seed"], 42)
-        self.assertIs(request["enable_thinking"], True)
-        self.assertEqual(request["reasoning_effort"], "high")
-        self.assertEqual(request["max_tokens"], 32000)
-        self.assertNotIn("response_format", request)
-        self.assertNotIn("extra_body", request)
-        self.assertNotIn("reasoningEffort", request)
+        self.assertEqual(len(requests), 2)
+        for request, model in zip(requests, ("glm-5.2", "qwen3.8-max"), strict=True):
+            with self.subTest(model=model):
+                self.assertEqual(request["model"], model)
+                self.assertEqual(request["temperature"], OPENCODE_QWEN_TEMPERATURE if model == "qwen3.8-max" else 0)
+                self.assertEqual(request["seed"], 42)
+                self.assertIs(request["enable_thinking"], OPENCODE_QWEN_ENABLE_THINKING if model == "qwen3.8-max" else True)
+                self.assertEqual(request["reasoning_effort"], OPENCODE_QWEN_REASONING_EFFORT if model == "qwen3.8-max" else "high")
+                self.assertEqual(request["max_tokens"], 32000)
+                self.assertNotIn("response_format", request)
+                self.assertNotIn("extra_body", request)
+                self.assertNotIn("reasoningEffort", request)
+
+    def test_qwen_cli_propagates_model_and_roundtrips_report_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(root)
+            requests: list[dict[str, Any]] = []
+
+            def completion(**kwargs: Any) -> dict[str, Any]:
+                requests.append(kwargs)
+                return {
+                    "choices": [{"message": {"content": json.dumps({key: 10 for key in (
+                        "correctness", "completeness", "relevance", "clarity", "coherence"
+                    )})}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+                }
+
+            with (
+                patch.dict("os.environ", {
+                    "OPENAI_API_KEY": "shared-key",
+                    "OPENAI_BASE_URL": "https://shared.invalid/v1",
+                    "GLM_API_KEY": "unused-legacy-key",
+                    "GLM_BASE_URL": "https://legacy.invalid/v1",
+                }, clear=True),
+                patch("zg_bench.swe_qa.judge._default_completion", return_value=completion),
+                patch("builtins.print"),
+            ):
+                status = swe_qa_main([
+                    "judge", "--pairs-root", str(pairs_root),
+                    "--references", str(references),
+                    "--output-dir", str(root / "report"),
+                    "--expected", "reflex-6", "--model", "qwen3.8-max", "--attempts", "1",
+                ])
+            self.assertEqual(status, 0)
+            self.assertEqual(len(requests), 6)
+            for request in requests:
+                self.assertEqual(request["model"], "openai/qwen3.8-max")
+                self.assertEqual(request["api_key"], "unused-legacy-key")
+                self.assertEqual(request["api_base"], "https://legacy.invalid/v1")
+                self.assertEqual(request["temperature"], OPENCODE_QWEN_TEMPERATURE)
+                self.assertEqual(request["seed"], 42)
+                self.assertEqual(request["extra_body"], {"enable_thinking": OPENCODE_QWEN_ENABLE_THINKING})
+                self.assertEqual(request["reasoning_effort"], OPENCODE_QWEN_REASONING_EFFORT)
+                self.assertNotIn("response_format", request)
+            report = aggregate_reports(reports_root=root / "report", output_dir=root / "combined")
+            self.assertEqual(report["judge"]["model"], "qwen3.8-max")
+            self.assertEqual(report["judge"]["label"], "qwen3.8-max-self-judge-v1")
+            self.assertEqual(report["judge"]["temperature"], OPENCODE_QWEN_TEMPERATURE)
+            self.assertEqual(report["judge"]["enable_thinking"], OPENCODE_QWEN_ENABLE_THINKING)
+            self.assertEqual(report["gate"]["successful_judgements"], 6)
+            for profile in report["cases"][0]["profiles"].values():
+                for result in (profile["judge"], *(trial["judge"] for trial in profile["trials"])):
+                    self.assertEqual(result["model"], "qwen3.8-max")
+                    self.assertEqual(result["label"], "qwen3.8-max-self-judge-v1")
+            markdown = (root / "combined" / "report.md").read_text()
+            self.assertIn("qwen3.8-max-self-judge-v1", markdown)
+            self.assertNotIn("glm-5.2-self-judge-v1", markdown)
+            if OPENCODE_QWEN_ENABLE_THINKING:
+                self.assertIn("temperatures below 0.6", markdown)
+                self.assertIn("documented provider behaviors", markdown)
+
+    def test_unknown_judge_model_fails_before_loading_evidence(self) -> None:
+        with self.assertRaisesRegex(SweQaError, "unsupported judge model"):
+            judge_pairs(
+                pairs_root=Path("missing"), references_path=Path("missing"),
+                output_dir=Path("missing"), expected=["reflex:6"], model="unknown",
+            )
+
+    def test_qwen_judge_shared_credentials_fallback_strips_legacy_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pairs_root, references = self._write_pair_and_reference(root)
+            requests: list[dict[str, Any]] = []
+
+            def completion(**kwargs: Any) -> dict[str, Any]:
+                requests.append(kwargs)
+                return {"choices": [{"message": {"content": json.dumps({key: 10 for key in (
+                    "correctness", "completeness", "relevance", "clarity", "coherence"
+                )})}}]}
+
+            with patch.dict("os.environ", {
+                "GLM_API_KEY": "  ", "OPENAI_API_KEY": " shared-key ",
+                "OPENAI_BASE_URL": "https://shared.invalid/v1",
+            }, clear=True):
+                judge_pairs(
+                    pairs_root=pairs_root, references_path=references,
+                    output_dir=root / "report", expected=["reflex-6"],
+                    completion_fn=completion, model="qwen3.8-max", attempts=1,
+                )
+            self.assertEqual(len(requests), 6)
+            self.assertTrue(all(request["api_key"] == "shared-key" for request in requests))
+            self.assertTrue(all(request["api_base"] == "https://shared.invalid/v1" for request in requests))
 
     def test_default_and_environment_judge_concurrency_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1812,6 +1914,45 @@ class AggregateReportTests(unittest.TestCase):
             for task_id in ("sqlfluff:2", "pylint:9"):
                 self.assertNotIn(f"| {task_id} |", markdown)
                 self.assertIn(task_id, markdown)
+
+    def test_aggregate_accepts_qwen_and_rejects_mixed_or_inconsistent_identities(self) -> None:
+        def qwen_report(task_id: str, index: int) -> dict[str, Any]:
+            report = _judged_task_report(task_id, index)
+            identities = [report["judge"]]
+            for profile in report["cases"][0]["profiles"].values():
+                identities.append(profile["judge"])
+                identities.extend(trial["judge"] for trial in profile["trials"])
+            for identity in identities:
+                identity.update(model="qwen3.8-max", label="qwen3.8-max-self-judge-v1")
+            report["judge"]["temperature"] = OPENCODE_QWEN_TEMPERATURE
+            return report
+
+        for mismatch in (None, "mixed_models", "label", "profile", "trial", "unknown", "temperature"):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                first = qwen_report("reflex:6", 0)
+                second = qwen_report("sqlfluff:2", 1)
+                if mismatch == "mixed_models":
+                    second = _judged_task_report("sqlfluff:2", 1)
+                elif mismatch == "label":
+                    second["judge"]["label"] = SELF_JUDGE_LABEL
+                elif mismatch in ("profile", "trial"):
+                    profile = second["cases"][0]["profiles"]["baseline"]
+                    identity = profile["judge"] if mismatch == "profile" else profile["trials"][0]["judge"]
+                    identity.update(model="glm-5.2", label=SELF_JUDGE_LABEL)
+                elif mismatch == "unknown":
+                    second["judge"].update(model="unknown", label="unknown-self-judge-v1")
+                elif mismatch == "temperature":
+                    second["judge"]["temperature"] = OPENCODE_QWEN_TEMPERATURE + 0.5
+                _write_json(root / "reports" / "first" / "report.json", first)
+                _write_json(root / "reports" / "second" / "report.json", second)
+                if mismatch is None:
+                    report = aggregate_reports(reports_root=root / "reports", output_dir=root / "combined")
+                    self.assertEqual(report["judge"]["model"], "qwen3.8-max")
+                    self.assertEqual(report["judge"]["usage"]["calls"], 12)
+                else:
+                    with self.assertRaisesRegex(SweQaError, "incompatible judge"):
+                        aggregate_reports(reports_root=root / "reports", output_dir=root / "combined")
 
     def test_aggregate_preserves_generation_metadata_and_rejects_mixing(self) -> None:
         variants = [

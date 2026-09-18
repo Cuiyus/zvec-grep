@@ -112,6 +112,7 @@ class CliTests(unittest.TestCase):
         listing = output.getvalue()
         self.assertNotIn("qwen-coder", listing)
         self.assertIn("qwen3.7-max", listing)
+        self.assertIn("custom-openai/qwen3.8-max", listing)
         self.assertIn("opencode", listing)
         self.assertIn("aliyun-glm-5.2", listing)
         self.assertIn("claude-code", listing)
@@ -134,7 +135,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(error.exception.code, 2)
         self.assertIn(
-            "supported models: aliyun-glm-5.2, custom-openai/glm-5.2, qwen3.7-max",
+            "supported models: aliyun-glm-5.2, custom-openai/glm-5.2, qwen3.7-max, "
+            "custom-openai/qwen3.8-max",
             stderr.getvalue(),
         )
 
@@ -167,6 +169,13 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(args.agent, "claude-code")
         self.assertEqual(args.model, "claude-opus-5")
+
+    def test_accepts_custom_qwen_38_configuration(self) -> None:
+        args = build_parser().parse_args(
+            ["run", self.suite_name, "--agent", "opencode", "--model", "custom-openai/qwen3.8-max"]
+        )
+        self.assertEqual(args.agent, "opencode")
+        self.assertEqual(args.model, "custom-openai/qwen3.8-max")
 
     def test_accepts_independent_trial_count(self) -> None:
         args = build_parser().parse_args(

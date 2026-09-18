@@ -1,4 +1,5 @@
 name: SWE-QA Bench
+run-name: SWE-QA Bench / ${{ inputs.model || 'qwen3.8-max' }} / ${{ inputs.scope || 'auto' }}
 
 on:
   pull_request:
@@ -18,12 +19,21 @@ on:
           - repro-3
           - all-full
           - smoke
+      model:
+        description: Use this model for both execution and self-judging
+        required: true
+        default: qwen3.8-max
+        type: choice
+        options:
+          - qwen3.8-max
+          - glm-5.2
 
 permissions: {}
 
 env:
   SWE_QA_TRIALS_PER_PROFILE: "5"
   SWE_QA_MAX_RETRIES: "2"
+  SWE_QA_MODEL: ${{ inputs.model || 'qwen3.8-max' }}
 
 concurrency:
   group: swe-qa-bench-${{ github.run_id }}-${{ github.run_attempt }}
@@ -120,7 +130,7 @@ jobs:
           swe-qa-bench
           --tier full
           --agent opencode
-          --model custom-openai/glm-5.2
+          --model "custom-openai/$SWE_QA_MODEL"
           --profile all
           --n-attempts "$SWE_QA_TRIALS_PER_PROFILE"
           --max-retries "$SWE_QA_MAX_RETRIES"
@@ -186,7 +196,7 @@ jobs:
             --tier full \
             --task "$TASK_NAME" \
             --agent opencode \
-            --model custom-openai/glm-5.2 \
+            --model "custom-openai/$SWE_QA_MODEL" \
             --profile all \
             --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
             --max-retries "$SWE_QA_MAX_RETRIES" \
@@ -208,6 +218,7 @@ jobs:
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa judge \
             --pairs-root "$RUNNER_TEMP/pair-${TASK_NAME}.json" \
             --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json \
+            --model "$SWE_QA_MODEL" \
             --output-dir "$RUNNER_TEMP/swe-qa-task-report/${TASK_NAME}" \
             --expected "$TASK_NAME"
       - name: Summarize trial retries

@@ -74,7 +74,7 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 ## GitHub Actions
 
-[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行原有 20 题完整 benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行原有 20 题完整 benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`model` 输入默认是 `qwen3.8-max`，也可选择 `glm-5.2`；所选模型同时用于执行和评审。Push 和 PR 运行采用 Qwen3.8 Max 默认值。
 
 `repro-3` 固定运行 3 题 × 2 个 profile × 5 次 = 30 个 trial，供小规模复现与迭代。任务按[运行 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943) 中的调查路径和评分波动选取。下表范围均来自该轮最终成功的五次测试：
 
@@ -86,15 +86,15 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 此分层是历史样本的描述，不是统计显著性标准，也不是模型的固有随机性等级。低波动组仍存在路径变化；高波动组的一次 baseline 使用子代理，主轨迹未展开其内部调用。新一轮应与历史同三题比较，失败尝试的开销单独计入。
 
-CI 使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。上文的 Claude Code 配置对应已发布的本地测试协议。
+CI 默认使用 OpenCode `1.18.4`、`custom-openai/qwen3.8-max` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。上文的 Claude Code 配置对应已发布的本地测试协议。
 
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 
 每次失败的日志和轨迹保存在 Harbor job 的 `.retry-history/` 下，并随原始证据上传；Job Summary 展示重试次数和最终错误数。报告中的 token、工具调用、耗时及费用仅统计每个 trial 最终成功的那次执行，不包含失败尝试的额外开销；这些开销可在归档证据中查看。用尽重试次数仍失败时，该任务保持失败。每个任务 job 的总时限为 6 小时，包含准备和重试时间。
 
-OpenCode 的两个 profile、子代理和 GLM-5.2 评审统一使用以下参数，常量位于 `zg_bench/settings.py`：
+OpenCode 的两个 profile、子代理和评审统一使用所选模型，并请求以下参数，常量位于 `zg_bench/settings.py`：
 
-| 参数 | GLM-5.2 执行与评审设置 |
+| 参数 | Qwen3.8 Max / GLM-5.2 执行与评审请求值 |
 | --- | --- |
 | `temperature` | `0` |
 | `seed` | `42` |
@@ -103,15 +103,19 @@ OpenCode 的两个 profile、子代理和 GLM-5.2 评审统一使用以下参数
 | `max_tokens` | `32000` |
 | `response_format` | 不传入 |
 
-所有 trial 和重试使用同一个 seed。custom-openai、DashScope 两种 GLM 执行配置均设置 `reasoningEffort = "high"`，OpenAI-compatible SDK 会将其映射为 HTTP 请求中的 `reasoning_effort`。执行模型显式声明 `limit.output`，评审请求的 `max_tokens` 使用同一个 `BENCHMARK_MAX_OUTPUT_TOKENS` 常量。单独的 Qwen 配置保持关闭 thinking，不套用 GLM 的推理设置。[百炼 GLM 文档](https://help.aliyun.com/zh/model-studio/glm) 明确支持 GLM-5.2 的 `high` 强度。
+所有 trial 和重试使用同一个 seed。custom-openai 下的 Qwen3.8 Max、GLM 配置，以及 DashScope 下的 GLM 配置均设置 `reasoningEffort = "high"`，OpenAI-compatible SDK 会将其映射为 HTTP 请求中的 `reasoning_effort`。执行模型显式声明 `limit.output`，评审请求的 `max_tokens` 使用同一个 `BENCHMARK_MAX_OUTPUT_TOKENS` 常量。
 
-执行和评审请求均不传入 `response_format`：[百炼 GLM 功能表](https://help.aliyun.com/zh/model-studio/glm) 列明 GLM-5.2 仅在非思考模式支持结构化输出。评审提示词仍要求 JSON，并保留严格的评分解析与格式错误重试；报告元数据记录 `response_format = null`，表示请求未强制响应格式。
+[百炼 Chat Completions 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) 说明了模型间的参数差异：Qwen3.8 Max 在思考模式下会将低于 `0.6` 的温度自动调整为 `0.6`，并将 `reasoning_effort="high"` 映射为 `xhigh`。因此此配置下 Qwen 的**实际温度不是零**。此外，`max_tokens=32000` 对 Qwen 只限制最终回答，不包含思考；对未设置 `thinking_budget` 的 GLM-5.2 则限制思考与回答的总和。本 benchmark 保留相同请求字段，但两个模型的实际采样设置和 token 预算并不完全相同。
+
+Qwen3.8 Max 默认开启 `preserve_thinking`。OpenCode 模型配置设置 `interleaved: {"field": "reasoning_content"}`，将历史思考内容通过独立的 `reasoning_content` 字段回传，不拼入回答正文。参见[深度思考用法](https://help.aliyun.com/zh/model-studio/deep-thinking)和[Qwen3.8 Max 模型信息](https://help.aliyun.com/zh/model-studio/qwen3-8-max)。原有独立的 Qwen3.7 配置仍保持关闭 thinking。
+
+执行和评审请求均不传入 `response_format`。评审提示词仍要求 JSON，并保留严格的评分解析与格式错误重试；报告元数据记录 `response_format = null`，表示请求未强制响应格式。
 
 OpenCode 配置同时声明模型支持 temperature，并为所有内置 agent（包括子代理、上下文压缩及标题/摘要生成）设置温度，通过各 agent 的 provider options 传递 seed。评审报告记录温度、seed、thinking、推理强度、输出上限及响应格式；聚合时拒绝混用不一致的评审配置，也拒绝将新报告与缺少新增配置字段的旧报告混用。配置兼容的旧报告仍可彼此聚合。早期报告使用关闭 thinking 的评审模型，其分数不应直接混入新的评审口径。这些设置用于降低采样波动，响应能否完全一致仍取决于模型服务。
 
 两个 OpenCode profile 在全局及全部内置 agent（包含子代理）统一禁止 `websearch` 和 `webfetch`。即使 Harbor 跳过交互式权限确认，这两个工具也不会出现在发给模型的工具列表中。本地仓库搜索、文件读取和 zvec-grep MCP 仍可使用。这是网页工具限制，并非容器网络隔离；shell 命令及安装、模型连接仍可访问网络。
 
-CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续工具调用请求中的采样参数、开启 GLM thinking、实际 HTTP 字段 `reasoning_effort = "high"` 及网页工具限制，不需要 GLM 凭证。
+CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续工具调用请求中的采样参数、开启 Qwen3.8 Max / GLM thinking、实际 HTTP 字段 `reasoning_effort = "high"`、网页工具限制，以及 Qwen 历史 `reasoning_content` 字段的回传，不需要模型凭证。
 
 每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。全部任务完成后生成聚合报告；部分任务失败时，Summary 仍展示已完成任务的报告，不将不完整结果作为完整 benchmark 聚合。不同 GitHub run attempt 的报告保持隔离，自动 trial 重试发生在同一 attempt 内。
 

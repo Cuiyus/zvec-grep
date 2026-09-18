@@ -693,6 +693,7 @@ class RunValidationTests(unittest.TestCase):
         suite = runner.load_suite(self.suite_name, tier="smoke")
         for model, provider_id, model_id in (
             ("custom-openai/glm-5.2", "custom-openai", "glm-5.2"),
+            ("custom-openai/qwen3.8-max", "custom-openai", "qwen3.8-max"),
             ("aliyun-glm-5.2", "dashscope", "glm-5.2"),
             ("qwen3.7-max", "dashscope", "qwen3.7-max"),
         ):
@@ -719,15 +720,24 @@ class RunValidationTests(unittest.TestCase):
                     self.assertIs(
                         config["provider"][provider_id]["models"][model_id]
                         ["options"]["enable_thinking"],
-                        model_id == "glm-5.2",
+                        (
+                            runner.OPENCODE_QWEN_ENABLE_THINKING
+                            if model_id == "qwen3.8-max"
+                            else model_id == "glm-5.2"
+                        ),
                     )
                     model_options = (
                         config["provider"][provider_id]["models"][model_id]["options"]
                     )
-                    if model_id == "glm-5.2":
+                    if model_id in ("glm-5.2", "qwen3.8-max"):
                         # The compatible SDK maps this option to the API's
                         # snake_case reasoning_effort field on the wire.
-                        self.assertEqual(model_options["reasoningEffort"], "high")
+                        self.assertEqual(
+                            model_options["reasoningEffort"],
+                            runner.OPENCODE_QWEN_REASONING_EFFORT
+                            if model_id == "qwen3.8-max"
+                            else "high",
+                        )
                         self.assertEqual(
                             config["provider"][provider_id]["models"][model_id]
                             ["limit"]["output"],
@@ -741,6 +751,16 @@ class RunValidationTests(unittest.TestCase):
                     else:
                         self.assertNotIn("reasoningEffort", model_options)
                     self.assertNotIn("reasoning_effort", model_options)
+                    self.assertNotIn("response_format", model_options)
+                    if model_id == "qwen3.8-max":
+                        self.assertEqual(
+                            config["provider"][provider_id]["models"][model_id]["interleaved"],
+                            {"field": "reasoning_content"},
+                        )
+                        self.assertEqual(
+                            config["provider"][provider_id]["options"]["baseURL"],
+                            runner.OPENCODE_CUSTOM_QWEN_BASE_URL,
+                        )
                     self.assertEqual(
                         config["permission"],
                         {"websearch": "deny", "webfetch": "deny"},
@@ -749,7 +769,12 @@ class RunValidationTests(unittest.TestCase):
                         "build", "plan", "general", "explore",
                         "compaction", "title", "summary",
                     ):
-                        self.assertEqual(config["agent"][name]["temperature"], 0)
+                        self.assertEqual(
+                            config["agent"][name]["temperature"],
+                            runner.OPENCODE_QWEN_TEMPERATURE
+                            if model_id == "qwen3.8-max"
+                            else 0,
+                        )
                         self.assertEqual(config["agent"][name]["options"]["seed"], 42)
                         self.assertEqual(
                             config["agent"][name]["permission"],
@@ -787,6 +812,34 @@ class RunValidationTests(unittest.TestCase):
                 agent="opencode",
                 model="custom-openai/glm-5.2",
                 embedding_model="local/potion-code-16m-v2",
+            )
+
+    def test_custom_qwen_normalizes_shared_endpoint_credentials(self) -> None:
+        for credential_name in ("GLM_API_KEY", "OPENAI_API_KEY"):
+            with self.subTest(credential=credential_name), patch.dict(
+                runner.os.environ,
+                {credential_name: "shared-endpoint-secret", "UNRELATED": "kept"},
+                clear=True,
+            ):
+                runner.validate_profile_credentials(
+                    ("baseline", "zvec-grep"),
+                    agent="opencode",
+                    model="custom-openai/qwen3.8-max",
+                    embedding_model="local/potion-code-16m-v2",
+                )
+                environment = runner.execution_environment(
+                    agent="opencode", model="custom-openai/qwen3.8-max"
+                )
+                self.assertEqual(environment["OPENAI_API_KEY"], "shared-endpoint-secret")
+                self.assertEqual(environment["OPENAI_BASE_URL"], runner.OPENCODE_CUSTOM_QWEN_BASE_URL)
+                self.assertNotIn("GLM_API_KEY", environment)
+                self.assertEqual(environment["UNRELATED"], "kept")
+
+        with patch.dict(runner.os.environ, {}, clear=True), self.assertRaisesRegex(
+            ValueError, "export GLM_API_KEY or OPENAI_API_KEY"
+        ):
+            runner.validate_profile_credentials(
+                ("baseline",), agent="opencode", model="custom-openai/qwen3.8-max"
             )
 
     def test_qwen_code_agent_is_not_supported(self) -> None:

@@ -1,4 +1,4 @@
-"""GLM-5.2 self-judge and report generation for SWE-QA pairs."""
+"""Same-model self-judge and report generation for SWE-QA pairs."""
 
 from __future__ import annotations
 
@@ -17,8 +17,12 @@ from ..settings import (
     OPENCODE_CUSTOM_GLM_BASE_URL,
     OPENCODE_GLM_ENABLE_THINKING,
     OPENCODE_GLM_REASONING_EFFORT,
+    OPENCODE_CUSTOM_QWEN_BASE_URL,
+    OPENCODE_QWEN_ENABLE_THINKING,
+    OPENCODE_QWEN_REASONING_EFFORT,
+    OPENCODE_QWEN_TEMPERATURE,
 )
-from . import SELF_JUDGE_LABEL, SweQaError
+from . import SweQaError
 from .collect import (
     LEGACY_USAGE_SCOPE,
     SESSION_USAGE_METRICS,
@@ -31,6 +35,7 @@ from .collect import (
 
 SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence")
 JUDGE_MODEL = "openai/glm-5.2"
+JUDGE_MODELS = ("glm-5.2", "qwen3.8-max")
 PROFILE_NAMES = ("baseline", "zvec-grep")
 COMPARISON_KEYS = (
     "judge_delta",
@@ -49,13 +54,25 @@ JUDGE_GENERATION_METADATA_KEYS = (
 Completion = Callable[..., Any]
 
 
-def _judge_generation_metadata() -> dict[str, Any]:
+def _judge_label(model: str) -> str:
+    if model not in JUDGE_MODELS:
+        raise SweQaError(f"unsupported judge model: {model}")
+    return f"{model}-self-judge-v1"
+
+
+def _judge_temperature(model: str) -> float:
+    return OPENCODE_QWEN_TEMPERATURE if model == "qwen3.8-max" else BENCHMARK_TEMPERATURE
+
+
+def _judge_generation_metadata(model: str = "glm-5.2") -> dict[str, Any]:
+    _judge_label(model)
+    is_qwen = model == "qwen3.8-max"
     return {
-        "enable_thinking": OPENCODE_GLM_ENABLE_THINKING,
-        "reasoning_effort": OPENCODE_GLM_REASONING_EFFORT,
+        "enable_thinking": OPENCODE_QWEN_ENABLE_THINKING if is_qwen else OPENCODE_GLM_ENABLE_THINKING,
+        "reasoning_effort": OPENCODE_QWEN_REASONING_EFFORT if is_qwen else OPENCODE_GLM_REASONING_EFFORT,
         "max_tokens": BENCHMARK_MAX_OUTPUT_TOKENS,
-        # GLM-5.2 supports API-enforced JSON only without thinking. The rubric
-        # prompt still requests JSON, and parsing/retries enforce valid scores.
+        # The rubric prompt requests JSON; no API-enforced format is enabled.
+        # Parsing and retries enforce valid scores for both supported models.
         "response_format": None,
     }
 
@@ -403,25 +420,27 @@ def _judge_candidate(
     reference: str,
     candidate: str,
     attempts: int,
+    model: str = "glm-5.2",
 ) -> dict[str, Any]:
+    generation = _judge_generation_metadata(model)
     prompt = _judge_prompt(question=question, reference=reference, candidate=candidate)
     last_failure = "unknown"
     for attempt in range(1, attempts + 1):
         started = time.monotonic()
         try:
             response = completion_fn(
-                model=JUDGE_MODEL,
+                model=f"openai/{model}",
                 api_key=api_key,
                 api_base=api_base,
-                temperature=BENCHMARK_TEMPERATURE,
+                temperature=_judge_temperature(model),
                 seed=BENCHMARK_SEED,
-                reasoning_effort=OPENCODE_GLM_REASONING_EFFORT,
-                # LiteLLM's OpenAI model registry does not know GLM's support.
+                reasoning_effort=generation["reasoning_effort"],
+                # LiteLLM's OpenAI model registry may not know this provider.
                 # Explicitly forward it rather than silently dropping it.
                 allowed_openai_params=["reasoning_effort"],
                 max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
-                extra_body={"enable_thinking": OPENCODE_GLM_ENABLE_THINKING},
+                extra_body={"enable_thinking": generation["enable_thinking"]},
             )
         except Exception as error:  # Provider errors have no shared stable base.
             last_failure = f"transport error ({type(error).__name__})"
@@ -432,9 +451,9 @@ def _judge_candidate(
                 last_failure = str(error)
             else:
                 return {
-                    "label": SELF_JUDGE_LABEL,
-                    "model": "glm-5.2",
-                    **_judge_generation_metadata(),
+                    "label": _judge_label(model),
+                    "model": model,
+                    **generation,
                     "scores": scores,
                     "total": sum(scores.values()),
                     "latency_seconds": time.monotonic() - started,
@@ -454,6 +473,7 @@ def _judge_task_trials(
     api_base: str,
     attempts: int,
     concurrency: int,
+    model: str = "glm-5.2",
 ) -> dict[str, list[dict[str, Any]]]:
     work_items = [
         (profile_name, trial)
@@ -476,6 +496,7 @@ def _judge_task_trials(
                     reference=str(reference["reference_answer"]),
                     candidate=str(trial["answer"]),
                     attempts=attempts,
+                    model=model,
                 )
             )
         try:
@@ -584,14 +605,19 @@ def _summarize_usage(
 
 def _summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     count = len(trials)
+    identity = {key: trials[0]["judge"][key] for key in ("label", "model")}
+    if any(
+        trial["judge"].get(key) != value
+        for trial in trials for key, value in identity.items()
+    ):
+        raise SweQaError("profile trials use incompatible judge identities")
     scores = {
         key: sum(trial["judge"]["scores"][key] for trial in trials) / count
         for key in SCORE_KEYS
     }
     usages = [trial["judge"]["usage"] for trial in trials]
     judge = {
-        "label": SELF_JUDGE_LABEL,
-        "model": "glm-5.2",
+        **identity,
         "scores": scores,
         "total": sum(trial["judge"]["total"] for trial in trials) / count,
         "latency_seconds": sum(
@@ -990,10 +1016,21 @@ def _render_report(report: dict[str, Any]) -> str:
         "Legacy report: judge thinking, reasoning effort, and output limit were not recorded."
     )
     lines.extend((
-        f"Judge: **{SELF_JUDGE_LABEL}** (GLM-5.2 self-judge).",
+        f"Judge: **{judge_metadata['label']}** ({judge_metadata['model']} self-judge).",
         "",
         generation_description,
         "",
+    ))
+    if judge_metadata["model"] == "qwen3.8-max" and judge_metadata.get("enable_thinking") is True:
+        lines.extend((
+            "Qwen thinking-mode parameter interpretation: the metadata above records requested values. "
+            "The [provider documentation](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) "
+            "specifies that temperatures below 0.6 are raised to 0.6 and `reasoning_effort=high` maps to `xhigh`; "
+            "`max_tokens` limits the final answer and excludes reasoning tokens. "
+            "These are documented provider behaviors, not effective values observed in the response.",
+            "",
+        ))
+    lines.extend((
         "This run is **report-only**. Numeric scores and the Aggregate filter are not code-review or merge gates. "
         "The hard gate still requires every expected pair and every judge call to succeed, including excluded tasks.",
         "",
@@ -1066,9 +1103,21 @@ def _valid_number(value: Any, *, allow_none: bool = False) -> bool:
     )
 
 
-def _validate_report_judge(value: Any, *, prefix: str) -> None:
+def _validate_report_judge(
+    value: Any, *, prefix: str, expected_model: str | None = None
+) -> None:
     if not isinstance(value, dict):
         raise SweQaError(f"{prefix}: missing judge result")
+    # Some legacy evidence omitted trial identities. If present, both fields
+    # must agree with the report identity instead of silently mixing models.
+    if "model" in value or "label" in value:
+        model = value.get("model")
+        if (
+            model not in JUDGE_MODELS
+            or value.get("label") != _judge_label(model)
+            or (expected_model is not None and model != expected_model)
+        ):
+            raise SweQaError(f"{prefix}: incompatible judge identity")
     total = value.get("total")
     if not _valid_number(total) or not 5 <= float(total) <= 100:
         raise SweQaError(f"{prefix}: invalid judge total")
@@ -1102,7 +1151,9 @@ def _validate_report_metrics(value: Any, *, prefix: str) -> None:
     value["usage_scope"] = _validate_usage_metrics(value, integer=False)
 
 
-def _report_profile_trial_count(profile: dict[str, Any], *, prefix: str) -> int:
+def _report_profile_trial_count(
+    profile: dict[str, Any], *, prefix: str, expected_model: str | None = None
+) -> int:
     raw_trials = profile.get("trials")
     if raw_trials is None:
         return 1
@@ -1121,7 +1172,9 @@ def _report_profile_trial_count(profile: dict[str, Any], *, prefix: str) -> int:
             raise SweQaError(f"{prefix}: invalid trial_index")
         indexes.append(trial_index)
         trial_prefix = f"{prefix} trial {trial_index}"
-        _validate_report_judge(trial.get("judge"), prefix=trial_prefix)
+        _validate_report_judge(
+            trial.get("judge"), prefix=trial_prefix, expected_model=expected_model
+        )
         _validate_report_metrics(trial.get("metrics"), prefix=trial_prefix)
     if sorted(indexes) != list(range(1, len(raw_trials) + 1)):
         raise SweQaError(f"{prefix}: trial_index values are not contiguous")
@@ -1166,10 +1219,11 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
 
     judge = report.get("judge")
     if not isinstance(judge, dict) or (
-        judge.get("label") != SELF_JUDGE_LABEL
-        or judge.get("model") != "glm-5.2"
+        judge.get("model") not in JUDGE_MODELS
+        or judge.get("label") != _judge_label(judge["model"])
         or judge.get("self_judge") is not True
-        or judge.get("temperature") != BENCHMARK_TEMPERATURE
+        or not _valid_number(judge.get("temperature"))
+        or judge["temperature"] < 0
         or judge.get("rubric") != list(SCORE_KEYS)
     ):
         raise SweQaError(f"{prefix}: incompatible judge metadata")
@@ -1217,10 +1271,12 @@ def _validate_task_report(report: dict[str, Any], path: Path) -> dict[str, Any]:
         if not isinstance(profile, dict):
             raise SweQaError(f"{prefix}: case has no {profile_name} profile")
         profile_prefix = f"{prefix} {profile_name}"
-        _validate_report_judge(profile.get("judge"), prefix=profile_prefix)
+        _validate_report_judge(
+            profile.get("judge"), prefix=profile_prefix, expected_model=judge["model"]
+        )
         _validate_report_metrics(profile.get("metrics"), prefix=profile_prefix)
         trial_count = _report_profile_trial_count(
-            profile, prefix=profile_prefix
+            profile, prefix=profile_prefix, expected_model=judge["model"]
         )
         trial_counts.append(trial_count)
         judgement_count += trial_count
@@ -1376,8 +1432,10 @@ def judge_pairs(
     completion_fn: Completion | None = None,
     attempts: int = 3,
     concurrency: int | None = None,
+    model: str = "glm-5.2",
 ) -> dict[str, Any]:
     """Apply the same-model judge and emit JSON/Markdown reports."""
+    label = _judge_label(model)
     if attempts < 1 or attempts > 5:
         raise SweQaError("judge attempts must be between 1 and 5")
     concurrency = _judge_concurrency(concurrency)
@@ -1389,12 +1447,20 @@ def judge_pairs(
             "hard gate is missing reference(s): " + ", ".join(missing_references)
         )
 
-    api_key = os.environ.get("GLM_API_KEY", "").strip()
+    # Both models use the same custom OpenAI-compatible deployment by default.
+    # Preserve legacy GLM settings, with shared OpenAI settings as a fallback.
+    api_key = (
+        os.environ.get("GLM_API_KEY", "").strip()
+        or os.environ.get("OPENAI_API_KEY", "").strip()
+    )
     if not api_key:
-        raise SweQaError("GLM_API_KEY is required for the self-judge")
-    api_base = os.environ.get("GLM_BASE_URL", OPENCODE_CUSTOM_GLM_BASE_URL).strip()
+        raise SweQaError("OPENAI_API_KEY or GLM_API_KEY is required for the self-judge")
+    default_base = OPENCODE_CUSTOM_QWEN_BASE_URL if model == "qwen3.8-max" else OPENCODE_CUSTOM_GLM_BASE_URL
+    api_base = os.environ.get(
+        "GLM_BASE_URL", os.environ.get("OPENAI_BASE_URL", default_base)
+    ).strip()
     if not api_base:
-        raise SweQaError("GLM_BASE_URL must not be empty")
+        raise SweQaError("self-judge API base URL must not be empty")
     completion_fn = completion_fn or _default_completion()
 
     cases: list[dict[str, Any]] = []
@@ -1416,6 +1482,7 @@ def judge_pairs(
             api_base=api_base,
             attempts=attempts,
             concurrency=concurrency,
+            model=model,
         )
         profile_results: dict[str, dict[str, Any]] = {}
         for profile_name in PROFILE_NAMES:
@@ -1453,12 +1520,12 @@ def judge_pairs(
             for case in cases for profile in PROFILE_NAMES
         ]),
         "judge": {
-            "label": SELF_JUDGE_LABEL,
-            "model": "glm-5.2",
+            "label": label,
+            "model": model,
             "self_judge": True,
-            "temperature": BENCHMARK_TEMPERATURE,
+            "temperature": _judge_temperature(model),
             "seed": BENCHMARK_SEED,
-            **_judge_generation_metadata(),
+            **_judge_generation_metadata(model),
             "rubric": list(SCORE_KEYS),
             "usage": judge_usage,
         },
