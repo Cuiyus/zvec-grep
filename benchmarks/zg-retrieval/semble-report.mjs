@@ -61,7 +61,7 @@ const sha = (value, label) =>
 const modeRows = (report) =>
   report.tasks.filter((row) => row.mode === "hybrid");
 const FILE_PRESENCE_RULE =
-  "Diagnostic only: repetition-5 native Top 10 contains an exact file path of at least one accepted Gold target. Bridge-only paths are excluded. This does not establish source-entry relevance or correctness and never changes Hit/MRR/nDCG.";
+  "Legacy diagnostic: repetition-5 native Top 10 contains an exact file path of at least one accepted Gold target. Bridge-only paths are excluded. This cached diagnostic is not used to calculate scores; headline file Hit/MRR are recomputed independently with upstream path matching. Neither establishes sufficient answer evidence.";
 
 function goldFilePresence(row, gold) {
   const acceptedPaths = new Set(
@@ -1234,7 +1234,7 @@ export async function compareSembleToZg(
         "No cross-environment timing ratio or speed winner is computed. Index/MCP timings are observations only; first query includes engine-specific load costs.",
     },
     warnings: [
-      "Same original queries, repository commits, partial Gold and Hit/MRR/grouped-nDCG semantics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
+      "Same original queries, repository commits, partial Gold, file Hit/MRR, official nDCG and legacy anchor semantics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
       "Semble official nDCG uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Supplementary anchor scores also depend on native rendering and frozen anchors; zero anchor score does not prove absence of relevant code.",
       ...[baseline, candidate].flatMap((report, i) =>
         report.product_error_calls
