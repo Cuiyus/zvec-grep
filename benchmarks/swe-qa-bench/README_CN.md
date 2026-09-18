@@ -74,7 +74,7 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 ## GitHub Actions
 
-[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行原有 20 题完整 benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`model` 输入默认是 `qwen3.8-max`，也可选择 `glm-5.2`；所选模型同时用于执行和评审。Push 和 PR 运行采用 Qwen3.8 Max 默认值。
+[SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 会在仓库的 `main` 分支收到 push，或同仓库分支向 `main` 提交 PR 时，自动运行原有 20 题完整 benchmark；Dependabot PR 除外。来自外部 fork 或 Dependabot 的 PR 只运行验证。`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。Push 和 PR 运行采用 GLM-5.2 默认值。
 
 `repro-3` 固定运行 3 题 × 2 个 profile × 5 次 = 30 个 trial，供小规模复现与迭代。任务按[运行 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943) 中的调查路径和评分波动选取。下表范围均来自该轮最终成功的五次测试：
 
@@ -86,7 +86,7 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 此分层是历史样本的描述，不是统计显著性标准，也不是模型的固有随机性等级。低波动组仍存在路径变化；高波动组的一次 baseline 使用子代理，主轨迹未展开其内部调用。新一轮应与历史同三题比较，失败尝试的开销单独计入。
 
-CI 默认使用 OpenCode `1.18.4`、`custom-openai/qwen3.8-max` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。上文的 Claude Code 配置对应已发布的本地测试协议。
+CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。上文的 Claude Code 配置对应已发布的本地测试协议。
 
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 

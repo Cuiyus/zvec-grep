@@ -134,9 +134,9 @@ same-repository pull requests targeting `main`, except Dependabot pull
 requests. External-fork and Dependabot pull requests run validation only.
 `workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
 `smoke` (5 tasks) remain available. Its `model` input defaults to
-`qwen3.8-max`; select `glm-5.2` to run the same protocol with GLM. The selected
+`glm-5.2`; select `qwen3.8-max` to run the same protocol with Qwen. The selected
 model is used for both execution and judging. Push and pull-request runs use
-the Qwen3.8 Max default.
+the GLM-5.2 default.
 
 The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
 tasks were selected from [run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943)
@@ -156,7 +156,7 @@ to a subagent whose internal calls are absent from the main trace. Compare new
 trials against the same three historical tasks, and account for failed-attempt
 overhead separately.
 
-CI uses OpenCode `1.18.4` with `custom-openai/qwen3.8-max` by default, the local
+CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2` by default, the local
 `local/potion-code-16m-v2` embedding model, and five trials per task and
 profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
 execution and judging. The existing secret name is retained for both models;
