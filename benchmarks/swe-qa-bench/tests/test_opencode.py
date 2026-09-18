@@ -13,9 +13,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.opencode import OpenCode
+from harbor.cli.utils import parse_env_vars, parse_kwargs
 from harbor.models.agent.context import AgentContext
+from harbor.models.trial.config import AgentConfig
 
 from zg_bench import runner
 from zg_bench.agents.opencode import (
@@ -166,12 +169,19 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                 (corpus / "README.md").write_text("The fixture value is 42.\n")
                 requests: list[dict[str, Any]] = []
                 child_requests: list[dict[str, Any]] = []
+                authorization_headers: list[str | None] = []
+                fixture_key = "offline-fixture-not-a-real-key"
 
                 class FakeProvider(BaseHTTPRequestHandler):
                     def log_message(self, *_args: Any) -> None:
                         pass
 
                     def do_POST(self) -> None:
+                        authorization = self.headers.get("Authorization")
+                        authorization_headers.append(authorization)
+                        if authorization != f"Bearer {fixture_key}":
+                            self.send_error(401, "No valid API key provided")
+                            return
                         body = json.loads(
                             self.rfile.read(int(self.headers["Content-Length"]))
                         )
@@ -320,11 +330,40 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         config["agent"][agent]["steps"] = 3
                     config_path = root / "opencode.json"
                     config_path.write_text(json.dumps(config))
+                    logs_dir = root / "agent"
+                    logs_dir.mkdir()
+                    # Follow Harbor's real CLI parsing and AgentFactory env
+                    # resolution. Host credentials must reach the isolated
+                    # runtime through --agent-env, never a fixture shortcut.
+                    source_key = (
+                        "GLM_API_KEY" if model.startswith("custom-openai/")
+                        else "DASHSCOPE_API_KEY"
+                    )
+                    with patch.dict(os.environ, {source_key: fixture_key}, clear=True):
+                        host_env = runner.execution_environment(agent="opencode", model=model)
+                    with patch.dict(os.environ, host_env, clear=True):
+                        agent = AgentFactory.create_agent_from_config(
+                            AgentConfig(
+                                name=command[command.index("--agent") + 1],
+                                model_name=command[command.index("--model") + 1],
+                                env=parse_env_vars([
+                                    command[index + 1]
+                                    for index, value in enumerate(command)
+                                    if value == "--agent-env"
+                                ]),
+                                kwargs=parse_kwargs([
+                                    command[index + 1]
+                                    for index, value in enumerate(command)
+                                    if value == "--agent-kwarg"
+                                ]),
+                            ),
+                            logs_dir=logs_dir,
+                        )
+                    self.assertEqual(agent.extra_env.get("OPENAI_API_KEY"), fixture_key)
                     env = {
                         "PATH": os.environ.get("PATH", os.defpath),
                         "HOME": str(root),
                         "LANG": "en_US.UTF-8",
-                        "OPENAI_API_KEY": "offline-fixture-not-a-real-key",
                         "OPENCODE_CONFIG": str(config_path),
                         "OPENCODE_DISABLE_MODELS_FETCH": "true",
                         "OPENCODE_DISABLE_PROJECT_CONFIG": "true",
@@ -335,6 +374,7 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         "XDG_DATA_HOME": str(root / "data"),
                         "XDG_STATE_HOME": str(root / "state"),
                         "XDG_CACHE_HOME": str(root / "cache"),
+                        **agent.extra_env,
                     }
                     result = subprocess.run(
                         [
@@ -357,14 +397,8 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         [binary, "db", USAGE_SQL, "--format", "json"],
                         env=env, cwd=corpus, text=True, timeout=30,
                     )
-                    logs_dir = root / "agent"
-                    logs_dir.mkdir()
                     (logs_dir / "opencode.txt").write_text(result.stdout)
                     (logs_dir / "opencode-session-snapshot.json").write_text(snapshot)
-                    agent = ResilientOpenCode(
-                        logs_dir=logs_dir, model_name=command[command.index("--model") + 1],
-                        collect_session_usage=True,
-                    )
                     agent._usage_capture_complete = True
                     context = AgentContext()
                     agent.populate_context_post_run(context)
@@ -393,6 +427,9 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                     self.assertGreater(
                         len(requests), len(task_requests),
                         "Expected a title/summary request",
+                    )
+                    self.assertEqual(
+                        authorization_headers, [f"Bearer {fixture_key}"] * len(requests)
                     )
                     for request in requests:
                         is_qwen = model == "custom-openai/qwen3.8-max"

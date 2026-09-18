@@ -1026,7 +1026,9 @@ def build_harbor_command(
         command.extend(["--agent-kwarg", agent_kwarg])
     if _opencode_dashscope_model_id(
         agent, model
-    ) is not None or _is_opencode_custom_glm_model(agent, model):
+    ) is not None or _opencode_custom_base_url(agent, model) is not None:
+        # Harbor does not automatically forward credentials for our custom
+        # provider. Normalizing the host environment alone is insufficient.
         command.extend(["--agent-env", "OPENAI_API_KEY=${OPENAI_API_KEY}"])
     if agent == _CLAUDE_CODE_AGENT:
         credential = _first_nonempty_env(_CLAUDE_CODE_CREDENTIAL_ENV_VARS)

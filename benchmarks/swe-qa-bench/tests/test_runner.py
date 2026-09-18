@@ -801,6 +801,41 @@ class RunValidationTests(unittest.TestCase):
         self.assertNotIn("GLM_API_KEY", environment)
         self.assertEqual(environment["UNRELATED"], "kept")
 
+    def test_all_opencode_profiles_forward_provider_key_as_harbor_template(self) -> None:
+        suite = runner.load_suite(self.suite_name, tier="smoke")
+        models = (
+            model
+            for support in runner.AGENT_MODEL_SUPPORT
+            if support.agent == "opencode"
+            for model in (support.model, *support.aliases)
+        )
+        fixture_key = "offline-fixture-not-a-real-key"
+        with patch.dict(
+            runner.os.environ,
+            {"OPENAI_API_KEY": fixture_key},
+            clear=True,
+        ):
+            for model in models:
+                for profile in runner.PROFILES:
+                    with self.subTest(model=model, profile=profile):
+                        command = runner.build_harbor_command(
+                            suite,
+                            profile=profile,
+                            agent="opencode",
+                            model=model,
+                            embedding_model="local/potion-code-16m-v2",
+                            job_name="provider-auth-test",
+                        )
+                        forwarded = [
+                            command[index + 1]
+                            for index, value in enumerate(command)
+                            if value == "--agent-env"
+                        ]
+                        self.assertEqual(
+                            forwarded, ["OPENAI_API_KEY=${OPENAI_API_KEY}"]
+                        )
+                        self.assertNotIn(fixture_key, " ".join(command))
+
     def test_local_embedding_does_not_require_embedding_key(self) -> None:
         with patch.dict(
             runner.os.environ,
