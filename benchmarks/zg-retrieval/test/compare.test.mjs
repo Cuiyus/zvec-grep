@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { scoreSembleMetric } from "../semble-metrics.mjs";
 import {
   compareReports,
   markdownComparison,
@@ -15,9 +16,15 @@ function row(task_id, rank = "not_in_top10", options = {}) {
   return {
     task_id,
     mode: "hybrid",
-    repetition: 1,
+    repetition: 5,
     quality_observation: true,
     repository: "example/repo",
+    language: "python",
+    items: [],
+    semble_official: {
+      targets: [{ path: "target.py" }],
+      ...scoreSembleMetric([], [{ path: "target.py" }]),
+    },
     category: "what",
     gold_status: "reviewed",
     status: "scored",
@@ -39,6 +46,7 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
   ).length;
   return {
     schema_version: 1,
+    quality_repetition: 5,
     quality_score_valid: true,
     integrity_passed: productErrors === 0,
     integrity_errors: [],
@@ -46,6 +54,7 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
     suite: {
       source: "a".repeat(64),
       gold: "b".repeat(64),
+      semble_gold: "b".repeat(64),
       protocol: "c".repeat(64),
     },
     scope: ids.length === 20 ? "full-20-original-queries" : "explicit-subset",
@@ -215,7 +224,7 @@ for (const [name, mutate, pattern] of [
     (r) => {
       r.tasks[1].repetition = 2;
     },
-    /quality repetition 1/,
+    /quality repetition 5/,
   ],
   [
     "hit-score corruption",
@@ -354,4 +363,63 @@ test("writes JSON and Markdown with input hashes only after validation and refus
     /invalid quality report/,
   );
   await assert.rejects(stat(invalidOutput), { code: "ENOENT" });
+});
+
+test("official comparison re-scores native first target ranks and ignores cached macro totals", () => {
+  const targets = [{ path: "a.py" }, { path: "b.py" }];
+  const oldRow = row("example:1", "not_in_top10", {
+    semble_official: { targets, ...scoreSembleMetric([], targets) },
+  });
+  const items = [
+    { rank: 1, path: "a.py" },
+    { rank: 2, path: "a.py" },
+    { rank: 3, path: "b.py" },
+  ];
+  const newRow = row("example:1", "not_in_top10", {
+    items,
+    semble_official: { targets, ...scoreSembleMetric(items, targets) },
+  });
+  const baseline = report([oldRow]),
+    candidate = report([newRow]);
+  candidate.modes.hybrid.semble_official = {
+    repository_macro: { ndcg_at_10: 999 },
+  };
+  const result = compareReports(baseline, candidate);
+  assert.deepEqual(
+    result.tasks[0].candidate.semble_official.target_ranks,
+    [1, 3],
+  );
+  const expected = 1.5 / (1 + 1 / Math.log2(3));
+  assert.equal(
+    result.modes.hybrid.semble_official.candidate.repository_macro.ndcg_at_10,
+    expected,
+  );
+  assert.equal(result.tasks[0].semble_official_delta.ndcg_at_10, expected);
+  assert.equal(result.modes.hybrid.summary.delta.mrr_at_10, 0);
+  assert.match(markdownComparison(result), /SWE-QA accepted-file projection/);
+});
+
+test("official comparison rejects score corruption, changed projection and old quality-repetition metadata", () => {
+  const baseline = report();
+  for (const mutate of [
+    (r) => {
+      r.tasks[0].semble_official.ndcg_at_10 = 1;
+    },
+    (r) => {
+      r.suite.semble_gold = "9".repeat(64);
+    },
+    (r) => {
+      r.tasks[0].semble_official.targets = [{ path: "changed.py" }];
+    },
+    (r) => {
+      r.quality_repetition = 1;
+    },
+  ]) {
+    const candidate = clone(baseline);
+    mutate(candidate);
+    assert.throws(
+      () => compareReports(baseline, candidate),
+      /Semble official score|incompatible suite semble_gold|incompatible Semble target projection|quality repetition 5/,
+    );
+  }
 });

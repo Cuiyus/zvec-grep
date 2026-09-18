@@ -29,12 +29,11 @@ function relativePath(value) {
 
 /**
  * Parse Semble @0051e000's public MCP search response for the fixed protocol:
- * one repository, top_k=10, max_snippet_lines=10, content="all".
- * utils.format_results returns the first ten splitlines() without stripping,
- * outlining, or reordering them. Map ONLY that visible snippet, never the rest
- * of the chunk's advertised range. Source/chunk validation belongs to the
- * runner: Python splitlines also recognizes separators other than LF, so the
- * source audit must verify line mapping rather than filling missing content.
+ * one repository, top_k=10, max_snippet_lines=null, content="code".
+ * utils.format_results returns the full native chunk without stripping,
+ * outlining, or reordering it. Only LF advances a source line: Python's
+ * splitlines() is deliberately not used for this full-content endpoint.
+ * A final LF terminates the last source line and does not add an empty line.
  */
 export function createSembleResponseParser({ expectedQuery } = {}) {
   if (typeof expectedQuery !== "string" || expectedQuery.length === 0)
@@ -105,15 +104,14 @@ export function createSembleResponseParser({ expectedQuery } = {}) {
         fail("Invalid Semble retrieval score.");
       if (
         typeof entry.content !== "string" ||
-        /[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]/.test(entry.content)
+        entry.content.length === 0 ||
+        entry.content.includes("\r")
       )
         fail("Unknown Semble snippet content or line framing.");
-      const lines = entry.content === "" ? [] : entry.content.split("\n");
-      if (
-        lines.length > 10 ||
-        lines.length > entry.end_line - entry.start_line + 1
-      )
-        fail("Semble visible snippet exceeds its limit or source range.");
+      const lines = entry.content.split("\n");
+      if (entry.content.endsWith("\n")) lines.pop();
+      if (lines.length !== entry.end_line - entry.start_line + 1)
+        fail("Semble full chunk does not match its complete source range.");
       return {
         rank: index + 1,
         path: entry.file_path,
@@ -130,6 +128,7 @@ export function createSembleResponseParser({ expectedQuery } = {}) {
           line: entry.start_line + offset,
           text: line,
         })),
+        source_content: entry.content,
         unnumbered_source: [],
         raw_lines: [JSON.stringify(entry)],
         matched_range: null,

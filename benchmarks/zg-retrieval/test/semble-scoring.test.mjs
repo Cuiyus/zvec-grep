@@ -13,14 +13,22 @@ const response = (payload, extra = {}) => ({
   content: [{ type: "text", text: JSON.stringify(payload) }],
   ...extra,
 });
-const entry = (overrides = {}) => ({
-  file_path: "pkg/main.py",
-  start_line: 20,
-  end_line: 40,
-  score: 0.9,
-  content: "def wanted():\n    return state",
-  ...overrides,
-});
+const entry = (overrides = {}) => {
+  const content = overrides.content ?? "def wanted():\n    return state";
+  const start = overrides.start_line ?? 20;
+  const count =
+    typeof content === "string"
+      ? content.split("\n").length - Number(content.endsWith("\n"))
+      : 1;
+  return {
+    file_path: "pkg/main.py",
+    start_line: start,
+    end_line: start + count - 1,
+    score: 0.9,
+    content,
+    ...overrides,
+  };
+};
 const result = (entries = [entry()], extra = {}) =>
   response({ query, results: entries }, extra);
 const anchor = (text = "def wanted():", start = 20) => ({
@@ -48,8 +56,7 @@ const gold = (targets = [target()], groups = []) => ({
 const score = (raw, labels = gold()) =>
   scoreSembleResponse(raw, labels, { expectedQuery: query });
 const parse = createSembleResponseParser({ expectedQuery: query });
-const filler = () =>
-  entry({ start_line: 2, end_line: 4, content: "def other():" });
+const filler = () => entry({ start_line: 2, content: "def other():" });
 
 for (const rank of [1, 5, 10]) {
   test(`Semble preserves native array rank ${rank} without file compaction`, () => {
@@ -75,11 +82,35 @@ test("Semble uses visible content at consecutive source lines without trimming o
   assert.deepEqual(parsed.items[0].source_lines, [
     { line: 20, text: "    def wanted():" },
     { line: 21, text: "\treturn state" },
-    { line: 22, text: "" },
   ]);
   assert.deepEqual(parsed.items[0].outline, []);
-  assert.equal(parsed.items[0].range.end_line, 40);
+  assert.equal(parsed.items[0].range.end_line, 21);
+  assert.equal(parsed.items[0].source_content, content);
   assert.equal(parsed.freshness, null);
+});
+
+test("Semble full chunks retain evidence beyond line ten and terminal blank lines", () => {
+  const prefix = Array.from({ length: 12 }, (_, index) => `# context ${index}`);
+  const content = `${prefix.join("\n")}\ndef wanted():\n\n`;
+  const raw = result([entry({ content })]);
+  const labels = gold([
+    target("wanted", { anchors: [anchor("def wanted():", 32)] }),
+  ]);
+  const scored = score(raw, labels);
+  assert.equal(scored.status, "scored");
+  assert.equal(scored.hit_at_1, 1);
+  assert.equal(scored.items[0].source_lines.length, 14);
+  assert.deepEqual(scored.items[0].source_lines.at(-1), { line: 33, text: "" });
+  assert.equal(scored.items[0].source_content, content);
+});
+
+test("Semble full content keeps non-LF separators on their physical source line", () => {
+  const content = "first\fsecond\u2028third\nnext\n";
+  const parsed = parse(result([entry({ content })]));
+  assert.deepEqual(parsed.items[0].source_lines, [
+    { line: 20, text: "first\fsecond\u2028third" },
+    { line: 21, text: "next" },
+  ]);
 });
 
 test("Semble never expands the chunk range or hidden structured content", () => {
@@ -97,7 +128,10 @@ test("Semble never expands the chunk range or hidden structured content", () => 
     }),
   ]);
   assert.equal(score(result(), outsideSnippet).hit_at_10, 0);
-  assert.equal(score(result([entry({ content: "" })])).hit_at_10, 0);
+  assert.equal(
+    score(result([entry({ content: "" })])).status,
+    "harness_invalid",
+  );
 });
 
 test("Semble applies the shared exact anchor position and complete-line rules", () => {
@@ -171,8 +205,8 @@ test("Semble repeated group evidence contributes once, and bridges earn no credi
     result([
       entry(),
       entry(),
-      entry({ start_line: 50, end_line: 55, content: "def second():" }),
-      entry({ start_line: 60, end_line: 65, content: "def bridge():" }),
+      entry({ start_line: 50, content: "def second():" }),
+      entry({ start_line: 60, content: "def bridge():" }),
     ]),
     labels,
   );
@@ -182,7 +216,7 @@ test("Semble repeated group evidence contributes once, and bridges earn no credi
   );
   assert.equal(scored.target_matches.length, 4);
   const bridgeOnly = score(
-    result([entry({ start_line: 60, end_line: 65, content: "def bridge():" })]),
+    result([entry({ start_line: 60, content: "def bridge():" })]),
     labels,
   );
   assert.equal(bridgeOnly.hit_at_10, 0);
@@ -284,14 +318,12 @@ test("Semble rejects unsupported ranks, paths, fields, ranges, scores and snippe
     { start_line: Number.MAX_SAFE_INTEGER + 1 },
     { end_line: 19 },
     { end_line: 20, content: "first\nsecond" },
+    { end_line: 40, content: "first\nsecond" },
     { score: "0.5" },
     { score: null },
     { content: undefined },
     { content: ["def wanted():"] },
     { content: "first\r\nsecond" },
-    { content: "first\fsecond" },
-    { content: "first\u2028second" },
-    { content: Array.from({ length: 11 }, () => "line").join("\n") },
   ];
   for (const overrides of malformed) {
     const scored = score(result([entry(overrides)]));

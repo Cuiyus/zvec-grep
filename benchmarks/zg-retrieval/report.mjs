@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve, isAbsolute } from "node:path";
+import { join, resolve, isAbsolute, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   loadSuite,
@@ -11,6 +11,7 @@ import {
   fileHash,
 } from "./lib.mjs";
 import { scoreResponse } from "./scoring.mjs";
+import { scoreSembleMetric } from "./semble-metrics.mjs";
 
 const metricKeys = [
   "hit_at_1",
@@ -26,6 +27,96 @@ const average = (values) =>
     : null;
 const display = (value) =>
   typeof value === "number" ? value.toFixed(3) : "N/A";
+
+export function summarizeSembleOfficial(rows) {
+  const metrics = ["ndcg_at_5", "ndcg_at_10"];
+  const mean = (values) =>
+    Object.fromEntries(
+      metrics.map((key) => [key, average(values.map((value) => value[key]))]),
+    );
+  const byRepository = Object.fromEntries(
+    [...new Set(rows.map((row) => row.repository))].sort().map((repository) => {
+      const selected = rows.filter((row) => row.repository === repository);
+      const languages = [...new Set(selected.map((row) => row.language))];
+      assert.equal(
+        languages.length,
+        1,
+        "one repository must have one benchmark language",
+      );
+      return [
+        repository,
+        {
+          language: languages[0],
+          query_count: selected.length,
+          ...mean(selected.map((row) => row.semble_official)),
+        },
+      ];
+    }),
+  );
+  const byLanguage = Object.fromEntries(
+    [...new Set(rows.map((row) => row.language))].sort().map((language) => {
+      const selected = Object.values(byRepository).filter(
+        (repo) => repo.language === language,
+      );
+      return [
+        language,
+        { repository_count: selected.length, ...mean(selected) },
+      ];
+    }),
+  );
+  return {
+    dataset:
+      "SWE-QA accepted-file projection; not the original Semble benchmark dataset",
+    metric:
+      "Semble official first-target-rank binary nDCG; all projected targets; no complementary-group substitution",
+    quality_repetition: 5,
+    query_count: rows.length,
+    repository_count: Object.keys(byRepository).length,
+    language_count: Object.keys(byLanguage).length,
+    query_mean: mean(rows.map((row) => row.semble_official)),
+    repository_macro: mean(Object.values(byRepository)),
+    language_macro: mean(Object.values(byLanguage)),
+    by_repository: byRepository,
+    by_language: byLanguage,
+  };
+}
+
+export function markdownSembleOfficialTable(
+  modes,
+  { title = "Semble official metric — SWE-QA accepted-file projection" } = {},
+) {
+  const lines = [
+    "",
+    `## ${title}`,
+    "",
+    "The algorithm and aggregation follow Semble; these are scores on this SWE-QA projection, not scores on Semble's original dataset. Quality uses the fifth native result list. Each distinct accepted file is one target; bridge-only files are excluded. No grouped-anchor nDCG is substituted.",
+    "",
+    "| Mode / aggregation | Queries | Repositories | Languages | nDCG@5 | nDCG@10 |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const [mode, entry] of Object.entries(modes)) {
+    const official = entry.semble_official;
+    if (!official) {
+      lines.push(
+        `| ${mode} | **Invalid experiment — official aggregate withheld** | | | | |`,
+      );
+      continue;
+    }
+    for (const [key, label] of [
+      ["query_mean", "query mean"],
+      ["repository_macro", "repository macro (JSON summary)"],
+      ["language_macro", "language macro (terminal Avg)"],
+    ])
+      lines.push(
+        `| ${mode} / ${label} | ${official.query_count} | ${official.repository_count} | ${official.language_count} | ${display(official[key].ndcg_at_5)} | ${display(official[key].ndcg_at_10)} |`,
+      );
+  }
+  lines.push(
+    "",
+    "Repository means weight their queries equally; repository macro weights repositories equally; language macro first averages repositories within each language, then weights languages equally. This suite contains only Python repositories, so its repository and language macros coincide.",
+  );
+  return lines;
+}
 
 function summarize(rows) {
   const scored = rows.filter((row) => row.hit_at_10 !== null);
@@ -225,6 +316,37 @@ export async function aggregate(directory, { expectedTasks } = {}) {
               `snapshot artifact drift: ${path}`,
             );
           }
+          const files = await readJson(
+            join(runDirectory, `stages/${phase}/files.json`),
+          );
+          assert.ok(
+            Array.isArray(files) && files.length > 0,
+            "code-only index contains no files",
+          );
+          const selection = suite.protocol.index_selection;
+          const extensions = new Set(selection.code_extensions);
+          for (const file of files) {
+            assert.ok(
+              extensions.has(extname(file.relativePath).toLowerCase()),
+              `non-code extension entered index: ${file.relativePath}`,
+            );
+            assert.ok(
+              Number.isFinite(file.sizeBytes) &&
+                file.sizeBytes >= 0 &&
+                file.sizeBytes <= selection.max_file_size_bytes,
+              `oversized or invalid file entered index: ${file.relativePath}`,
+            );
+          }
+          assert.deepEqual(
+            manifest.index_selection_audit,
+            {
+              content: "code",
+              max_file_size_bytes: selection.max_file_size_bytes,
+              indexed_files: files.length,
+              verified: true,
+            },
+            "index selection audit differs from recorded files",
+          );
         }
         for (const [path, hash] of [
           ["corpus.json", manifest.corpus_sha256],
@@ -278,6 +400,40 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       )
     )
       invalid.push("unexpected task selection");
+    if (
+      objectHash(manifest.tasks) !==
+      objectHash(
+        suite.lock.tasks
+          .filter(
+            (task) =>
+              task.repository === manifest.repository &&
+              expected.includes(task.task_id),
+          )
+          .map((task) => task.task_id),
+      )
+    )
+      invalid.push(
+        "repository task coverage/order differs from frozen selection",
+      );
+    const plannedOrder = modeSet.flatMap((mode) =>
+      manifest.tasks.flatMap((task_id) =>
+        Array.from({ length: suite.protocol.repetitions }, (_, index) => ({
+          task_id,
+          mode,
+          repetition: index + 1,
+        })),
+      ),
+    );
+    if (
+      objectHash(
+        calls.map(({ task_id, mode, repetition }) => ({
+          task_id,
+          mode,
+          repetition,
+        })),
+      ) !== objectHash(plannedOrder)
+    )
+      invalid.push("call order differs from mode-task-repetition protocol");
     for (const call of calls) {
       const task = suite.lock.tasks.find(
         (task) => task.task_id === call.task_id,
@@ -348,6 +504,17 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       observations.push({
         ...call,
         ...score,
+        language: suite.semble_gold[call.task_id].language,
+        semble_official:
+          score.status === "harness_invalid"
+            ? null
+            : {
+                targets: suite.semble_gold[call.task_id].targets,
+                ...scoreSembleMetric(
+                  score.items ?? [],
+                  suite.semble_gold[call.task_id].targets,
+                ),
+              },
         category: task.category,
         repository: task.repository,
         raw_path: `${runDirectory.slice(directory.length + 1)}/${call.raw_path}`,
@@ -378,7 +545,9 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     if (
       !observations.some(
         (row) =>
-          row.task_id === id && row.mode === "hybrid" && row.repetition === 1,
+          row.task_id === id &&
+          row.mode === "hybrid" &&
+          row.repetition === suite.protocol.quality_repetition,
       )
     )
       errors.push(`missing quality observation: ${id}`);
@@ -439,6 +608,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
   const modes = [...new Set(observations.map((row) => row.mode))];
   const report = {
     schema_version: 1,
+    quality_repetition: suite.protocol.quality_repetition,
     generated_at: new Date().toISOString(),
     suite: suite.identity,
     scope:
@@ -451,7 +621,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "equal weight per task; repetition 1 only; supplementary nDCG on its declared subset",
+      "quality repetition 5; Semble official nDCG on all projected targets with query/repository/language means; supplementary anchor metrics retain their declared subset",
     modes: Object.fromEntries(
       modes.map((mode) => {
         const rows = quality.filter((row) => row.mode === mode);
@@ -459,6 +629,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           mode,
           {
             summary: complete ? summarize(rows) : null,
+            semble_official: complete ? summarizeSembleOfficial(rows) : null,
             by_category: complete
               ? Object.fromEntries(
                   ["what", "where", "how", "why"].map((category) => [
@@ -495,7 +666,10 @@ export function markdownReport(report) {
     "",
     `Scope: **${report.scope}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
     "",
-    "Quality uses repetition 1; five repeats measure stability, not five independent questions. Known source-entry positives are incomplete. Hit is OR; supplementary nDCG rewards distinct complementary groups and is not answer accuracy. Quality thresholds are report-only.",
+    "Quality uses repetition 5; five repeats measure stability, not five independent questions. Semble official file-target nDCG is reported first. The separate source-anchor Hit/MRR and grouped nDCG remain supplementary and are not answer accuracy. Quality thresholds are report-only.",
+    ...markdownSembleOfficialTable(report.modes),
+    "",
+    "## Supplementary source-anchor metrics",
     "",
     "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -512,12 +686,12 @@ export function markdownReport(report) {
     "",
     "## Per task",
     "",
-    "| Task / mode | Status | First rank | RR@10 | nDCG@10 | Repeat ranks | Same rank / text | Raw |",
+    "| Task / mode | Official nDCG@5 / @10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const task of report.tasks) {
     lines.push(
-      `| ${task.task_id} / ${task.mode} | ${task.status} | ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} | ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
+      `| ${task.task_id} / ${task.mode} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
     );
   }
   lines.push(

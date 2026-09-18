@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { join, resolve, delimiter } from "node:path";
+import { join, resolve, delimiter, extname } from "node:path";
 import { platform, arch, cpus } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -45,10 +45,11 @@ export function callPlan(tasks, modes, protocol) {
   assert.equal(new Set(modes).size, modes.length);
   modes.forEach((mode) => assert.ok(protocol.available_modes.includes(mode)));
   const plan = [];
-  // All hybrid repetitions precede optional ablations; no best-mode selection.
+  // Match Semble's quality runner: five consecutive searches per original query.
+  // All hybrid queries precede optional ablations; no best-mode selection.
   for (const mode of modes) {
-    for (let repetition = 1; repetition <= protocol.repetitions; repetition++) {
-      for (const task of tasks)
+    for (const task of tasks) {
+      for (let repetition = 1; repetition <= protocol.repetitions; repetition++)
         plan.push({
           task,
           mode,
@@ -58,6 +59,46 @@ export function callPlan(tasks, modes, protocol) {
     }
   }
   return plan;
+}
+
+export function indexSelectionArguments(protocol) {
+  const selection = protocol.index_selection;
+  assert.equal(selection.content, "code");
+  assert.ok(selection.code_extensions.length > 0);
+  const args = ["--max-filesize", String(selection.max_file_size_bytes)];
+  // Small brace groups stay below the public argument-size limits while covering
+  // precisely the frozen CODE extension set. Native ignore rules still apply.
+  for (let index = 0; index < selection.code_extensions.length; index += 32) {
+    const extensions = selection.code_extensions.slice(index, index + 32);
+    extensions.forEach((extension) =>
+      assert.match(extension, /^\.[a-z0-9_-]+$/),
+    );
+    args.push("--iglob", `*{${extensions.join(",")}}`);
+  }
+  return args;
+}
+
+export function auditIndexSelection(files, protocol) {
+  const selection = protocol.index_selection;
+  const extensions = new Set(selection.code_extensions);
+  assert.ok(files.length > 0, "code-only index contains no files");
+  for (const file of files) {
+    assert.ok(
+      extensions.has(extname(file.relativePath).toLowerCase()),
+      `non-code extension entered index: ${file.relativePath}`,
+    );
+    assert.ok(
+      Number.isFinite(file.sizeBytes) &&
+        file.sizeBytes <= selection.max_file_size_bytes,
+      `oversized file entered index: ${file.relativePath}`,
+    );
+  }
+  return {
+    content: "code",
+    max_file_size_bytes: selection.max_file_size_bytes,
+    indexed_files: files.length,
+    verified: true,
+  };
 }
 
 async function freePort() {
@@ -254,6 +295,7 @@ async function runRepository({
           protocol.model,
           "--device",
           protocol.device,
+          ...indexSelectionArguments(protocol),
           "--debug",
         ],
         { env, cwd: root, timeout: 2_400_000 },
@@ -282,6 +324,10 @@ async function runRepository({
       { env, cwd: root },
     );
     before = await readJson(join(output, "stages/before/summary.json"));
+    manifest.index_selection_audit = auditIndexSelection(
+      await readJson(join(output, "stages/before/files.json")),
+      protocol,
+    );
     manifest.stage_availability = before.stages;
     modelBefore = await directoryManifest(options.modelCache);
     assert.ok(modelBefore.entries.length > 0, "no model artifacts recorded");

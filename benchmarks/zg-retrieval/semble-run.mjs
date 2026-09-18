@@ -25,13 +25,6 @@ import { SEMBLE_PROTOCOL, aggregateSemble } from "./semble-report.mjs";
 
 const SOURCE_COMMIT = "0051e000fcaac69a9c5d081ebbc8d4cb8508160b";
 
-function snippetOf(content) {
-  if (content === "") return "";
-  const lines = content.split(/\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/);
-  if (lines.at(-1) === "") lines.pop();
-  return lines.slice(0, 10).join("\n");
-}
-
 async function evidence(directory, path, value) {
   await writeJson(join(directory, path), value);
   return { path, sha256: await fileHash(join(directory, path)) };
@@ -44,29 +37,31 @@ export async function auditVisibleSource(items, root, chunks) {
       inside(await realpath(root), await realpath(join(root, item.path))),
       "visible source escapes corpus",
     );
-    const visible = item.source_lines.map((line) => line.text).join("\n");
+    const visible = item.source_content;
     const carriers = chunks.filter(
       (chunk) =>
         chunk.file_path === item.path &&
         chunk.start_line === item.range.start_line &&
         chunk.end_line === item.range.end_line &&
-        snippetOf(chunk.content) === visible,
+        chunk.content === visible,
     );
     if (!carriers.length)
       errors.push(
-        `rank ${item.rank}: snippet not bound to a persisted native chunk`,
+        `rank ${item.rank}: full content not bound to a persisted native chunk`,
       );
-    const source = (await readFile(join(root, item.path), "utf8")).split(
-      /\r?\n/,
-    );
+    const source = (await readFile(join(root, item.path), "utf8"))
+      .replace(/\r\n?/g, "\n")
+      .split("\n");
     for (const [index, line] of item.source_lines.entries()) {
       const actual = source[line.line - 1];
       const matches =
         actual === line.text ||
         (index === 0 && actual?.endsWith(line.text)) ||
         (index === item.source_lines.length - 1 &&
+          !visible.endsWith("\n") &&
           actual?.startsWith(line.text)) ||
         (item.source_lines.length === 1 &&
+          !visible.endsWith("\n") &&
           carriers.length > 0 &&
           actual?.includes(line.text));
       if (!matches)
@@ -76,6 +71,29 @@ export async function auditVisibleSource(items, root, chunks) {
     }
   }
   return errors;
+}
+
+/** Compare all native fields, including scores and final newlines, without Gold. */
+export function compareSdkMcp(response, sdkQuery, expectedQuery) {
+  try {
+    assert.equal(
+      sdkQuery.query,
+      expectedQuery,
+      "SDK query differs from original",
+    );
+    assert.ok(Array.isArray(sdkQuery.results), "SDK results missing");
+    assert.notEqual(response?.isError, true, "MCP returned a product error");
+    assert.equal(response?.content?.length, 1, "MCP text block count differs");
+    assert.equal(response.content[0].type, "text", "MCP response is not text");
+    const payload = JSON.parse(response.content[0].text);
+    const expected = sdkQuery.results.length
+      ? { query: expectedQuery, results: sdkQuery.results }
+      : { error: "No results found." };
+    assert.deepEqual(payload, expected, "MCP and SDK native results differ");
+    return [];
+  } catch (error) {
+    return [`SDK/MCP parity: ${error.message}`];
+  }
 }
 
 async function runRepository(suite, repo, options, experiment) {
@@ -91,15 +109,18 @@ async function runRepository(suite, repo, options, experiment) {
     repository_commit: repo.commit,
     tasks: tasks.map((task) => task.task_id),
     modes: ["hybrid"],
-    planned_calls: tasks.length * 5,
+    planned_calls: tasks.length * SEMBLE_PROTOCOL.repetitions,
     preparation_status: "pending",
     invalid_reasons: [],
     evidence: {},
     started_at: new Date().toISOString(),
   };
-  const planned = Array.from({ length: 5 }, (_, i) =>
-    tasks.map((task) => ({ task, repetition: i + 1 })),
-  ).flat();
+  const planned = tasks.flatMap((task) =>
+    Array.from({ length: SEMBLE_PROTOCOL.repetitions }, (_, i) => ({
+      task,
+      repetition: i + 1,
+    })),
+  );
   const records = [],
     audits = [];
   let client,
@@ -143,6 +164,8 @@ async function runRepository(suite, repo, options, experiment) {
         "index",
         "--repo",
         root,
+        "--content",
+        SEMBLE_PROTOCOL.content,
         "--output",
         join(output, "preparation.json"),
       ],
@@ -154,6 +177,7 @@ async function runRepository(suite, repo, options, experiment) {
     const preparation = await readJson(join(output, "preparation.json"));
     assert.equal(preparation.loaded_from_disk, false);
     assert.equal(preparation.source_mapping_verified, true);
+    assert.deepEqual(preparation.content, [SEMBLE_PROTOCOL.content]);
     const trackedFiles = new Set(
       beforeCorpus.entries
         .filter((entry) => entry.kind === "file")
@@ -196,7 +220,7 @@ async function runRepository(suite, repo, options, experiment) {
       await import("@modelcontextprotocol/client/stdio");
     transport = new StdioClientTransport({
       command: join(dirname(options.python), "semble"),
-      args: ["--content", "all"],
+      args: ["--content", SEMBLE_PROTOCOL.content],
       env,
       stderr: "pipe",
       cwd: output,
@@ -231,9 +255,9 @@ async function runRepository(suite, repo, options, experiment) {
         arguments: {
           query: task.query,
           repo: root,
-          top_k: 10,
-          max_snippet_lines: 10,
-          content: "all",
+          top_k: SEMBLE_PROTOCOL.limit,
+          max_snippet_lines: SEMBLE_PROTOCOL.max_snippet_lines,
+          content: SEMBLE_PROTOCOL.content,
         },
       };
       const rawPath = `raw/${task.task_slug}-hybrid-${repetition}.json`;
@@ -257,7 +281,7 @@ async function runRepository(suite, repo, options, experiment) {
         task_id: task.task_id,
         mode: "hybrid",
         repetition,
-        quality_observation: repetition === 1,
+        quality_observation: repetition === SEMBLE_PROTOCOL.quality_repetition,
         session_first_query: i === 0,
         latency_ms: latency,
         request,
@@ -284,13 +308,87 @@ async function runRepository(suite, repo, options, experiment) {
         results_checked: scored.items.length,
       });
       manifest.invalid_reasons.push(...errors);
-      if (repetition === 1)
+      if (repetition === SEMBLE_PROTOCOL.quality_repetition)
         console.log(
           `${task.task_id}: ${scored.status}, first rank ${scored.first_hit_rank}`,
         );
     }
     await client.close();
     client = null;
+    phase = "sdk-parity";
+    await writeJson(
+      join(output, "sdk-queries.json"),
+      tasks.map((task) => ({
+        task_id: task.task_id,
+        query: task.query,
+      })),
+    );
+    const replay = await run(
+      options.python,
+      [
+        join(suiteDirectory, "semble-prepare.py"),
+        "sdk-replay",
+        "--index-directory",
+        preparation.index_directory,
+        "--repo",
+        root,
+        "--queries",
+        join(output, "sdk-queries.json"),
+        "--top-k",
+        String(SEMBLE_PROTOCOL.limit),
+        "--content",
+        SEMBLE_PROTOCOL.content,
+        "--output",
+        join(output, "sdk-replay.json"),
+      ],
+      { env, timeout: 1_200_000 },
+    );
+    await writeJson(join(output, "sdk-replay-log.json"), replay);
+    const sdk = await readJson(join(output, "sdk-replay.json"));
+    manifest.sdk_replay = await evidence(output, "sdk-replay.json", sdk);
+    assert.equal(sdk.schema_version, 1);
+    assert.equal(sdk.loaded_from_disk, true);
+    assert.equal(sdk.index_directory, preparation.index_directory);
+    assert.equal(sdk.corpus_root, root);
+    assert.equal(sdk.model_path, options.model);
+    assert.deepEqual(sdk.content, [SEMBLE_PROTOCOL.content]);
+    assert.deepEqual(sdk.parameters, {
+      top_k: SEMBLE_PROTOCOL.limit,
+      alpha: null,
+      rerank: null,
+      filter_languages: null,
+      filter_paths: null,
+      max_snippet_lines: null,
+    });
+    assert.deepEqual(
+      sdk.queries.map((row) => row.task_id),
+      tasks.map((task) => task.task_id),
+    );
+    const parity = [];
+    for (const [index, task] of tasks.entries()) {
+      const record = records.find(
+        (row) => row.task_id === task.task_id && row.quality_observation,
+      );
+      assert.ok(record, "missing quality MCP observation for SDK comparison");
+      const response = await readJson(join(output, record.raw_path));
+      const errors = compareSdkMcp(response, sdk.queries[index], task.query);
+      parity.push({
+        task_id: task.task_id,
+        repetition: SEMBLE_PROTOCOL.quality_repetition,
+        raw_path: record.raw_path,
+        raw_sha256: record.raw_sha256,
+        sdk_result_sha256: objectHash(sdk.queries[index]),
+        matches: errors.length === 0,
+        errors,
+      });
+      manifest.invalid_reasons.push(...errors);
+    }
+    manifest.sdk_parity = await evidence(output, "sdk-parity.json", {
+      schema_version: 1,
+      quality_repetition: SEMBLE_PROTOCOL.quality_repetition,
+      sdk_replay_sha256: manifest.sdk_replay.sha256,
+      calls: parity,
+    });
     phase = "audit";
     await prepareCorpus(repo, options.corpus);
     manifest.evidence.after = {
@@ -322,7 +420,7 @@ async function runRepository(suite, repo, options, experiment) {
     assert.equal(
       manifest.invalid_reasons.length,
       0,
-      "visible source audit failed",
+      "source or SDK/MCP parity audit failed",
     );
     manifest.post_run_integrity = "verified";
   } catch (error) {
@@ -357,7 +455,7 @@ async function runRepository(suite, repo, options, experiment) {
       task_id: task.task_id,
       mode: "hybrid",
       repetition,
-      quality_observation: repetition === 1,
+      quality_observation: repetition === SEMBLE_PROTOCOL.quality_repetition,
       session_first_query: i === 0,
       latency_ms: null,
       request: {
@@ -365,9 +463,9 @@ async function runRepository(suite, repo, options, experiment) {
         arguments: {
           query: task.query,
           repo: root ?? join(options.corpus, repositorySlug(repo.repository)),
-          top_k: 10,
-          max_snippet_lines: 10,
-          content: "all",
+          top_k: SEMBLE_PROTOCOL.limit,
+          max_snippet_lines: SEMBLE_PROTOCOL.max_snippet_lines,
+          content: SEMBLE_PROTOCOL.content,
         },
       },
       raw_path: rawPath,
@@ -508,6 +606,7 @@ export async function main(args = process.argv.slice(2)) {
     suite: {
       source: suite.identity.source,
       gold: suite.identity.gold,
+      semble_gold: suite.identity.semble_gold,
       protocol: objectHash(SEMBLE_PROTOCOL),
     },
     protocol: SEMBLE_PROTOCOL,

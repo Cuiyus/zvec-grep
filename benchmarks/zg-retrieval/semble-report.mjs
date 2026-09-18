@@ -13,16 +13,21 @@ import {
 } from "./lib.mjs";
 import { compareReports } from "./compare.mjs";
 import { scoreSembleResponse } from "./semble-scoring.mjs";
+import { scoreSembleMetric } from "./semble-metrics.mjs";
+import {
+  summarizeSembleOfficial,
+  markdownSembleOfficialTable,
+} from "./report.mjs";
 
 export const SEMBLE_PROTOCOL = Object.freeze({
-  id: "sweqa20-semble-mcp-v1",
+  id: "sweqa20-semble-mcp-v2",
   engine: "semble",
   mode: "hybrid",
   limit: 10,
   repetitions: 5,
-  quality_repetition: 1,
-  content: "all",
-  max_snippet_lines: 10,
+  quality_repetition: 5,
+  content: "code",
+  max_snippet_lines: null,
   endpoint: "semble-native-stdio-mcp",
   model: "minishlab/potion-code-16M-v2",
 });
@@ -51,7 +56,7 @@ const sha = (value, label) =>
 const modeRows = (report) =>
   report.tasks.filter((row) => row.mode === "hybrid");
 const FILE_PRESENCE_RULE =
-  "Diagnostic only: repetition-1 native Top 10 contains an exact file path of at least one accepted Gold target. Bridge-only paths are excluded. This does not establish source-entry relevance or correctness and never changes Hit/MRR/nDCG.";
+  "Diagnostic only: repetition-5 native Top 10 contains an exact file path of at least one accepted Gold target. Bridge-only paths are excluded. This does not establish source-entry relevance or correctness and never changes Hit/MRR/nDCG.";
 
 function goldFilePresence(row, gold) {
   const acceptedPaths = new Set(
@@ -218,6 +223,11 @@ async function auditFrozenRun(directory, run, suite, tasks, modelIdentity) {
     true,
     "prepared source mapping not verified",
   );
+  same(
+    preparation.content,
+    ["code"],
+    "prepared index content is not code-only",
+  );
   assert.ok(
     Number.isInteger(preparation.chunk_count) && preparation.chunk_count >= 0,
     "invalid prepared chunk count",
@@ -243,6 +253,126 @@ async function auditFrozenRun(directory, run, suite, tasks, modelIdentity) {
   };
 }
 
+async function auditSdkParity(directory, run, tasks, calls, modelDirectory) {
+  const replay = await readJson(
+    await checkedArtifact(directory, run.sdk_replay, "sdk-replay.json"),
+  );
+  const parity = await readJson(
+    await checkedArtifact(directory, run.sdk_parity, "sdk-parity.json"),
+  );
+  assert.equal(replay.schema_version, 1, "unsupported SDK replay schema");
+  assert.equal(replay.engine, "semble", "wrong SDK replay engine");
+  assert.equal(
+    replay.loaded_from_disk,
+    true,
+    "SDK replay did not use the frozen index",
+  );
+  assert.equal(replay.corpus_root, run.corpus_root, "SDK corpus root mismatch");
+  assert.equal(replay.model_path, modelDirectory, "SDK model path mismatch");
+  const preparation = await readJson(join(directory, "preparation.json"));
+  assert.equal(
+    replay.index_directory,
+    preparation.index_directory,
+    "SDK replay index differs from prepared index",
+  );
+  same(
+    replay.content,
+    ["code"],
+    "SDK replay content differs from code-only protocol",
+  );
+  same(
+    replay.parameters,
+    {
+      top_k: 10,
+      alpha: null,
+      rerank: null,
+      filter_languages: null,
+      filter_paths: null,
+      max_snippet_lines: null,
+    },
+    "SDK replay parameters differ from official defaults",
+  );
+  assert.equal(parity.schema_version, 1, "unsupported SDK parity schema");
+  assert.equal(
+    parity.quality_repetition,
+    5,
+    "SDK parity must bind repetition 5",
+  );
+  assert.equal(
+    parity.sdk_replay_sha256,
+    run.sdk_replay.sha256,
+    "SDK parity replay hash mismatch",
+  );
+  assert.ok(
+    Array.isArray(replay.queries) && Array.isArray(parity.calls),
+    "missing SDK replay/parity task records",
+  );
+  same(
+    replay.queries.map((query) => query.task_id),
+    tasks.map((task) => task.task_id),
+    "SDK replay task coverage/order mismatch",
+  );
+  same(
+    parity.calls.map((call) => call.task_id),
+    tasks.map((task) => task.task_id),
+    "SDK parity task coverage/order mismatch",
+  );
+  for (const task of tasks) {
+    const sdk = replay.queries.find((query) => query.task_id === task.task_id);
+    const record = parity.calls.find((call) => call.task_id === task.task_id);
+    const call = calls.find(
+      (call) => call.task_id === task.task_id && call.repetition === 5,
+    );
+    assert.ok(call, "SDK parity has no fifth MCP call");
+    assert.equal(sdk.query, task.query, "SDK replay changed original query");
+    assert.ok(Array.isArray(sdk.results), "SDK replay omitted result list");
+    assert.equal(
+      record.repetition,
+      5,
+      "SDK parity call is not fifth repetition",
+    );
+    assert.equal(
+      record.raw_path,
+      call.raw_path,
+      "SDK parity raw call mapping mismatch",
+    );
+    assert.equal(
+      record.raw_sha256,
+      call.raw_sha256,
+      "SDK parity raw hash mismatch",
+    );
+    assert.equal(
+      record.sdk_result_sha256,
+      objectHash(sdk),
+      "SDK parity result hash mismatch",
+    );
+    assert.equal(record.matches, true, "SDK parity mismatch");
+    same(record.errors, [], "SDK parity errors");
+    const raw = await readJson(
+      await checkedArtifact(
+        directory,
+        { path: call.raw_path, sha256: call.raw_sha256 },
+        `raw/${task.task_slug}-hybrid-5.json`,
+      ),
+    );
+    assert.ok(
+      !raw.isError &&
+        raw.content?.length === 1 &&
+        raw.content[0].type === "text",
+      "SDK parity requires a successful native MCP response",
+    );
+    const payload = JSON.parse(raw.content[0].text);
+    same(
+      payload,
+      sdk.results.length
+        ? { query: sdk.query, results: sdk.results }
+        : { error: "No results found." },
+      "fifth MCP result differs from official SDK replay",
+    );
+  }
+  return true;
+}
+
 /** Recompute public-response scores, validating all recorded inputs before publishing a headline. */
 export async function aggregateSemble(
   directory,
@@ -260,6 +390,7 @@ export async function aggregateSemble(
   const expectedIdentity = {
     source: suite.identity.source,
     gold: suite.identity.gold,
+    semble_gold: suite.identity.semble_gold,
     protocol: objectHash(SEMBLE_PROTOCOL),
   };
   let selected = [];
@@ -464,6 +595,13 @@ export async function aggregateSemble(
           "duplicate source audit call",
         );
         auditRows = audit.calls;
+        run.sdk_parity_verified = await auditSdkParity(
+          directoryForRun,
+          run,
+          tasks,
+          calls,
+          experiment.tool.model?.directory,
+        );
       } else if (run.preparation_status === "product_error") {
         assert.ok(run.preparation_error, "missing product preparation error");
       } else throw new Error("preparation did not succeed");
@@ -492,17 +630,17 @@ export async function aggregateSemble(
         assert.equal(call.mode, "hybrid", "unexpected mode");
         assert.equal(
           call.repetition,
-          Math.floor(index / tasks.length) + 1,
+          (index % 5) + 1,
           "call repetition/order mismatch",
         );
         assert.equal(
           call.task_id,
-          tasks[index % tasks.length].task_id,
+          tasks[Math.floor(index / 5)].task_id,
           "call task order mismatch",
         );
         assert.equal(
           call.quality_observation,
-          call.repetition === 1,
+          call.repetition === 5,
           "incorrect quality observation",
         );
         assert.equal(
@@ -518,8 +656,8 @@ export async function aggregateSemble(
               repo: run.corpus_root,
               query: task.query,
               top_k: 10,
-              max_snippet_lines: 10,
-              content: "all",
+              max_snippet_lines: null,
+              content: "code",
             },
           },
           "request differs from original-query protocol",
@@ -587,6 +725,17 @@ export async function aggregateSemble(
       observations.push({
         ...call,
         ...score,
+        language: task ? suite.semble_gold[task.task_id].language : null,
+        semble_official:
+          task && score.status !== "harness_invalid"
+            ? {
+                targets: suite.semble_gold[task.task_id].targets,
+                ...scoreSembleMetric(
+                  score.items ?? [],
+                  suite.semble_gold[task.task_id].targets,
+                ),
+              }
+            : null,
         category: task?.category ?? null,
         repository: reference.repository,
         raw_path: directoryForRun
@@ -615,7 +764,7 @@ export async function aggregateSemble(
     const repeats = observations
       .filter((row) => row.task_id === task.task_id)
       .sort((a, b) => a.repetition - b.repetition);
-    const row = repeats.find((item) => item.repetition === 1);
+    const row = repeats.find((item) => item.repetition === 5);
     if (!row) return [];
     const valid =
       repeats.length === 5 &&
@@ -642,6 +791,7 @@ export async function aggregateSemble(
   const complete = errors.length === 0;
   const report = {
     schema_version: 1,
+    quality_repetition: 5,
     engine: "semble",
     generated_at: new Date().toISOString(),
     suite: expectedIdentity,
@@ -657,10 +807,11 @@ export async function aggregateSemble(
     product_error_calls: productErrors,
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "equal weight per original question; repetition 1 only; supplementary nDCG on the declared Gold subset",
+      "equal weight per original question; repetition 5 only; supplementary nDCG on the declared Gold subset",
     modes: {
       hybrid: {
         summary: complete ? summarize(quality) : null,
+        semble_official: complete ? summarizeSembleOfficial(quality) : null,
         diagnostics: {
           gold_file_presence_at_10: {
             count: complete
@@ -717,6 +868,11 @@ export async function aggregateSemble(
 
 function validateQualityRows(report, suite, label) {
   assert.equal(
+    report.quality_repetition,
+    5,
+    `${label}: fifth quality observation required`,
+  );
+  assert.equal(
     report.quality_score_valid,
     true,
     `${label}: invalid quality report`,
@@ -746,7 +902,7 @@ function validateQualityRows(report, suite, label) {
     report.product_error_calls === 0,
     `${label}: inconsistent integrity state`,
   );
-  for (const field of ["source", "gold"])
+  for (const field of ["source", "gold", "semble_gold"])
     assert.equal(
       report.suite?.[field],
       suite.identity[field],
@@ -774,7 +930,29 @@ function validateQualityRows(report, suite, label) {
       gold.status,
       `${label}: Gold status mismatch`,
     );
-    assert.equal(row.repetition, 1, `${label}: quality repetition mismatch`);
+    assert.equal(row.repetition, 5, `${label}: quality repetition mismatch`);
+    assert.equal(
+      row.language,
+      suite.semble_gold[task.task_id].language,
+      `${label}: language mismatch`,
+    );
+    if (row.execution_status === "product_error")
+      assert.equal(
+        row.items?.length ?? 0,
+        0,
+        `${label}: product errors cannot provide official retrieval credit`,
+      );
+    same(
+      row.semble_official,
+      {
+        targets: suite.semble_gold[task.task_id].targets,
+        ...scoreSembleMetric(
+          row.items ?? [],
+          suite.semble_gold[task.task_id].targets,
+        ),
+      },
+      `${label}: Semble official metric differs from public items or frozen projection`,
+    );
     assert.equal(
       row.quality_observation,
       true,
@@ -863,10 +1041,14 @@ export async function compareSembleToZg(
       newRow = after.find((row) => row.task_id === task.task_id);
     const view = (row) => ({
       ...Object.fromEntries(
-        ["first_hit_rank", "execution_status", ...METRICS].map((key) => [
-          key,
-          row[key],
-        ]),
+        [
+          "first_hit_rank",
+          "execution_status",
+          "repository",
+          "language",
+          "semble_official",
+          ...METRICS,
+        ].map((key) => [key, row[key]]),
       ),
       ...goldFilePresence(row, suite.gold[task.task_id]),
     });
@@ -876,6 +1058,12 @@ export async function compareSembleToZg(
       repository: task.repository,
       zg: view(oldRow),
       semble: view(newRow),
+      semble_official_delta: Object.fromEntries(
+        ["ndcg_at_5", "ndcg_at_10"].map((key) => [
+          key,
+          newRow.semble_official[key] - oldRow.semble_official[key],
+        ]),
+      ),
       delta: Object.fromEntries(
         METRICS.map((key) => [
           key,
@@ -904,6 +1092,7 @@ export async function compareSembleToZg(
     delta_direction: "Semble minus zg",
     source: suite.identity.source,
     gold: suite.identity.gold,
+    semble_gold: suite.identity.semble_gold,
     protocols: {
       zg: baseline.suite.protocol,
       semble: candidate.suite.protocol,
@@ -911,6 +1100,10 @@ export async function compareSembleToZg(
     quality_gate:
       "report-only; no causal attribution to a single retrieval component",
     summary: summarizePair(tasks),
+    semble_official: {
+      zg: summarizeSembleOfficial(tasks.map((row) => row.zg)),
+      semble: summarizeSembleOfficial(tasks.map((row) => row.semble)),
+    },
     diagnostics: {
       gold_file_presence_at_10: {
         zg_count: tasks.filter(
@@ -944,12 +1137,12 @@ export async function compareSembleToZg(
       content: {
         zg: "Native outline plus visible source excerpt",
         semble:
-          "Native chunk prefix, maximum 10 snippet lines; no outline and no source completion",
+          "Native complete chunk text, no outline; fifth-call results verified against the official SDK",
       },
       filtering: {
         zg: "zg native scan policy",
         semble:
-          "content=all (code/config/docs); Semble native supported formats and exclusions; DATA formats remain excluded",
+          "content=code; Semble CODE extensions, native scanning and exclusions; zg uses the same fixed extension allowlist but native scanner exclusions may still differ",
       },
       retrieval: {
         zg: "Native zg hybrid",
@@ -973,7 +1166,7 @@ export async function compareSembleToZg(
     },
     warnings: [
       "Same original queries, repository commits, partial Gold and Hit/MRR/grouped-nDCG semantics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
-      "Primary scores combine retrieval, visible rendering and frozen annotation. A snippet may contain a related file or a target function body/docstring without showing a frozen declaration anchor. Zero primary score does not prove that no relevant code was retrieved. Exact Gold file presence is a separate diagnostic, not a source-entry hit or accuracy measure.",
+      "Semble official nDCG uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Supplementary anchor scores also depend on native rendering and frozen anchors; zero anchor score does not prove absence of relevant code.",
       ...[baseline, candidate].flatMap((report, i) =>
         report.product_error_calls
           ? [
@@ -992,9 +1185,12 @@ export function markdownSembleReport(report) {
     "",
     `Scope: **${cell(report.scope)}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
     "",
-    "Quality uses repetition 1; five repeats measure stability, not independent questions. Same partial source-entry Gold as zg: Hit is OR; supplementary nDCG rewards distinct complementary groups. No query rewrite, subquery, result deduplication or invisible source completion.",
+    "Quality uses repetition 5; five repeats measure stability, not independent questions. Semble official file-target nDCG is reported first; source-anchor Hit/MRR and grouped nDCG remain separately labeled supplementary metrics. No query rewrite, subquery, result deduplication or invisible source completion.",
     "",
-    `Semble ${cell(report.tool?.version)}, commit \`${cell(report.tool?.source_commit)}\`. Native stdio MCP search; content=all; top_k=10; max_snippet_lines=10. Model: ${SEMBLE_PROTOCOL.model}.`,
+    `Semble ${cell(report.tool?.version)}, commit \`${cell(report.tool?.source_commit)}\`. Native stdio MCP search; content=code; top_k=10; max_snippet_lines=null. Model: ${SEMBLE_PROTOCOL.model}.`,
+    ...markdownSembleOfficialTable(report.modes),
+    "",
+    "## Supplementary source-anchor metrics",
     "",
     "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -1004,24 +1200,24 @@ export function markdownSembleReport(report) {
     "",
     "## Per task",
     "",
-    "| Task | First rank | RR@10 | nDCG@10 | Gold file present (diagnostic) | Repeat ranks | Same rank / text | Raw |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Task | Official nDCG@5 / @10 | Official target ranks | Anchor first rank | Anchor RR@10 / grouped nDCG@10 | Gold file present (diagnostic) | Repeat anchor ranks | Same rank / text | Raw |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.tasks.map(
       (row) =>
-        `| ${cell(row.task_id)} | ${cell(row.first_hit_rank)} | ${number(row.rr_at_10)} | ${number(row.ndcg_at_10)} | ${cell(row.gold_file_presence_at_10)} | ${row.repeat_ranks.map(cell).join(", ")} | ${cell(row.ranking_repeatable)} / ${cell(row.output_repeatable)} | [response](${row.raw_path}) |`,
+        `| ${cell(row.task_id)} | ${number(row.semble_official?.ndcg_at_5)} / ${number(row.semble_official?.ndcg_at_10)} | ${row.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${cell(row.first_hit_rank)} | ${number(row.rr_at_10)} / ${number(row.ndcg_at_10)} | ${cell(row.gold_file_presence_at_10)} | ${row.repeat_ranks.map(cell).join(", ")} | ${cell(row.ranking_repeatable)} / ${cell(row.output_repeatable)} | [response](${row.raw_path}) |`,
     ),
     "",
     `Gold file presence at Top 10 (diagnostic only): **${cell(report.modes.hybrid.diagnostics.gold_file_presence_at_10.count)}/${report.modes.hybrid.diagnostics.gold_file_presence_at_10.planned_tasks}**. ${FILE_PRESENCE_RULE}`,
     "",
-    "The public snippet may show a related file or a target function's body/docstring while omitting the frozen declaration anchor. Primary scores measure the combination of retrieval, visible rendering and annotation; a zero score does not establish absence of relevant code. File presence cannot establish that the returned snippet itself is relevant, and contributes no primary score.",
+    "The public result may show a related file or a target function's body/docstring while omitting the frozen declaration anchor. Supplementary anchor scores measure retrieval, native rendering and anchor annotation together; a zero anchor score does not establish absence of relevant code. File presence alone cannot establish that the returned source text is relevant. Semble official nDCG uses the separately frozen file-target projection.",
     "",
     "## Preparation and latency",
     "",
-    "| Repository | Preparation | Index seconds | MCP connect ms | Post-run integrity |",
-    "| --- | --- | --- | --- | --- |",
+    "| Repository | Preparation | Index seconds | MCP connect ms | Post-run integrity | Fifth-call SDK parity |",
+    "| --- | --- | --- | --- | --- | --- |",
     ...report.repositories.map(
       (run) =>
-        `| ${cell(run.repository)} | ${cell(run.preparation_status)} | ${number(run.index_seconds)} | ${number(run.mcp_connect_ms)} | ${cell(run.post_run_integrity)} |`,
+        `| ${cell(run.repository)} | ${cell(run.preparation_status)} | ${number(run.index_seconds)} | ${number(run.mcp_connect_ms)} | ${cell(run.post_run_integrity)} | ${cell(run.sdk_parity_verified)} |`,
     ),
     "",
     "Individual call latency and session-first-query flags are retained in scores.jsonl. Timings are observations for this environment; no cross-environment speed comparison is made. Five repeats do not characterize tail latency. Semble has no public auto-update disable switch; before/after corpus, model and index inventories must match. Native snippets are independently source-audited; the scoring input is only the public response.",
@@ -1033,6 +1229,17 @@ export function markdownSembleReport(report) {
       "## Cross-tool quality comparison",
       "",
       "Delta = Semble minus zg. Different engine protocol identities are retained; source/Gold/task coverage and scoring eligibility match.",
+      ...markdownSembleOfficialTable(
+        Object.fromEntries(
+          ["zg", "semble"].map((engine) => [
+            engine,
+            { semble_official: comparison.semble_official[engine] },
+          ]),
+        ),
+        { title: "Cross-tool Semble official metric" },
+      ),
+      "",
+      "Supplementary source-anchor comparison:",
       "",
       "| Engine | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@10 |",
       "| --- | --- | --- | --- | --- | --- |",
@@ -1047,11 +1254,11 @@ export function markdownSembleReport(report) {
       "",
       `Separate Gold file presence diagnostic: zg **${comparison.diagnostics.gold_file_presence_at_10.zg_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**; Semble **${comparison.diagnostics.gold_file_presence_at_10.semble_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**. Both are recomputed from parsed public Top-10 items using the same exact accepted-file rule; neither alters primary scores.`,
       "",
-      "| Task | zg rank | Semble rank | ΔRR@10 | ΔnDCG@10 | zg / Semble Gold file present (diagnostic) |",
-      "| --- | --- | --- | --- | --- | --- |",
+      "| Task | zg official nDCG@5 / @10 | Semble official nDCG@5 / @10 | Δofficial nDCG@5 / @10 | zg / Semble target ranks | zg / Semble anchor rank | Δanchor RR@10 | Δgrouped nDCG@10 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
       ...comparison.tasks.map(
         (row) =>
-          `| ${cell(row.task_id)} | ${cell(row.zg.first_hit_rank)} | ${cell(row.semble.first_hit_rank)} | ${number(row.delta.rr_at_10)} | ${number(row.delta.ndcg_at_10)} | ${cell(row.zg.gold_file_presence_at_10)} / ${cell(row.semble.gold_file_presence_at_10)} |`,
+          `| ${cell(row.task_id)} | ${number(row.zg.semble_official.ndcg_at_5)} / ${number(row.zg.semble_official.ndcg_at_10)} | ${number(row.semble.semble_official.ndcg_at_5)} / ${number(row.semble.semble_official.ndcg_at_10)} | ${number(row.semble_official_delta.ndcg_at_5)} / ${number(row.semble_official_delta.ndcg_at_10)} | ${row.zg.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} / ${row.semble.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} | ${cell(row.zg.first_hit_rank)} / ${cell(row.semble.first_hit_rank)} | ${number(row.delta.rr_at_10)} | ${number(row.delta.ndcg_at_10)} |`,
       ),
       "",
       ...comparison.warnings.map((warning) => `- ${warning}`),

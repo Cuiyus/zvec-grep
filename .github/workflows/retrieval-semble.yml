@@ -4,24 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "benchmarks/zg-retrieval/semble-*"
-      - "benchmarks/zg-retrieval/configs/semble-*"
-      - "benchmarks/zg-retrieval/test/semble-*.test.mjs"
-      - "benchmarks/zg-retrieval/lib.mjs"
-      - "benchmarks/zg-retrieval/scoring.mjs"
-      - "benchmarks/zg-retrieval/data/**"
-      - "benchmarks/zg-retrieval/gold/**"
+      - "benchmarks/zg-retrieval/**"
+      - "!**/*.md"
       - "package*.json"
       - ".github/workflows/retrieval-semble.yml"
   pull_request:
     paths:
-      - "benchmarks/zg-retrieval/semble-*"
-      - "benchmarks/zg-retrieval/configs/semble-*"
-      - "benchmarks/zg-retrieval/test/semble-*.test.mjs"
-      - "benchmarks/zg-retrieval/lib.mjs"
-      - "benchmarks/zg-retrieval/scoring.mjs"
-      - "benchmarks/zg-retrieval/data/**"
-      - "benchmarks/zg-retrieval/gold/**"
+      - "benchmarks/zg-retrieval/**"
+      - "!**/*.md"
       - "package*.json"
       - ".github/workflows/retrieval-semble.yml"
   workflow_dispatch:
@@ -50,7 +40,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - name: Test the protocol and scorers with Node built-ins
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test the protocol and compare metrics with the pinned upstream Python oracle
         run: node --test benchmarks/zg-retrieval/test/*.test.mjs
 
   retrieval:
@@ -99,7 +92,7 @@ jobs:
             --revision "$SEMBLE_MODEL_REVISION" \
             --model-directory "$RUNNER_TEMP/model/weights" \
             --output "$RUNNER_TEMP/model/model.json"
-      - name: Run all 11 repositories through the native Semble MCP tool
+      - name: Run native Semble MCP and verify SDK parity on all 20 questions
         run: |
           node benchmarks/zg-retrieval/semble-run.mjs \
             --python "$RUNNER_TEMP/semble-venv/bin/python" \

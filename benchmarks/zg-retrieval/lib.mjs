@@ -140,14 +140,52 @@ export async function loadSuite() {
     gold[task.task_id] = entry;
   }
   assert.equal(queries.length, lock.tasks.length);
+  const sembleGold = await readJson(
+    join(suiteDirectory, "gold/semble-file-v1.json"),
+  );
+  assert.equal(sembleGold.schema_version, 1);
+  assert.equal(sembleGold.id, "sweqa20-accepted-files-v1");
+  assert.equal(
+    sembleGold.source_gold_sha256,
+    objectHash(gold),
+    "stale Semble file-label projection",
+  );
+  assert.equal(
+    sembleGold.metric_source_commit,
+    "0051e000fcaac69a9c5d081ebbc8d4cb8508160b",
+  );
+  assert.deepEqual(
+    Object.keys(sembleGold.tasks).sort(),
+    lock.tasks.map((task) => task.task_id).sort(),
+  );
+  for (const task of lock.tasks) {
+    const projected = sembleGold.tasks[task.task_id];
+    assert.equal(projected.repository, task.repository);
+    assert.equal(projected.language, "python");
+    assert.equal(projected.query_sha256, task.query_sha256);
+    const paths = [
+      ...new Set(
+        gold[task.task_id].targets
+          .filter((target) => target.role === "accepted")
+          .map((target) => target.path),
+      ),
+    ];
+    assert.deepEqual(
+      projected.targets,
+      paths.map((path) => ({ path })),
+      "Semble labels must be the frozen accepted-file projection",
+    );
+  }
   return {
     lock,
     protocol,
     gold,
+    semble_gold: sembleGold.tasks,
     identity: {
       source: objectHash(lock),
       protocol: objectHash(protocol),
       gold: objectHash(gold),
+      semble_gold: objectHash(sembleGold),
     },
   };
 }

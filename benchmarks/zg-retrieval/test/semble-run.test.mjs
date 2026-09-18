@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { auditVisibleSource } from "../semble-run.mjs";
+import { auditVisibleSource, compareSdkMcp } from "../semble-run.mjs";
 import {
   createSembleResponseParser,
   scoreSembleResponse,
@@ -65,6 +65,92 @@ test("Semble source audit accepts a one-line AST node wholly inside a source lin
   assert.deepEqual(await auditVisibleSource(items(native), root, [native]), []);
 });
 
+test("Semble source audit preserves the exact final newline and rejects terminal partial lines", async (t) => {
+  const { root } = await corpus(t, "if flag: invoke(x); finish()\n\n");
+  const complete = chunk("invoke(x); finish()\n\n", 1, 2);
+  assert.deepEqual(
+    await auditVisibleSource(items(complete), root, [complete]),
+    [],
+  );
+  const dropped = chunk("invoke(x); finish()\n", 1, 1);
+  const wrongCarrier = { ...dropped, content: "invoke(x); finish()" };
+  assert.ok(
+    (await auditVisibleSource(items(dropped), root, [wrongCarrier])).some(
+      (error) => error.includes("persisted native chunk"),
+    ),
+  );
+  const partial = chunk("invoke(x)\n", 1, 1);
+  assert.ok(
+    (await auditVisibleSource(items(partial), root, [partial])).some((error) =>
+      error.includes("does not map to locked source"),
+    ),
+  );
+});
+
+test("SDK parity compares native order, scores, ranges and complete content", () => {
+  const native = { ...chunk("def wanted():\n", 1, 1), score: 0.9 };
+  const sdk = { task_id: "example:1", query, results: [native] };
+  assert.deepEqual(compareSdkMcp(response(native), sdk, query), []);
+  for (const changed of [
+    { file_path: "pkg/other.py" },
+    { start_line: 2 },
+    { end_line: 2 },
+    { score: 0.91 },
+    { content: "def wanted():" },
+  ]) {
+    const raw = response({ ...native, ...changed });
+    // response() normally supplies score=0.9; score differences must stay visible.
+    raw.content[0].text = JSON.stringify({
+      query,
+      results: [{ ...native, ...changed }],
+    });
+    assert.ok(compareSdkMcp(raw, sdk, query).length > 0);
+  }
+  assert.ok(
+    compareSdkMcp(
+      response(native),
+      { ...sdk, query: `${query} changed` },
+      query,
+    ).length > 0,
+  );
+  const other = { ...native, file_path: "pkg/second.py" };
+  const reordered = {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ query, results: [other, native] }),
+      },
+    ],
+  };
+  assert.ok(
+    compareSdkMcp(reordered, { ...sdk, results: [native, other] }, query)
+      .length > 0,
+  );
+});
+
+test("SDK parity accepts only the explicit empty response for an empty SDK result", () => {
+  const sdk = { task_id: "example:1", query, results: [] };
+  const empty = {
+    content: [
+      { type: "text", text: JSON.stringify({ error: "No results found." }) },
+    ],
+  };
+  assert.deepEqual(compareSdkMcp(empty, sdk, query), []);
+  assert.ok(compareSdkMcp({ ...empty, isError: true }, sdk, query).length > 0);
+  assert.ok(
+    compareSdkMcp(
+      {
+        content: [
+          { type: "text", text: "Failed to index '/tmp/repo': failure" },
+        ],
+      },
+      sdk,
+      query,
+    ).length > 0,
+  );
+  assert.ok(compareSdkMcp({ content: [] }, sdk, query).length > 0);
+});
+
 test("Semble source audit requires a persisted carrier with the same path, range and snippet", async (t) => {
   const { root } = await corpus(t, "def wanted():\n    return state\n");
   const native = chunk("def wanted():\n    return state", 1, 2);
@@ -115,24 +201,19 @@ test("Semble source audit rejects a corpus-escaping symlink even with matching c
   );
 });
 
-test("Semble source audit catches Python splitlines separators that shift advertised source lines", async (t) => {
+test("Semble source audit preserves non-LF separators in full native content", async (t) => {
   const physical = [
     "first\fsecond",
     ...Array.from({ length: 11 }, (_, index) => `physical_${index + 2}`),
   ];
   const { root } = await corpus(t, `${physical.join("\n")}\n`);
   const native = chunk(physical.join("\n"), 1, physical.length);
-  const visible = ["first", "second", ...physical.slice(1, 9)].join("\n");
-  const errors = await auditVisibleSource(items(native, visible), root, [
-    native,
-  ]);
-  assert.ok(
-    errors.some((error) => error.includes("does not map to locked source")),
-  );
-  assert.ok(!errors.some((error) => error.includes("persisted native chunk")));
+  const errors = await auditVisibleSource(items(native), root, [native]);
+  assert.deepEqual(errors, []);
+  assert.equal(items(native)[0].source_lines[0].text, "first\fsecond");
 });
 
-test("Semble source audit validates only the visible prefix and never exposes hidden chunk content to scoring", async (t) => {
+test("Semble full chunk exposes its native evidence beyond line ten without source supplementation", async (t) => {
   const prefix = Array.from(
     { length: 10 },
     (_, index) => `# context ${index + 1}`,
@@ -141,7 +222,7 @@ test("Semble source audit validates only the visible prefix and never exposes hi
   const source = `${prefix.join("\n")}\n${hidden}`;
   const { root } = await corpus(t, `${source}\n`);
   const native = chunk(source, 1, 11);
-  const raw = response(native, prefix.join("\n"));
+  const raw = response(native);
   const labels = {
     schema_version: 1,
     status: "reviewed",
@@ -170,7 +251,13 @@ test("Semble source audit validates only the visible prefix and never exposes hi
   assert.deepEqual(await auditVisibleSource(scored.items, root, [native]), []);
   assert.deepEqual(scored.items, before);
   assert.equal(scored.status, "scored");
-  assert.equal(scored.hit_at_10, 0);
-  assert.equal(scored.target_matches.length, 0);
-  assert.equal(scored.items[0].source_lines.at(-1).line, 10);
+  assert.equal(scored.hit_at_10, 1);
+  assert.equal(scored.target_matches.length, 1);
+  assert.equal(scored.items[0].source_lines.at(-1).line, 11);
+  const truncated = scoreSembleResponse(
+    response(native, prefix.join("\n")),
+    labels,
+    { expectedQuery: query },
+  );
+  assert.equal(truncated.status, "harness_invalid");
 });

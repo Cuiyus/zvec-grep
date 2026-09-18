@@ -9,6 +9,8 @@ import {
   SEMBLE_PROTOCOL,
   markdownSembleReport,
 } from "../semble-report.mjs";
+import { scoreSembleMetric } from "../semble-metrics.mjs";
+import { summarizeSembleOfficial } from "../report.mjs";
 import {
   fileHash,
   loadSuite,
@@ -49,6 +51,7 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
     suite: {
       source: suite.identity.source,
       gold: suite.identity.gold,
+      semble_gold: suite.identity.semble_gold,
       protocol: objectHash(SEMBLE_PROTOCOL),
     },
     protocol: SEMBLE_PROTOCOL,
@@ -56,6 +59,7 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
       version: "0.6.0",
       source_commit: "a".repeat(40),
       model_sha256: objectHash(modelEntries),
+      model: { directory: "/locked/model" },
       runtime_sha256: await fileHash(join(directory, "runtime.json")),
     },
     environment: {
@@ -106,6 +110,8 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
     ].sort((a, b) => a.path.localeCompare(b.path));
     await writeJson(join(root, "preparation.json"), {
       loaded_from_disk: false,
+      content: ["code"],
+      index_directory: `/locked/index/${slug}`,
       source_mapping_verified: true,
       chunk_count: corpusEntries.length,
       indexed_files: corpusEntries.map((entry) => entry.path),
@@ -133,8 +139,8 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
     }
     const calls = [],
       audit = { schema_version: 1, calls: [] };
-    for (let repetition = 1; repetition <= 5; repetition++) {
-      for (const task of selected) {
+    for (const task of selected) {
+      for (let repetition = 1; repetition <= 5; repetition++) {
         const raw_path = `raw/${task.task_slug}-hybrid-${repetition}.json`;
         await writeJson(
           join(root, raw_path),
@@ -145,7 +151,7 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
           task_id: task.task_id,
           mode: "hybrid",
           repetition,
-          quality_observation: repetition === 1,
+          quality_observation: repetition === 5,
           session_first_query: calls.length === 0,
           latency_ms: preparationError ? null : 1,
           transport_error: null,
@@ -155,8 +161,8 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
               repo: run.corpus_root,
               query: task.query,
               top_k: 10,
-              max_snippet_lines: 10,
-              content: "all",
+              max_snippet_lines: null,
+              content: "code",
             },
           },
           raw_path,
@@ -172,10 +178,62 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
     }
     const reference = { repository, path: `${slug}/run.json`, sha256: "" };
     experiment.repository_runs.push(reference);
-    shards.set(repository, { root, run, reference, calls, audit });
+    const sdkReplay = {
+      schema_version: 1,
+      engine: "semble",
+      index_directory: `/locked/index/${slug}`,
+      corpus_root: run.corpus_root,
+      model_path: "/locked/model",
+      loaded_from_disk: true,
+      content: ["code"],
+      parameters: {
+        top_k: 10,
+        alpha: null,
+        rerank: null,
+        filter_languages: null,
+        filter_paths: null,
+        max_snippet_lines: null,
+      },
+      queries: selected.map((task) => ({
+        task_id: task.task_id,
+        query: task.query,
+        results: [],
+      })),
+    };
+    const sdkParity = {
+      schema_version: 1,
+      quality_repetition: 5,
+      calls: calls
+        .filter((call) => call.repetition === 5)
+        .map((call) => ({
+          task_id: call.task_id,
+          repetition: 5,
+          raw_path: call.raw_path,
+          raw_sha256: call.raw_sha256,
+          matches: true,
+          errors: [],
+        })),
+    };
+    shards.set(repository, {
+      root,
+      run,
+      reference,
+      calls,
+      audit,
+      sdkReplay,
+      sdkParity,
+    });
   }
   async function save() {
-    for (const { root, run, reference, calls, audit } of shards.values()) {
+    for (const {
+      root,
+      run,
+      reference,
+      calls,
+      audit,
+      sdkReplay,
+      sdkParity,
+    } of shards.values()) {
       await writeFile(
         join(root, "calls.jsonl"),
         calls.map((call) => JSON.stringify(call)).join("\n") + "\n",
@@ -188,6 +246,21 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
       run.source_audit = {
         path: "source-audit.json",
         sha256: await fileHash(join(root, "source-audit.json")),
+      };
+      await writeJson(join(root, "sdk-replay.json"), sdkReplay);
+      run.sdk_replay = {
+        path: "sdk-replay.json",
+        sha256: await fileHash(join(root, "sdk-replay.json")),
+      };
+      sdkParity.sdk_replay_sha256 = run.sdk_replay.sha256;
+      for (const call of sdkParity.calls)
+        call.sdk_result_sha256 = objectHash(
+          sdkReplay.queries.find((query) => query.task_id === call.task_id),
+        );
+      await writeJson(join(root, "sdk-parity.json"), sdkParity);
+      run.sdk_parity = {
+        path: "sdk-parity.json",
+        sha256: await fileHash(join(root, "sdk-parity.json")),
       };
       await writeJson(join(root, "run.json"), run);
       reference.sha256 = await fileHash(join(root, "run.json"));
@@ -289,7 +362,7 @@ test("missing calls and duplicate call identities invalidate the planned matrix"
 
 test("wrong repetition and first-query flags invalidate the measurement order", async (t) => {
   for (const [field, value] of [
-    ["quality_observation", false],
+    ["quality_observation", true],
     ["session_first_query", false],
     ["repetition", 5],
   ]) {
@@ -468,7 +541,7 @@ test("cross-tool comparison rejects incomplete task sets, changed eligibility, i
       r.tasks.find((row) => row.ndcg_at_10 !== null).ndcg_at_10 = null;
     },
     (r) => {
-      r.protocol.content = "code";
+      r.protocol.content = "all";
     },
     (r) => {
       r.quality_score_valid = false;
@@ -568,7 +641,7 @@ test("a successful call cannot claim unknown latency while unissued product fail
 
 test("Gold file presence is a separate public-item diagnostic and cannot turn a missing anchor into a hit", async (t) => {
   const f = await fixture(t, { subset: true });
-  const call = f.first.calls[0],
+  const call = f.first.calls[4],
     task = suite.lock.tasks.find((task) => task.task_id === call.task_id);
   const path = suite.gold[task.task_id].targets.find(
     (target) => target.role === "accepted",
@@ -593,10 +666,15 @@ test("Gold file presence is a separate public-item diagnostic and cannot turn a 
     ],
   });
   call.raw_sha256 = await fileHash(join(f.first.root, call.raw_path));
-  Object.assign(f.first.audit.calls[0], {
+  Object.assign(f.first.audit.calls[4], {
     raw_sha256: call.raw_sha256,
     results_checked: 1,
   });
+  const payload = JSON.parse(
+    (await readJson(join(f.first.root, call.raw_path))).content[0].text,
+  );
+  f.first.sdkReplay.queries[0].results = payload.results;
+  f.first.sdkParity.calls[0].raw_sha256 = call.raw_sha256;
   await f.save();
   const report = await aggregateSemble(f.directory, { allowSubset: true });
   assert.equal(report.quality_score_valid, true);
@@ -608,10 +686,12 @@ test("Gold file presence is a separate public-item diagnostic and cannot turn a 
   );
   assert.equal(report.tasks[0].hit_at_10, 0);
   assert.equal(report.tasks[0].rr_at_10, 0);
+  assert.equal(report.tasks[0].repetition, 5);
+  assert.ok(report.tasks[0].semble_official.ndcg_at_10 > 0);
   assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
   assert.match(
     markdownSembleReport(report),
-    /zero score does not establish absence of relevant code/,
+    /zero anchor score does not establish absence of relevant code/,
   );
 });
 
@@ -631,18 +711,26 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
     (target) => target.role === "bridge",
   ).path;
   const before = baseline.tasks.find((row) => row.task_id === "requests:16");
-  before.items = [
-    { rank: 1, path: bridgeOnly },
-    { rank: 2, path: `${accepted}.extra` },
-    { rank: 11, path: accepted },
-  ];
+  before.items = Array.from({ length: 10 }, (_, i) => ({
+    rank: i + 1,
+    path: "unrelated.py",
+  }));
+  before.items[0].path = bridgeOnly;
+  before.items[1].path = `${accepted}.extra`;
   before.gold_file_presence_at_10 = true; // Cached diagnostic must not be trusted.
-  report.tasks.find((row) => row.task_id === "requests:16").items = [
-    { rank: 10, path: accepted },
-  ];
+  report.tasks.find((row) => row.task_id === "requests:16").items = Array.from(
+    { length: 10 },
+    (_, i) => ({ rank: i + 1, path: i === 9 ? accepted : "unrelated.py" }),
+  );
   report.tasks.find((row) => row.task_id === "xarray:46").items = [
     { rank: 1, path: shared },
   ];
+  for (const r of [baseline, report])
+    for (const row of r.tasks)
+      row.semble_official = {
+        targets: suite.semble_gold[row.task_id].targets,
+        ...scoreSembleMetric(row.items, suite.semble_gold[row.task_id].targets),
+      };
   const result = await compareSembleToZg(baseline, report);
   assert.equal(result.diagnostics.gold_file_presence_at_10.zg_count, 0);
   assert.equal(result.diagnostics.gold_file_presence_at_10.semble_count, 2);
@@ -657,4 +745,62 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   assert.equal(result.summary.zg.hit_at_10_count, 0);
   assert.equal(result.summary.semble.hit_at_10_count, 0);
   assert.equal(result.summary.delta.mrr_at_10, 0);
+});
+
+test("official means preserve query/repository/language weighting instead of substituting the grouped subset", () => {
+  const row = (repository, language, value) => ({
+    repository,
+    language,
+    semble_official: { ndcg_at_5: value, ndcg_at_10: value },
+  });
+  const result = summarizeSembleOfficial([
+    row("a", "python", 1),
+    row("a", "python", 1),
+    row("a", "python", 1),
+    row("b", "python", 0),
+    row("c", "go", 0),
+  ]);
+  assert.equal(result.query_count, 5);
+  assert.equal(result.repository_count, 3);
+  assert.equal(result.language_count, 2);
+  assert.equal(result.query_mean.ndcg_at_10, 0.6);
+  assert.equal(result.repository_macro.ndcg_at_10, 1 / 3);
+  assert.equal(result.language_macro.ndcg_at_10, 0.25);
+  assert.equal(result.by_language.python.ndcg_at_10, 0.5);
+});
+
+test("SDK parity evidence is mandatory and independently recomputed, not accepted from matches=true", async (t) => {
+  for (const mutate of [
+    (f) => {
+      f.first.sdkReplay.parameters.alpha = 0.8;
+    },
+    (f) => {
+      f.first.sdkParity.calls[0].matches = false;
+    },
+    (f) => {
+      f.first.sdkParity.calls[0].raw_sha256 = "f".repeat(64);
+    },
+    (f) => {
+      f.first.sdkReplay.queries[0].results = [
+        {
+          file_path: "other.py",
+          start_line: 1,
+          end_line: 1,
+          score: 0,
+          content: "pass",
+        },
+      ];
+    },
+    (f) => {
+      f.first.sdkReplay.queries[0].query = "rewritten";
+    },
+  ]) {
+    const f = await fixture(t, { subset: true });
+    mutate(f);
+    await f.save();
+    expectInvalid(
+      await aggregateSemble(f.directory, { allowSubset: true }),
+      /SDK replay parameters|SDK parity mismatch|SDK parity raw hash|differs from official SDK|changed original query/,
+    );
+  }
 });

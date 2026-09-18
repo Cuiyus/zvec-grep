@@ -23,7 +23,12 @@ import {
   validateGoldSources,
   writeJson,
 } from "../lib.mjs";
-import { callPlan, requestArguments } from "../run.mjs";
+import {
+  callPlan,
+  requestArguments,
+  indexSelectionArguments,
+  auditIndexSelection,
+} from "../run.mjs";
 import { aggregate } from "../report.mjs";
 
 const suite = await loadSuite();
@@ -236,7 +241,7 @@ test("each mode receives the unmodified original question exactly once, without 
   );
 });
 
-test("the fixed plan runs all hybrid rounds first and preserves task order within every five-repeat mode", () => {
+test("the SDK-aligned plan runs five consecutive calls per question and scores the last, not best, result", () => {
   const tasks = suite.lock.tasks;
   const modes = ["hybrid", "fts", "vector"];
   const plan = callPlan(tasks, modes, suite.protocol);
@@ -248,21 +253,68 @@ test("the fixed plan runs all hybrid rounds first and preserves task order withi
       modeCalls.filter((call) => call.quality_observation).length,
       20,
     );
-    for (let repetition = 1; repetition <= 5; repetition++) {
-      const round = modeCalls.slice((repetition - 1) * 20, repetition * 20);
+    for (const [index, task] of tasks.entries()) {
+      const round = modeCalls.slice(index * 5, (index + 1) * 5);
+      assert.ok(round.every((call) => call.task.task_id === task.task_id));
       assert.deepEqual(
-        round.map((call) => call.task.task_id),
-        tasks.map((task) => task.task_id),
+        round.map((call) => call.repetition),
+        [1, 2, 3, 4, 5],
       );
       assert.ok(
         round.every(
-          (call) =>
-            call.repetition === repetition &&
-            call.quality_observation === (repetition === 1),
+          (call) => call.quality_observation === (call.repetition === 5),
         ),
       );
     }
   }
+});
+
+test("code-only index arguments cover the frozen Semble extension set and reject leaked documents or oversized files", () => {
+  const args = indexSelectionArguments(suite.protocol);
+  assert.deepEqual(args.slice(0, 2), ["--max-filesize", "1000000"]);
+  const extensions = [];
+  for (let i = 2; i < args.length; i += 2) {
+    assert.equal(args[i], "--iglob");
+    assert.ok(args[i + 1].length < 1024);
+    extensions.push(...args[i + 1].slice(2, -1).split(","));
+  }
+  assert.deepEqual(extensions, suite.protocol.index_selection.code_extensions);
+  assert.ok(extensions.includes(".py"));
+  assert.ok(!extensions.includes(".md") && !extensions.includes(".json"));
+  const files = [{ relativePath: "source/ENTRY.PY", sizeBytes: 1000000 }];
+  assert.equal(auditIndexSelection(files, suite.protocol).verified, true);
+  assert.throws(
+    () =>
+      auditIndexSelection(
+        [{ relativePath: "README.md", sizeBytes: 20 }],
+        suite.protocol,
+      ),
+    /non-code extension/,
+  );
+  assert.throws(
+    () =>
+      auditIndexSelection(
+        [{ relativePath: "entry.py", sizeBytes: 1000001 }],
+        suite.protocol,
+      ),
+    /oversized/,
+  );
+});
+
+test("the independent Semble file-label projection is frozen and cannot silently inherit a new anchor target", async (t) => {
+  assert.equal(
+    Object.values(suite.semble_gold).reduce(
+      (n, entry) => n + entry.targets.length,
+      0,
+    ),
+    39,
+  );
+  const fixture = await isolatedSuite(t);
+  const path = join(fixture.directory, "gold/semble-file-v1.json");
+  const labels = await readJson(path);
+  labels.tasks[fixedTask.task_id].targets.push({ path: "unreviewed.py" });
+  await writeJson(path, labels);
+  await assert.rejects(fixture.load, /frozen accepted-file projection/);
 });
 
 async function reportFixture(t) {
@@ -367,7 +419,7 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.product_error_calls, 5);
   assert.deepEqual(report.integrity_errors, []);
   assert.equal(report.tasks.length, 1);
-  assert.equal(report.tasks[0].repetition, 1);
+  assert.equal(report.tasks[0].repetition, 5);
   assert.equal(report.tasks[0].ranking_repeatable, null);
   assert.equal(report.tasks[0].output_repeatable, null);
   const summary = report.modes.hybrid.summary;
@@ -482,7 +534,7 @@ for (const [label, mutate] of [
 
 test("raw response tampering is detected before scoring even when replacement is another product error", async (t) => {
   const fixture = await reportFixture(t);
-  await writeJson(join(fixture.shard, fixture.calls[0].raw_path), {
+  await writeJson(join(fixture.shard, fixture.calls.at(-1).raw_path), {
     isError: true,
     content: [{ type: "text", text: "Changed after capture" }],
   });
