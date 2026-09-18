@@ -10,6 +10,11 @@ import {
   markdownSembleReport,
 } from "../semble-report.mjs";
 import { scoreSembleMetric } from "../semble-metrics.mjs";
+import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+  summarizeFileRetrieval,
+} from "../file-retrieval-metrics.mjs";
 import { summarizeSembleOfficial } from "../report.mjs";
 import {
   fileHash,
@@ -324,8 +329,9 @@ test("Semble comparison retains both zg preview arms and publishes one shared me
   assert.match(markdown, /\| Semble MCP full chunk \|/);
   assert.match(
     markdown,
-    /Official nDCG@10 \(repo macro\).*Anchor Hit@1.*Grouped anchor nDCG@10/,
+    /Official nDCG@10 \(repo macro\).*File Hit@1.*File MRR@10/,
   );
+  assert.match(markdown, /Legacy strict-anchor visibility comparison/);
   baseline.tasks.pop();
   await assert.rejects(compareSembleToZg(baseline, report), /coverage/);
 });
@@ -339,6 +345,10 @@ test("offline aggregation requires all 100 calls, re-scores raw and records 12 e
   assert.equal(report.tasks.length, 20);
   assert.equal(report.modes.hybrid.summary.ndcg_tasks, 12);
   assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
+  assert.equal(report.file_retrieval_contract, FILE_RETRIEVAL_CONTRACT);
+  assert.equal(report.modes.hybrid.file_retrieval.scored_tasks, 20);
+  assert.equal(report.modes.hybrid.file_retrieval.hit_at_10_count, 0);
+  assert.ok(report.tasks.every((row) => row.file_retrieval.rr_at_10 === 0));
   assert.equal(report.modes.hybrid.ranking_repeatable_tasks, 20);
   assert.equal(report.modes.hybrid.output_repeatable_tasks, 20);
   assert.equal(
@@ -584,11 +594,46 @@ test("cross-tool comparison rejects incomplete task sets, changed eligibility, i
     (r) => {
       r.quality_score_valid = false;
     },
+    (r) => {
+      r.file_retrieval_contract = "unknown";
+    },
+    (r) => {
+      r.tasks[0].file_retrieval.rr_at_10 = 1;
+    },
+    (r) => {
+      delete r.tasks[0].file_retrieval;
+    },
+    (r) => {
+      r.modes.hybrid.file_retrieval.mrr_at_10 = 1;
+    },
   ]) {
     const changed = structuredClone(report);
     mutate(changed);
     await assert.rejects(compareSembleToZg(zgBaseline(report), changed));
   }
+});
+
+test("older saved reports are re-scored into the file contract without changing anchor history", async (t) => {
+  const f = await fixture(t);
+  const report = await aggregateSemble(f.directory);
+  const baseline = zgBaseline(report);
+  for (const saved of [baseline, report]) {
+    delete saved.file_retrieval_contract;
+    delete saved.modes.hybrid.file_retrieval;
+    for (const row of saved.tasks) delete row.file_retrieval;
+  }
+  const previousAnchors = structuredClone(
+    report.tasks.map((row) => row.rr_at_10),
+  );
+  const comparison = await compareSembleToZg(baseline, report);
+  assert.equal(comparison.file_retrieval_contract, FILE_RETRIEVAL_CONTRACT);
+  assert.equal(comparison.file_retrieval.semble.scored_tasks, 20);
+  assert.equal(comparison.file_retrieval.semble.mrr_at_10, 0);
+  assert.deepEqual(
+    report.tasks.map((row) => row.rr_at_10),
+    previousAnchors,
+  );
+  assert.ok(report.tasks.every((row) => row.file_retrieval === undefined));
 });
 
 test("baseline CLI option writes explicit cross-tool disclosure and comparison errors are withheld", async (t) => {
@@ -724,6 +769,8 @@ test("Gold file presence is a separate public-item diagnostic and cannot turn a 
   );
   assert.equal(report.tasks[0].hit_at_10, 0);
   assert.equal(report.tasks[0].rr_at_10, 0);
+  assert.equal(report.tasks[0].file_retrieval.rr_at_10, 1);
+  assert.equal(report.modes.hybrid.file_retrieval.hit_at_1_count, 1);
   assert.equal(report.tasks[0].repetition, 5);
   assert.ok(report.tasks[0].semble_official.ndcg_at_10 > 0);
   assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
@@ -763,12 +810,16 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   report.tasks.find((row) => row.task_id === "xarray:46").items = [
     { rank: 1, path: shared },
   ];
-  for (const r of [baseline, report])
-    for (const row of r.tasks)
+  for (const r of [baseline, report]) {
+    for (const row of r.tasks) {
       row.semble_official = {
         targets: suite.semble_gold[row.task_id].targets,
         ...scoreSembleMetric(row.items, suite.semble_gold[row.task_id].targets),
       };
+      row.file_retrieval = fileRetrievalForRow(row);
+    }
+    r.modes.hybrid.file_retrieval = summarizeFileRetrieval(r.tasks);
+  }
   const result = await compareSembleToZg(baseline, report);
   assert.equal(result.diagnostics.gold_file_presence_at_10.zg_count, 0);
   assert.equal(result.diagnostics.gold_file_presence_at_10.semble_count, 2);
@@ -783,6 +834,11 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   assert.equal(result.summary.zg.hit_at_10_count, 0);
   assert.equal(result.summary.semble.hit_at_10_count, 0);
   assert.equal(result.summary.delta.mrr_at_10, 0);
+  assert.equal(result.file_retrieval.zg.hit_at_10_count, 0);
+  assert.equal(result.file_retrieval.semble.hit_at_10_count, 2);
+  assert.equal(result.file_retrieval.semble.mrr_at_10, 1.1 / 20);
+  assert.equal(pair.semble.file_retrieval.first_hit_rank, 10);
+  assert.equal(pair.file_retrieval_delta.rr_at_10, 0.1);
 });
 
 test("official means preserve query/repository/language weighting instead of substituting the grouped subset", () => {

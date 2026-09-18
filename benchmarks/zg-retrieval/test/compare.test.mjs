@@ -5,6 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { scoreSembleMetric } from "../semble-metrics.mjs";
 import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+} from "../file-retrieval-metrics.mjs";
+import {
   compareReports,
   selectPreviewReport,
   markdownComparison,
@@ -92,6 +96,67 @@ function pairedReport() {
   );
   return result;
 }
+
+function fileRow(taskId, rank) {
+  const items = Array.from({ length: 10 }, (_, index) => ({
+    rank: index + 1,
+    path: index + 1 === rank ? "target.py" : "other.py",
+    range: { kind: "text", start_line: 100, end_line: 120 },
+    source_lines: [],
+    outline: [],
+  }));
+  const targets = [{ path: "target.py" }];
+  return row(taskId, "not_in_top10", {
+    items,
+    semble_official: { targets, ...scoreSembleMetric(items, targets) },
+  });
+}
+
+test("file comparisons use shared public file relevance even when every strict anchor misses", () => {
+  const baseline = report([
+    fileRow("example:1", 5),
+    fileRow("example:2", null),
+  ]);
+  const candidate = report([fileRow("example:1", 1), fileRow("example:2", 10)]);
+  candidate.file_retrieval_contract = FILE_RETRIEVAL_CONTRACT;
+  for (const value of candidate.tasks)
+    value.file_retrieval = fileRetrievalForRow(value);
+  // Cached aggregate summaries cannot control file scores.
+  candidate.modes.hybrid.file_retrieval = { mrr_at_10: 999 };
+  const result = compareReports(baseline, candidate);
+  const metrics = result.modes.hybrid.file_retrieval;
+  assert.equal(metrics.baseline.mrr_at_10, 0.1);
+  assert.equal(metrics.candidate.mrr_at_10, 0.55);
+  assert.equal(result.modes.hybrid.summary.delta.mrr_at_10, 0);
+  assert.equal(result.tasks[1].candidate.file_retrieval.first_hit_rank, 10);
+  assert.equal(result.tasks[1].file_retrieval_delta.rr_at_10, 0.1);
+  assert.match(markdownComparison(result), /File MRR@10 \(query mean\)/);
+  assert.match(markdownComparison(result), /Legacy strict-anchor/);
+});
+
+test("file metric contracts and cached per-question scores cannot be silently changed", () => {
+  const baseline = report([fileRow("example:1", 5)]);
+  baseline.file_retrieval_contract = FILE_RETRIEVAL_CONTRACT;
+  baseline.tasks[0].file_retrieval = fileRetrievalForRow(baseline.tasks[0]);
+  for (const mutate of [
+    (value) => {
+      value.file_retrieval_contract = "different-contract";
+    },
+    (value) => {
+      delete value.file_retrieval_contract;
+    },
+    (value) => {
+      delete value.tasks[0].file_retrieval;
+    },
+    (value) => {
+      value.tasks[0].file_retrieval.rr_at_10 = 1;
+    },
+  ]) {
+    const changed = clone(baseline);
+    mutate(changed);
+    assert.throws(() => compareReports(baseline, changed), /file retrieval/);
+  }
+});
 
 test("version comparisons keep preview arms separate and recompute from public rows", () => {
   const baseline = pairedReport();

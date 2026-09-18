@@ -15,6 +15,11 @@ import { compareReports, selectPreviewReport } from "./compare.mjs";
 import { scoreSembleResponse } from "./semble-scoring.mjs";
 import { scoreSembleMetric } from "./semble-metrics.mjs";
 import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+  summarizeFileRetrieval,
+} from "./file-retrieval-metrics.mjs";
+import {
   summarizeSembleOfficial,
   markdownSembleOfficialTable,
 } from "./report.mjs";
@@ -760,6 +765,7 @@ export async function aggregateSemble(
     errors.push("model artifact identities differ across repository shards");
   if (observations.some((row) => row.status === "harness_invalid"))
     errors.push("one or more observations are experimentally invalid");
+  for (const row of observations) row.file_retrieval = fileRetrievalForRow(row);
   const quality = selected.flatMap((task) => {
     const repeats = observations
       .filter((row) => row.task_id === task.task_id)
@@ -791,6 +797,7 @@ export async function aggregateSemble(
   const complete = errors.length === 0;
   const report = {
     schema_version: 1,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     quality_repetition: 5,
     engine: "semble",
     generated_at: new Date().toISOString(),
@@ -807,10 +814,11 @@ export async function aggregateSemble(
     product_error_calls: productErrors,
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "equal weight per original question; repetition 5 only; supplementary nDCG on the declared Gold subset",
+      "equal weight per original question for file Hit/MRR; repetition 5 only; Semble nDCG reports query/repository/language means; legacy anchor nDCG uses the declared Gold subset",
     modes: {
       hybrid: {
         summary: complete ? summarize(quality) : null,
+        file_retrieval: complete ? summarizeFileRetrieval(quality) : null,
         semble_official: complete ? summarizeSembleOfficial(quality) : null,
         diagnostics: {
           gold_file_presence_at_10: {
@@ -867,6 +875,12 @@ export async function aggregateSemble(
 }
 
 function validateQualityRows(report, suite, label) {
+  if (report.file_retrieval_contract !== undefined)
+    assert.equal(
+      report.file_retrieval_contract,
+      FILE_RETRIEVAL_CONTRACT,
+      `${label}: file retrieval contract mismatch`,
+    );
   assert.equal(
     report.quality_repetition,
     5,
@@ -953,6 +967,15 @@ function validateQualityRows(report, suite, label) {
       },
       `${label}: Semble official metric differs from public items or frozen projection`,
     );
+    if (
+      report.file_retrieval_contract !== undefined ||
+      row.file_retrieval !== undefined
+    )
+      same(
+        row.file_retrieval,
+        fileRetrievalForRow(row),
+        `${label}: file retrieval metric differs from public items or frozen projection`,
+      );
     assert.equal(
       row.quality_observation,
       true,
@@ -1002,6 +1025,12 @@ function validateQualityRows(report, suite, label) {
     if (row.execution_status === "product_error")
       assert.equal(rank, "not_in_top10", `${label}: product error cannot hit`);
   }
+  if (report.file_retrieval_contract !== undefined)
+    same(
+      report.modes.hybrid.file_retrieval,
+      summarizeFileRetrieval(rows),
+      `${label}: file retrieval aggregate differs from public items`,
+    );
   return rows;
 }
 
@@ -1062,9 +1091,11 @@ export async function compareSembleToZg(
           "repository",
           "language",
           "semble_official",
+          "items",
           ...METRICS,
         ].map((key) => [key, row[key]]),
       ),
+      file_retrieval: fileRetrievalForRow(row),
       ...goldFilePresence(row, suite.gold[task.task_id]),
     });
     return {
@@ -1073,6 +1104,12 @@ export async function compareSembleToZg(
       repository: task.repository,
       zg: view(oldRow),
       semble: view(newRow),
+      file_retrieval_delta: Object.fromEntries(
+        ["hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"].map((key) => [
+          key,
+          fileRetrievalForRow(newRow)[key] - fileRetrievalForRow(oldRow)[key],
+        ]),
+      ),
       semble_official_delta: Object.fromEntries(
         ["ndcg_at_5", "ndcg_at_10"].map((key) => [
           key,
@@ -1101,8 +1138,11 @@ export async function compareSembleToZg(
       ),
     };
   };
+  const fileZg = summarizeFileRetrieval(before),
+    fileSemble = summarizeFileRetrieval(after);
   return {
     schema_version: 1,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     kind: "cross-tool-quality-observation",
     zg_preview: baseline.preview ?? "short",
     delta_direction: "Semble minus zg",
@@ -1116,6 +1156,16 @@ export async function compareSembleToZg(
     quality_gate:
       "report-only; no causal attribution to a single retrieval component",
     summary: summarizePair(tasks),
+    file_retrieval: {
+      zg: fileZg,
+      semble: fileSemble,
+      delta: Object.fromEntries(
+        ["hit_at_1", "hit_at_5", "hit_at_10", "mrr_at_10"].map((key) => [
+          key,
+          fileZg[key] === null ? null : fileSemble[key] - fileZg[key],
+        ]),
+      ),
+    },
     semble_official: {
       zg: summarizeSembleOfficial(tasks.map((row) => row.zg)),
       semble: summarizeSembleOfficial(tasks.map((row) => row.semble)),
@@ -1199,17 +1249,29 @@ export async function compareSembleToZg(
 
 export function markdownSembleReport(report) {
   const summary = report.modes.hybrid.summary;
+  const fileSummary = report.modes.hybrid.file_retrieval;
+  const official = report.modes.hybrid.semble_official?.repository_macro;
   const lines = [
     "# Semble Retrieval-only — SWE-QA original queries",
     "",
     `Scope: **${cell(report.scope)}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
     "",
-    "Quality uses repetition 5; five repeats measure stability, not independent questions. Semble official file-target nDCG is reported first; source-anchor Hit/MRR and grouped nDCG remain separately labeled supplementary metrics. No query rewrite, subquery, result deduplication or invisible source completion.",
+    "Quality uses repetition 5; five repeats measure stability, not independent questions. File Hit/MRR and Semble official file-target nDCG are retrieval metrics; legacy strict-anchor scores are output-visibility diagnostics. No query rewrite, subquery, result deduplication or invisible source completion.",
     "",
     `Semble ${cell(report.tool?.version)}, commit \`${cell(report.tool?.source_commit)}\`. Native stdio MCP search; content=code; top_k=10; max_snippet_lines=null. Model: ${SEMBLE_PROTOCOL.model}.`,
+    "",
+    "| Mode | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    fileSummary && official
+      ? `| hybrid | ${fileSummary.hit_at_1_count}/${fileSummary.scored_tasks} | ${fileSummary.hit_at_5_count}/${fileSummary.scored_tasks} | ${fileSummary.hit_at_10_count}/${fileSummary.scored_tasks} | ${number(fileSummary.mrr_at_10)} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} |`
+      : "| hybrid | **Invalid experiment — aggregate withheld** | | | | | |",
+    "",
+    "File Hit/MRR use the same frozen accepted-file targets and upstream path matching as nDCG, preserving native ranks. Hit@K is 1 when the first matching file is within K; RR@10 is 1/r for its first native rank r, or 0 for a Top-10 miss. MRR is the mean over original questions, including misses and product errors. Source text, outlines and returned length do not affect these file-localization metrics; finding a file does not establish sufficient answer evidence.",
     ...markdownSembleOfficialTable(report.modes),
     "",
-    "## Supplementary source-anchor metrics",
+    "## Legacy strict-anchor visibility diagnostics",
+    "",
+    "Historical anchor scores mix native retrieval, rendering and agent-authored anchor selection. They are retained for diagnosis and continuity, not as a cross-tool retrieval quality score.",
     "",
     "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -1219,11 +1281,11 @@ export function markdownSembleReport(report) {
     "",
     "## Per task",
     "",
-    "| Task | Official nDCG@5 / @10 | Official target ranks | Anchor first rank | Anchor RR@10 / grouped nDCG@10 | Gold file present (diagnostic) | Repeat anchor ranks | Same rank / text | Raw |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Task | Official nDCG@5 / @10 | File first rank / RR@10 | Official target ranks | Anchor first rank | Anchor RR@10 / grouped nDCG@10 | Gold file present (diagnostic) | Repeat anchor ranks | Same rank / text | Raw |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.tasks.map(
       (row) =>
-        `| ${cell(row.task_id)} | ${number(row.semble_official?.ndcg_at_5)} / ${number(row.semble_official?.ndcg_at_10)} | ${row.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${cell(row.first_hit_rank)} | ${number(row.rr_at_10)} / ${number(row.ndcg_at_10)} | ${cell(row.gold_file_presence_at_10)} | ${row.repeat_ranks.map(cell).join(", ")} | ${cell(row.ranking_repeatable)} / ${cell(row.output_repeatable)} | [response](${row.raw_path}) |`,
+        `| ${cell(row.task_id)} | ${number(row.semble_official?.ndcg_at_5)} / ${number(row.semble_official?.ndcg_at_10)} | ${cell(row.file_retrieval?.first_hit_rank)} / ${number(row.file_retrieval?.rr_at_10)} | ${row.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${cell(row.first_hit_rank)} | ${number(row.rr_at_10)} / ${number(row.ndcg_at_10)} | ${cell(row.gold_file_presence_at_10)} | ${row.repeat_ranks.map(cell).join(", ")} | ${cell(row.ranking_repeatable)} / ${cell(row.output_repeatable)} | [response](${row.raw_path}) |`,
     ),
     "",
     `Gold file presence at Top 10 (diagnostic only): **${cell(report.modes.hybrid.diagnostics.gold_file_presence_at_10.count)}/${report.modes.hybrid.diagnostics.gold_file_presence_at_10.planned_tasks}**. ${FILE_PRESENCE_RULE}`,
@@ -1259,12 +1321,12 @@ export function markdownSembleReport(report) {
       "",
       "Delta = Semble minus zg. Different engine protocol identities are retained; source/Gold/task coverage and scoring eligibility match.",
       "",
-      "| Arm | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) | Anchor Hit@1 | Anchor Hit@5 | Anchor Hit@10 | Anchor MRR@10 | Grouped anchor nDCG@5 | Grouped anchor nDCG@10 | Grouped questions |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| Arm | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
       ...variants.map(([label, entry, engine]) => {
-        const s = entry.summary[engine];
+        const s = entry.file_retrieval[engine];
         const official = entry.semble_official[engine].repository_macro;
-        return `| ${label} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} | ${number(s.ndcg_at_5)} | ${number(s.ndcg_at_10)} | ${s.ndcg_tasks} |`;
+        return `| ${label} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} |`;
       }),
       ...markdownSembleOfficialTable(
         Object.fromEntries(
@@ -1276,7 +1338,7 @@ export function markdownSembleReport(report) {
         { title: "Cross-tool Semble official metric" },
       ),
       "",
-      "Supplementary source-anchor comparison:",
+      "Legacy strict-anchor visibility comparison (not retrieval quality):",
       "",
       "| Engine | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@10 |",
       "| --- | --- | --- | --- | --- | --- |",

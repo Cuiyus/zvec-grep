@@ -12,6 +12,11 @@ import {
 } from "./lib.mjs";
 import { scoreResponse } from "./scoring.mjs";
 import { scoreSembleMetric } from "./semble-metrics.mjs";
+import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+  summarizeFileRetrieval,
+} from "./file-retrieval-metrics.mjs";
 
 const metricKeys = [
   "hit_at_1",
@@ -686,6 +691,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     errors.push("mixed mode selections across repository shards");
   if (observations.some((row) => row.status === "harness_invalid"))
     errors.push("one or more observations are experimentally invalid");
+  for (const row of observations) row.file_retrieval = fileRetrievalForRow(row);
   const quality = observations
     .filter((row) => row.repetition === suite.protocol.quality_repetition)
     .map((row) => {
@@ -745,6 +751,9 @@ export async function aggregate(directory, { expectedTasks } = {}) {
                 mode,
                 {
                   summary: complete ? summarize(rows) : null,
+                  file_retrieval: complete
+                    ? summarizeFileRetrieval(rows)
+                    : null,
                   semble_official: complete
                     ? summarizeSembleOfficial(rows)
                     : null,
@@ -784,6 +793,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
   );
   const report = {
     schema_version: 2,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     primary_preview: suite.protocol.primary_preview,
     quality_repetition: suite.protocol.quality_repetition,
     generated_at: new Date().toISOString(),
@@ -798,7 +808,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5 separately for each preview; Semble official nDCG on all projected targets with query/repository/language means; supplementary anchor metrics retain their declared subset",
+      "quality repetition 5 separately for each preview; file Hit and MRR use equal weight per original question and the same frozen targets as Semble official nDCG; nDCG has query/repository/language means; legacy anchor diagnostics retain their declared subset",
     modes: previewReports[suite.protocol.primary_preview].modes,
     previews: previewReports,
     paired_preview_comparison: summarizePreviewPairs(observations, {
@@ -835,21 +845,21 @@ export function markdownReport(report) {
     "",
     "Both previews use the same frozen index, MCP session, original query and native top-10 limit. Full displays all stored source content of each returned retrieval unit, not the entire file; outline-only units remain outlines. The two arms are scored separately, with the fifth call per arm used for quality. Each row still contains the same original questions.",
     "",
-    "| Mode / preview | Official nDCG@5 | Official nDCG@10 | Anchor Hit@1 | Anchor Hit@5 | Anchor Hit@10 | Anchor MRR@10 | Grouped anchor nDCG@5 | Grouped anchor nDCG@10 | Mean output bytes |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Mode / preview | Official nDCG@5 | Official nDCG@10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Mean output bytes |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const [label, entry] of Object.entries(previewModes)) {
-    const s = entry.summary,
+    const s = entry.file_retrieval,
       official = entry.semble_official?.repository_macro;
     previewComparison.push(
       s && official
-        ? `| ${label} | ${display(official.ndcg_at_5)} | ${display(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} | ${display(s.ndcg_at_5)} | ${display(s.ndcg_at_10)} | ${display(entry.output_size?.quality_mean_bytes)} |`
-        : `| ${label} | **Invalid experiment — aggregate quality withheld** | | | | | | | | |`,
+        ? `| ${label} | ${display(official.ndcg_at_5)} | ${display(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} | ${display(entry.output_size?.quality_mean_bytes)} |`
+        : `| ${label} | **Invalid experiment — aggregate quality withheld** | | | | | | |`,
     );
   }
   previewComparison.push(
     "",
-    "Official nDCG uses the repository macro; anchor Hit/MRR uses all scored questions; grouped anchor nDCG uses only questions with reviewed complementary groups (12 of the full 20-question suite). Output size is UTF-8 bytes of the public MCP text, not a model token estimate.",
+    "Official nDCG uses the repository macro; file Hit/MRR uses equal weight per scored original question. All headline metrics use the same frozen accepted-file targets and upstream path matching, preserve native chunk ranks, and ignore source/outline visibility. File Hit@K is 1 if the first matching file is within K; RR@10 is 1/r for its first native rank r, or 0 for a Top-10 miss; MRR is the query mean including misses and product errors. These measure file localization, not sufficient answer evidence. Output size is UTF-8 bytes of the public MCP text, not a model token estimate.",
   );
   if (report.paired_preview_comparison) {
     const pair = report.paired_preview_comparison;
@@ -870,11 +880,13 @@ export function markdownReport(report) {
     "",
     `Scope: **${report.scope}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
     "",
-    "Quality uses repetition 5; five repeats measure stability, not five independent questions. Semble official file-target nDCG is reported first. The separate source-anchor Hit/MRR and grouped nDCG remain supplementary and are not answer accuracy. Quality thresholds are report-only.",
+    "Quality uses repetition 5; five repeats measure stability, not five independent questions. File Hit/MRR and Semble official file-target nDCG are the retrieval metrics. Legacy strict source-anchor Hit/MRR and grouped nDCG are output-visibility diagnostics, not retrieval or answer accuracy. Quality thresholds are report-only.",
     ...previewComparison,
     ...markdownSembleOfficialTable(previewModes),
     "",
-    "## Supplementary source-anchor metrics",
+    "## Legacy strict-anchor visibility diagnostics",
+    "",
+    "These historical scores mix native retrieval, output rendering and agent-authored anchor selection. They are retained for diagnosis and continuity, not as a cross-tool retrieval quality score. Grouped anchor nDCG uses only reviewed complementary groups (12 of the full 20-question suite).",
     "",
     "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -891,17 +903,17 @@ export function markdownReport(report) {
     "",
     "## Per task",
     "",
-    "| Task / mode / preview | Official nDCG@5 / @10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Task / mode / preview | Official nDCG@5 / @10 | File first rank / RR@10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const task of report.tasks) {
     lines.push(
-      `| ${task.task_id} / ${task.mode} / ${task.preview ?? report.primary_preview ?? "short"} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
+      `| ${task.task_id} / ${task.mode} / ${task.preview ?? report.primary_preview ?? "short"} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.file_retrieval?.first_hit_rank ?? "N/A"} / ${display(task.file_retrieval?.rr_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
     );
   }
   lines.push(
     "",
-    "## Categories",
+    "## Legacy anchor diagnostics by category",
     "",
     "| Mode / category | Scored / planned | Hit@10 | MRR@10 |",
     "| --- | --- | --- | --- |",

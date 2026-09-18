@@ -4,6 +4,7 @@ import { loadSuite } from "../lib.mjs";
 import { markdownReport, summarizePreviewPairs } from "../report.mjs";
 import { scoreResponse } from "../scoring.mjs";
 import { scoreSembleMetric } from "../semble-metrics.mjs";
+import { fileRetrievalForRow } from "../file-retrieval-metrics.mjs";
 
 const suite = await loadSuite();
 const taskId = "sympy:38";
@@ -32,10 +33,10 @@ function observation(preview, repetition = 5) {
     repetition,
     ...score,
     visible_output_bytes: Buffer.byteLength(text, "utf8"),
-    semble_official: scoreSembleMetric(
-      score.items,
-      suite.semble_gold[taskId].targets,
-    ),
+    semble_official: {
+      targets: suite.semble_gold[taskId].targets,
+      ...scoreSembleMetric(score.items, suite.semble_gold[taskId].targets),
+    },
   };
 }
 
@@ -48,6 +49,8 @@ test("full source can improve strict anchor visibility while preserving native i
   // it must not be used to compare different presentation arms.
   assert.notEqual(short.ranking_sha256, full.ranking_sha256);
   assert.deepEqual(short.semble_official, full.semble_official);
+  assert.deepEqual(fileRetrievalForRow(short), fileRetrievalForRow(full));
+  assert.equal(fileRetrievalForRow(short).hit_at_1, 1);
   const result = summarizePreviewPairs([short, full]);
   assert.equal(result.compared_pairs, 1);
   assert.equal(result.same_ranking_pairs, 1);
@@ -105,6 +108,14 @@ test("a changed ranked range is exposed even when file-target nDCG stays equal",
 
 test("report tables retain both preview arms and label their different metric denominators", () => {
   const mode = {
+    file_retrieval: {
+      planned_tasks: 20,
+      scored_tasks: 20,
+      hit_at_1_count: 7,
+      hit_at_5_count: 12,
+      hit_at_10_count: 15,
+      mrr_at_10: 0.4,
+    },
     summary: {
       planned_tasks: 20,
       scored_tasks: 20,
@@ -151,12 +162,14 @@ test("report tables retain both preview arms and label their different metric de
   const text = markdownReport(report);
   assert.match(
     text,
-    /\| hybrid \/ short \| 0\.400 \| 0\.500 \| 1\/20 \| 2\/20 \| 3\/20/,
+    /\| hybrid \/ short \| 0\.400 \| 0\.500 \| 7\/20 \| 12\/20 \| 15\/20/,
   );
   assert.match(
     text,
-    /\| hybrid \/ full \| 0\.400 \| 0\.500 \| 1\/20 \| 2\/20 \| 9\/20/,
+    /\| hybrid \/ full \| 0\.400 \| 0\.500 \| 7\/20 \| 12\/20 \| 15\/20/,
   );
+  assert.match(text, /Legacy strict-anchor visibility diagnostics/);
+  assert.match(text, /\| hybrid \/ full \| 20\/20 \| 1\/20 \| 2\/20 \| 9\/20/);
   assert.match(text, /12 of the full 20-question suite/);
   assert.match(text, /not the entire file/);
   assert.match(text, /not a model token estimate/);

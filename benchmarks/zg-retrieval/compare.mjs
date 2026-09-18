@@ -5,6 +5,11 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { scoreSembleMetric } from "./semble-metrics.mjs";
 import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+  summarizeFileRetrieval,
+} from "./file-retrieval-metrics.mjs";
+import {
   summarizeSembleOfficial,
   markdownSembleOfficialTable,
 } from "./report.mjs";
@@ -65,6 +70,13 @@ export function selectPreviewReport(report, preview) {
 }
 
 function validateReport(report, label) {
+  const hasFileContract = Object.hasOwn(report, "file_retrieval_contract");
+  if (hasFileContract)
+    assert.equal(
+      report.file_retrieval_contract,
+      FILE_RETRIEVAL_CONTRACT,
+      `${label}: incompatible file retrieval contract`,
+    );
   assert.ok(
     [1, 2].includes(report.schema_version),
     `${label}: unsupported report schema`,
@@ -203,6 +215,17 @@ function validateReport(report, label) {
       { targets, ...scoreSembleMetric(row.items, targets) },
       `${context}: Semble official score differs from public items`,
     );
+    if (hasFileContract || Object.hasOwn(row, "file_retrieval")) {
+      assert.ok(
+        hasFileContract,
+        `${context}: undeclared file retrieval metric`,
+      );
+      assert.deepEqual(
+        row.file_retrieval,
+        fileRetrievalForRow(row),
+        `${context}: file retrieval score differs from public items`,
+      );
+    }
     assert.ok(
       ["success", "product_error"].includes(row.execution_status),
       `${context}: invalid execution status`,
@@ -297,18 +320,37 @@ function validateReport(report, label) {
 }
 
 function scoreView(row) {
-  return Object.fromEntries(
-    [
-      "status",
-      "execution_status",
-      "gold_status",
-      "repository",
-      "language",
-      "semble_official",
-      "first_hit_rank",
-      ...METRICS,
-    ].map((field) => [field, row[field]]),
-  );
+  return {
+    ...Object.fromEntries(
+      [
+        "status",
+        "execution_status",
+        "gold_status",
+        "repository",
+        "language",
+        "semble_official",
+        "items",
+        "first_hit_rank",
+        ...METRICS,
+      ].map((field) => [field, row[field]]),
+    ),
+    file_retrieval: fileRetrievalForRow(row),
+  };
+}
+
+function filePair(pairs) {
+  const baseline = summarizeFileRetrieval(pairs.map((pair) => pair.baseline));
+  const candidate = summarizeFileRetrieval(pairs.map((pair) => pair.candidate));
+  return {
+    baseline,
+    candidate,
+    delta: Object.fromEntries(
+      Object.keys(baseline).map((field) => [
+        field,
+        difference(baseline[field], candidate[field]),
+      ]),
+    ),
+  };
 }
 
 function summarize(rows) {
@@ -470,6 +512,8 @@ export function compareReports(baseline, candidate) {
           difference(oldRow[metric], newRow[metric]),
         ]),
       );
+      const oldFile = fileRetrievalForRow(oldRow);
+      const newFile = fileRetrievalForRow(newRow);
       pairs.push({
         task_id,
         mode,
@@ -478,6 +522,12 @@ export function compareReports(baseline, candidate) {
         baseline: scoreView(oldRow),
         candidate: scoreView(newRow),
         delta,
+        file_retrieval_delta: Object.fromEntries(
+          [...HITS, "rr_at_10"].map((metric) => [
+            metric,
+            difference(oldFile?.[metric] ?? null, newFile?.[metric] ?? null),
+          ]),
+        ),
         semble_official_delta: Object.fromEntries(
           ["ndcg_at_5", "ndcg_at_10"].map((metric) => [
             metric,
@@ -510,6 +560,7 @@ export function compareReports(baseline, candidate) {
     }
   return {
     schema_version: 1,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     ...(baseline.preview === undefined ? {} : { preview: baseline.preview }),
     quality_repetition: 5,
     suite: structuredClone(baseline.suite),
@@ -543,6 +594,7 @@ export function compareReports(baseline, candidate) {
           mode,
           {
             summary: summarizePairs(rows),
+            file_retrieval: filePair(rows),
             semble_official: officialPair(rows),
             by_category: group(
               "category",
@@ -587,7 +639,18 @@ export function markdownComparison(result) {
     "",
     "Source, anchor Gold, Semble file-target projection and protocol identities match. Task order may differ, but task/mode coverage and per-task scoring eligibility must match. Official quality is recomputed from the paired fifth public result lists; repeats are not independent quality samples.",
     "",
-    "This is a report-only comparison, with no quality gate and no causal attribution. Partial source-entry positives do not measure complete answer evidence or E2E token savings.",
+    "This is a report-only comparison, with no quality gate and no causal attribution. File Hit/RR/MRR and official nDCG use the same frozen accepted-file targets and native ranks. These AI-reviewed partial positives do not establish complete relevance or answer sufficiency. Strict-anchor scores are legacy presentation diagnostics.",
+    "",
+    "## File retrieval — common relevance contract",
+    "",
+    "| Mode / version | Official nDCG@10 (repo macro) | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 (query mean) |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...Object.entries(result.modes).flatMap(([mode, entry]) =>
+      ["baseline", "candidate"].map((side) => {
+        const f = entry.file_retrieval[side];
+        return `| ${mode} / ${side} | ${signed(entry.semble_official[side].repository_macro.ndcg_at_10)} | ${f.hit_at_1_count}/${f.scored_tasks} | ${f.hit_at_5_count}/${f.scored_tasks} | ${f.hit_at_10_count}/${f.scored_tasks} | ${signed(f.mrr_at_10)} |`;
+      }),
+    ),
     ...markdownSembleOfficialTable(
       Object.fromEntries(
         Object.entries(result.modes).flatMap(([mode, entry]) =>
@@ -614,7 +677,7 @@ export function markdownComparison(result) {
     `| ${cell(label)} | ${group.baseline.scored_tasks}/${group.baseline.planned_tasks} | ${group.baseline.ndcg_tasks} | ${signed(group.delta.hit_at_1_count)} | ${signed(group.delta.hit_at_5_count)} | ${signed(group.delta.hit_at_10_count)} | ${signed(group.delta.mrr_at_10)} | ${signed(group.delta.ndcg_at_5)} | ${signed(group.delta.ndcg_at_10)} |`;
   lines.push(
     "",
-    "## Supplementary source-anchor metrics by mode",
+    "## Legacy strict-anchor presentation diagnostics by mode",
     "",
     ...header,
   );
@@ -631,6 +694,16 @@ export function markdownComparison(result) {
   }
   lines.push(
     "",
+    "## File retrieval per question",
+    "",
+    "| Task / mode | First file rank | File Hit@1 / @5 / @10 | File RR@10 baseline / candidate | ΔFile RR@10 |",
+    "| --- | --- | --- | --- | --- |",
+    ...result.tasks.map((row) => {
+      const b = row.baseline.file_retrieval,
+        c = row.candidate.file_retrieval;
+      return `| ${cell(row.task_id)} / ${cell(row.mode)} | ${change(b?.first_hit_rank, c?.first_hit_rank)} | ${HITS.map((metric) => change(b?.[metric], c?.[metric])).join(" / ")} | ${signed(b?.rr_at_10 ?? null)} / ${signed(c?.rr_at_10 ?? null)} | ${signed(row.file_retrieval_delta.rr_at_10)} |`;
+    }),
+    "",
     "## Semble official metric per question",
     "",
     "| Task / mode | Baseline nDCG@5 / @10 | Candidate nDCG@5 / @10 | ΔnDCG@5 / @10 | Baseline target ranks | Candidate target ranks |",
@@ -640,7 +713,7 @@ export function markdownComparison(result) {
         `| ${cell(row.task_id)} / ${cell(row.mode)} | ${signed(row.baseline.semble_official.ndcg_at_5)} / ${signed(row.baseline.semble_official.ndcg_at_10)} | ${signed(row.candidate.semble_official.ndcg_at_5)} / ${signed(row.candidate.semble_official.ndcg_at_10)} | ${signed(row.semble_official_delta.ndcg_at_5)} / ${signed(row.semble_official_delta.ndcg_at_10)} | ${row.baseline.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} | ${row.candidate.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} |`,
     ),
     "",
-    "## Per question and mode",
+    "## Legacy strict-anchor diagnostics per question and mode",
     "",
     "| Task / mode | First rank | Rank change | Hit@1 / @5 / @10 | ΔRR@10 | ΔnDCG@5 / @10 | Scoring status | Execution status |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
