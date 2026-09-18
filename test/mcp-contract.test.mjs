@@ -1407,6 +1407,105 @@ test("structured tools return schema-compatible content and searches preview eve
   );
 });
 
+for (const toolset of ["agent", "full"]) {
+  test(`${toolset} MCP full preview preserves retrieved source without changing search`, async (t) => {
+    const backend = createBackend();
+    const response = await backend.search({ root, queries: ["query"] });
+    const sourceLines = Array.from({ length: 24 }, (_, index) =>
+      index === 1
+        ? `long-line-${"x".repeat(1_000)}-end`
+        : `retrieved-source-line-${index + 1}`,
+    );
+    response.result.items = [2, 1].map((rank) => ({
+      ...response.result.items[0],
+      rank,
+      file: {
+        absolutePath: `${root}/src/result-${rank}.ts`,
+        relativePath: `src/result-${rank}.ts`,
+      },
+      range: {
+        kind: "text",
+        startLine: 10,
+        endLine: 33,
+        startOffset: 100,
+        endOffset: 2_000,
+      },
+      content: sourceLines.join("\n"),
+    }));
+    const originalResponse = structuredClone(response);
+    const received = [];
+    backend.search = async (input, options) => {
+      received.push(structuredClone({ input, options }));
+      return response;
+    };
+    const { client, server } = await connect(backend, { toolset });
+    t.after(async () => {
+      await client.close();
+      await server.close();
+    });
+
+    const searchTool = (await client.listTools()).tools.find(
+      (tool) => tool.name === "zvec_grep_search",
+    );
+    assert.deepEqual(searchTool.inputSchema.properties.preview.enum, [
+      "short",
+      "full",
+    ]);
+    assert.equal(searchTool.inputSchema.required.includes("preview"), false);
+    assert.match(searchTool.description, /preview: "full"/);
+
+    const responses = [];
+    for (const preview of [undefined, "short", "full"]) {
+      responses.push(
+        await client.callTool({
+          name: "zvec_grep_search",
+          arguments: {
+            root,
+            query: "query",
+            limit: 2,
+            autoUpdate: false,
+            ...(preview ? { preview } : {}),
+          },
+        }),
+      );
+    }
+    for (const result of responses) {
+      assert.equal(result.isError, undefined);
+      assert.equal(result.structuredContent, undefined);
+      assert.equal(result.content.length, 1);
+      assert.equal(result.content[0].type, "text");
+    }
+    const [defaultText, shortText, fullText] = responses.map(
+      (result) => result.content[0].text,
+    );
+    assert.equal(defaultText, shortText);
+    assert.equal(shortText.includes(sourceLines[1]), false);
+    assert.equal(shortText.includes(sourceLines.at(-1)), false);
+    for (const line of sourceLines) {
+      assert.equal(fullText.includes(line), true, `missing full line: ${line}`);
+    }
+    assert.match(fullText, /^33\tretrieved-source-line-24$/m);
+    const headers = (text) =>
+      text.split("\n").filter((line) => /^#\d/.test(line));
+    assert.deepEqual(headers(fullText), headers(shortText));
+    assert.deepEqual(headers(fullText), [
+      "#1 matchedBy=fts+vector src/result-1.ts:10-33",
+      "#2 matchedBy=fts+vector src/result-2.ts:10-33",
+    ]);
+    assert.deepEqual(received[0], received[1]);
+    assert.deepEqual(received[0], received[2]);
+    assert.equal("preview" in received[0].input, false);
+    assert.deepEqual(response, originalResponse);
+
+    const invalid = await client.callTool({
+      name: "zvec_grep_search",
+      arguments: { root, query: "query", preview: "none" },
+    });
+    assert.equal(invalid.isError, true);
+    assert.equal(received.length, 3);
+  });
+}
+
 test("CLI admin search includes per-group recall while public MCP remains text-only", async (t) => {
   const backend = createBackend();
   const receivedSearches = [];

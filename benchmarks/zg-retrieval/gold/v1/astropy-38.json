@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "astropy:38",
+  "question_sha256": "7ce28ac0654a3efbc8d56b7f09adb970bc30e1c987bbcb58cb0cd0d87fb70e21",
+  "repository": "astropy/astropy",
+  "repository_commit": "0a041d38fbd0014298d4cf340d9f891c4522093f",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "sip-shift-and-polynomial",
+      "path": "astropy/wcs/src/sip.c",
+      "relevance_reason": "Direct sip_compute definition and coordinate shift subtracting crpix immediately before polynomial evaluation.",
+      "role": "accepted",
+      "kind": "code_span",
+      "source_sha256": "ba1bc7549ea45903b757509af617877616adf5590f449307e1e114e42158b440",
+      "anchors": [
+        {
+          "start_line": 183,
+          "end_line": 194,
+          "text": "static int\nsip_compute(\n    /*@unused@*/ const unsigned int naxes,\n    const unsigned int nelem,\n    const unsigned int m,\n    /*@null@*/ const double* a,\n    const unsigned int n,\n    /*@null@*/ const double* b,\n    const double* crpix /* [2] */,\n    /*@null@*/ double* tmp,\n    /*@null@*/ const double* input /* [NAXES][nelem] */,\n    /*@null@*/ double* output /* [NAXES][nelem] */) {",
+          "sha256": "c7487044ef3beb99f3d6de56178d80d3f582d0adb5d7331cf22f6fd23324d540"
+        },
+        {
+          "start_line": 225,
+          "end_line": 240,
+          "text": "  input_ptr = input;\n  output_ptr = output;\n  for (i = 0; i < nelem; ++i) {\n    x = *input_ptr++ - crpix[0];\n    y = *input_ptr++ - crpix[1];\n\n    for (j = 0; j <= (int)m; ++j) {\n      tmp[j] = lu(m, a, (int)m-j, j);\n      for (k = j-1; k >= 0; --k) {\n        tmp[j] = (y * tmp[j]) + lu(m, a, (int)m-j, k);\n      }\n    }\n\n    sum = tmp[0];\n    for (j = (int)m; j > 0; --j) {\n      sum = x * sum + tmp[(int)m - j + 1];",
+          "sha256": "245496bccf26e794acb511e0091cc8b0482d64e9680b8dcc56ebf6eebe27b051"
+        }
+      ]
+    },
+    {
+      "id": "sip-forward-dispatch",
+      "path": "astropy/wcs/src/sip.c",
+      "relevance_reason": "sip_pix2deltas forwards pixel coordinates and reference pixels to sip_compute; useful caller only.",
+      "role": "bridge",
+      "kind": "code_span",
+      "source_sha256": "ba1bc7549ea45903b757509af617877616adf5590f449307e1e114e42158b440",
+      "anchors": [
+        {
+          "start_line": 261,
+          "end_line": 278,
+          "text": "int\nsip_pix2deltas(\n    const sip_t* sip,\n    const unsigned int naxes,\n    const unsigned int nelem,\n    const double* pix /* [NAXES][nelem] */,\n    double* deltas /* [NAXES][nelem] */) {\n\n  if (sip == NULL) {\n    return 1;\n  }\n\n  return sip_compute(naxes, nelem,\n                     sip->a_order, sip->a,\n                     sip->b_order, sip->b,\n                     sip->crpix,\n                     (double *)sip->scratch,\n                     pix, deltas);",
+          "sha256": "d2cec38b2b8a90b75ddb14cd3cf063b16152e0558a0a7aa212492afed75d991b"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Disabled: one direct coordinate-transformation entry is labeled; caller is a bridge.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "C definition and shift lines verified at the pinned commit. Broad pipeline or WCS classes are not accepted merely for containing a call. Independent audit_token source review: Read sip_compute coordinate shifts and both polynomial loops plus sip_pix2deltas dispatch. The accepted C spans identify the computation itself; dispatch is appropriately bridge-only. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}
