@@ -1,9 +1,27 @@
+import assert from "node:assert/strict";
 import {
   scoreResponse as evaluateResponse,
   VisibleFormatError,
   relativePath,
 } from "../../core/response.mjs";
 export { VisibleFormatError };
+
+/** Enforce this benchmark's indexed search route without narrowing the public parser. */
+export function validateSearchRoute(items, mode) {
+  const allowed =
+    mode === "hybrid"
+      ? ["fts", "vector", "fts+vector"]
+      : ["fts", "vector"].includes(mode)
+        ? [mode]
+        : null;
+  assert.ok(allowed, `unknown search mode: ${String(mode)}`);
+  assert.ok(Array.isArray(items), `${mode}: missing public parsed items`);
+  for (const item of items)
+    assert.ok(
+      allowed.includes(item?.matched_by),
+      `${mode}: unexpected matchedBy=${String(item?.matched_by)} at rank ${item?.rank ?? "?"}; expected ${allowed.join(" or ")}`,
+    );
+}
 
 function fail(message) {
   throw new VisibleFormatError(message);

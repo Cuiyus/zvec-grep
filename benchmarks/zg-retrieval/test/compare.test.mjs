@@ -10,12 +10,11 @@ import {
 } from "../metrics/files.mjs";
 import {
   compareReports,
-  selectPreviewReport,
   markdownComparison,
   writeComparison,
 } from "../reports/compare.mjs";
 
-import { validateZgReport } from "../reports/validation.mjs";
+import { validateZgReport, ZG_MODES } from "../reports/validation.mjs";
 
 const clone = (value) => structuredClone(value);
 function row(task_id, rank = null, options = {}) {
@@ -29,7 +28,7 @@ function row(task_id, rank = null, options = {}) {
   const value = {
     task_id,
     mode: "hybrid",
-    preview: "short",
+    preview: "full",
     repetition: 5,
     quality_observation: true,
     repository: "example/repo",
@@ -55,15 +54,26 @@ function row(task_id, rank = null, options = {}) {
   }));
   return value;
 }
-function report(rows = [row("example:1", 1), row("example:2", 10)]) {
+function report(prototypes = [row("example:1", 1), row("example:2", 10)]) {
+  const rows = ZG_MODES.flatMap((mode) =>
+    prototypes.map((source) => ({
+      ...clone(source),
+      mode,
+      items: source.items.map((item) => ({
+        ...clone(item),
+        matched_by: mode === "hybrid" ? "fts+vector" : mode,
+      })),
+    })),
+  );
   const ids = [...new Set(rows.map((item) => item.task_id))];
   const productErrors =
     rows.filter((item) => item.execution_status === "product_error").length * 5;
   return {
-    schema_version: 3,
+    schema_version: 4,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    preview: "short",
+    preview: "full",
     quality_repetition: 5,
+    observed_calls: ids.length * 3 * 5,
     quality_score_valid: true,
     integrity_passed: productErrors === 0,
     integrity_errors: [],
@@ -89,22 +99,6 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
     ],
   };
 }
-function pairedReport() {
-  const value = report();
-  delete value.preview;
-  value.primary_preview = "short";
-  value.tasks = ["short", "full"].flatMap((preview) =>
-    value.tasks.map((item) => ({ ...clone(item), preview })),
-  );
-  value.previews = Object.fromEntries(
-    ["short", "full"].map((preview) => [
-      preview,
-      { modes: clone(value.modes) },
-    ]),
-  );
-  return value;
-}
-
 test("comparison recomputes only the five quality metrics and both operational measurements", () => {
   const baseline = report([row("example:1", 5), row("example:2")]);
   const candidate = report([row("example:1", 1), row("example:2", 10)]);
@@ -134,42 +128,6 @@ test("comparison recomputes only the five quality metrics and both operational m
   assert.doesNotMatch(
     JSON.stringify(result),
     /ndcg_at_5|target_matches|by_category/,
-  );
-});
-
-test("legacy schema 1/2 reports are rederived from public items without carrying removed metrics forward", () => {
-  const old = report([row("example:1", 5)]);
-  old.schema_version = 2;
-  delete old.file_retrieval_contract;
-  for (const value of old.tasks) {
-    delete value.file_retrieval;
-    delete value.measurement_observations;
-    Object.assign(value, {
-      first_hit_rank: 1,
-      hit_at_1: 1,
-      hit_at_5: 1,
-      hit_at_10: 1,
-      rr_at_10: 1,
-      ndcg_at_5: 1,
-      ndcg_at_10: 1,
-      target_matches: [],
-    });
-    value.semble_official.ndcg_at_5 = 1 / Math.log2(6);
-  }
-  const current = report([row("example:1", 1)]);
-  const result = compareReports(old, current);
-  assert.equal(result.modes.hybrid.file_retrieval.baseline.mrr_at_10, 0.2);
-  assert.equal(result.modes.hybrid.file_retrieval.candidate.mrr_at_10, 1);
-  assert.equal(result.modes.hybrid.measurements.baseline.latency_ms_p50, null);
-  assert.doesNotMatch(JSON.stringify(result), /ndcg_at_5|target_matches/);
-  assert.ok(!Object.hasOwn(result.tasks[0].baseline, "rr_at_10"));
-  const schema1 = clone(old);
-  schema1.schema_version = 1;
-  delete schema1.preview;
-  assert.equal(
-    compareReports(schema1, clone(schema1)).modes.hybrid.file_retrieval.baseline
-      .mrr_at_10,
-    0.2,
   );
 });
 
@@ -215,76 +173,9 @@ test("new reports reject removed quality fields and corrupted official scores", 
     mutate(after);
     assert.throws(
       () => compareReports(before, after),
-      /obsolete report field|Semble official score/,
+      /obsolete report field|nDCG score/,
     );
   }
-});
-
-test("version comparisons keep preview arms separate and render one combined table", () => {
-  const baseline = pairedReport(),
-    candidate = clone(baseline);
-  candidate.tasks = candidate.tasks.map((item) =>
-    item.preview === "full" && item.task_id === "example:2"
-      ? row("example:2", 1, { preview: "full" })
-      : item,
-  );
-  const result = compareReports(baseline, candidate);
-  assert.equal(
-    result.previews.short.modes.hybrid.file_retrieval.delta.mrr_at_10,
-    0,
-  );
-  assert.ok(
-    Math.abs(
-      result.previews.full.modes.hybrid.file_retrieval.delta.mrr_at_10 - 0.45,
-    ) < 1e-12,
-  );
-  assert.equal(result.previews.short.tasks.length, 2);
-  assert.equal(result.previews.full.tasks.length, 2);
-  const markdown = markdownComparison(result);
-  assert.match(markdown, /hybrid \/ short \/ baseline/);
-  assert.match(markdown, /hybrid \/ full \/ candidate/);
-  assert.equal(
-    (markdown.match(/\| Mode \/ preview \/ version \|/g) ?? []).length,
-    1,
-  );
-  assert.equal(selectPreviewReport(candidate, "full").tasks.length, 2);
-});
-
-test("version comparisons reject incomplete, duplicated or unlabeled preview matrices", () => {
-  for (const mutate of [
-    (value) => {
-      value.previews.short.modes.fts = {};
-    },
-    (value) => {
-      delete value.previews.full;
-    },
-    (value) => {
-      delete value.tasks[0].preview;
-    },
-    (value) => {
-      value.tasks.pop();
-    },
-    (value) => {
-      value.tasks.push(clone(value.tasks[0]));
-    },
-  ]) {
-    const before = pairedReport(),
-      after = clone(before);
-    mutate(after);
-    assert.throws(() => compareReports(before, after));
-  }
-  assert.throws(
-    () => compareReports(pairedReport(), report()),
-    /preview arm sets/,
-  );
-  assert.throws(
-    () =>
-      compareReports(
-        selectPreviewReport(pairedReport(), "short"),
-        selectPreviewReport(pairedReport(), "full"),
-      ),
-    /incompatible preview arms/,
-  );
 });
 
 test("offsetting hit changes remain visible per question", () => {
@@ -304,21 +195,16 @@ test("offsetting hit changes remain visible per question", () => {
 });
 
 test("identical task and mode sets preserve baseline table order", () => {
-  const baseline = report([
-    row("example:1", 1),
-    row("example:2", 5),
-    row("example:1", 3, { mode: "fts" }),
-    row("example:2", 9, { mode: "fts" }),
-  ]);
+  const baseline = report([row("example:1", 1), row("example:2", 5)]);
   const candidate = clone(baseline);
   candidate.expected_task_ids.reverse();
   candidate.tasks.reverse();
-  candidate.modes = { fts: {}, hybrid: {} };
+  candidate.modes = { vector: {}, fts: {}, hybrid: {} };
   const result = compareReports(baseline, candidate);
   assert.deepEqual(result.expected_task_ids, baseline.expected_task_ids);
   assert.deepEqual(
     result.tasks.map((item) => `${item.task_id}/${item.mode}`),
-    ["example:1/hybrid", "example:2/hybrid", "example:1/fts", "example:2/fts"],
+    ZG_MODES.flatMap((mode) => [`example:1/${mode}`, `example:2/${mode}`]),
   );
   assert.equal(result.modes.fts.file_retrieval.delta.mrr_at_10, 0);
 });
@@ -409,9 +295,9 @@ for (const [name, mutate, pattern] of [
   [
     "mode coverage",
     (r) => {
-      r.modes.vector = {};
+      delete r.modes.vector;
     },
-    /missing task\/mode coverage/,
+    /all three modes/,
   ],
   [
     "unexpected task",
@@ -502,19 +388,11 @@ test("measurement evidence cannot selectively omit repeats or successful calls",
   }
 });
 
-test("same-size but different task or mode sets cannot be compared", () => {
-  const before = report([row("example:1")]);
-  assert.throws(
-    () => compareReports(before, report([row("example:2")])),
-    /incompatible expected task sets/,
-  );
+test("different task sets cannot be compared", () => {
   assert.throws(
     () =>
-      compareReports(
-        before,
-        report([row("example:1"), row("example:1", 1, { mode: "vector" })]),
-      ),
-    /incompatible mode sets/,
+      compareReports(report([row("example:1")]), report([row("example:2")])),
+    /incompatible expected task sets/,
   );
 });
 
@@ -589,7 +467,7 @@ test("writes JSON and Markdown with input hashes after validation and refuses ov
   assert.equal(
     JSON.parse(await readFile(join(output, "comparison.json"), "utf8")).tasks
       .length,
-    2,
+    6,
   );
   assert.match(
     await readFile(join(output, "comparison.md"), "utf8"),
@@ -648,30 +526,76 @@ test("official comparison rejects changed projection and old quality repetition"
     mutate(candidate);
     assert.throws(
       () => compareReports(baseline, candidate),
-      /Semble official score|quality repetition 5/,
+      /nDCG score|quality repetition 5/,
     );
   }
 });
 
-test("standalone ZG validation covers both preview arms and the total error count without mutation", () => {
-  const value = pairedReport();
-  const snapshot = clone(value);
-  const checked = validateZgReport(value);
-  assert.equal(checked.previews.short.rows.size, 2);
-  assert.equal(checked.previews.full.rows.size, 2);
+test("standalone validation covers all modes and total failure counts without mutation", () => {
+  const value = report(),
+    snapshot = clone(value);
+  assert.equal(validateZgReport(value).rows.size, 6);
   assert.deepEqual(value, snapshot);
-
-  const incomplete = clone(value);
-  incomplete.tasks.pop();
-  assert.throws(
-    () => validateZgReport(incomplete),
-    /missing task\/mode coverage/,
-  );
   const inflated = clone(value);
   inflated.product_error_calls = 1;
   inflated.integrity_passed = false;
   assert.throws(
     () => validateZgReport(inflated),
-    /full preview matrix product error count/,
+    /product error count differs/,
   );
+});
+
+test("schema 4 rejects legacy reports, preview matrices, and non-full result rows", () => {
+  for (const mutate of [
+    ...[1, 2, 3].map((schema) => (r) => {
+      r.schema_version = schema;
+    }),
+    (r) => {
+      r.preview = "short";
+    },
+    (r) => {
+      delete r.preview;
+    },
+    (r) => {
+      r.tasks[0].preview = "short";
+    },
+    (r) => {
+      r.previews = {};
+    },
+    (r) => {
+      r.primary_preview = "full";
+    },
+    (r) => {
+      r.paired_preview_comparison = {};
+    },
+  ]) {
+    const value = report();
+    mutate(value);
+    assert.throws(() => validateZgReport(value), /schema|preview/);
+  }
+});
+
+test("mode identity is verified from public match routes", () => {
+  for (const [mode, matched_by] of [
+    ["fts", "vector"],
+    ["vector", "fts+vector"],
+    ["hybrid", "lexical"],
+  ]) {
+    const value = report();
+    value.tasks.find((row) => row.mode === mode).items[0].matched_by =
+      matched_by;
+    assert.throws(() => validateZgReport(value));
+  }
+});
+
+test("three fixed arms are rendered without preview variants", () => {
+  const before = report(),
+    after = clone(before);
+  const result = compareReports(before, after);
+  assert.equal(result.preview, "full");
+  assert.equal(Object.hasOwn(result, "previews"), false);
+  const markdown = markdownComparison(result);
+  for (const mode of ZG_MODES)
+    assert.match(markdown, new RegExp(`zg-${mode} / candidate`));
+  assert.doesNotMatch(markdown, /short|Semble|SDK/);
 });

@@ -5,8 +5,7 @@ import { summarizeFileRetrieval } from "../metrics/files.mjs";
 import { loadSuite, readJson, writeJson } from "../core/lib.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
 import { summarizeSembleOfficial } from "../metrics/summary.mjs";
-import { compareSembleToZg } from "./cross-engine.mjs";
-import { validateZgReport, validateSembleReport } from "./validation.mjs";
+import { validateZgReport, ZG_MODES } from "./validation.mjs";
 
 export const QUALITY_METRICS = Object.freeze([
   "file_hit_at_1",
@@ -16,13 +15,19 @@ export const QUALITY_METRICS = Object.freeze([
   "ndcg_at_10",
 ]);
 
-function resultRow(label, rows, report) {
+function resultRow(label, rows) {
   const file = summarizeFileRetrieval(rows);
   const official = summarizeSembleOfficial(rows);
   assert.equal(file.scored_tasks, 20, `${label}: requires all 20 questions`);
   return {
     label,
-    status: report.integrity_passed ? "success" : "product_error",
+    status: rows.some((row) =>
+      row.measurement_observations.some(
+        (sample) => sample.execution_status === "product_error",
+      ),
+    )
+      ? "product_error"
+      : "success",
     questions: file.scored_tasks,
     metrics: {
       file_hit_at_1: file.hit_at_1,
@@ -45,101 +50,44 @@ const unavailableRow = (label, status) => ({
   measurements: null,
 });
 
-/** One overview for the requested engines; missing results never become zeros. */
+/** Fixed ZG arms; invalid evidence never becomes a zero score. */
 export async function buildCiSummary({
   zg = null,
-  semble = null,
-  sembleRequested = false,
-  modes = ["hybrid"],
   jobResults = {},
   runUrl = null,
   commit = null,
 } = {}) {
-  assert.equal(typeof sembleRequested, "boolean");
-  assert.ok(
-    modes.length > 0 &&
-      modes.includes("hybrid") &&
-      new Set(modes).size === modes.length &&
-      modes.every((mode) => ["hybrid", "fts", "vector"].includes(mode)),
-    "invalid requested ZG modes",
-  );
   const suite = await loadSuite();
-  const rows = [];
-  const errors = [];
-  const labels = ["short", "full"].flatMap((preview) =>
-    modes.map((mode) => `ZG ${mode} / ${preview}`),
-  );
-  let zgValid = false;
-  let sembleValid = false;
+  const rows = [],
+    errors = [];
   try {
     assert.ok(zg, "missing ZG report");
-    assert.equal(zg.schema_version, 3, "requires current ZG report schema");
-    assert.equal(zg.scope, "full-20-original-queries");
-    assert.deepEqual(zg.suite, suite.identity, "ZG frozen suite mismatch");
-    assert.deepEqual(
-      [...zg.expected_task_ids].sort(),
-      suite.lock.tasks.map((task) => task.task_id).sort(),
-    );
-    assert.equal(zg.observed_calls, 20 * 2 * 5 * modes.length);
-    assert.deepEqual(Object.keys(zg.modes).sort(), [...modes].sort());
+    const checked = validateZgReport(zg, "ZG", { suite });
     assert.equal(
-      zg.tasks.length,
-      20 * 2 * modes.length,
-      "ZG quality matrix differs from requested modes",
+      zg.scope,
+      "full-20-original-queries",
+      "CI requires all 20 questions",
     );
-    for (const preview of ["short", "full"])
-      assert.deepEqual(
-        Object.keys(zg.previews[preview].modes).sort(),
-        [...modes].sort(),
-        `${preview}: mode selection differs from request`,
+    assert.deepEqual(
+      checked.ids,
+      suite.lock.tasks.map((task) => task.task_id).sort(),
+      "CI task selection differs from frozen suite",
+    );
+    for (const mode of ZG_MODES)
+      rows.push(
+        resultRow(
+          `zg-${mode}`,
+          [...checked.rows.values()].filter((row) => row.mode === mode),
+        ),
       );
-    validateZgReport(zg, "ZG", { suite });
-    const validated = [];
-    for (const preview of ["short", "full"])
-      for (const mode of modes)
-        validated.push(
-          resultRow(
-            `ZG ${mode} / ${preview}`,
-            zg.tasks.filter(
-              (row) => row.preview === preview && row.mode === mode,
-            ),
-            zg,
-          ),
-        );
-    rows.push(...validated);
-    zgValid = true;
     if (!zg.integrity_passed)
       errors.push(`ZG: ${zg.product_error_calls} product calls failed`);
   } catch (error) {
     errors.push(`ZG: ${error.message}`);
-    rows.push(...labels.map((label) => unavailableRow(label, "invalid")));
-  }
-
-  if (sembleRequested) {
-    try {
-      assert.ok(semble, "missing requested Semble report");
-      const quality = await validateSembleReport(semble, suite);
-      rows.push(resultRow("Semble MCP", quality, semble));
-      sembleValid = true;
-      if (!semble.integrity_passed)
-        errors.push(
-          `Semble: ${semble.product_error_calls} product calls failed`,
-        );
-    } catch (error) {
-      errors.push(`Semble: ${error.message}`);
-      rows.push(unavailableRow("Semble MCP", "invalid"));
-    }
-  } else {
-    rows.push(unavailableRow("Semble MCP", "not_requested"));
-  }
-
-  let comparison = null;
-  if (zgValid && sembleValid) {
-    try {
-      comparison = await compareSembleToZg(zg, semble, suite);
-    } catch (error) {
-      errors.push(`Cross-tool validation: ${error.message}`);
-    }
+    rows.length = 0;
+    rows.push(
+      ...ZG_MODES.map((mode) => unavailableRow(`zg-${mode}`, "invalid")),
+    );
   }
   const requiredJobs = [
     "authorize",
@@ -147,23 +95,20 @@ export async function buildCiSummary({
     "package-candidate",
     "retrieval",
     "zg-report",
-    ...(sembleRequested ? ["semble"] : []),
   ];
   if (Object.keys(jobResults).length)
     for (const job of requiredJobs)
       if (jobResults[job]?.result !== "success")
         errors.push(`${job}: ${jobResults[job]?.result ?? "missing job"}`);
-
   return {
-    schema_version: 2,
+    schema_version: 3,
     status: errors.length ? "failed" : "success",
+    preview: "full",
     quality_metrics: QUALITY_METRICS,
-    semble_requested: sembleRequested,
     run_url: runUrl,
     commit,
     rows,
     errors,
-    comparison,
   };
 }
 
@@ -178,7 +123,7 @@ export function markdownCiSummary(result) {
   const lines = [
     "# Retrieval-only results",
     "",
-    `**${status}** · 20 original questions · 11 pinned repositories · ${result.semble_requested ? "ZG + Semble" : "ZG only"}`,
+    `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · full preview`,
     "",
     "| Arm | Status | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -186,9 +131,8 @@ export function markdownCiSummary(result) {
   for (const row of result.rows) {
     const state = {
       success: "✅ Valid",
-      product_error: "⚠️ Failed calls score zero",
+      product_error: "⚠️ Product-call failure",
       invalid: "❌ No valid report",
-      not_requested: "Disabled",
     }[row.status];
     const hits = [1, 5, 10].map((cutoff) => {
       const value = row.metrics?.[`file_hit_at_${cutoff}`];
@@ -202,9 +146,9 @@ export function markdownCiSummary(result) {
   }
   lines.push(
     "",
-    "Quality uses the fifth call per question: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
+    "All three arms use full preview and five calls per question. Each arm has 20 quality observations from the fifth call: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
     "",
-    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of all successful MCP search calls, excluding indexing and SDK replay. Failed calls are excluded from these measurements. Different machines, indexes and call order make latency an observation of this run, not a controlled speed comparison.",
+    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of all successful MCP search calls, excluding indexing. Failed calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
     "",
     ...result.rows
       .filter((row) => row.measurements)
@@ -213,11 +157,6 @@ export function markdownCiSummary(result) {
           `- ${cell(row.label)}: ${row.measurements.output_sample_count} output samples; ${row.measurements.latency_sample_count} latency samples.`,
       ),
   );
-  if (!result.semble_requested)
-    lines.push(
-      "",
-      "Semble was not run. Enable `run_semble` when dispatching the workflow to include it. Disabled or missing results appear as —, not zero scores.",
-    );
   if (result.errors.length)
     lines.push(
       "",
@@ -229,7 +168,7 @@ export function markdownCiSummary(result) {
     lines.push("", `Tested commit: \`${cell(result.commit)}\`.`);
   lines.push(
     "",
-    "Details: download the `retrieval-results` artifact for summary.json and, when both ZG and Semble validate, comparison.json. Per-question raw records are available in the evidence artifacts for each executed arm.",
+    "Details: download the `retrieval-results` artifact for summary.md and summary.json. Per-question raw records are available in the repository evidence artifacts.",
   );
   if (result.run_url)
     lines.push("", `[Open this run and its artifacts](${result.run_url})`);
@@ -241,16 +180,13 @@ export async function main() {
   for (let i = 2; i < process.argv.length; i += 2) {
     const key = process.argv[i];
     assert.ok(
-      ["--zg", "--semble", "--output"].includes(key) && process.argv[i + 1],
+      ["--zg", "--output"].includes(key) &&
+        process.argv[i + 1] &&
+        !Object.hasOwn(args, key.slice(2)),
     );
     args[key.slice(2)] = process.argv[i + 1];
   }
-  assert.ok(
-    args.output && args.zg && args.semble,
-    "requires --zg, --semble and --output",
-  );
-  const requested = process.env.RETRIEVAL_SEMBLE_REQUESTED ?? "false";
-  assert.ok(["true", "false"].includes(requested), "invalid Semble flag");
+  assert.ok(args.output && args.zg, "requires --zg and --output");
   const maybeRead = async (path) => {
     try {
       return await readJson(path);
@@ -263,19 +199,13 @@ export async function main() {
     : null;
   const result = await buildCiSummary({
     zg: await maybeRead(args.zg),
-    semble: requested === "true" ? await maybeRead(args.semble) : null,
-    sembleRequested: requested === "true",
-    modes: (process.env.RETRIEVAL_MODES ?? "hybrid").split(","),
     jobResults: JSON.parse(process.env.RETRIEVAL_JOB_RESULTS ?? "{}"),
     runUrl,
     commit: process.env.GITHUB_SHA ?? null,
   });
   const directory = resolve(args.output);
   await mkdir(directory, { recursive: true });
-  const { comparison, ...overview } = result;
-  await writeJson(join(directory, "summary.json"), overview);
-  if (comparison)
-    await writeJson(join(directory, "comparison.json"), comparison);
+  await writeJson(join(directory, "summary.json"), result);
   await writeFile(join(directory, "summary.md"), markdownCiSummary(result));
   if (result.status !== "success") process.exitCode = 1;
 }

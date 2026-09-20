@@ -69,6 +69,8 @@ Evaluating code evidence would require a separate, independently reviewed label 
 
 ## Implementation and compatibility
 
-Original queries, retrieval protocols, raw responses, and frozen labels remain unchanged. Current reports use ZG schema 3 and Semble schema 2. The five quality metrics are stored under `file_retrieval` and `semble_official`; the latter retains only nDCG@10 and its supporting target evidence. Legacy top-level anchor scores and mode summaries have been removed. Per-question first-file ranks and RR support the MRR calculation; they are not additional headline metrics.
+The label assessment and historical scoring comparisons above remain unchanged. The current execution protocol has since moved to three ZG-only arms: hybrid, FTS and vector, all using full preview. See the [current design](./zg-retrieval-only-sweqa20-design.md) for the authoritative protocol; the historical two-engine and short/full results in this review are not current CI arms.
 
-The new `measurements` field records mean public output bytes from successful fifth calls and P50 latency across all successful search calls, with sample counts and metadata for all five repetitions. The unified manual CI publishes one results table, with ZG enabled by default and Semble optional. Historical comparisons recompute only current metrics; missing operational measurement evidence is shown as N/A.
+Current reports use schema 4 and retain the same five quality formulas under `file_retrieval` and `semble_official`; the latter is a historical field name for nDCG and target evidence, not a running baseline. The `measurements` field records successful fifth-call output bytes and P50 latency across successful search calls, with evidence for all five repetitions. The overview uses schema 3 and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows.
+
+Questions and labels are unchanged, but the execution protocol identity differs. Current comparisons require matching schema 4 protocols. Use the corresponding historical scorer checkout to inspect old raw captures; do not relabel them as executions of the current benchmark.

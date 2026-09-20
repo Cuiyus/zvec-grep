@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   parseVisibleResponse,
   scoreResponse,
+  validateSearchRoute,
   VisibleFormatError,
 } from "../engines/zg/parse.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
@@ -67,6 +68,79 @@ const atRank = (rank) =>
       item(rank),
     ].join("\n\n"),
   );
+
+const routeItems = (routes) =>
+  parseVisibleResponse(
+    response(
+      routes
+        .map((route, index) =>
+          item(index + 1).replace("matchedBy=fts+vector", `matchedBy=${route}`),
+        )
+        .join("\n\n"),
+    ),
+  ).items;
+
+for (const [mode, routes] of [
+  ["hybrid", ["fts", "vector", "fts+vector"]],
+  ["fts", ["fts", "fts"]],
+  ["vector", ["vector", "vector"]],
+]) {
+  test(`${mode} accepts its native indexed routes without changing public items`, () => {
+    const items = routeItems(routes);
+    const snapshot = structuredClone(items);
+    assert.doesNotThrow(() => validateSearchRoute(items, mode));
+    assert.deepEqual(items, snapshot);
+  });
+}
+
+test("single-route arms reject results credited to another route", () => {
+  for (const [mode, unexpected] of [
+    ["fts", "vector"],
+    ["fts", "fts+vector"],
+    ["vector", "fts"],
+    ["vector", "fts+vector"],
+  ])
+    assert.throws(
+      () => validateSearchRoute(routeItems([mode, unexpected]), mode),
+      (error) =>
+        error instanceof assert.AssertionError &&
+        error.message.includes(`${mode}: unexpected matchedBy=${unexpected}`) &&
+        error.message.includes("at rank 2"),
+    );
+});
+
+test("lexical remains a valid public format but is excluded from all indexed benchmark arms", () => {
+  const items = routeItems(["lexical"]);
+  assert.equal(items[0].matched_by, "lexical");
+  for (const mode of ["hybrid", "fts", "vector"])
+    assert.throws(
+      () => validateSearchRoute(items, mode),
+      /unexpected matchedBy=lexical/,
+    );
+});
+
+test("explicit empty results are valid for every planned search route", () => {
+  for (const label of ["No matches.", "No searchable files."])
+    for (const mode of ["hybrid", "fts", "vector"])
+      assert.doesNotThrow(() =>
+        validateSearchRoute(parseVisibleResponse(response(label)).items, mode),
+      );
+});
+
+test("route validation rejects unknown modes and missing route evidence", () => {
+  for (const mode of [undefined, "lexical", "__proto__", ""])
+    assert.throws(() => validateSearchRoute([], mode), /unknown search mode/);
+  for (const mode of ["hybrid", "fts", "vector"]) {
+    assert.throws(
+      () => validateSearchRoute(null, mode),
+      /missing public parsed items/,
+    );
+    assert.throws(
+      () => validateSearchRoute([{ rank: 1 }], mode),
+      /unexpected matchedBy=undefined at rank 1/,
+    );
+  }
+});
 
 const removedFields = [
   "first_hit_rank",

@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   buildCiSummary,
@@ -10,23 +15,15 @@ import {
   fileRetrievalForRow,
   summarizeFileRetrieval,
 } from "../metrics/files.mjs";
-import { loadSuite, objectHash } from "../core/lib.mjs";
+import { loadSuite } from "../core/lib.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
 import { summarizeSembleOfficial } from "../metrics/summary.mjs";
 import { scoreSembleMetric } from "../metrics/ndcg.mjs";
-import { SEMBLE_PROTOCOL } from "../engines/semble/protocol.mjs";
-
-import {
-  validateZgReport,
-  validateSembleReport,
-} from "../reports/validation.mjs";
+import { validateZgReport, ZG_MODES } from "../reports/validation.mjs";
 
 const suite = await loadSuite();
 const clone = (value) => structuredClone(value);
-function qualityRow(
-  task,
-  { mode = "hybrid", preview, failed = false, firstRank = 3 } = {},
-) {
+function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
   const targets = suite.semble_gold[task.task_id].targets;
   const items = failed
     ? []
@@ -37,11 +34,12 @@ function qualityRow(
             ? targets[0].path
             : `__unrelated__/entry_${index + 1}.none`,
         range: { kind: "text", start_line: 100, end_line: 120 },
+        matched_by: mode === "hybrid" ? "fts+vector" : mode,
       }));
   const row = {
     task_id: task.task_id,
     mode,
-    ...(preview ? { preview } : {}),
+    preview: "full",
     repetition: 5,
     quality_observation: true,
     repository: task.repository,
@@ -51,13 +49,7 @@ function qualityRow(
     status: failed ? "product_error" : "scored",
     execution_status: failed ? "product_error" : "success",
     latency_ms: failed ? null : 12.34567,
-    visible_output_bytes: failed
-      ? null
-      : preview === "short"
-        ? 1024
-        : preview === "full"
-          ? 3584
-          : 10240,
+    visible_output_bytes: failed ? null : 3584,
     items,
     semble_official: { targets, ...scoreSembleMetric(items, targets) },
   };
@@ -80,237 +72,146 @@ function modeReport(rows) {
     ),
   };
 }
-function zgReport({
-  modes = ["hybrid"],
-  failed = false,
-  rankForTask = () => 3,
-} = {}) {
-  const tasks = ["short", "full"].flatMap((preview) =>
-    modes.flatMap((mode) =>
-      suite.lock.tasks.map((task) =>
-        qualityRow(task, {
-          preview,
-          mode,
-          failed,
-          firstRank: rankForTask(task),
-        }),
-      ),
+function zgReport({ failedModes = [], rankForTask = () => 3 } = {}) {
+  const tasks = ZG_MODES.flatMap((mode) =>
+    suite.lock.tasks.map((task) =>
+      qualityRow(task, mode, {
+        failed: failedModes.includes(mode),
+        firstRank: rankForTask(task, mode),
+      }),
     ),
   );
-  const previews = Object.fromEntries(
-    ["short", "full"].map((preview) => {
-      const rows = tasks.filter((row) => row.preview === preview);
-      return [
-        preview,
-        {
-          modes: Object.fromEntries(
-            modes.map((mode) => [
-              mode,
-              modeReport(rows.filter((row) => row.mode === mode)),
-            ]),
-          ),
-          tasks: rows,
-        },
-      ];
-    }),
-  );
   return {
-    schema_version: 3,
+    schema_version: 4,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    primary_preview: "short",
+    preview: "full",
     quality_repetition: 5,
     quality_score_valid: true,
-    integrity_passed: !failed,
+    integrity_passed: failedModes.length === 0,
     integrity_errors: [],
-    product_error_calls: failed ? 200 * modes.length : 0,
+    product_error_calls: failedModes.length * 100,
     suite: clone(suite.identity),
     scope: "full-20-original-queries",
     expected_task_ids: suite.lock.tasks.map((task) => task.task_id),
-    observed_calls: 200 * modes.length,
-    modes: previews.short.modes,
-    previews,
+    observed_calls: 300,
+    modes: Object.fromEntries(
+      ZG_MODES.map((mode) => [
+        mode,
+        modeReport(tasks.filter((row) => row.mode === mode)),
+      ]),
+    ),
     tasks,
     repositories: suite.lock.repositories.map((repository) => ({
       repository: repository.repository,
-      environment: { platform: "fixture" },
     })),
   };
 }
-function sembleReport({ failed = false, rankForTask = () => 4 } = {}) {
-  const tasks = suite.lock.tasks.map((task) =>
-    qualityRow(task, { failed, firstRank: rankForTask(task) }),
-  );
-  return {
-    schema_version: 2,
-    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    engine: "semble",
-    protocol: clone(SEMBLE_PROTOCOL),
-    quality_repetition: 5,
-    quality_score_valid: true,
-    integrity_passed: !failed,
-    integrity_errors: [],
-    product_error_calls: failed ? 100 : 0,
-    scope: "full-20-original-queries",
-    expected_task_ids: suite.lock.tasks.map((task) => task.task_id),
-    observed_calls: 100,
-    suite: { ...suite.identity, protocol: objectHash(SEMBLE_PROTOCOL) },
-    modes: { hybrid: modeReport(tasks) },
-    tasks,
-    environment: { platform: "fixture" },
-    repositories: [],
-  };
-}
-const successes = (includeSemble = false) =>
-  Object.fromEntries(
-    [
-      "authorize",
-      "quality-contract",
-      "package-candidate",
-      "retrieval",
-      "zg-report",
-      ...(includeSemble ? ["semble"] : []),
-    ].map((job) => [job, { result: "success" }]),
-  );
-
-function assertUnavailable(row, status) {
-  assert.equal(row.status, status);
-  assert.equal(row.metrics, null);
-  assert.equal(row.measurements, null);
-  assert.equal(row.questions, null);
-}
-
-test("default summary scores both ZG previews and never inspects unrequested Semble", async () => {
-  let propertyReads = 0;
-  const trap = new Proxy(
-    {},
-    {
-      get() {
-        propertyReads++;
-        throw new Error("unrequested Semble must not be read");
-      },
-    },
-  );
-  const result = await buildCiSummary({
-    zg: zgReport(),
-    semble: trap,
-    jobResults: successes(),
-  });
-  assert.equal(propertyReads, 0);
-  assert.equal(result.status, "success");
-  assert.equal(result.semble_requested, false);
+function assertUnavailable(result) {
+  assert.equal(result.status, "failed");
   assert.deepEqual(
     result.rows.map((row) => row.label),
-    ["ZG hybrid / short", "ZG hybrid / full", "Semble MCP"],
+    ["zg-hybrid", "zg-fts", "zg-vector"],
   );
-  assertUnavailable(result.rows[2], "not_requested");
-  assert.equal(result.comparison, null);
-  for (const row of result.rows.slice(0, 2)) {
-    assert.equal(row.status, "success");
-    assert.deepEqual(Object.keys(row.metrics), QUALITY_METRICS);
-    assert.equal(row.questions, 20);
-    assert.equal(row.metrics.file_hit_at_1, 0);
-    assert.equal(row.metrics.file_hit_at_5, 1);
-    assert.equal(row.metrics.file_hit_at_10, 1);
-    assert.ok(Math.abs(row.metrics.file_mrr_at_10 - 1 / 3) < 1e-15);
-    assert.equal(row.measurements.latency_sample_count, 100);
-    assert.equal(row.measurements.output_sample_count, 20);
+  for (const row of result.rows) {
+    assert.equal(row.status, "invalid");
+    assert.equal(row.questions, null);
+    assert.equal(row.metrics, null);
+    assert.equal(row.measurements, null);
   }
-});
+}
 
-test("requested valid Semble joins one validated cross-tool summary", async () => {
-  const result = await buildCiSummary({
-    zg: zgReport(),
-    semble: sembleReport(),
-    sembleRequested: true,
-    jobResults: successes(true),
-  });
+test("summary schema 3 has exactly the fixed three full-preview ZG arms", async () => {
+  const result = await buildCiSummary({ zg: zgReport() });
+  assert.equal(result.schema_version, 3);
   assert.equal(result.status, "success");
-  assert.equal(result.rows.length, 3);
-  assert.equal(result.rows[2].status, "success");
-  assert.equal(result.rows[2].metrics.file_mrr_at_10, 0.25);
-  assert.deepEqual(Object.keys(result.comparison.zg_previews), [
-    "short",
-    "full",
+  assert.equal(result.preview, "full");
+  assert.deepEqual(result.quality_metrics, [
+    "file_hit_at_1",
+    "file_hit_at_5",
+    "file_hit_at_10",
+    "file_mrr_at_10",
+    "ndcg_at_10",
   ]);
-  assert.equal(result.comparison.zg_previews.full.tasks.length, 20);
-  assert.equal(result.comparison.file_retrieval.zg.scored_tasks, 20);
-});
-
-test("requested missing Semble fails clearly instead of fabricating zero scores", async () => {
-  const result = await buildCiSummary({
-    zg: zgReport(),
-    sembleRequested: true,
-    jobResults: successes(true),
-  });
-  assert.equal(result.status, "failed");
-  assert.equal(result.rows[0].status, "success");
-  assertUnavailable(result.rows[2], "invalid");
-  assert.match(result.errors.join("\n"), /missing requested Semble report/);
-  assert.equal(result.comparison, null);
-  assert.match(
-    markdownCiSummary(result),
-    /Semble MCP \| ❌ No valid report \| — \| — \| — \| — \| — \| — \| —/,
+  assert.deepEqual(
+    result.rows.map((row) => row.label),
+    ["zg-hybrid", "zg-fts", "zg-vector"],
   );
-});
-
-test("missing or invalid ZG withholds both previews but does not erase valid requested Semble", async () => {
-  const missing = await buildCiSummary();
-  assert.equal(missing.status, "failed");
-  assertUnavailable(missing.rows[0], "invalid");
-  assertUnavailable(missing.rows[1], "invalid");
-  assertUnavailable(missing.rows[2], "not_requested");
-  const broken = zgReport();
-  broken.integrity_errors.push("raw capture changed");
-  const result = await buildCiSummary({
-    zg: broken,
-    semble: sembleReport(),
-    sembleRequested: true,
-  });
-  assert.equal(result.status, "failed");
-  assertUnavailable(result.rows[0], "invalid");
-  assertUnavailable(result.rows[1], "invalid");
-  assert.equal(result.rows[2].status, "success");
-  assert.equal(result.comparison, null);
-});
-
-test("cached ZG aggregates never override public items or per-call measurement evidence", async () => {
-  const source = zgReport(),
-    original = clone(source);
-  for (const preview of ["short", "full"]) {
-    source.previews[preview].modes.hybrid.file_retrieval = { mrr_at_10: 999 };
-    source.previews[preview].modes.hybrid.semble_official = {
-      repository_macro: { ndcg_at_10: 999 },
-    };
-    source.previews[preview].modes.hybrid.measurements = {
-      latency_ms_p50: 999,
-    };
+  for (const row of result.rows) {
+    assert.equal(row.questions, 20);
+    assert.ok(Math.abs(row.metrics.file_mrr_at_10 - 1 / 3) < 1e-14);
+    assert.equal(row.measurements.output_sample_count, 20);
+    assert.equal(row.measurements.latency_sample_count, 100);
   }
-  const result = await buildCiSummary({ zg: source });
-  assert.equal(result.status, "success");
-  assert.equal(
-    result.rows[0].metrics.file_mrr_at_10,
-    original.modes.hybrid.file_retrieval.mrr_at_10,
+  assert.deepEqual(result.quality_metrics, QUALITY_METRICS);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /semble|comparison|previews|primary_preview/,
   );
-  assert.equal(
-    result.rows[0].metrics.ndcg_at_10,
-    original.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
-  );
-  assert.equal(result.rows[0].measurements.latency_ms_p50, 12.34567);
 });
 
-test("per-question scores, frozen Gold and aggregation metadata tampering are rejected in ZG-only mode", async () => {
+test("missing and invalid reports withhold all three arms instead of fabricating zeros", async () => {
+  assertUnavailable(await buildCiSummary());
+  const report = zgReport();
+  report.quality_score_valid = false;
+  assertUnavailable(await buildCiSummary({ zg: report }));
+});
+
+test("CI rejects old contracts and incomplete or misrouted three-mode matrices", async () => {
   for (const mutate of [
     (r) => {
-      r.tasks[0].file_retrieval.rr_at_10 = 1;
+      r.schema_version = 3;
     },
     (r) => {
-      r.tasks[0].semble_official.ndcg_at_10 = 1;
+      r.preview = "short";
     },
     (r) => {
-      r.suite.gold = "0".repeat(64);
+      r.previews = {};
     },
     (r) => {
-      r.tasks[0].semble_official.targets = [{ path: "forged.py" }];
+      r.primary_preview = "full";
+    },
+    (r) => {
+      r.tasks[0].preview = "short";
+    },
+    (r) => {
+      r.tasks.pop();
+    },
+    (r) => {
+      r.tasks[1] = clone(r.tasks[0]);
+    },
+    (r) => {
+      delete r.modes.vector;
+    },
+    (r) => {
+      r.modes.extra = {};
+    },
+    (r) => {
+      r.observed_calls = 299;
+    },
+    (r) => {
+      r.tasks.find((row) => row.mode === "vector").items[0].matched_by =
+        "fts+vector";
+    },
+    (r) => {
+      r.tasks.find((row) => row.mode === "fts").items[0].matched_by = "vector";
+    },
+  ]) {
+    const report = zgReport();
+    mutate(report);
+    assertUnavailable(await buildCiSummary({ zg: report }));
+  }
+});
+
+test("per-question scores and frozen label identities cannot be changed", async () => {
+  for (const mutate of [
+    (r) => {
+      r.tasks[0].file_retrieval.mrr_at_10 = 999;
+    },
+    (r) => {
+      r.tasks[0].semble_official.ndcg_at_10 = 999;
+    },
+    (r) => {
+      r.tasks[0].semble_official.targets = [{ path: "changed.py" }];
     },
     (r) => {
       r.tasks[0].repository = "forged/repository";
@@ -319,271 +220,219 @@ test("per-question scores, frozen Gold and aggregation metadata tampering are re
       r.tasks[0].language = "forged-language";
     },
     (r) => {
-      r.tasks[0].category = r.tasks[0].category === "what" ? "where" : "what";
+      r.tasks[0].category = "invalid";
     },
     (r) => {
       r.tasks[0].gold_status = "unknown";
     },
     (r) => {
-      r.tasks[0].measurement_observations.pop();
+      r.suite.protocol = "f".repeat(64);
     },
   ]) {
-    const zg = zgReport();
-    mutate(zg);
-    const result = await buildCiSummary({ zg });
-    assert.equal(result.status, "failed");
-    assertUnavailable(result.rows[0], "invalid");
-    assertUnavailable(result.rows[1], "invalid");
-    assert.ok(result.errors.length > 0);
+    const report = zgReport();
+    mutate(report);
+    assertUnavailable(await buildCiSummary({ zg: report }));
   }
 });
 
-test("Semble cached aggregates and metadata are validated even when ZG is unavailable", async () => {
+test("cached aggregates never override public items or per-call measurements", async () => {
+  const report = zgReport(),
+    snapshot = clone(report);
+  for (const mode of ZG_MODES)
+    report.modes[mode] = {
+      file_retrieval: { mrr_at_10: 999 },
+      semble_official: { repository_macro: { ndcg_at_10: 999 } },
+      measurements: { latency_ms_p50: 999 },
+    };
+  const result = await buildCiSummary({ zg: report });
+  assert.equal(result.status, "success");
+  for (const [index, mode] of ZG_MODES.entries()) {
+    assert.equal(
+      result.rows[index].metrics.file_mrr_at_10,
+      snapshot.modes[mode].file_retrieval.mrr_at_10,
+    );
+    assert.equal(
+      result.rows[index].metrics.ndcg_at_10,
+      snapshot.modes[mode].semble_official.repository_macro.ndcg_at_10,
+    );
+    assert.equal(result.rows[index].measurements.latency_ms_p50, 12.34567);
+  }
+});
+
+test("measurement evidence must cover all five repetitions with valid successful calls", async () => {
   for (const mutate of [
     (r) => {
-      r.modes.hybrid.file_retrieval.mrr_at_10 = 999;
+      r.tasks[0].measurement_observations.pop();
     },
     (r) => {
-      r.modes.hybrid.semble_official.repository_macro.ndcg_at_10 = 999;
+      r.tasks[0].measurement_observations[0].repetition = 5;
+    },
+    ...[null, -1, Number.NaN].map((value) => (r) => {
+      r.tasks[0].measurement_observations[0].latency_ms = value;
+    }),
+    (r) => {
+      r.tasks[0].measurement_observations[0].visible_output_bytes = -1;
     },
     (r) => {
-      r.modes.hybrid.measurements.latency_ms_p50 = 999;
-    },
-    (r) => {
-      r.tasks[0].repository = "forged/repository";
+      r.tasks[0].measurement_observations[4].latency_ms = 999;
     },
   ]) {
-    const semble = sembleReport();
-    mutate(semble);
-    const result = await buildCiSummary({ semble, sembleRequested: true });
-    assert.equal(result.status, "failed");
-    assertUnavailable(result.rows[2], "invalid");
-  }
-});
-
-test("mode coverage follows the request and unrequested extra modes cannot hide behind top-level caches", async () => {
-  const modes = ["hybrid", "fts", "vector"];
-  const full = await buildCiSummary({ zg: zgReport({ modes }), modes });
-  assert.equal(full.status, "success");
-  assert.equal(full.rows.length, 7);
-  assert.deepEqual(
-    full.rows.slice(0, 6).map((r) => r.label),
-    [
-      "ZG hybrid / short",
-      "ZG fts / short",
-      "ZG vector / short",
-      "ZG hybrid / full",
-      "ZG fts / full",
-      "ZG vector / full",
-    ],
-  );
-  const missing = await buildCiSummary({ zg: zgReport(), modes });
-  assert.equal(missing.status, "failed");
-  assert.equal(missing.rows.filter((r) => r.status === "invalid").length, 6);
-  const extra = zgReport({ modes: ["hybrid", "fts"] });
-  extra.modes = { hybrid: extra.modes.hybrid };
-  extra.observed_calls = 200;
-  const hidden = await buildCiSummary({ zg: extra });
-  assert.equal(hidden.status, "failed");
-  assertUnavailable(hidden.rows[0], "invalid");
-  for (const modes of [
-    [],
-    ["fts"],
-    ["hybrid", "hybrid"],
-    ["hybrid", "unknown"],
-  ])
-    await assert.rejects(
-      buildCiSummary({ modes }),
-      /invalid requested ZG modes/,
-    );
-});
-
-test("required failed jobs fail the run and only requested Semble becomes required", async () => {
-  const jobs = successes();
-  jobs.retrieval.result = "failure";
-  const failed = await buildCiSummary({ zg: zgReport(), jobResults: jobs });
-  assert.equal(failed.status, "failed");
-  assert.match(failed.errors.join("\n"), /retrieval: failure/);
-  const absent = await buildCiSummary({
-    zg: zgReport(),
-    semble: sembleReport(),
-    sembleRequested: true,
-    jobResults: successes(),
-  });
-  assert.equal(absent.status, "failed");
-  assert.match(absent.errors.join("\n"), /semble: missing job/);
-  const unused = successes();
-  unused.semble = { result: "failure" };
-  assert.equal(
-    (await buildCiSummary({ zg: zgReport(), jobResults: unused })).status,
-    "success",
-  );
-});
-
-test("complete product failures are quality zeros, with no fabricated measurement samples", async () => {
-  const result = await buildCiSummary({
-    zg: zgReport({ failed: true }),
-    semble: sembleReport({ failed: true }),
-    sembleRequested: true,
-  });
-  assert.equal(result.status, "failed");
-  for (const row of result.rows) {
-    assert.equal(row.status, "product_error");
-    assert.equal(row.questions, 20);
-    assert.deepEqual(Object.values(row.metrics), [0, 0, 0, 0, 0]);
-    assert.deepEqual(row.measurements, {
-      latency_ms_p50: null,
-      latency_sample_count: 0,
-      output_bytes_mean: null,
-      output_sample_count: 0,
-    });
-  }
-  assert.ok(result.comparison);
-});
-
-test("Markdown has five quality columns, two operational columns, exact display precision and sample definitions", async () => {
-  const result = await buildCiSummary({
-    zg: zgReport(),
-    semble: sembleReport(),
-    sembleRequested: true,
-    runUrl: "https://example.invalid/run/123",
-    commit: "a".repeat(40),
-  });
-  const text = markdownCiSummary(result);
-  assert.equal(result.schema_version, 2);
-  assert.deepEqual(result.quality_metrics, [
-    "file_hit_at_1",
-    "file_hit_at_5",
-    "file_hit_at_10",
-    "file_mrr_at_10",
-    "ndcg_at_10",
-  ]);
-  assert.match(
-    text,
-    /\| File Hit@1 \| File Hit@5 \| File Hit@10 \| File MRR@10 \| nDCG@10 \| Mean output \(KiB\) \| Latency P50 \(ms\) \|/,
-  );
-  const official = result.rows[0].metrics.ndcg_at_10.toFixed(4);
-  assert.ok(
-    text.includes(
-      `| 0.0% (0/20) | 100.0% (20/20) | 100.0% (20/20) | 0.3333 | ${official} | 1.00 | 12.35 |`,
-    ),
-  );
-  assert.match(text, /\| ZG hybrid \/ full .* \| 3\.50 \| 12\.35 \|/);
-  assert.match(text, /\| Semble MCP .* \| 10\.00 \| 12\.35 \|/);
-  assert.match(text, /Quality uses the fifth call per question/);
-  assert.match(text, /Hit\/MRR weight all 20 questions equally/);
-  assert.match(text, /nDCG@10 uses a repository macro average/);
-  assert.match(text, /1 KiB = 1024 bytes/);
-  assert.match(text, /20 output samples; 100 latency samples/);
-  assert.match(text, /excluding indexing and SDK replay/);
-  assert.doesNotMatch(text, /nDCG@5|anchor|Legacy|by.category/i);
-  assert.equal(
-    text.split("\n").filter((line) => line.startsWith("| Arm |")).length,
-    1,
-  );
-  assert.equal(result.rows[0].measurements.latency_ms_p50, 12.34567);
-  assert.ok(Math.abs(result.rows[0].metrics.file_mrr_at_10 - 1 / 3) < 1e-15);
-});
-
-test("fractional aggregates are exactly independent of shard and task order without mutating rows", () => {
-  const ranks = [1, 3, 7, 10, null, 6, 9, 5, 2, 8];
-  const report = zgReport({
-    rankForTask: (task) => ranks[suite.lock.tasks.indexOf(task) % ranks.length],
-  });
-  const rows = report.previews.short.tasks;
-  const snapshot = clone(rows);
-  const permutations = [
-    [...rows].reverse(),
-    [...rows].sort(
-      (a, b) =>
-        a.repository.localeCompare(b.repository) ||
-        b.task_id.localeCompare(a.task_id),
-    ),
-    [...rows.slice(7), ...rows.slice(0, 7)],
-  ];
-  const file = summarizeFileRetrieval(rows),
-    official = summarizeSembleOfficial(rows);
-  for (const shuffled of permutations) {
-    assert.deepEqual(summarizeFileRetrieval(shuffled), file);
-    assert.deepEqual(summarizeSembleOfficial(shuffled), official);
-  }
-  assert.deepEqual(rows, snapshot);
-});
-
-test("combined CI table validates exact cached fractional scores after independent report reorderings", async () => {
-  const ranks = [1, 3, 7, 10, null, 6, 9, 5, 2, 8];
-  const rankForTask = (task) =>
-    ranks[suite.lock.tasks.indexOf(task) % ranks.length];
-  const zg = zgReport({ rankForTask }),
-    semble = sembleReport({ rankForTask });
-  const before = await buildCiSummary({ zg, semble, sembleRequested: true });
-  assert.equal(before.status, "success");
-  const shuffledZg = clone(zg),
-    shuffledSemble = clone(semble);
-  shuffledZg.tasks.sort(
-    (a, b) =>
-      a.repository.localeCompare(b.repository) ||
-      b.task_id.localeCompare(a.task_id),
-  );
-  shuffledSemble.tasks.reverse();
-  // Keep cached aggregates intact; exact validation must remain possible.
-  const after = await buildCiSummary({
-    zg: shuffledZg,
-    semble: shuffledSemble,
-    sembleRequested: true,
-  });
-  assert.equal(after.status, "success", after.errors.join("\n"));
-  assert.deepEqual(after.rows, before.rows);
-  for (const preview of ["short", "full"]) {
-    assert.deepEqual(
-      after.comparison.zg_previews[preview].semble_official,
-      before.comparison.zg_previews[preview].semble_official,
-    );
-    assert.deepEqual(
-      after.comparison.zg_previews[preview].file_retrieval,
-      before.comparison.zg_previews[preview].file_retrieval,
-    );
-    assert.deepEqual(
-      after.comparison.zg_previews[preview].semble_official.zg,
-      shuffledZg.previews[preview].modes.hybrid.semble_official,
-    );
-  }
-});
-
-test("both standalone validators reject successful calls with missing or invalid latency", async () => {
-  for (const latency_ms of [null, -1, Number.NaN]) {
-    const zg = zgReport();
-    zg.tasks[0].measurement_observations[0].latency_ms = latency_ms;
+    const report = zgReport();
+    mutate(report);
     assert.throws(
-      () => validateZgReport(zg, "ZG", { suite }),
-      /measurement.*latency/,
+      () => validateZgReport(report, "ZG", { suite }),
+      /measurement|successful-call/,
     );
-    const semble = sembleReport();
-    semble.tasks[0].measurement_observations[0].latency_ms = latency_ms;
-    await assert.rejects(
-      validateSembleReport(semble, suite),
-      /measurement.*latency/,
-    );
+    assertUnavailable(await buildCiSummary({ zg: report }));
   }
 });
 
-test("ZG product-error text does not invalidate a cross-engine comparison or enter measurements", async () => {
-  const zg = zgReport({ failed: true });
-  for (const row of zg.tasks) {
+test("product failures retain quality zeros only in the affected arm and exclude error text from measurements", async () => {
+  const report = zgReport({ failedModes: ["vector"] });
+  for (const row of report.tasks.filter((row) => row.mode === "vector")) {
     row.visible_output_bytes = 37;
     for (const sample of row.measurement_observations)
       sample.visible_output_bytes = 37;
   }
-  const result = await buildCiSummary({
-    zg,
-    semble: sembleReport(),
-    sembleRequested: true,
+  const result = await buildCiSummary({ zg: report });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(
+    result.rows.map((row) => row.status),
+    ["success", "success", "product_error"],
+  );
+  assert.equal(result.rows[2].questions, 20);
+  for (const metric of QUALITY_METRICS)
+    assert.equal(result.rows[2].metrics[metric], 0);
+  assert.equal(result.rows[2].measurements.output_bytes_mean, null);
+  assert.equal(result.rows[2].measurements.output_sample_count, 0);
+  assert.equal(result.rows[2].measurements.latency_sample_count, 0);
+  report.product_error_calls = 99;
+  assertUnavailable(await buildCiSummary({ zg: report }));
+});
+
+test("an earlier repetition failure does not replace the successful fifth-call quality score", async () => {
+  const report = zgReport(),
+    first = report.tasks[0].measurement_observations[0];
+  Object.assign(first, {
+    execution_status: "product_error",
+    status: "product_error",
+    latency_ms: null,
+    visible_output_bytes: 50,
   });
+  report.product_error_calls = 1;
+  report.integrity_passed = false;
+  const result = await buildCiSummary({ zg: report });
   assert.equal(result.status, "failed");
   assert.equal(result.rows[0].status, "product_error");
-  assert.equal(result.rows[0].metrics.file_hit_at_10, 0);
-  assert.equal(result.rows[0].measurements.output_sample_count, 0);
-  assert.equal(result.rows[0].measurements.output_bytes_mean, null);
-  assert.ok(result.comparison, result.errors.join("\n"));
-  assert.equal(result.comparison.file_retrieval.zg.hit_at_10, 0);
+  assert.equal(result.rows[0].metrics.file_hit_at_5, 1);
+  assert.equal(result.rows[0].measurements.output_sample_count, 20);
+  assert.equal(result.rows[0].measurements.latency_sample_count, 99);
+});
+
+test("required job failures fail the summary without changing valid measured values", async () => {
+  const jobs = Object.fromEntries(
+    [
+      "authorize",
+      "quality-contract",
+      "package-candidate",
+      "retrieval",
+      "zg-report",
+    ].map((name) => [name, { result: "success" }]),
+  );
+  assert.equal(
+    (await buildCiSummary({ zg: zgReport(), jobResults: jobs })).status,
+    "success",
+  );
+  for (const name of Object.keys(jobs)) {
+    const changed = clone(jobs);
+    changed[name].result = "failure";
+    const result = await buildCiSummary({
+      zg: zgReport(),
+      jobResults: changed,
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.rows[0].metrics.file_hit_at_5, 1);
+    assert.ok(result.errors.some((error) => error.includes(name)));
+  }
+});
+
+test("fractional results are stable across task ordering and do not mutate evidence", async () => {
+  const ranks = [1, 3, 7, 10, null, 6, 9, 5, 2, 8];
+  const report = zgReport({
+    rankForTask: (task) => ranks[suite.lock.tasks.indexOf(task) % ranks.length],
+  });
+  const snapshot = clone(report),
+    before = await buildCiSummary({ zg: report });
+  report.tasks.reverse();
+  report.expected_task_ids.reverse();
+  const after = await buildCiSummary({ zg: report });
+  assert.equal(before.status, "success");
+  assert.deepEqual(after.rows, before.rows);
+  report.tasks.reverse();
+  report.expected_task_ids.reverse();
+  assert.deepEqual(report, snapshot);
+});
+
+test("Markdown exposes exactly three arms, five quality metrics and two measurements", async () => {
+  const result = await buildCiSummary({
+    zg: zgReport(),
+    commit: "a".repeat(40),
+  });
+  const text = markdownCiSummary(result);
+  assert.match(text, /full preview/);
+  assert.match(text, /20 quality observations/);
+  assert.match(text, /Hit\/MRR weight all 20 questions equally/);
+  assert.match(text, /nDCG@10 uses a repository macro average/);
+  assert.match(text, /1 KiB = 1024 bytes/);
+  assert.match(text, /20 output samples; 100 latency samples/);
+  for (const label of ["zg-hybrid", "zg-fts", "zg-vector"])
+    assert.match(
+      text,
+      new RegExp(
+        `\\| ${label} \\| ✅ Valid \\| 0.0% \\(0/20\\) \\| 100.0% \\(20/20\\) \\| 100.0% \\(20/20\\) \\| 0.3333`,
+      ),
+    );
+  assert.match(text, /\| 3\.50 \| 12\.35 \|/);
+  assert.equal(
+    text.split("\n").filter((line) => line.startsWith("| zg-")).length,
+    3,
+  );
+  assert.doesNotMatch(
+    text,
+    /Semble|SDK|Disabled|comparison\.json|short|nDCG@5|anchor/,
+  );
+});
+
+test("CLI accepts only --zg and --output and writes only the two overview artifacts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "zg-ci-summary-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const input = join(directory, "report.json"),
+    output = join(directory, "summary");
+  await writeFile(input, JSON.stringify(zgReport()));
+  const script = fileURLToPath(new URL("../ci-report.mjs", import.meta.url));
+  const env = { ...process.env, RETRIEVAL_JOB_RESULTS: "{}" };
+  const result = spawnSync(
+    process.execPath,
+    [script, "--zg", input, "--output", output],
+    { encoding: "utf8", env },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual((await readdir(output)).sort(), [
+    "summary.json",
+    "summary.md",
+  ]);
+  assert.equal(
+    JSON.parse(await readFile(join(output, "summary.json"), "utf8"))
+      .schema_version,
+    3,
+  );
+  for (const unsupported of ["--semble", "--modes"])
+    assert.notEqual(
+      spawnSync(
+        process.execPath,
+        [script, "--zg", input, "--output", output, unsupported, "ignored"],
+        { encoding: "utf8", env },
+      ).status,
+      0,
+    );
 });

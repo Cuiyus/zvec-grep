@@ -41,27 +41,73 @@ function steps(job) {
   );
 }
 
-test("Retrieval-only is one manual workflow and Semble is opt-in", async () => {
+test("Retrieval-only is one manual workflow with no selectable inputs or baseline", async () => {
   assert.deepEqual(
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
     ),
     ["workflow_dispatch"],
   );
-  assert.match(block(workflow, "run_semble", 6), /^ {8}type: boolean$/m);
-  assert.match(block(workflow, "run_semble", 6), /^ {8}default: false$/m);
+  assert.equal(block(workflow, "workflow_dispatch", 2).trim(), "");
+  assert.doesNotMatch(workflow, /\binputs[.:]|semble/i);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),
     ["retrieval-only.yml"],
   );
-  assert.match(jobs.semble, /^ {4}if: \$\{\{ inputs\.run_semble \}\}$/m);
-  assert.match(jobs.semble, /^ {4}needs: quality-contract$/m);
+  assert.deepEqual(Object.keys(jobs), [
+    "authorize",
+    "quality-contract",
+    "package-candidate",
+    "retrieval",
+    "zg-report",
+    "results",
+  ]);
+});
+
+test("every repository runs the fixed three ZG modes with full previews, yielding 16 jobs", async () => {
+  const protocol = JSON.parse(
+    await readFile(
+      new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(protocol.modes, ["hybrid", "fts", "vector"]);
+  assert.equal(protocol.preview, "full");
+  const lock = JSON.parse(
+    await readFile(
+      new URL("benchmarks/zg-retrieval/data/source.lock.json", repository),
+      "utf8",
+    ),
+  );
+  assert.equal(lock.repositories.length, 11);
+  assert.equal(
+    new Set(lock.repositories.map((repo) => repo.repository)).size,
+    11,
+  );
+  assert.equal(Object.keys(jobs).length - 1 + lock.repositories.length, 16);
+  assert.match(jobs["package-candidate"], /lock\.repositories\.map/);
+  assert.match(
+    jobs.retrieval,
+    /matrix: \$\{\{ fromJSON\(needs\.package-candidate\.outputs\.matrix\) \}\}/,
+  );
+  const runner = steps(jobs.retrieval).find((entry) =>
+    entry.includes("node benchmarks/zg-retrieval/run.mjs"),
+  );
+  assert.ok(runner);
+  assert.doesNotMatch(runner, /--(?:modes|preview)\b|RETRIEVAL_MODES|inputs\./);
+  assert.match(runner, /--repository "\$RETRIEVAL_REPOSITORY"/);
+  assert.match(jobs["quality-contract"], /uses: actions\/setup-python@/);
+  assert.match(
+    jobs["quality-contract"],
+    /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
+  );
+  assert.doesNotMatch(workflow, /pip install|python -m venv|SDK parity/);
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {
-  assert.ok(Object.keys(jobs).length >= 7);
-  assert.ok(jobs.results && jobs.retrieval && jobs.semble && jobs.authorize);
+  assert.equal(Object.keys(jobs).length, 6);
+  assert.ok(jobs.results && jobs.retrieval && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
     const entries = steps(job);
     assert.match(entries[0], /uses: actions\/checkout@/, `${name}: checkout`);
@@ -92,23 +138,46 @@ test("every independently rerunnable job checks both actors before doing benchma
   assert.match(action, /RERUN_ACTOR: \$\{\{ github\.triggering_actor \}\}/);
 });
 
-test("the optional baseline can skip while one final summary handles successful or failed upstream jobs", () => {
+test("one final ZG summary runs after successful or failed upstream jobs without optional arms", () => {
   assert.match(jobs.results, /^ {4}if:.*always\(\)/m);
-  const finalSteps = steps(jobs.results);
-  const optionalDownload = finalSteps.find((entry) =>
-    entry.includes("name: Download optional Semble evidence"),
+  const dependencies = /needs:\s*\[([\s\S]*?)\]/.exec(jobs.results);
+  assert.ok(dependencies);
+  assert.deepEqual(
+    dependencies[1]
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+    [
+      "authorize",
+      "quality-contract",
+      "package-candidate",
+      "retrieval",
+      "zg-report",
+    ],
   );
-  assert.ok(optionalDownload);
-  assert.match(optionalDownload, /if:.*inputs\.run_semble/);
-  assert.match(optionalDownload, /continue-on-error: true/);
+  const finalSteps = steps(jobs.results);
+  const downloads = finalSteps.filter((entry) =>
+    entry.includes("uses: actions/download-artifact@"),
+  );
+  assert.equal(downloads.length, 1);
+  assert.match(downloads[0], /name: retrieval-zg-report/);
+  assert.match(downloads[0], /continue-on-error: true/);
   const builder = finalSteps.find((entry) => entry.includes("ci-report.mjs"));
   assert.ok(builder);
   assert.match(builder, /if:.*always\(\)/);
-  assert.match(
-    builder,
-    /RETRIEVAL_SEMBLE_REQUESTED: \$\{\{ inputs\.run_semble \}\}/,
-  );
   assert.match(builder, /RETRIEVAL_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
+  assert.deepEqual(
+    [...builder.matchAll(/^\s+--([\w-]+)/gm)].map((match) => match[1]),
+    ["zg", "output"],
+  );
+  assert.doesNotMatch(builder, /comparison|baseline|preview|modes/);
+  const overviewArtifact = finalSteps.find((entry) =>
+    entry.includes("name: retrieval-results"),
+  );
+  assert.ok(overviewArtifact);
+  assert.match(overviewArtifact, /retrieval-results\/summary\.md/);
+  assert.match(overviewArtifact, /retrieval-results\/summary\.json/);
+  assert.doesNotMatch(overviewArtifact, /comparison/);
   const publishers = Object.entries(jobs).flatMap(([name, job]) =>
     steps(job)
       .filter((entry) => entry.includes("$GITHUB_STEP_SUMMARY"))

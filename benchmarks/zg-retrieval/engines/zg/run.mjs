@@ -30,53 +30,34 @@ import {
 } from "../../core/lib.mjs";
 import { aggregate } from "./report.mjs";
 
-export function requestArguments(
-  task,
-  root,
-  mode,
-  protocol,
-  preview = "short",
-) {
-  assert.ok(protocol.available_modes.includes(mode), `unknown mode: ${mode}`);
-  assert.ok(protocol.previews.includes(preview), `unknown preview: ${preview}`);
+export function requestArguments(task, root, mode, protocol) {
+  assert.ok(protocol.modes.includes(mode), `unknown mode: ${mode}`);
+  assert.equal(protocol.preview, "full", "the benchmark requires full preview");
   return {
     root,
     ...(mode === "hybrid" ? { query: task.query } : { [mode]: [task.query] }),
     limit: protocol.limit,
     ...protocol.request,
-    preview,
+    preview: protocol.preview,
   };
 }
 
-export function callPlan(tasks, modes, protocol) {
-  assert.equal(modes[0], "hybrid");
-  assert.equal(new Set(modes).size, modes.length);
-  modes.forEach((mode) => assert.ok(protocol.available_modes.includes(mode)));
-  assert.deepEqual(protocol.previews, ["short", "full"]);
-  assert.equal(protocol.primary_preview, "short");
-  const plan = [];
-  // Match Semble's quality runner: five consecutive searches per original query
-  // and preview arm. The same index and MCP session serve both presentation arms.
-  // All hybrid queries precede optional ablations; no best-mode selection.
-  for (const mode of modes) {
-    for (const task of tasks) {
-      for (const preview of protocol.previews) {
-        for (
-          let repetition = 1;
-          repetition <= protocol.repetitions;
-          repetition++
-        )
-          plan.push({
-            task,
-            mode,
-            preview,
-            repetition,
-            quality_observation: repetition === protocol.quality_repetition,
-          });
-      }
-    }
-  }
-  return plan;
+export function callPlan(tasks, protocol) {
+  assert.deepEqual(protocol.modes, ["hybrid", "fts", "vector"]);
+  assert.equal(protocol.preview, "full");
+  // Each mode receives every original question five times in the same session.
+  // Fixed mode order is part of the protocol, not a controlled speed comparison.
+  return protocol.modes.flatMap((mode) =>
+    tasks.flatMap((task) =>
+      Array.from({ length: protocol.repetitions }, (_, index) => ({
+        task,
+        mode,
+        preview: protocol.preview,
+        repetition: index + 1,
+        quality_observation: index + 1 === protocol.quality_repetition,
+      })),
+    ),
+  );
 }
 
 export function indexSelectionArguments(protocol) {
@@ -177,18 +158,12 @@ async function packageCandidate(packagePath, output) {
   };
 }
 
-async function runRepository({
-  suite,
-  repo,
-  tasks,
-  candidate,
-  options,
-  modes,
-}) {
+async function runRepository({ suite, repo, tasks, candidate, options }) {
   const { protocol, gold, identity } = suite;
+  const modes = protocol.modes;
   const output = join(options.output, repositorySlug(repo.repository));
   await mkdir(join(output, "raw"), { recursive: true });
-  const planned = callPlan(tasks, modes, protocol);
+  const planned = callPlan(tasks, protocol);
   const manifest = {
     schema_version: 1,
     run_id: options.runId,
@@ -208,7 +183,7 @@ async function runRepository({
     },
     tasks: tasks.map((task) => task.task_id),
     modes,
-    previews: protocol.previews,
+    preview: protocol.preview,
     planned_calls: planned.length,
     invalid_reasons: [],
     preparation_status: "pending",
@@ -389,6 +364,7 @@ async function runRepository({
       "query",
       "limit",
       "autoUpdate",
+      "preferSymbol",
       "freshness",
       "preview",
       ...modes.filter((mode) => mode !== "hybrid"),
@@ -398,13 +374,12 @@ async function runRepository({
     assert.equal(fields.root.type, "string");
     assert.equal(fields.query.type, "string");
     assert.equal(fields.autoUpdate.type, "boolean");
+    assert.equal(fields.preferSymbol.type, "boolean");
     assert.ok(["number", "integer"].includes(fields.limit.type));
     assert.ok(fields.freshness.enum?.includes(protocol.request.freshness));
     assert.ok(
-      protocol.previews.every((preview) =>
-        fields.preview.enum?.includes(preview),
-      ),
-      "candidate search schema must support both short and full previews",
+      fields.preview.enum?.includes(protocol.preview),
+      "candidate search schema must support full preview",
     );
     assert.ok(
       (fields.limit.minimum ?? 1) <= protocol.limit &&
@@ -439,13 +414,7 @@ async function runRepository({
     await writeJson(join(output, "installation/tools.json"), tools);
     phase = "replay";
     for (const [index, call] of planned.entries()) {
-      const args = requestArguments(
-        call.task,
-        root,
-        call.mode,
-        protocol,
-        call.preview,
-      );
+      const args = requestArguments(call.task, root, call.mode, protocol);
       const start = performance.now();
       let response, error;
       try {
@@ -572,7 +541,6 @@ async function runRepository({
             root ?? "<unavailable>",
             call.mode,
             protocol,
-            call.preview,
           ),
         },
         preparation_error: productFailure ?? null,
@@ -608,26 +576,15 @@ export async function main(args = process.argv.slice(2)) {
       corpus: { type: "string" },
       repository: { type: "string" },
       tasks: { type: "string" },
-      modes: { type: "string", default: "hybrid" },
       "model-cache": { type: "string" },
       "candidate-commit": { type: "string", default: "unrecorded" },
     },
   });
   assert.ok(
     values.package && values.output && values.corpus,
-    "usage: node run.mjs --package candidate.tgz --output NEW_DIR --corpus CORPUS_DIR [--repository owner/name] [--modes hybrid,fts,vector]",
+    "usage: node run.mjs --package candidate.tgz --output NEW_DIR --corpus CORPUS_DIR [--repository owner/name]",
   );
   const suite = await loadSuite();
-  const modes = values.modes.split(",");
-  assert.equal(
-    modes[0],
-    "hybrid",
-    "hybrid is always the primary mode and must run first",
-  );
-  assert.equal(new Set(modes).size, modes.length);
-  modes.forEach((mode) =>
-    assert.ok(suite.protocol.available_modes.includes(mode)),
-  );
   const selected = values.tasks?.split(",");
   if (selected)
     selected.forEach((id) =>
@@ -664,7 +621,6 @@ export async function main(args = process.argv.slice(2)) {
       tasks: tasks.filter((task) => task.repository === repo.repository),
       candidate,
       options,
-      modes,
     });
   }
   const report = await aggregate(options.output, {

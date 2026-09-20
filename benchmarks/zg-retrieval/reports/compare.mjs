@@ -10,10 +10,9 @@ import {
 } from "../metrics/files.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
 import { summarizeSembleOfficial } from "../metrics/summary.mjs";
-import { selectPreviewReport, validateZgReport } from "./validation.mjs";
-export { selectPreviewReport } from "./validation.mjs";
+import { validateZgReport, ZG_MODES } from "./validation.mjs";
 
-const MODES = ["hybrid", "fts", "vector"];
+const MODES = ZG_MODES;
 const HITS = ["hit_at_1", "hit_at_5", "hit_at_10"];
 const FILE_METRICS = [...HITS, "rr_at_10"];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -108,24 +107,6 @@ export function compareReports(baseline, candidate) {
 }
 
 function compareValidatedReports(baseline, candidate, before, after) {
-  if (baseline.previews || candidate.previews) {
-    assert.ok(
-      baseline.previews && candidate.previews,
-      "incompatible preview arm sets",
-    );
-    const previews = Object.fromEntries(
-      ["short", "full"].map((preview) => [
-        preview,
-        compareValidatedReports(
-          selectPreviewReport(baseline, preview),
-          selectPreviewReport(candidate, preview),
-          before.previews[preview],
-          after.previews[preview],
-        ),
-      ]),
-    );
-    return { ...previews.short, primary_preview: "short", previews };
-  }
   assert.equal(
     baseline.preview,
     candidate.preview,
@@ -201,7 +182,7 @@ function compareValidatedReports(baseline, candidate, before, after) {
   return {
     schema_version: 2,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    ...(baseline.preview === undefined ? {} : { preview: baseline.preview }),
+    preview: "full",
     quality_repetition: 5,
     suite: structuredClone(baseline.suite),
     scope: baseline.scope,
@@ -262,32 +243,26 @@ const signed = (value) =>
     : "N/A";
 
 export function markdownComparison(result) {
-  const variants = result.previews
-    ? Object.entries(result.previews)
-    : [[result.preview ?? "default", result]];
   const lines = [
     "# zg Retrieval-only version comparison",
     "",
-    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. Quality uses the fifth call. Delta is candidate minus baseline.`,
+    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. All modes use full preview. Quality uses the fifth call. Delta is candidate minus baseline.`,
     "",
     "Source, Gold, frozen accepted-file targets and protocol identities match; task/mode coverage and scoring eligibility are validated. All five metrics are recomputed from saved public result items. This is a report-only comparison with no quality threshold or causal attribution.",
     "",
-    "| Mode / preview / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
+    "| Arm / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...variants.flatMap(([preview, report]) =>
-      Object.entries(report.modes).flatMap(([mode, entry]) =>
-        ["baseline", "candidate"].map((side) => {
-          const file = entry.file_retrieval[side];
-          return `| ${mode} / ${preview} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.semble_official[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
-        }),
-      ),
+    ...ZG_MODES.flatMap((mode) =>
+      ["baseline", "candidate"].map((side) => {
+        const entry = result.modes[mode],
+          file = entry.file_retrieval[side];
+        return `| zg-${mode} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.semble_official[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
+      }),
     ),
     "",
     "File Hit@1/5/10 and MRR@10 weight original questions equally. nDCG@10 first averages questions within each repository, then weights repositories equally. Native ranks are preserved without deduplication. These SWE-QA accepted-file projection scores measure file localization, not sufficient answer evidence; five repetitions are not independent questions.",
   ];
-  const warnings = [
-    ...new Set(variants.flatMap(([, report]) => report.warnings)),
-  ];
+  const warnings = [...new Set(result.warnings)];
   if (warnings.length)
     lines.push(
       "",
@@ -300,27 +275,23 @@ export function markdownComparison(result) {
     "<details>",
     "<summary>Per-question changes</summary>",
     "",
-    "| Question / mode / preview | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
+    "| Question / arm | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...variants.flatMap(([preview, report]) =>
-      report.tasks.map(
-        (row) =>
-          `| ${cell(row.task_id)} / ${cell(row.mode)} / ${preview} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.semble_official_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
-      ),
+    ...result.tasks.map(
+      (row) =>
+        `| ${cell(row.task_id)} / zg-${cell(row.mode)} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.semble_official_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
     ),
     "",
     "</details>",
     "",
-    ...variants.flatMap(([preview, report]) =>
-      Object.entries(report.modes).flatMap(([mode, entry]) =>
-        ["baseline", "candidate"].map(
-          (side) =>
-            `${mode} / ${preview} / ${side}: output samples **${entry.measurements[side].output_sample_count}** (successful fifth calls); latency samples **${entry.measurements[side].latency_sample_count}** (all successful valid calls).`,
-        ),
-      ),
+    ...ZG_MODES.flatMap((mode) =>
+      ["baseline", "candidate"].map((side) => {
+        const entry = result.modes[mode];
+        return `zg-${mode} / ${side}: output samples **${entry.measurements[side].output_sample_count}** (successful fifth calls); latency samples **${entry.measurements[side].latency_sample_count}** (all successful valid calls).`;
+      }),
     ),
     "",
-    "Output means use public UTF-8 bytes / 1024; latency P50 includes session load and fixed-order cache effects. Measurements are recomputed from saved per-call metadata, whose raw-response identities are audited by aggregation; this comparison does not reread raw captures. Older reports without complete per-call measurement evidence show N/A. Cross-environment timings do not establish a speed winner.",
+    "Output means use public UTF-8 bytes / 1024; latency P50 includes session load and fixed-order cache effects. Measurements are recomputed from saved per-call metadata, whose raw-response identities are audited by aggregation; this comparison does not reread raw captures. Cross-environment timings do not establish a speed winner.",
     "",
     "Product-error zeros remain in the denominator. Invalid experiments are rejected; unreviewed Gold is N/A. JSON retains input identities, target ranks and per-question status transitions.",
   );

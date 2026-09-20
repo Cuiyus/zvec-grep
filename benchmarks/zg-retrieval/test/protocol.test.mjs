@@ -228,7 +228,15 @@ test("each mode receives the unmodified original question exactly once, without 
     const field = mode === "hybrid" ? "query" : mode;
     assert.deepEqual(
       Object.keys(args).sort(),
-      ["root", field, "limit", "autoUpdate", "freshness", "preview"].sort(),
+      [
+        "root",
+        field,
+        "limit",
+        "autoUpdate",
+        "freshness",
+        "preferSymbol",
+        "preview",
+      ].sort(),
     );
     assert.deepEqual(
       args[field],
@@ -237,62 +245,60 @@ test("each mode receives the unmodified original question exactly once, without 
     assert.equal(args.autoUpdate, false);
     assert.equal(args.freshness, "eventual");
     assert.equal(args.limit, 10);
-    assert.equal(args.preview, "short");
-    const full = requestArguments(task, "/app", mode, suite.protocol, "full");
-    assert.deepEqual(full, { ...args, preview: "full" });
+    assert.equal(args.preview, "full");
+    assert.equal(args.preferSymbol, false);
   }
   assert.throws(
     () => requestArguments(task, "/app", "expanded", suite.protocol),
     /unknown mode/,
   );
   assert.throws(
-    () => requestArguments(task, "/app", "hybrid", suite.protocol, "none"),
-    /unknown preview/,
+    () =>
+      requestArguments(task, "/app", "hybrid", {
+        ...suite.protocol,
+        preview: "short",
+      }),
+    /requires full preview/,
   );
 });
 
-test("the SDK-aligned plan runs five consecutive calls per question and preview, scoring each arm's last result", () => {
+test("the fixed plan runs all three modes with five full-preview calls per question", () => {
   const tasks = suite.lock.tasks;
-  const modes = ["hybrid", "fts", "vector"];
-  const plan = callPlan(tasks, modes, suite.protocol);
-  assert.equal(plan.length, 600);
-  assert.equal(callPlan(tasks, ["hybrid"], suite.protocol).length, 200);
-  assert.ok(plan.slice(0, 200).every((call) => call.mode === "hybrid"));
-  for (const mode of modes) {
-    const modeCalls = plan.filter((call) => call.mode === mode);
-    assert.equal(
-      modeCalls.filter((call) => call.quality_observation).length,
-      40,
-    );
+  const plan = callPlan(tasks, suite.protocol);
+  assert.equal(plan.length, 300);
+  assert.deepEqual(
+    [...new Set(plan.map((call) => call.mode))],
+    ["hybrid", "fts", "vector"],
+  );
+  assert.ok(plan.slice(0, 100).every((call) => call.mode === "hybrid"));
+  for (const mode of suite.protocol.modes) {
+    const calls = plan.filter((call) => call.mode === mode);
+    assert.equal(calls.filter((call) => call.quality_observation).length, 20);
     for (const [index, task] of tasks.entries()) {
-      const round = modeCalls.slice(index * 10, (index + 1) * 10);
-      assert.ok(round.every((call) => call.task.task_id === task.task_id));
-      assert.deepEqual(
-        round.map((call) => call.repetition),
-        [1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
+      const repeats = calls.slice(index * 5, (index + 1) * 5);
+      assert.ok(
+        repeats.every(
+          (call) =>
+            call.task.task_id === task.task_id && call.preview === "full",
+        ),
       );
       assert.deepEqual(
-        round.map((call) => call.preview),
-        [
-          "short",
-          "short",
-          "short",
-          "short",
-          "short",
-          "full",
-          "full",
-          "full",
-          "full",
-          "full",
-        ],
+        repeats.map((call) => call.repetition),
+        [1, 2, 3, 4, 5],
       );
       assert.ok(
-        round.every(
+        repeats.every(
           (call) => call.quality_observation === (call.repetition === 5),
         ),
       );
     }
   }
+  assert.throws(() =>
+    callPlan(tasks, { ...suite.protocol, modes: ["hybrid"] }),
+  );
+  assert.throws(() =>
+    callPlan(tasks, { ...suite.protocol, modes: ["vector", "fts", "hybrid"] }),
+  );
 });
 
 test("code-only index arguments cover the frozen Semble extension set and reject leaked documents or oversized files", () => {
@@ -347,8 +353,8 @@ async function reportFixture(t) {
   const directory = await temporary(t);
   const shard = join(directory, repositorySlug(fixedTask.repository));
   const root = "/app";
-  const modes = ["hybrid"];
-  const plan = callPlan([fixedTask], modes, suite.protocol);
+  const modes = suite.protocol.modes;
+  const plan = callPlan([fixedTask], suite.protocol);
   const manifest = {
     schema_version: 1,
     run_id: "unit-test-product-failure",
@@ -371,7 +377,7 @@ async function reportFixture(t) {
     index_content_sha256: "e".repeat(64),
     tasks: [fixedTask.task_id],
     modes,
-    previews: suite.protocol.previews,
+    preview: suite.protocol.preview,
     planned_calls: plan.length,
     invalid_reasons: [],
     preparation_status: "index_failed",
@@ -387,13 +393,7 @@ async function reportFixture(t) {
     latency_ms: 1,
     request: {
       name: "zvec_grep_search",
-      arguments: requestArguments(
-        call.task,
-        root,
-        call.mode,
-        suite.protocol,
-        call.preview,
-      ),
+      arguments: requestArguments(call.task, root, call.mode, suite.protocol),
     },
     transport_error: null,
     preparation_error: manifest.preparation_error,
@@ -437,31 +437,26 @@ function assertNoHeadline(report) {
     assert.equal(mode.file_retrieval, null);
     assert.equal(mode.semble_official, null);
   }
-  for (const preview of Object.values(report.previews)) {
-    for (const mode of Object.values(preview.modes)) {
-      assert.equal(mode.file_retrieval, null);
-      assert.equal(mode.semble_official, null);
-    }
-  }
 }
 
 test("complete product-error observations retain a zero score and denominator but fail operational integrity", async (t) => {
   const fixture = await reportFixture(t);
   const report = await fixture.score();
   assert.equal(report.scope, "explicit-subset");
-  assert.equal(report.observed_calls, 10);
+  assert.equal(report.observed_calls, 15);
   assert.equal(
     report.quality_score_valid,
     true,
     JSON.stringify(report.integrity_errors),
   );
   assert.equal(report.integrity_passed, false);
-  assert.equal(report.product_error_calls, 10);
+  assert.equal(report.product_error_calls, 15);
   assert.deepEqual(report.integrity_errors, []);
-  assert.equal(report.tasks.length, 2);
-  assert.equal(report.primary_preview, "short");
-  assert.deepEqual(report.previews.short.tasks, [report.tasks[0]]);
-  assert.deepEqual(report.previews.full.tasks, [report.tasks[1]]);
+  assert.equal(report.tasks.length, 3);
+  assert.equal(report.schema_version, 4);
+  assert.equal(report.preview, "full");
+  assert.deepEqual(Object.keys(report.modes), ["hybrid", "fts", "vector"]);
+  assert.equal(Object.hasOwn(report, "previews"), false);
   assert.equal(report.tasks[0].repetition, 5);
   assert.equal(report.tasks[0].ranking_repeatable, null);
   assert.equal(report.tasks[0].output_repeatable, null);
@@ -559,7 +554,7 @@ test("successful raw calls with missing or invalid latency invalidate the standa
       .split("\n")
       .map(JSON.parse);
     assert.match(
-      scored.find((row) => row.preview === "short" && row.repetition === 2)
+      scored.find((row) => row.mode === "hybrid" && row.repetition === 2)
         .invalid_reason,
       /invalid call latency/,
     );
@@ -583,7 +578,7 @@ test("a duplicate cannot replace a missing repetition even if the call count sti
   );
 });
 
-test("a missing full-preview arm cannot silently become a valid short-only run", async (t) => {
+test("missing fts/vector arms cannot silently become a valid hybrid-only run", async (t) => {
   const fixture = await reportFixture(t);
   fixture.calls.splice(5);
   await fixture.save();
@@ -610,19 +605,46 @@ for (const [label, mutate] of [
   [
     "mismatched preview request",
     (fixture) => {
-      fixture.calls[1].request.arguments.preview = "full";
+      fixture.calls[1].request.arguments.preview = "short";
     },
   ],
   [
-    "reused raw response across preview arms",
+    "reused raw response across modes",
     (fixture) => {
       fixture.calls[5].raw_path = fixture.calls[0].raw_path;
     },
   ],
   [
-    "missing manifest preview arm",
+    "wrong manifest preview",
     (fixture) => {
-      fixture.manifest.previews = ["short"];
+      fixture.manifest.preview = "short";
+    },
+  ],
+  [
+    "missing manifest mode",
+    (fixture) => {
+      fixture.manifest.modes = ["hybrid"];
+    },
+  ],
+  [
+    "mixed search route",
+    (fixture) => {
+      fixture.calls[5].request.arguments.query = fixedTask.query;
+    },
+  ],
+  [
+    "symbol routing enabled",
+    (fixture) => {
+      fixture.calls[5].request.arguments.preferSymbol = true;
+    },
+  ],
+  [
+    "changed mode execution order",
+    (fixture) => {
+      [fixture.calls[4], fixture.calls[5]] = [
+        fixture.calls[5],
+        fixture.calls[4],
+      ];
     },
   ],
   [
@@ -695,7 +717,7 @@ test("raw response tampering is detected before scoring even when replacement is
   const report = await fixture.score();
   assertNoHeadline(report);
   assert.match(
-    report.tasks.find((task) => task.preview === "full").invalid_reason,
+    report.tasks.find((task) => task.mode === "vector").invalid_reason,
     /raw response changed since capture/,
   );
 });

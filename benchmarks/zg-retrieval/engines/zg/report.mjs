@@ -9,7 +9,7 @@ import {
   inside,
   fileHash,
 } from "../../core/lib.mjs";
-import { scoreResponse } from "./parse.mjs";
+import { scoreResponse, validateSearchRoute } from "./parse.mjs";
 import { scoreSembleMetric } from "../../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
@@ -23,7 +23,7 @@ import {
 } from "../../metrics/measurements.mjs";
 
 import { summarizeSembleOfficial } from "../../metrics/summary.mjs";
-import { summarizePreviewPairs, markdownReport } from "../../reports/zg.mjs";
+import { markdownReport } from "../../reports/zg.mjs";
 
 async function findRuns(directory) {
   const runs = [];
@@ -184,22 +184,13 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         "preparation did not succeed and no complete product preparation failure was recorded",
       );
     }
-    const modeSet = manifest.modes ?? [];
-    if (
-      !modeSet.length ||
-      modeSet[0] !== "hybrid" ||
-      new Set(modeSet).size !== modeSet.length ||
-      modeSet.some((mode) => !suite.protocol.available_modes.includes(mode))
-    )
-      invalid.push("invalid modes");
-    const previewSet = suite.protocol.previews;
-    if (objectHash(manifest.previews ?? null) !== objectHash(previewSet))
+    const modeSet = suite.protocol.modes;
+    if (objectHash(manifest.modes ?? null) !== objectHash(modeSet))
+      invalid.push("mode selection differs from frozen three-mode protocol");
+    if (manifest.preview !== suite.protocol.preview)
       invalid.push("preview selection differs from frozen protocol");
     const plannedCount =
-      manifest.tasks.length *
-      modeSet.length *
-      previewSet.length *
-      suite.protocol.repetitions;
+      manifest.tasks.length * modeSet.length * suite.protocol.repetitions;
     if (
       calls.length !== plannedCount ||
       manifest.planned_calls !== plannedCount
@@ -233,14 +224,12 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       );
     const plannedOrder = modeSet.flatMap((mode) =>
       manifest.tasks.flatMap((task_id) =>
-        previewSet.flatMap((preview) =>
-          Array.from({ length: suite.protocol.repetitions }, (_, index) => ({
-            task_id,
-            mode,
-            preview,
-            repetition: index + 1,
-          })),
-        ),
+        Array.from({ length: suite.protocol.repetitions }, (_, index) => ({
+          task_id,
+          mode,
+          preview: suite.protocol.preview,
+          repetition: index + 1,
+        })),
       ),
     );
     if (
@@ -253,9 +242,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         })),
       ) !== objectHash(plannedOrder)
     )
-      invalid.push(
-        "call order differs from mode-task-preview-repetition protocol",
-      );
+      invalid.push("call order differs from mode-task-repetition protocol");
     for (const call of calls) {
       const task = suite.lock.tasks.find(
         (task) => task.task_id === call.task_id,
@@ -273,7 +260,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
       const callInvalid = [...invalid];
       if (
         !modeSet.includes(call.mode) ||
-        !previewSet.includes(call.preview) ||
+        call.preview !== suite.protocol.preview ||
         !Number.isInteger(call.repetition) ||
         call.repetition < 1 ||
         call.repetition > suite.protocol.repetitions
@@ -332,6 +319,8 @@ export async function aggregate(directory, { expectedTasks } = {}) {
             "utf8",
           );
         score = scoreResponse(response, suite.gold[call.task_id]);
+        if (score.execution_status === "success")
+          validateSearchRoute(score.items, call.mode);
       } catch (error) {
         callInvalid.push(error.message);
         score = {};
@@ -362,38 +351,37 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         raw_path: `${runDirectory.slice(directory.length + 1)}/${call.raw_path}`,
       });
     }
-    for (const taskId of manifest.tasks) {
-      for (const mode of modeSet) {
-        for (const preview of previewSet) {
-          for (
-            let repetition = 1;
-            repetition <= suite.protocol.repetitions;
-            repetition++
-          ) {
-            if (!seen.has(`${taskId}/${mode}/${preview}/${repetition}`))
-              errors.push(
-                `missing call: ${taskId}/${mode}/${preview}/${repetition}`,
-              );
-          }
-        }
-      }
-    }
+    for (const taskId of manifest.tasks)
+      for (const mode of modeSet)
+        for (
+          let repetition = 1;
+          repetition <= suite.protocol.repetitions;
+          repetition++
+        )
+          if (
+            !seen.has(
+              `${taskId}/${mode}/${suite.protocol.preview}/${repetition}`,
+            )
+          )
+            errors.push(
+              `missing call: ${taskId}/${mode}/${suite.protocol.preview}/${repetition}`,
+            );
     errors.push(
       ...invalid.map((reason) => `${manifest.repository}: ${reason}`),
     );
   }
   for (const id of expected)
-    for (const preview of suite.protocol.previews)
+    for (const mode of suite.protocol.modes)
       if (
         !observations.some(
           (row) =>
             row.task_id === id &&
-            row.mode === "hybrid" &&
-            row.preview === preview &&
+            row.mode === mode &&
+            row.preview === suite.protocol.preview &&
             row.repetition === suite.protocol.quality_repetition,
         )
       )
-        errors.push(`missing quality observation: ${id}/${preview}`);
+        errors.push(`missing quality observation: ${id}/${mode}`);
   for (const field of ["tarball_sha256"])
     if (
       new Set(manifests.map((manifest) => manifest.package?.[field])).size !== 1
@@ -454,49 +442,33 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     (row) => row.execution_status === "product_error",
   ).length;
   const complete = errors.length === 0;
-  const modes = [...new Set(observations.map((row) => row.mode))];
-  const previewReports = Object.fromEntries(
-    suite.protocol.previews.map((preview) => {
-      const tasks = quality.filter((row) => row.preview === preview);
+  const modeReports = Object.fromEntries(
+    suite.protocol.modes.map((mode) => {
+      const rows = quality.filter((row) => row.mode === mode);
       return [
-        preview,
+        mode,
         {
-          modes: Object.fromEntries(
-            modes.map((mode) => {
-              const rows = tasks.filter((row) => row.mode === mode);
-              return [
-                mode,
-                {
-                  measurements: summarizeMeasurements(
-                    observations.filter(
-                      (row) => row.mode === mode && row.preview === preview,
-                    ),
-                  ),
-                  file_retrieval: complete
-                    ? summarizeFileRetrieval(rows)
-                    : null,
-                  semble_official: complete
-                    ? summarizeSembleOfficial(rows)
-                    : null,
-                  ranking_repeatable_tasks: rows.filter(
-                    (row) => row.ranking_repeatable === true,
-                  ).length,
-                  output_repeatable_tasks: rows.filter(
-                    (row) => row.output_repeatable === true,
-                  ).length,
-                },
-              ];
-            }),
-          ),
-          tasks,
+          measurements: complete
+            ? summarizeMeasurements(
+                observations.filter((row) => row.mode === mode),
+              )
+            : null,
+          file_retrieval: complete ? summarizeFileRetrieval(rows) : null,
+          semble_official: complete ? summarizeSembleOfficial(rows) : null,
+          ranking_repeatable_tasks: rows.filter(
+            (row) => row.ranking_repeatable === true,
+          ).length,
+          output_repeatable_tasks: rows.filter(
+            (row) => row.output_repeatable === true,
+          ).length,
         },
       ];
     }),
   );
   const report = {
-    schema_version: 3,
+    schema_version: 4,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    primary_preview: suite.protocol.primary_preview,
+    preview: suite.protocol.preview,
     quality_repetition: suite.protocol.quality_repetition,
     generated_at: new Date().toISOString(),
     suite: suite.identity,
@@ -510,14 +482,8 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5 separately for each preview; file Hit@1/5/10 and MRR@10 weight original questions equally; nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
-    modes: previewReports[suite.protocol.primary_preview].modes,
-    previews: previewReports,
-    paired_preview_comparison: summarizePreviewPairs(observations, {
-      primaryPreview: suite.protocol.primary_preview,
-      comparisonPreview: "full",
-      qualityRepetition: suite.protocol.quality_repetition,
-    }),
+      "quality repetition 5 separately for each retrieval mode; file Hit@1/5/10 and MRR@10 weight original questions equally; nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
+    modes: modeReports,
     repositories: manifests,
     tasks: quality,
   };
