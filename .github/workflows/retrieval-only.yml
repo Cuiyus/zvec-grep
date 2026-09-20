@@ -1,0 +1,235 @@
+name: Retrieval-only
+
+run-name: Retrieval-only · ZG hybrid / fts / vector · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: Check maintainer permission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+
+  quality-contract:
+    name: Validate retrieval contracts
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test the five metrics, replay protocol and upstream nDCG oracle
+        run: node --test benchmarks/zg-retrieval/test/*.test.mjs
+
+  package-candidate:
+    name: package retrieval candidate
+    needs: quality-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Read all repositories from the frozen suite
+        id: matrix
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const lock = JSON.parse(readFileSync('benchmarks/zg-retrieval/data/source.lock.json', 'utf8'));
+          assert.equal(lock.repositories.length, 11);
+          assert.equal(lock.tasks.length, 20);
+          const include = lock.repositories.map(({ repository }) => {
+            assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
+            return { repository, slug: repository.replace('/', '__') };
+          });
+          assert.equal(new Set(include.map(({ repository }) => repository)).size, 11);
+          assert.equal(new Set(include.map(({ slug }) => slug)).size, 11);
+          assert.ok(lock.tasks.every(task => include.some(row => row.repository === task.repository)));
+          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
+          NODE
+      - run: npm ci
+      - name: Build and pack the candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --json --pack-destination "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package/*.tgz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  retrieval:
+    name: retrieval (${{ matrix.repository }})
+    needs: package-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.package-candidate.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Cache model artifacts only
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/model-cache
+          key: retrieval-model-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/engine/models/catalog.ts', 'package-lock.json') }}
+      - name: Run zg-hybrid, zg-fts and zg-vector with full source previews
+        env:
+          RETRIEVAL_REPOSITORY: ${{ matrix.repository }}
+        run: |
+          node benchmarks/zg-retrieval/run.mjs \
+            --package "$RUNNER_TEMP/package" \
+            --output "$RUNNER_TEMP/retrieval" \
+            --corpus "$RUNNER_TEMP/corpus" \
+            --repository "$RETRIEVAL_REPOSITORY" \
+            --model-cache "$RUNNER_TEMP/model-cache" \
+            --candidate-commit "$GITHUB_SHA"
+      - name: Preserve repository evidence, including failures
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-data-${{ matrix.slug }}
+          path: |
+            ${{ runner.temp }}/retrieval/
+            !${{ runner.temp }}/retrieval/consumer/**
+            !${{ runner.temp }}/retrieval/**/runtime-home/**
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  zg-report:
+    name: Validate complete ZG results
+    if: ${{ always() && needs.authorize.result == 'success' }}
+    needs: [authorize, retrieval]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Prepare aggregate directory
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: mkdir -p "$RUNNER_TEMP/retrieval-combined"
+      - name: Download repository evidence without merging shard roots
+        uses: actions/download-artifact@v8
+        with:
+          pattern: retrieval-data-*
+          path: ${{ runner.temp }}/retrieval-combined
+          merge-multiple: false
+      - name: Require all 20 questions in all three modes with full previews and valid evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
+      - name: Preserve combined summary
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-zg-report
+          path: |
+            ${{ runner.temp }}/retrieval-combined/report.md
+            ${{ runner.temp }}/retrieval-combined/report.json
+            ${{ runner.temp }}/retrieval-combined/scores.jsonl
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  results:
+    name: Retrieval results
+    if: ${{ always() && needs.authorize.result == 'success' }}
+    needs:
+      [authorize, quality-contract, package-candidate, retrieval, zg-report]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Download ZG report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-zg-report
+          path: ${{ runner.temp }}/results-input/zg
+      - name: Build the single results table
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        env:
+          RETRIEVAL_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node benchmarks/zg-retrieval/ci-report.mjs \
+            --zg "$RUNNER_TEMP/results-input/zg/report.json" \
+            --output "$RUNNER_TEMP/retrieval-results"
+      - name: Publish the results table
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/retrieval-results/summary.md" ]; then
+            cat "$RUNNER_TEMP/retrieval-results/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## Retrieval-only: FAILED' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No validated results table was produced. Inspect the failed job; missing results are not zero scores.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve the combined results
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-results
+          path: |
+            ${{ runner.temp }}/retrieval-results/summary.md
+            ${{ runner.temp }}/retrieval-results/summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14

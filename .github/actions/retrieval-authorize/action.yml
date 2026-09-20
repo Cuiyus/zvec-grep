@@ -1,0 +1,34 @@
+name: Authorize Retrieval-only
+description: Require maintainer permission for each job, including partial re-runs.
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      env:
+        DISPATCH_ACTOR: ${{ github.actor }}
+        RERUN_ACTOR: ${{ github.triggering_actor }}
+      with:
+        script: |
+          try {
+            if (context.eventName !== 'workflow_dispatch') {
+              throw new Error('Retrieval-only permits manual workflow_dispatch only.');
+            }
+            const actors = new Set([process.env.DISPATCH_ACTOR, process.env.RERUN_ACTOR]);
+            for (const username of actors) {
+              if (!username) throw new Error('Missing workflow actor.');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo, username,
+              });
+              // GitHub maps maintain to permission=write; check the precise role.
+              if (data.permission !== 'admin' && !['maintain', 'admin'].includes(data.role_name)) {
+                throw new Error(`${username} requires the maintain or admin repository role.`);
+              }
+              core.info(`${username}: authorized (${data.role_name})`);
+            }
+          } catch (error) {
+            await core.summary
+              .addHeading('Retrieval-only: access denied')
+              .addRaw('Only maintainers and administrators may start or re-run this benchmark. No results were produced by this job.')
+              .write();
+            throw error;
+          }

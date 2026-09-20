@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "django:21",
+  "question_sha256": "98a8a7edabf45144b071d67015aff8f74fd8825278d14a876ddfaa9b76aa689c",
+  "repository": "django/django",
+  "repository_commit": "14fc2e97036fc9d7acb55ada4f16f1aa3bdc5ec7",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "migration-unapply-precheck",
+      "path": "django/db/migrations/migration.py",
+      "symbol": "Migration.unapply",
+      "relevance_reason": "Direct rollback orchestrator checks each operation.reversible in phase 1 before dispatching database_backwards in phase 2.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "3eeecc565bca680b83f27ba889df329050432c47e0511ee42f3f92a1dacdf81d",
+      "anchors": [
+        {
+          "start_line": 139,
+          "end_line": 139,
+          "text": "    def unapply(self, project_state, schema_editor, collect_sql=False):",
+          "sha256": "efbd8199a0c2d38f896b52b589744366f2addf7b01c0d6b6e8117a5bbd1bf92f"
+        },
+        {
+          "start_line": 139,
+          "end_line": 150,
+          "text": "    def unapply(self, project_state, schema_editor, collect_sql=False):\n        \"\"\"\n        Take a project_state representing all migrations prior to this one\n        and a schema_editor for a live database and apply the migration\n        in a reverse order.\n\n        The backwards migration process consists of two phases:\n\n        1. The intermediate states from right before the first until right\n           after the last operation inside this migration are preserved.\n        2. The operations are applied in reverse order using the states\n           recorded in step 1.",
+          "sha256": "0a112b8d41fe407b89d4e3a152d64e796205b19a21c98ce6676d468d6ef48288"
+        },
+        {
+          "start_line": 155,
+          "end_line": 167,
+          "text": "        # Phase 1\n        for operation in self.operations:\n            # If it's irreversible, error out\n            if not operation.reversible:\n                raise IrreversibleError(\n                    \"Operation %s in %s is not reversible\" % (operation, self)\n                )\n            # Preserve new state from previous run to not tamper the same state\n            # over all operations\n            new_state = new_state.clone()\n            old_state = new_state.clone()\n            operation.state_forwards(self.app_label, new_state)\n            to_run.insert(0, (operation, old_state, new_state))",
+          "sha256": "7a4fdeeda18ff1d7543e1522776ceadb904a1507c024906e1acd54067e7cc8d4"
+        },
+        {
+          "start_line": 184,
+          "end_line": 195,
+          "text": "            if not schema_editor.atomic_migration and atomic_operation:\n                # Force a transaction on a non-transactional-DDL backend or an\n                # atomic operation inside a non-atomic migration.\n                with atomic(schema_editor.connection.alias):\n                    operation.database_backwards(\n                        self.app_label, schema_editor, from_state, to_state\n                    )\n            else:\n                # Normal behavior\n                operation.database_backwards(\n                    self.app_label, schema_editor, from_state, to_state\n                )",
+          "sha256": "ab105ccfbf190d5f61bac9815b3213ff509829c8ee328e8fa2287bbd2a39145b"
+        }
+      ]
+    },
+    {
+      "id": "runsql-reversibility",
+      "path": "django/db/migrations/operations/special.py",
+      "symbol": "RunSQL.reversible",
+      "relevance_reason": "Concrete operation supplies the reversible contract based on reverse_sql availability.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "08c2dfa91e2b3bc0210cc36c70e5e36e52aebcd037bd617383ee8cffbc599d7e",
+      "anchors": [
+        {
+          "start_line": 97,
+          "end_line": 97,
+          "text": "    def reversible(self):",
+          "sha256": "0599d4b4d1cfa0e82f7defc58b9bdab11ad10568b222064df8bc087267829744"
+        },
+        {
+          "start_line": 96,
+          "end_line": 98,
+          "text": "    @property\n    def reversible(self):\n        return self.reverse_sql is not None",
+          "sha256": "0abaf7aed647e56753db90d254030853edd4027dd7d30159f9f6868da4260485"
+        }
+      ]
+    },
+    {
+      "id": "runpython-reversibility",
+      "path": "django/db/migrations/operations/special.py",
+      "symbol": "RunPython.reversible",
+      "relevance_reason": "Concrete Python operation supplies the reversible contract based on reverse_code availability.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "08c2dfa91e2b3bc0210cc36c70e5e36e52aebcd037bd617383ee8cffbc599d7e",
+      "anchors": [
+        {
+          "start_line": 177,
+          "end_line": 177,
+          "text": "    def reversible(self):",
+          "sha256": "0599d4b4d1cfa0e82f7defc58b9bdab11ad10568b222064df8bc087267829744"
+        },
+        {
+          "start_line": 176,
+          "end_line": 178,
+          "text": "    @property\n    def reversible(self):\n        return self.reverse_code is not None",
+          "sha256": "c205c5c4d631919e0c944424423413b612d3802aa96b25602a843d153e609624"
+        }
+      ]
+    },
+    {
+      "id": "irreversible-exception",
+      "path": "django/db/migrations/exceptions.py",
+      "symbol": "IrreversibleError",
+      "relevance_reason": "Specific RuntimeError subtype signals an irreversible migration about to be reversed.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "4a8b5017b64a809a5df4a37e80a0cbf3008900a48481b653a0cfefb54027a87c",
+      "anchors": [
+        {
+          "start_line": 34,
+          "end_line": 34,
+          "text": "class IrreversibleError(RuntimeError):",
+          "sha256": "51dc69fb70868cbdd6be7c4caa4a068f26793fa1168cfbc08738a3d242d7c0d8"
+        },
+        {
+          "start_line": 34,
+          "end_line": 37,
+          "text": "class IrreversibleError(RuntimeError):\n    \"\"\"An irreversible migration is about to be reversed.\"\"\"\n\n    pass",
+          "sha256": "a2ae0c41e37a3e6bdc40860316b727ce3816a57315ad3e4587ea062372bda1c6"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Distinct source-verified orchestration, per-operation contract and exception hierarchy groups; RunSQL/RunPython are equivalent contract examples.",
+    "groups": [
+      {
+        "id": "rollback-orchestration",
+        "target_ids": ["migration-unapply-precheck"]
+      },
+      {
+        "id": "operation-contract",
+        "target_ids": ["runsql-reversibility", "runpython-reversibility"]
+      },
+      {
+        "id": "exception-contract",
+        "target_ids": ["irreversible-exception"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "The precheck prevents reverse execution of non-reversible operations; it does not prohibit executing their forward migrations. Generic parent Operation or whole migration modules are not accepted by containment. Independent audit_token source review: Read Migration.unapply two phases, RunSQL/RunPython reversible properties and IrreversibleError inheritance. Irreversible reverse execution is prechecked before database_backwards; forward migrations are not incorrectly prohibited. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

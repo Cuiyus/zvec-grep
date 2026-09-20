@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "streamlink:43",
+  "question_sha256": "ab701deb903219981fac6fa2c0d288d72c0fc57846e44dd3d4120d217c7a7060",
+  "repository": "streamlink/streamlink",
+  "repository_commit": "ab1f36560005253ca6a290a614730bf18a29a7f9",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "kick-low-latency-init",
+      "path": "src/streamlink/plugins/kick.py",
+      "symbol": "KickHLSStream.__init__",
+      "relevance_reason": "Direct constructor stores the low_latency parameter consumed by its specialized reader and worker.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "d24f3ab020a8291f06e43cb634d10859235a98a572b408cb19b8eec9ca46b3c3",
+      "anchors": [
+        {
+          "start_line": 122,
+          "end_line": 122,
+          "text": "    def __init__(self, *args, low_latency: bool = False, **kwargs):",
+          "sha256": "d8c8feaad2cb1ece840cc225076a26255701bd5d98dc461b3e0d73011f1a6f31"
+        },
+        {
+          "start_line": 122,
+          "end_line": 124,
+          "text": "    def __init__(self, *args, low_latency: bool = False, **kwargs):\n        super().__init__(*args, **kwargs)\n        self.low_latency = low_latency",
+          "sha256": "c05641effe71aa17e2db24c2d40845d3ce97727be3f6a61ff119fef1578b6ee6"
+        }
+      ]
+    },
+    {
+      "id": "kick-reader-buffer-options",
+      "path": "src/streamlink/plugins/kick.py",
+      "symbol": "KickHLSStreamReader.__init__",
+      "relevance_reason": "Clamps HLS live edge and enables hls-segment-stream-data in low-latency mode, directly controlling buffer-related options.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "d24f3ab020a8291f06e43cb634d10859235a98a572b408cb19b8eec9ca46b3c3",
+      "anchors": [
+        {
+          "start_line": 108,
+          "end_line": 108,
+          "text": "    def __init__(self, stream: KickHLSStream, **kwargs):",
+          "sha256": "1b105a00f13613b561f43af903fae7829243f14b9d52d382ce61707dd27b4e5c"
+        },
+        {
+          "start_line": 108,
+          "end_line": 115,
+          "text": "    def __init__(self, stream: KickHLSStream, **kwargs):\n        if stream.low_latency:\n            live_edge = max(1, min(LOW_LATENCY_MAX_LIVE_EDGE, stream.session.options.get(\"hls-live-edge\")))\n            stream.session.options.set(\"hls-live-edge\", live_edge)\n            stream.session.options.set(\"hls-segment-stream-data\", True)\n            log.info(f\"Low latency streaming (HLS live edge: {live_edge})\")\n\n        super().__init__(stream, **kwargs)",
+          "sha256": "82080956d5f167ab31fa2972728ed9aafdcd2dab553016f7b533006606e5cc29"
+        }
+      ]
+    },
+    {
+      "id": "kick-worker-reload",
+      "path": "src/streamlink/plugins/kick.py",
+      "symbol": "KickHLSStreamWorker.__init__",
+      "relevance_reason": "Changes playlist reload timing to segment-based timing when low_latency is enabled.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "d24f3ab020a8291f06e43cb634d10859235a98a572b408cb19b8eec9ca46b3c3",
+      "anchors": [
+        {
+          "start_line": 82,
+          "end_line": 82,
+          "text": "    def __init__(self, *args, **kwargs):",
+          "sha256": "c7c83da6a233f3c49534618ffab67799fd7423d437050a939508eeda86ed2e2c"
+        },
+        {
+          "start_line": 82,
+          "end_line": 85,
+          "text": "    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        if self.stream.low_latency:\n            self.reload_time = \"segment\"",
+          "sha256": "0330474c9ba9bc185d94042f3ed94dad006150b44766961051d281f47d9594b2"
+        }
+      ]
+    },
+    {
+      "id": "kick-worker-prefetch",
+      "path": "src/streamlink/plugins/kick.py",
+      "symbol": "KickHLSStreamWorker.process_segments",
+      "relevance_reason": "Drops prefetch segments only when low-latency is disabled; keeps them for low-latency segment processing.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "d24f3ab020a8291f06e43cb634d10859235a98a572b408cb19b8eec9ca46b3c3",
+      "anchors": [
+        {
+          "start_line": 87,
+          "end_line": 87,
+          "text": "    def process_segments(self, playlist: KickM3U8):  # type: ignore[override]",
+          "sha256": "c8eea5eb4b38455c3a6234d401aa2fa7c3e1b2e547bd180821c79a171deb4b4c"
+        },
+        {
+          "start_line": 87,
+          "end_line": 92,
+          "text": "    def process_segments(self, playlist: KickM3U8):  # type: ignore[override]\n        # ignore prefetch segments if not LL streaming\n        if not self.stream.low_latency:\n            playlist.segments = [segment for segment in playlist.segments if not segment.prefetch]\n\n        return super().process_segments(playlist)",
+          "sha256": "df948261ebc104586e56bfb61a4fe0848b14b62e7d841a1b1f017841745b963f"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Verified mode storage, reader buffer policy and worker fetch policy; worker methods are grouped to avoid double reward for the same component.",
+    "groups": [
+      {
+        "id": "mode-parameter",
+        "target_ids": ["kick-low-latency-init"]
+      },
+      {
+        "id": "reader-buffer-policy",
+        "target_ids": ["kick-reader-buffer-options"]
+      },
+      {
+        "id": "worker-fetch-policy",
+        "target_ids": ["kick-worker-reload", "kick-worker-prefetch"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Source correction: low-latency uses live-edge clamping, stream-data mode, prefetch segments and segment reload timing. No source-based claim that it implements generic partial-segment loading or always improves throughput. Reducing live edge can cause buffering. Independent audit_token source review: Read KickHLSStream, reader and worker implementations; verified low_latency storage, live-edge clamp, stream-data setting, segment reload and prefetch policy. Groups capture distinct constructor/reader/worker roles without double-counting worker alternatives. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}
