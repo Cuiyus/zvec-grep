@@ -8,9 +8,12 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from zg_bench.core.protocol import JUDGE_MODELS
+from zg_bench.reports.aggregate import aggregate_reports
+
 from . import SweQaError
 from .collect import collect_pair
-from .judge import JUDGE_MODELS, aggregate_reports, judge_pairs
+from .judge import judge_pairs
 from .validation import validate_assets
 
 

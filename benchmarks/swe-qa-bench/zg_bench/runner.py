@@ -14,35 +14,38 @@ from typing import Any, Literal, Sequence
 
 import yaml
 
+from .engines.opencode.config import build_opencode_config
+from .engines.registry import (
+    AGENT_MODEL_SUPPORT as AGENT_MODEL_SUPPORT,
+)
+from .engines.registry import (
+    CLAUDE_CODE_CREDENTIAL_ENV_VARS as _CLAUDE_CODE_CREDENTIAL_ENV_VARS,
+)
+from .engines.registry import (
+    AgentModelSupport as AgentModelSupport,
+)
+from .engines.registry import (
+    available_agent_models as available_agent_models,
+)
+from .engines.registry import (
+    execution_environment as execution_environment,
+)
+from .engines.registry import (
+    first_nonempty_env as _first_nonempty_env,
+)
+from .engines.registry import (
+    resolve_agent_model,
+)
+from .engines.registry import (
+    validate_profile_credentials as validate_profile_credentials,
+)
 from .settings import (
     AGENT_SETUP_TIMEOUT_MULTIPLIER,
-    BENCHMARK_MAX_OUTPUT_TOKENS,
-    BENCHMARK_SEED,
-    BENCHMARK_TEMPERATURE,
     CLAUDE_CODE_MAX_BUDGET_USD,
     CLAUDE_CODE_REASONING_EFFORT,
     CLAUDE_CODE_VERSION,
-    CLAUDE_OPUS_5_MODEL,
     CODEX_VERSION,
-    OPENCODE_ALIYUN_GLM_MODEL,
-    OPENCODE_ALIYUN_GLM_MODEL_ID,
-    OPENCODE_ALIYUN_QWEN_MODEL,
-    OPENCODE_ALIYUN_QWEN_MODEL_ID,
-    OPENCODE_CUSTOM_GLM_BASE_URL,
-    OPENCODE_CUSTOM_GLM_MODEL,
-    OPENCODE_CUSTOM_GLM_MODEL_ID,
-    OPENCODE_CUSTOM_QWEN_BASE_URL,
-    OPENCODE_CUSTOM_QWEN_MODEL,
-    OPENCODE_CUSTOM_QWEN_MODEL_ID,
-    OPENCODE_DASHSCOPE_BASE_URL,
-    OPENCODE_GLM_ENABLE_THINKING,
-    OPENCODE_GLM_REASONING_EFFORT,
-    OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
-    OPENCODE_QWEN_ENABLE_THINKING,
-    OPENCODE_QWEN_REASONING_EFFORT,
-    OPENCODE_QWEN_TEMPERATURE,
     OPENCODE_VERSION,
-    ZVEC_GREP_API_KEY_ENV_VARS,
     ZVEC_GREP_BINDING_PACKAGE,
     ZVEC_GREP_EMBEDDING,
     ZVEC_GREP_EMBEDDING_ENDPOINT,
@@ -74,15 +77,6 @@ _ZVEC_AGENT_IMPORT_PATHS = {
     _CODEX_AGENT: ZVEC_CODEX_IMPORT_PATH,
     _OPENCODE_AGENT: ZVEC_OPENCODE_IMPORT_PATH,
 }
-_OPENCODE_ALIYUN_API_KEY_ENV_VARS = (
-    "DASHSCOPE_API_KEY",
-    "OPENAI_API_KEY",
-)
-_CLAUDE_CODE_CREDENTIAL_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-)
 
 Profile = Literal["baseline", "zvec-grep"]
 ProfileSelection = Literal["baseline", "zvec-grep", "all"]
@@ -103,60 +97,6 @@ class BenchmarkSuite:
     tier: Tier
     tasks: tuple[str, ...] | None
     path: Path | None = None
-
-
-@dataclass(frozen=True)
-class AgentModelSupport:
-    """An agent/model pair intentionally supported by this benchmark."""
-
-    agent: str
-    model: str
-    aliases: tuple[str, ...] = ()
-    configuration: str = "configured"
-
-    def matches(self, agent: str, model: str) -> bool:
-        return self.agent == agent and model in (self.model, *self.aliases)
-
-
-_CODEX_MODEL_SUPPORT = AgentModelSupport(
-    _CODEX_AGENT,
-    "*",
-    configuration="native passthrough",
-)
-_CLAUDE_CODE_MODEL_SUPPORT = AgentModelSupport(
-    _CLAUDE_CODE_AGENT,
-    CLAUDE_OPUS_5_MODEL,
-)
-_OPENCODE_GLM_MODEL_SUPPORT = AgentModelSupport(
-    _OPENCODE_AGENT,
-    OPENCODE_ALIYUN_GLM_MODEL,
-    aliases=(
-        f"openai/{OPENCODE_ALIYUN_GLM_MODEL}",
-        f"dashscope/{OPENCODE_ALIYUN_GLM_MODEL}",
-    ),
-)
-_OPENCODE_QWEN_MODEL_SUPPORT = AgentModelSupport(
-    _OPENCODE_AGENT,
-    OPENCODE_ALIYUN_QWEN_MODEL,
-    aliases=(f"dashscope/{OPENCODE_ALIYUN_QWEN_MODEL}",),
-)
-_OPENCODE_CUSTOM_GLM_MODEL_SUPPORT = AgentModelSupport(
-    _OPENCODE_AGENT,
-    OPENCODE_CUSTOM_GLM_MODEL,
-)
-_OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT = AgentModelSupport(
-    _OPENCODE_AGENT,
-    OPENCODE_CUSTOM_QWEN_MODEL,
-)
-AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
-    # Codex owns its model catalog and receives the selected model unchanged.
-    _CODEX_MODEL_SUPPORT,
-    _CLAUDE_CODE_MODEL_SUPPORT,
-    _OPENCODE_GLM_MODEL_SUPPORT,
-    _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT,
-    _OPENCODE_QWEN_MODEL_SUPPORT,
-    _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT,
-)
 
 
 @dataclass(frozen=True)
@@ -287,119 +227,6 @@ def selected_profiles(selection: ProfileSelection) -> tuple[Profile, ...]:
     return (selection,)
 
 
-def available_agent_models() -> tuple[AgentModelSupport, ...]:
-    return AGENT_MODEL_SUPPORT
-
-
-def resolve_agent_model(agent: str, model: str) -> AgentModelSupport:
-    agent = agent.strip()
-    model = model.strip()
-    if not agent:
-        raise ValueError("agent must not be empty")
-    if not model:
-        raise ValueError("model must not be empty")
-    agent_support = tuple(
-        support for support in AGENT_MODEL_SUPPORT if support.agent == agent
-    )
-    if not agent_support:
-        supported = ", ".join(
-            dict.fromkeys(support.agent for support in AGENT_MODEL_SUPPORT)
-        )
-        raise ValueError(f"unsupported agent {agent!r}; supported agents: {supported}")
-
-    for support in agent_support:
-        if support.model == "*" or support.matches(agent, model):
-            return support
-
-    supported = ", ".join(support.model for support in agent_support)
-    raise ValueError(
-        f"unsupported model {model!r} for agent {agent!r}; "
-        f"supported models: {supported}"
-    )
-
-
-def _is_opencode_aliyun_glm_model(agent: str, model: str) -> bool:
-    return _OPENCODE_GLM_MODEL_SUPPORT.matches(agent, model)
-
-
-def _is_opencode_aliyun_qwen_model(agent: str, model: str) -> bool:
-    return _OPENCODE_QWEN_MODEL_SUPPORT.matches(agent, model)
-
-
-def _is_opencode_custom_glm_model(agent: str, model: str) -> bool:
-    return _OPENCODE_CUSTOM_GLM_MODEL_SUPPORT.matches(agent, model)
-
-
-def _is_opencode_custom_qwen_model(agent: str, model: str) -> bool:
-    return _OPENCODE_CUSTOM_QWEN_MODEL_SUPPORT.matches(agent, model)
-
-
-def _opencode_custom_base_url(agent: str, model: str) -> str | None:
-    if _is_opencode_custom_glm_model(agent, model):
-        return OPENCODE_CUSTOM_GLM_BASE_URL
-    if _is_opencode_custom_qwen_model(agent, model):
-        return OPENCODE_CUSTOM_QWEN_BASE_URL
-    return None
-
-
-def _opencode_dashscope_model_id(agent: str, model: str) -> str | None:
-    if _is_opencode_aliyun_glm_model(agent, model):
-        return OPENCODE_ALIYUN_GLM_MODEL_ID
-    if _is_opencode_aliyun_qwen_model(agent, model):
-        return OPENCODE_ALIYUN_QWEN_MODEL_ID
-    return None
-
-
-def _first_nonempty_env(names: Sequence[str]) -> tuple[str, str] | None:
-    for name in names:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return name, value
-    return None
-
-
-def validate_profile_credentials(
-    profiles: Sequence[Profile],
-    *,
-    agent: str,
-    model: str,
-    embedding_model: str = ZVEC_GREP_EMBEDDING,
-    embedding_endpoint: str | None = ZVEC_GREP_EMBEDDING_ENDPOINT,
-) -> None:
-    resolve_agent_model(agent, model)
-    if agent == _CLAUDE_CODE_AGENT:
-        if _first_nonempty_env(_CLAUDE_CODE_CREDENTIAL_ENV_VARS) is None:
-            accepted = ", ".join(_CLAUDE_CODE_CREDENTIAL_ENV_VARS)
-            raise ValueError(
-                "Claude Code requires Anthropic API or OAuth credentials; "
-                f"export one of: {accepted}"
-            )
-    if _opencode_dashscope_model_id(agent, model) is not None:
-        if _first_nonempty_env(_OPENCODE_ALIYUN_API_KEY_ENV_VARS) is None:
-            accepted = ", ".join(_OPENCODE_ALIYUN_API_KEY_ENV_VARS)
-            raise ValueError(
-                f"{model} requires a DashScope API key; " f"export one of: {accepted}"
-            )
-
-    if _opencode_custom_base_url(agent, model) is not None:
-        if _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY")) is None:
-            raise ValueError(
-                f"{model} requires an API key; export GLM_API_KEY or " "OPENAI_API_KEY"
-            )
-
-    if "zvec-grep" not in profiles or not embedding_model.startswith("qwen/"):
-        return
-    if embedding_endpoint is not None and not embedding_endpoint.strip():
-        raise ValueError("embedding endpoint must not be empty")
-    if _first_nonempty_env(ZVEC_GREP_API_KEY_ENV_VARS) is not None:
-        return
-    accepted = ", ".join(ZVEC_GREP_API_KEY_ENV_VARS)
-    raise ValueError(
-        "the zvec-grep profile requires a Qwen embedding API key; "
-        f"export one of: {accepted}"
-    )
-
-
 def validate_zvec_grep_package_compatibility(
     profiles: Sequence[Profile], *, agent: str, zvec_grep_package: str
 ) -> None:
@@ -447,29 +274,6 @@ def validate_job_destinations(
             f"job output already exists: {paths}; choose a new --job-name or "
             "omit it to use a timestamped name"
         )
-
-
-def execution_environment(*, agent: str, model: str) -> dict[str, str]:
-    """Return Harbor's environment without placing credentials in its command."""
-    resolve_agent_model(agent, model)
-    environment = os.environ.copy()
-    if _opencode_dashscope_model_id(agent, model) is not None:
-        credential = _first_nonempty_env(_OPENCODE_ALIYUN_API_KEY_ENV_VARS)
-        if credential is not None:
-            _, api_key = credential
-            environment["OPENAI_API_KEY"] = api_key
-        environment["OPENAI_BASE_URL"] = OPENCODE_DASHSCOPE_BASE_URL
-    custom_base_url = _opencode_custom_base_url(agent, model)
-    if custom_base_url is not None:
-        credential = _first_nonempty_env(("GLM_API_KEY", "OPENAI_API_KEY"))
-        if credential is not None:
-            _, api_key = credential
-            environment["OPENAI_API_KEY"] = api_key
-        environment["OPENAI_BASE_URL"] = custom_base_url
-        # Harbor only needs the normalized OpenAI variable. Avoid forwarding
-        # the provider-specific source variable to every subprocess as well.
-        environment.pop("GLM_API_KEY", None)
-    return environment
 
 
 def default_job_name(suite: BenchmarkSuite, profile: Profile, *, run_id: str) -> str:
@@ -790,7 +594,7 @@ def build_harbor_command(
         or max_retries < 0
     ):
         raise ValueError("max_retries must be a non-negative integer")
-    resolve_agent_model(agent, model)
+    support = resolve_agent_model(agent, model)
 
     harbor_agent = agent
     harbor_model = model
@@ -810,136 +614,9 @@ def build_harbor_command(
         harbor_agent = OPENCODE_IMPORT_PATH
         agent_kwargs.append(f"version={OPENCODE_VERSION}")
         agent_kwargs.append("collect_session_usage=true")
-        # Cover every built-in agent in pinned OpenCode, including delegated
-        # tasks and compaction/title/summary requests. The model also needs
-        # temperature capability enabled below, or 1.18.4 silently omits it.
-        # Deny web tools for primary and delegated agents. These explicit
-        # denials still hide the tools when Harbor uses --auto/skip-permissions.
-        web_permissions = {"websearch": "deny", "webfetch": "deny"}
-        # The OpenAI-compatible SDK maps reasoningEffort to reasoning_effort
-        # in the HTTP body. A snake_case config option can be overwritten.
-        glm_model_options = {
-            "enable_thinking": OPENCODE_GLM_ENABLE_THINKING,
-            "reasoningEffort": OPENCODE_GLM_REASONING_EFFORT,
-        }
-        custom_qwen = _is_opencode_custom_qwen_model(agent, model)
-        temperature = OPENCODE_QWEN_TEMPERATURE if custom_qwen else BENCHMARK_TEMPERATURE
-        agent_config = {
-            name: {
-                "temperature": temperature,
-                "options": {"seed": BENCHMARK_SEED},
-                "permission": dict(web_permissions),
-            }
-            for name in (
-                "build", "plan", "general", "explore", "compaction", "title", "summary"
-            )
-        }
-        opencode_model_id = _opencode_dashscope_model_id(agent, model)
-        if opencode_model_id is not None:
-            harbor_model = f"dashscope/{opencode_model_id}"
-            opencode_config = {
-                "provider": {
-                    "dashscope": {
-                        "npm": OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
-                        "name": "DashScope OpenAI Compatible",
-                        "models": {
-                            opencode_model_id: {
-                                "temperature": True,
-                                **(
-                                    {"limit": {"context": 0, "output": BENCHMARK_MAX_OUTPUT_TOKENS}}
-                                    if opencode_model_id == OPENCODE_ALIYUN_GLM_MODEL_ID
-                                    else {}
-                                ),
-                                "options": (
-                                    glm_model_options
-                                    if opencode_model_id == OPENCODE_ALIYUN_GLM_MODEL_ID
-                                    else {"enable_thinking": False}
-                                ),
-                            }
-                        },
-                        "options": {
-                            "apiKey": "{env:OPENAI_API_KEY}",
-                            "baseURL": OPENCODE_DASHSCOPE_BASE_URL,
-                        },
-                    }
-                },
-                "agent": agent_config,
-                "permission": dict(web_permissions),
-            }
-            if profile == "zvec-grep":
-                # ZvecGrepMixin provisions this entry during setup, but the
-                # native OpenCode adapter renders opencode.json again just
-                # before execution. Include the managed MCP entry in that
-                # render so the provider config does not overwrite it.
-                opencode_config["mcp"] = {
-                    "zvec_grep": {
-                        "type": "remote",
-                        "url": "http://127.0.0.1:7999/mcp",
-                        "enabled": True,
-                        "timeout": 600_000,
-                        "oauth": False,
-                    }
-                }
-            agent_kwargs.append(
-                "opencode_config=" + json.dumps(opencode_config, separators=(",", ":"))
-            )
-        elif _opencode_custom_base_url(agent, model) is not None:
-            harbor_model = model
-            custom_model_id = (
-                OPENCODE_CUSTOM_QWEN_MODEL_ID if custom_qwen else OPENCODE_CUSTOM_GLM_MODEL_ID
-            )
-            model_options = (
-                {
-                    "enable_thinking": OPENCODE_QWEN_ENABLE_THINKING,
-                    "reasoningEffort": OPENCODE_QWEN_REASONING_EFFORT,
-                }
-                if custom_qwen
-                else glm_model_options
-            )
-            opencode_config = {
-                "$schema": "https://opencode.ai/config.json",
-                "provider": {
-                    "custom-openai": {
-                        "npm": OPENCODE_OPENAI_COMPATIBLE_PACKAGE,
-                        "name": "Custom OpenAI Compatible",
-                        "options": {
-                            "apiKey": "{env:OPENAI_API_KEY}",
-                            "baseURL": _opencode_custom_base_url(agent, model),
-                        },
-                        "models": {
-                            custom_model_id: {
-                                "name": "Qwen 3.8 Max" if custom_qwen else "GLM 5.2",
-                                "temperature": True,
-                                # Qwen preserves thinking across tool calls by
-                                # default. Replay it as the API's assistant
-                                # reasoning_content field instead of discarding it.
-                                **(
-                                    {"interleaved": {"field": "reasoning_content"}}
-                                    if custom_qwen
-                                    else {}
-                                ),
-                                # Keep the previous unknown context limit (0);
-                                # pin only the already-used output allowance.
-                                "limit": {"context": 0, "output": BENCHMARK_MAX_OUTPUT_TOKENS},
-                                "options": model_options,
-                            }
-                        },
-                    }
-                },
-                "model": model,
-                "agent": agent_config,
-                "permission": dict(web_permissions),
-            }
-            if profile == "zvec-grep":
-                opencode_config["mcp"] = {
-                    "zvec_grep": {
-                        "type": "remote",
-                        "url": "http://127.0.0.1:7999/mcp",
-                        "enabled": True,
-                        "timeout": 600_000,
-                        "oauth": False,
-                    }
-                }
+        if support.opencode is not None:
+            harbor_model = support.opencode.harbor_model
+            opencode_config = build_opencode_config(support.opencode, profile=profile)
             agent_kwargs.append(
                 "opencode_config=" + json.dumps(opencode_config, separators=(",", ":"))
             )
@@ -1024,9 +701,7 @@ def build_harbor_command(
 
     for agent_kwarg in agent_kwargs:
         command.extend(["--agent-kwarg", agent_kwarg])
-    if _opencode_dashscope_model_id(
-        agent, model
-    ) is not None or _opencode_custom_base_url(agent, model) is not None:
+    if support.opencode is not None:
         # Harbor does not automatically forward credentials for our custom
         # provider. Normalizing the host environment alone is insufficient.
         command.extend(["--agent-env", "OPENAI_API_KEY=${OPENAI_API_KEY}"])

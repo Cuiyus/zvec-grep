@@ -121,6 +121,39 @@ CI 还会使用锁定版本的 OpenCode 连接本地模拟服务，验证连续�
 
 每个任务在同一个 runner 上运行 Baseline 和 zvec-grep，对配对结果进行评审，并将 Harbor 运行证据和独立任务报告上传为 artifacts。全部任务完成后生成聚合报告；部分任务失败时，Summary 仍展示已完成任务的报告，不将不完整结果作为完整 benchmark 聚合。不同 GitHub run attempt 的报告保持隔离，自动 trial 重试发生在同一 attempt 内。
 
+## 代码结构
+
+Python 包采用与 Retrieval-only benchmark 相同的职责划分：`core`、`engines`、`metrics` 和 `reports`。SWE-QA 的专用输入与 Harbor 集成保持独立：
+
+```text
+swe-qa-bench/
+  zg_bench/
+    cli.py                 稳定的 zg-bench 命令入口
+    runner.py              Suite/profile 执行编排与安装缓存
+    retries.py             失败 trial 的重试策略
+    core/                  公共异常、JSON 读写与报告协议
+    engines/
+      registry.py          Agent/模型支持目录与凭证路由
+      judge.py             模型请求、评分解析与评审重试
+      opencode/config.py   OpenCode 模型和 provider 配置
+    metrics/               数值检查、用量核算与对比计算
+    reports/               报告校验、聚合与 Markdown 输出
+    agents/                稳定的 Harbor 适配器导入路径与会话导出
+    swe_qa/                Suite 校验、配对结果采集与评审编排
+      cli.py               稳定的 python -m zg_bench.swe_qa 命令入口
+      data/                锁定的任务选择与隔离参考答案
+    settings.py            共用的模型请求参数
+  suites/                  Runner 的 suite 配置
+  datasets/                锁定的 Harbor 任务与环境
+  tests/                   CLI、用量、报告与 provider 契约测试
+```
+
+Suite 适配层采集并校验执行证据，judge engine 对最终答案评分，metrics 基于规范化记录计算指标，reports 校验和聚合这些记录后再渲染。指标计算不调用模型，也不依赖具体 Agent engine；Markdown 渲染不发起模型请求。Runner 负责 Harbor 执行编排，不定义报告中的统计公式。
+
+新增执行模型或 Agent 时，扩展 engine 配置/注册及对应的 provider 或 Harbor 适配器测试。新增评审模型还需在 `core/protocol.py` 声明身份、在 `engines/judge.py` 配置生成参数，并在 `swe_qa/judge.py` 选择服务端点。新增指标时，在 `metrics/` 中定义计算方式与用量检查，再更新报告校验和渲染。新增 suite 负责自身的输入校验和证据转换，不向公共指标代码添加数据集分支。两个 CLI、Harbor 适配器导入路径及锁定资源路径保持稳定。
+
+这里统一的是与 Retrieval-only 的目录职责；两个 benchmark 分别保留自己的 Python 或 JavaScript 实现和统计协议。模块迁移不改变任务选择、trial 次数、用量统计范围或 Aggregate 排除规则。
+
 ## 本地配置
 
 Harbor 使用 Docker 运行锁定的任务环境。为了得到可比较的结果，请保持主机平台、Claude Code 版本和模型服务配置一致。

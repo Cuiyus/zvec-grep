@@ -251,6 +251,56 @@ the summary still shows completed task reports without presenting a partial
 set as the full benchmark. Reports from separate GitHub run attempts are kept
 separate; automatic trial retries happen within one attempt.
 
+## Code structure
+
+The Python package follows the same responsibility boundaries as the
+Retrieval-only benchmark: `core`, `engines`, `metrics`, and `reports`.
+SWE-QA-specific inputs and Harbor integration remain explicit:
+
+```text
+swe-qa-bench/
+  zg_bench/
+    cli.py                 Stable zg-bench entrypoint
+    runner.py              Suite/profile execution and setup caches
+    retries.py             Failed-trial retry policy
+    core/                  Shared errors, JSON I/O and report protocol
+    engines/
+      registry.py          Supported agent/model catalog and credentials
+      judge.py             Model requests, score parsing and judge retries
+      opencode/config.py   OpenCode model/provider configuration
+    metrics/               Numeric checks, usage accounting and comparisons
+    reports/               Report validation, aggregation and Markdown output
+    agents/                Stable Harbor adapter import paths and session export
+    swe_qa/                Suite validation, pair collection and judge orchestration
+      cli.py               Stable python -m zg_bench.swe_qa entrypoint
+      data/                Frozen selection and isolated reference answers
+    settings.py            Shared model-request settings
+  suites/                  Runner suite configuration
+  datasets/                Frozen Harbor tasks and environments
+  tests/                   CLI, accounting, report and provider-contract tests
+```
+
+The suite adapter collects and validates execution evidence; the judge engine
+scores final answers; metric functions operate on normalized records; reports
+validate and aggregate those records before rendering. Metrics do not call a
+model or depend on an agent engine, and Markdown formatting does not perform
+model requests. The runner coordinates Harbor execution without owning report
+formulas.
+
+To add an execution model or agent, extend the engine configuration/registry
+and its provider or Harbor adapter tests. Self-judge models also declare their
+identity in `core/protocol.py`, generation settings in `engines/judge.py`, and
+endpoint selection in `swe_qa/judge.py`. To add a metric, define its calculation and
+accounting checks in `metrics/`, then update report validation and rendering.
+A new suite owns its input validation and evidence conversion rather than
+adding dataset branches to shared metrics. Keep both CLI interfaces, Harbor
+adapter import paths and frozen asset paths stable.
+
+This aligns directory responsibilities with Retrieval-only; each benchmark
+keeps its own Python or JavaScript implementation and statistical protocol.
+Moving code between modules does not change task selection, trial counts,
+usage scope or Aggregate exclusion rules.
+
 ## Local setup
 
 Harbor runs the pinned task environments in Docker. Use the same host platform,

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from harbor.agents.installed.claude_code import ClaudeCode
 
-from zg_bench import doctor, runner
+from zg_bench import doctor, runner, settings
 from zg_bench.agents.zvec_claude_code import ZvecClaudeCode
 from zg_bench.agents.zvec_grep import ZvecGrepMixin
 
@@ -721,7 +721,7 @@ class RunValidationTests(unittest.TestCase):
                         config["provider"][provider_id]["models"][model_id]
                         ["options"]["enable_thinking"],
                         (
-                            runner.OPENCODE_QWEN_ENABLE_THINKING
+                            settings.OPENCODE_QWEN_ENABLE_THINKING
                             if model_id == "qwen3.8-max"
                             else model_id == "glm-5.2"
                         ),
@@ -734,7 +734,7 @@ class RunValidationTests(unittest.TestCase):
                         # snake_case reasoning_effort field on the wire.
                         self.assertEqual(
                             model_options["reasoningEffort"],
-                            runner.OPENCODE_QWEN_REASONING_EFFORT
+                            settings.OPENCODE_QWEN_REASONING_EFFORT
                             if model_id == "qwen3.8-max"
                             else "high",
                         )
@@ -759,7 +759,7 @@ class RunValidationTests(unittest.TestCase):
                         )
                         self.assertEqual(
                             config["provider"][provider_id]["options"]["baseURL"],
-                            runner.OPENCODE_CUSTOM_QWEN_BASE_URL,
+                            settings.OPENCODE_CUSTOM_QWEN_BASE_URL,
                         )
                     self.assertEqual(
                         config["permission"],
@@ -771,7 +771,7 @@ class RunValidationTests(unittest.TestCase):
                     ):
                         self.assertEqual(
                             config["agent"][name]["temperature"],
-                            runner.OPENCODE_QWEN_TEMPERATURE
+                            settings.OPENCODE_QWEN_TEMPERATURE
                             if model_id == "qwen3.8-max"
                             else 0,
                         )
@@ -866,7 +866,7 @@ class RunValidationTests(unittest.TestCase):
                     agent="opencode", model="custom-openai/qwen3.8-max"
                 )
                 self.assertEqual(environment["OPENAI_API_KEY"], "shared-endpoint-secret")
-                self.assertEqual(environment["OPENAI_BASE_URL"], runner.OPENCODE_CUSTOM_QWEN_BASE_URL)
+                self.assertEqual(environment["OPENAI_BASE_URL"], settings.OPENCODE_CUSTOM_QWEN_BASE_URL)
                 self.assertNotIn("GLM_API_KEY", environment)
                 self.assertEqual(environment["UNRELATED"], "kept")
 
@@ -917,7 +917,7 @@ class RunValidationTests(unittest.TestCase):
             )
         self.assertEqual(environment["OPENAI_API_KEY"], "opencode-qwen-secret")
         self.assertEqual(
-            environment["OPENAI_BASE_URL"], runner.OPENCODE_DASHSCOPE_BASE_URL
+            environment["OPENAI_BASE_URL"], settings.OPENCODE_DASHSCOPE_BASE_URL
         )
 
     def test_opencode_zvec_profile_keeps_mcp_in_native_config(self) -> None:

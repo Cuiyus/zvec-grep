@@ -20,7 +20,7 @@ from harbor.cli.utils import parse_env_vars, parse_kwargs
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.config import AgentConfig
 
-from zg_bench import runner
+from zg_bench import runner, settings
 from zg_bench.agents.opencode import (
     ResilientOpenCode,
     resilient_nvm_node_install_snippet,
@@ -435,14 +435,14 @@ class OpenCodeSamplingContractTests(unittest.TestCase):
                         is_qwen = model == "custom-openai/qwen3.8-max"
                         self.assertEqual(request["model"], "qwen3.8-max" if is_qwen else "glm-5.2")
                         self.assertEqual(
-                            request.get("temperature"), runner.OPENCODE_QWEN_TEMPERATURE if is_qwen else 0
+                            request.get("temperature"), settings.OPENCODE_QWEN_TEMPERATURE if is_qwen else 0
                         )
                         self.assertEqual(request.get("seed"), 42)
                         self.assertIs(
-                            request.get("enable_thinking"), runner.OPENCODE_QWEN_ENABLE_THINKING if is_qwen else True
+                            request.get("enable_thinking"), settings.OPENCODE_QWEN_ENABLE_THINKING if is_qwen else True
                         )
                         self.assertEqual(
-                            request.get("reasoning_effort"), runner.OPENCODE_QWEN_REASONING_EFFORT if is_qwen else "high"
+                            request.get("reasoning_effort"), settings.OPENCODE_QWEN_REASONING_EFFORT if is_qwen else "high"
                         )
                         self.assertEqual(request.get("max_tokens"), 32000)
                         self.assertNotIn("response_format", request)
