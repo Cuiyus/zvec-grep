@@ -336,7 +336,7 @@ test("Semble comparison retains both zg preview arms and publishes one shared me
   assert.match(markdown, /\| Semble MCP full chunk \|/);
   assert.match(
     markdown,
-    /File Hit@1.*File MRR@10.*Semble nDCG@10.*Output KiB.*Latency P50/,
+    /File Hit@1.*File MRR@10.*nDCG@10.*Output KiB.*Latency P50/,
   );
   assert.doesNotMatch(
     markdown,
@@ -943,7 +943,7 @@ test("file localization receives credit from the public path without requiring a
               start_line: 1,
               end_line: 1,
               score: 1,
-              content: "# 无关可见前缀 🧪",
+              content: "# unrelated visible prefix 🧪",
             },
           ],
         }),

@@ -1,6 +1,6 @@
 # Retrieval-only: ZG with an optional Semble baseline
 
-The suite uses the **20 unchanged SWE-QA questions and 11 pinned repositories** selected in [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). It calls public MCP search directly; no answering agent, query rewriting, subquery or LLM judge runs during retrieval.
+The suite uses the **20 unchanged SWE-QA questions and 11 pinned repositories** selected in [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). It calls public MCP search directly; no answering agent, query rewriting, subquery or LLM judge runs during retrieval. See the [test design](../../docs/zg-retrieval-only-sweqa20-design.md) for protocol and scoring details.
 
 ## Run CI and read the result
 
@@ -13,7 +13,7 @@ In GitHub Actions, select **Retrieval-only → Run workflow**:
 | `run_semble` | `false` | ZG always runs; enable this to add Semble in the same run |
 | `modes` | `hybrid` | ZG hybrid, or `hybrid,fts,vector`; each mode includes short and full previews |
 
-The **Retrieval results** job publishes the single overview table. Repository shards and the optional Semble job upload evidence without publishing competing summary tables. Each row is a mode/preview arm; optional Semble appears as **未启用** with dashes when disabled. A missing or invalid report is a failure, never a zero score.
+The **Retrieval results** job publishes the single overview table. Repository shards and the optional Semble job upload evidence without publishing competing summary tables. Each row is a mode/preview arm; optional Semble appears as **Disabled** with dashes when disabled. A missing or invalid report is a failure, never a zero score.
 
 The table contains exactly five quality metrics plus two operational measurements:
 
@@ -23,7 +23,7 @@ The table contains exactly five quality metrics plus two operational measurement
 | File Hit@5 | Fraction with a labeled file within native Top 5 |
 | File Hit@10 | Fraction with a labeled file within native Top 10 |
 | File MRR@10 | Mean of `1 / first matching native rank`; Top-10 misses are zero, all 20 questions have equal weight |
-| Semble nDCG@10 | Pinned upstream binary-gain algorithm; repository macro average across 11 repositories |
+| nDCG@10 | Pinned upstream binary-gain algorithm; repository macro average across 11 repositories |
 | Mean output (KiB) | Mean public MCP text UTF-8 bytes / 1024, using successful fifth calls only; not model tokens |
 | Latency P50 (ms) | Median of all successful MCP search calls, including the five repetitions; excludes indexing and SDK parity calls |
 
@@ -44,15 +44,17 @@ GitHub normally registers a manually triggered workflow from the default branch.
 - Each fifth-round Semble result must match an independent `index.search()` call on the same persisted index, including rank, path, range, score and full content. These 20 SDK parity calls do not supply quality or latency observations.
 - Fixed short-before-full order, different runtimes and CI runners mean observed timings are not a controlled speed comparison. Five repeats do not support tail-latency claims.
 
-Frozen inputs are `data/source.lock.json`, `data/queries.jsonl`, `configs/protocol.json`, and `gold/semble-file-v1.json`. The 39 file targets are unique accepted paths projected from AI-reviewed source annotations. They remain partial positives, not independent human ground truth or complete answer evidence. The [metric review](../../docs/zg-retrieval-metric-review.zh-CN.md) explains why declaration anchors were retired.
+Frozen inputs are `data/source.lock.json`, `data/queries.jsonl`, `configs/protocol.json`, and `gold/semble-file-v1.json`. The 39 file targets are unique accepted paths projected from AI-reviewed source annotations. They remain partial positives, not independent human ground truth or complete answer evidence. The [metric review](../../docs/zg-retrieval-metric-review.md) explains why declaration anchors were retired.
 
 ## Scoring and report contracts
 
-File Hit/RR/MRR use contract `sweqa-file-hit-rr-v1`. They share exactly the same frozen file targets and upstream normalized-path matching as Semble nDCG. Native ranks are preserved; repeated file chunks are never collapsed or renumbered. Source declarations, outlines and preview length cannot alter these quality scores.
+File Hit/RR/MRR use contract `sweqa-file-hit-rr-v1`. They share exactly the same frozen file targets and upstream normalized-path matching as nDCG@10. Native ranks are preserved; repeated file chunks are never collapsed or renumbered. Source declarations, outlines and preview length cannot alter these quality scores.
 
 `semble-metrics.mjs` preserves upstream first-target rank, binary gain and target-count IDCG. The byte-identical Python oracle and MIT attribution remain in `test/fixtures/semble-upstream/`; tests compare the JavaScript implementation against those original functions. The dataset is SWE-QA, not Semble's own benchmark dataset.
 
 ZG reports use schema **3**; Semble reports use schema **2**. New reports contain `file_retrieval`, `semble_official` (nDCG@10 only) and `measurements`. Each quality row preserves five `measurement_observations` to make measurement aggregation inspectable. Old top-level anchor scores and `summary` fields are removed. The same-engine comparator can read historical ZG schemas 1/2 by recomputing supported metrics from public items; old reports without complete measurement evidence show unavailable measurements. Raw response and index audits remain the aggregator's responsibility.
+
+The combined CI `summary.json` uses schema **2** and names the quality metric `ndcg_at_10`. The report label is **nDCG@10** throughout; this naming change does not alter scoring or aggregation.
 
 ## CI structure
 

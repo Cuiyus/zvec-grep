@@ -14,7 +14,7 @@ export const QUALITY_METRICS = Object.freeze([
   "file_hit_at_5",
   "file_hit_at_10",
   "file_mrr_at_10",
-  "semble_ndcg_at_10",
+  "ndcg_at_10",
 ]);
 
 function resultRow(label, rows, report) {
@@ -30,7 +30,7 @@ function resultRow(label, rows, report) {
       file_hit_at_5: file.hit_at_5,
       file_hit_at_10: file.hit_at_10,
       file_mrr_at_10: file.mrr_at_10,
-      semble_ndcg_at_10: official.repository_macro.ndcg_at_10,
+      ndcg_at_10: official.repository_macro.ndcg_at_10,
     },
     measurements: summarizeMeasurements(
       rows.flatMap((row) => row.measurement_observations),
@@ -188,7 +188,7 @@ export async function buildCiSummary({
         errors.push(`${job}: ${jobResults[job]?.result ?? "missing job"}`);
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     status: errors.length ? "failed" : "success",
     quality_metrics: QUALITY_METRICS,
     semble_requested: sembleRequested,
@@ -207,21 +207,21 @@ const number = (value, places = 4) =>
 
 export function markdownCiSummary(result) {
   const status =
-    result.status === "success" ? "✅ 完成" : "❌ 失败 / 结果不完整";
+    result.status === "success" ? "✅ Complete" : "❌ Failed / incomplete";
   const lines = [
-    "# Retrieval-only 测试结果",
+    "# Retrieval-only results",
     "",
-    `**${status}** · 20 道原始问题 · 11 个固定仓库版本 · ${result.semble_requested ? "ZG + Semble" : "仅 ZG"}`,
+    `**${status}** · 20 original questions · 11 pinned repositories · ${result.semble_requested ? "ZG + Semble" : "ZG only"}`,
     "",
-    "| 测试组 | 状态 | 文件 Hit@1 | 文件 Hit@5 | 文件 Hit@10 | 文件 MRR@10 | Semble nDCG@10 | 平均输出 (KiB) | 延迟 P50 (ms) |",
+    "| Arm | Status | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
   for (const row of result.rows) {
     const state = {
-      success: "✅ 有效",
-      product_error: "⚠️ 调用失败计零",
-      invalid: "❌ 无有效报告",
-      not_requested: "未启用",
+      success: "✅ Valid",
+      product_error: "⚠️ Failed calls score zero",
+      invalid: "❌ No valid report",
+      not_requested: "Disabled",
     }[row.status];
     const hits = [1, 5, 10].map((cutoff) => {
       const value = row.metrics?.[`file_hit_at_${cutoff}`];
@@ -230,41 +230,42 @@ export function markdownCiSummary(result) {
         : "—";
     });
     lines.push(
-      `| ${cell(row.label)} | ${state} | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.semble_ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
+      `| ${cell(row.label)} | ${state} | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
     );
   }
   lines.push(
     "",
-    "质量取每题第 5 次调用：Hit/MRR 按 20 题等权，Semble nDCG@10 按仓库宏平均。两者使用同一份已标注相关文件；命中文件不代表回答证据充分。",
+    "Quality uses the fifth call per question: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
     "",
-    "输出为正式计分轮次成功响应的 UTF-8 字节均值（1 KiB = 1024 字节，不是模型 token）；延迟为全部成功 MCP 搜索调用的 P50，不含建索引。失败调用不进入测量样本；机器、索引和调用顺序不同，延迟仅作本次运行观测。",
+    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of all successful MCP search calls, excluding indexing and SDK replay. Failed calls are excluded from these measurements. Different machines, indexes and call order make latency an observation of this run, not a controlled speed comparison.",
     "",
     ...result.rows
       .filter((row) => row.measurements)
       .map(
         (row) =>
-          `- ${cell(row.label)}：输出 ${row.measurements.output_sample_count} 个样本；延迟 ${row.measurements.latency_sample_count} 个样本。`,
+          `- ${cell(row.label)}: ${row.measurements.output_sample_count} output samples; ${row.measurements.latency_sample_count} latency samples.`,
       ),
   );
   if (!result.semble_requested)
     lines.push(
       "",
-      "Semble 未运行；手动触发时勾选 `run_semble` 可加入对照。未启用或缺失结果用 — 表示，不记为零分。",
+      "Semble was not run. Enable `run_semble` when dispatching the workflow to include it. Disabled or missing results appear as —, not zero scores.",
     );
   if (result.errors.length)
     lines.push(
       "",
-      "## 需要处理",
+      "## Required action",
       "",
       ...result.errors.map((error) => `- ${cell(error)}`),
     );
-  if (result.commit) lines.push("", `测试提交：\`${cell(result.commit)}\`。`);
+  if (result.commit)
+    lines.push("", `Tested commit: \`${cell(result.commit)}\`.`);
   lines.push(
     "",
-    "详细结果：下载本次运行的 `retrieval-results` artifact（summary.json；ZG 与 Semble 均通过校验时另含 comparison.json）；逐题原始记录见已运行测试组的 evidence artifacts。",
+    "Details: download the `retrieval-results` artifact for summary.json and, when both ZG and Semble validate, comparison.json. Per-question raw records are available in the evidence artifacts for each executed arm.",
   );
   if (result.run_url)
-    lines.push("", `[打开本次运行及 artifacts](${result.run_url})`);
+    lines.push("", `[Open this run and its artifacts](${result.run_url})`);
   return `${lines.join("\n")}\n`;
 }
 

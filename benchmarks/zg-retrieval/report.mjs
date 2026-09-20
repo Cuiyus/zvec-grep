@@ -96,7 +96,7 @@ export function summarizeSembleOfficial(rows) {
 export function markdownSembleOfficialTable(modes) {
   return [
     "",
-    "| Mode | Semble nDCG@10 (repository macro) |",
+    "| Mode | nDCG@10 (repository macro) |",
     "| --- | --- |",
     ...Object.entries(modes).map(
       ([mode, entry]) =>
@@ -661,7 +661,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5 separately for each preview; file Hit@1/5/10 and MRR@10 weight original questions equally; Semble nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
+      "quality repetition 5 separately for each preview; file Hit@1/5/10 and MRR@10 weight original questions equally; nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
     modes: previewReports[suite.protocol.primary_preview].modes,
     previews: previewReports,
     paired_preview_comparison: summarizePreviewPairs(observations, {
@@ -700,7 +700,7 @@ export function markdownReport(report) {
     "",
     `Status: **${report.integrity_passed ? "PASS" : "FAIL"}**. Dataset: **${queryCount} original questions / ${repoCount} repositories**. Quality: **fifth call per question and preview**. Five repetitions are stability observations, not additional questions.`,
     "",
-    "| Mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Semble nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
+    "| Mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...previewModes.map(([label, entry]) => {
       const file = entry.file_retrieval,
@@ -710,7 +710,7 @@ export function markdownReport(report) {
         : `| ${label} | N/A — invalid experiment | N/A | N/A | N/A | N/A | N/A | N/A |`;
     }),
     "",
-    "File Hit@1/5/10 and MRR@10 give every original question equal weight, including misses and product-error zeros. Semble nDCG@10 first averages questions within each repository, then weights repositories equally. All five metrics use the same frozen accepted-file targets and native result ranks; repeated chunks consume ranks without file deduplication. Finding a file does not establish sufficient answer evidence. These are SWE-QA accepted-file projection scores, not scores on Semble's original dataset.",
+    "File Hit@1/5/10 and MRR@10 give every original question equal weight, including misses and product-error zeros. nDCG@10 first averages questions within each repository, then weights repositories equally. All five metrics use the same frozen accepted-file targets and native result ranks; repeated chunks consume ranks without file deduplication. Finding a file does not establish sufficient answer evidence. These are SWE-QA accepted-file projection scores, not scores on Semble's original dataset.",
     "",
     "Short and full use the same frozen index, session, query and Top-10 limit. Full returns all available content of each retrieved unit, not the entire file. Preview text and output length do not affect these five metrics. Quality thresholds are report-only.",
   ];
@@ -731,7 +731,7 @@ export function markdownReport(report) {
     "<details>",
     "<summary>Per-question results and captured responses</summary>",
     "",
-    "| Question / mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File RR@10 | Semble nDCG@10 | Status | Response |",
+    "| Question / mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File RR@10 | nDCG@10 | Status | Response |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.tasks.map(
       (row) =>

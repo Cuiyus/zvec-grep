@@ -541,7 +541,7 @@ export function compareReports(baseline, candidate) {
       "Task IDs and modes match as sets; tables follow baseline task order and hybrid/fts/vector mode order.",
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "Five metrics recomputed from matched repetition-5 public items on the SWE-QA accepted-file projection: file Hit@1/5/10 and MRR@10 use query means; Semble nDCG@10 uses the repository macro.",
+      "Five metrics recomputed from matched repetition-5 public items on the SWE-QA accepted-file projection: file Hit@1/5/10 and MRR@10 use query means; nDCG@10 uses the repository macro.",
     baseline: reportIdentity(baseline),
     candidate: reportIdentity(candidate),
     warnings: [baseline, candidate].flatMap((report, i) =>
@@ -603,7 +603,7 @@ export function markdownComparison(result) {
     "",
     "Source, Gold, frozen accepted-file targets and protocol identities match; task/mode coverage and scoring eligibility are validated. All five metrics are recomputed from saved public result items. This is a report-only comparison with no quality threshold or causal attribution.",
     "",
-    "| Mode / preview / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Semble nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
+    "| Mode / preview / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...variants.flatMap(([preview, report]) =>
       Object.entries(report.modes).flatMap(([mode, entry]) =>
@@ -614,7 +614,7 @@ export function markdownComparison(result) {
       ),
     ),
     "",
-    "File Hit@1/5/10 and MRR@10 weight original questions equally. Semble nDCG@10 first averages questions within each repository, then weights repositories equally. Native ranks are preserved without deduplication. These SWE-QA accepted-file projection scores measure file localization, not sufficient answer evidence; five repetitions are not independent questions.",
+    "File Hit@1/5/10 and MRR@10 weight original questions equally. nDCG@10 first averages questions within each repository, then weights repositories equally. Native ranks are preserved without deduplication. These SWE-QA accepted-file projection scores measure file localization, not sufficient answer evidence; five repetitions are not independent questions.",
   ];
   const warnings = [
     ...new Set(variants.flatMap(([, report]) => report.warnings)),
@@ -631,7 +631,7 @@ export function markdownComparison(result) {
     "<details>",
     "<summary>Per-question changes</summary>",
     "",
-    "| Question / mode / preview | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔSemble nDCG@10 | Execution |",
+    "| Question / mode / preview | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...variants.flatMap(([preview, report]) =>
       report.tasks.map(

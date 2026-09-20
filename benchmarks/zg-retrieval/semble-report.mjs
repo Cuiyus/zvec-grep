@@ -763,7 +763,7 @@ export async function aggregateSemble(
     product_error_calls: productErrors,
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "repetition 5 only; file Hit/MRR average all original questions equally; Semble nDCG@10 averages questions within each repository, then repositories equally; query/language means are retained in JSON",
+      "repetition 5 only; file Hit/MRR average all original questions equally; nDCG@10 averages questions within each repository, then repositories equally; query/language means are retained in JSON",
     modes: {
       hybrid: {
         file_retrieval: complete ? summarizeFileRetrieval(quality) : null,
@@ -1179,7 +1179,7 @@ export async function compareSembleToZg(
     },
     warnings: [
       "Same original queries, repository commits, frozen accepted-file targets and five quality metrics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
-      "Semble nDCG@10 uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Finding a target file does not establish sufficient answer evidence.",
+      "nDCG@10 uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Finding a target file does not establish sufficient answer evidence.",
       ...[baseline, candidate].flatMap((report, i) =>
         report.product_error_calls
           ? [
@@ -1192,7 +1192,7 @@ export async function compareSembleToZg(
 }
 
 const QUALITY_HEADER =
-  "| Arm | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Semble nDCG@10 | Output KiB (mean) | Latency P50 ms |";
+  "| Arm | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output KiB (mean) | Latency P50 ms |";
 const QUALITY_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- |";
 const qualityRow = (label, file, official, measurements) =>
   `| ${cell(label)} | ${number(file?.hit_at_1)} | ${number(file?.hit_at_5)} | ${number(file?.hit_at_10)} | ${number(file?.mrr_at_10)} | ${number(official?.repository_macro.ndcg_at_10)} | ${number(measurements?.output_bytes_mean == null ? null : measurements.output_bytes_mean / 1024)} | ${number(measurements?.latency_ms_p50)} |`;
@@ -1237,7 +1237,7 @@ export function markdownSembleReport(report) {
           ),
         ]),
     "",
-    "Averaging: quality uses repetition 5. File Hit/MRR average all original questions equally; Semble nDCG@10 first averages questions within each repository, then averages repositories equally. Misses and product errors contribute zero. Invalid experiments have no aggregate. Five repeats do not add independent questions.",
+    "Averaging: quality uses repetition 5. File Hit/MRR average all original questions equally; nDCG@10 first averages questions within each repository, then averages repositories equally. Misses and product errors contribute zero. Invalid experiments have no aggregate. Five repeats do not add independent questions.",
     "",
     "Measurements: output is mean UTF-8 public MCP text size on successful fifth calls (1 KiB = 1024 bytes); latency is P50 across all successful search calls. Errors are excluded from measurement samples; timing includes engine-specific loading and is not a controlled speed comparison.",
     ...(variants
@@ -1256,7 +1256,7 @@ export function markdownSembleReport(report) {
     "<details>",
     "<summary>Per-question evidence and run integrity</summary>",
     "",
-    "| Task | Status | File first rank | File RR@10 | Semble nDCG@10 | Target ranks | Public response |",
+    "| Task | Status | File first rank | File RR@10 | nDCG@10 | Target ranks | Public response |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     ...report.tasks.map(
       (row) =>

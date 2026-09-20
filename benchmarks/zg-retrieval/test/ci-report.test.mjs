@@ -244,7 +244,7 @@ test("requested missing Semble fails clearly instead of fabricating zero scores"
   assert.equal(result.comparison, null);
   assert.match(
     markdownCiSummary(result),
-    /Semble MCP \| ❌ 无有效报告 \| — \| — \| — \| — \| — \| — \| —/,
+    /Semble MCP \| ❌ No valid report \| — \| — \| — \| — \| — \| — \| —/,
   );
 });
 
@@ -287,7 +287,7 @@ test("cached ZG aggregates never override public items or per-call measurement e
     original.modes.hybrid.file_retrieval.mrr_at_10,
   );
   assert.equal(
-    result.rows[0].metrics.semble_ndcg_at_10,
+    result.rows[0].metrics.ndcg_at_10,
     original.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
   );
   assert.equal(result.rows[0].measurements.latency_ms_p50, 12.34567);
@@ -445,18 +445,19 @@ test("Markdown has five quality columns, two operational columns, exact display 
     commit: "a".repeat(40),
   });
   const text = markdownCiSummary(result);
+  assert.equal(result.schema_version, 2);
   assert.deepEqual(result.quality_metrics, [
     "file_hit_at_1",
     "file_hit_at_5",
     "file_hit_at_10",
     "file_mrr_at_10",
-    "semble_ndcg_at_10",
+    "ndcg_at_10",
   ]);
   assert.match(
     text,
-    /\| 文件 Hit@1 \| 文件 Hit@5 \| 文件 Hit@10 \| 文件 MRR@10 \| Semble nDCG@10 \| 平均输出 \(KiB\) \| 延迟 P50 \(ms\) \|/,
+    /\| File Hit@1 \| File Hit@5 \| File Hit@10 \| File MRR@10 \| nDCG@10 \| Mean output \(KiB\) \| Latency P50 \(ms\) \|/,
   );
-  const official = result.rows[0].metrics.semble_ndcg_at_10.toFixed(4);
+  const official = result.rows[0].metrics.ndcg_at_10.toFixed(4);
   assert.ok(
     text.includes(
       `| 0.0% (0/20) | 100.0% (20/20) | 100.0% (20/20) | 0.3333 | ${official} | 1.00 | 12.35 |`,
@@ -464,15 +465,15 @@ test("Markdown has five quality columns, two operational columns, exact display 
   );
   assert.match(text, /\| ZG hybrid \/ full .* \| 3\.50 \| 12\.35 \|/);
   assert.match(text, /\| Semble MCP .* \| 10\.00 \| 12\.35 \|/);
-  assert.match(text, /质量取每题第 5 次调用/);
-  assert.match(text, /Hit\/MRR 按 20 题等权/);
-  assert.match(text, /nDCG@10 按仓库宏平均/);
-  assert.match(text, /1 KiB = 1024 字节/);
-  assert.match(text, /输出 20 个样本；延迟 100 个样本/);
-  assert.match(text, /不含建索引/);
-  assert.doesNotMatch(text, /nDCG@5|anchor|锚点|Legacy|by.category/i);
+  assert.match(text, /Quality uses the fifth call per question/);
+  assert.match(text, /Hit\/MRR weight all 20 questions equally/);
+  assert.match(text, /nDCG@10 uses a repository macro average/);
+  assert.match(text, /1 KiB = 1024 bytes/);
+  assert.match(text, /20 output samples; 100 latency samples/);
+  assert.match(text, /excluding indexing and SDK replay/);
+  assert.doesNotMatch(text, /nDCG@5|anchor|Legacy|by.category/i);
   assert.equal(
-    text.split("\n").filter((line) => line.startsWith("| 测试组 |")).length,
+    text.split("\n").filter((line) => line.startsWith("| Arm |")).length,
     1,
   );
   assert.equal(result.rows[0].measurements.latency_ms_p50, 12.34567);
