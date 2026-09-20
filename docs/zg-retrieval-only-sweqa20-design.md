@@ -40,7 +40,7 @@ The protocol fixes the same model, corpus policy and index across modes. Shared 
 | Mean output (KiB) | Mean UTF-8 bytes of successful fifth-call response text divided by 1024; normally 20 samples per mode |
 | Latency P50 (ms) | Median duration of all successful MCP search calls; normally 100 samples per mode; excludes indexing |
 
-All five quality metrics share [39 frozen relevant-file targets](../benchmarks/zg-retrieval/gold/semble-file-v1.json), deduplicated from accepted annotation paths. Bridge-only paths earn no credit. Matching normalizes separators and accepts exact paths or directory-boundary suffixes without case folding. Preserve native ranks: repeated file chunks consume positions and are not collapsed or renumbered. Source preview length and visible declarations do not affect relevance.
+All five quality metrics share [39 frozen relevant-file targets](../benchmarks/zg-retrieval/gold/files-v1.json), deduplicated from accepted annotation paths. Bridge-only paths earn no credit. Matching normalizes separators and accepts exact paths or directory-boundary suffixes without case folding. Preserve native ranks: repeated file chunks consume positions and are not collapsed or renumbered. Source preview length and visible declarations do not affect relevance.
 
 For each question q, a target contributes only at its first matching native rank. Let g_i be 1 when at least one target first appears at rank i, otherwise 0, and T_q be the labeled target set:
 
@@ -50,7 +50,7 @@ IDCG@10(q) = sum(1 / log2(i + 1), i = 1..min(10, |T_q|))
 nDCG@10(q) = DCG@10(q) / IDCG@10(q)
 ```
 
-Unretrieved targets remain in the ideal-gain denominator; later chunks from an already matched file add no gain. Hit/MRR weight questions equally, while nDCG weights repositories equally after their within-repository means. The JavaScript nDCG implementation is checked against byte-identical pinned upstream Python functions and their license attribution; no external retrieval baseline runs.
+Unretrieved targets remain in the ideal-gain denominator; later chunks from an already matched file add no gain. Hit/MRR weight questions equally, while nDCG weights repositories equally after their within-repository means. The JavaScript nDCG implementation is checked against byte-identical pinned Python functions in [`test/fixtures/ndcg-reference/`](../benchmarks/zg-retrieval/test/fixtures/ndcg-reference/), with their MIT license attribution preserved. This reference runs only in unit tests.
 
 ## Integrity and labels
 
@@ -66,6 +66,6 @@ Labels came from AI-assisted source review and remain partial positives, without
 - `retrieval-zg-report`: `report.json`, `report.md` and per-call `scores.jsonl`.
 - `retrieval-data-<owner>__<repo>`: raw requests/responses, installation evidence and index inventories.
 
-The overview uses schema 3 and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows. ZG reports use schema 4 with `preview: full`, three mode aggregates and 60 quality rows for a complete suite. `file_retrieval` contains file metrics, the historical `semble_official` field contains nDCG and its target evidence, and `measurements` contains output/latency and sample counts. Each quality row retains all five measurement observations for recomputation.
+The overview uses schema 3 and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows. ZG reports use schema 5 with `preview: full`, three mode aggregates and 60 quality rows for a complete suite. `file_retrieval` contains Hit/MRR, `ndcg` contains nDCG and its target evidence, and `measurements` contains output size, latency and sample counts. Each quality row retains all five measurement observations for recomputation.
 
-This protocol replaces the earlier short/full and optional-baseline experiment. Its identity changes, while questions, relevant files and scoring formulas remain unchanged. Compare only schema 4 reports with matching protocol and frozen inputs; historical raw captures require their matching scorer checkout. Saved-evidence replay must not be presented as a new product run.
+The protocol ID is `sweqa20-zg-three-modes-full-v5`. Compare only schema 5 reports with matching protocol and frozen inputs. Reports from other protocol versions require their matching scorer checkout; saved-evidence replay must not be presented as a new product run.

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 
-// Adapted from Semble, Copyright (c) 2026 Thomas van Dongen, MIT licensed.
-// The upstream copyright/license and byte-identical oracle are in
-// test/fixtures/semble-upstream/.
+// Adapted from the reference implementation, Copyright (c) 2026 Thomas van Dongen, MIT licensed.
+// Source attribution, license and byte-identical oracle are in
+// test/fixtures/ndcg-reference/.
 
-export const SEMBLE_METRIC_SOURCE = Object.freeze({
-  repository: "https://github.com/MinishLab/semble",
+export const NDCG_SOURCE = Object.freeze({
   commit: "0051e000fcaac69a9c5d081ebbc8d4cb8508160b",
   files: ["benchmarks/data.py", "benchmarks/metrics.py"],
 });
@@ -32,12 +31,12 @@ export function targetMatchesLocation(filePath, startLine, endLine, target) {
 }
 
 function validateItems(items) {
-  assert.ok(Array.isArray(items), "Semble metric requires native ranked items");
+  assert.ok(Array.isArray(items), "nDCG requires native ranked items");
   for (const [index, item] of items.entries()) {
     assert.equal(
       item.rank,
       index + 1,
-      "Semble metric requires consecutive native ranks without compaction",
+      "nDCG requires consecutive native ranks without compaction",
     );
     assert.equal(typeof item.path, "string", "result path must be a string");
     if (item.range?.kind === "text") {
@@ -109,9 +108,9 @@ export function ndcgAtK(relevantRanks, nRelevant, k) {
  * Input item order/ranks are native: repeated files are never compacted away.
  * Source text, outline, snippets and retrieval scores are deliberately not read.
  */
-export function scoreSembleMetric(items, targets) {
+export function scoreNdcg(items, targets) {
   validateItems(items);
-  assert.ok(Array.isArray(targets), "Semble metric requires a target array");
+  assert.ok(Array.isArray(targets), "nDCG requires a target array");
   targets.forEach(validateTarget);
   const targetRanks = targets.map((target) => firstTargetRank(items, target));
   const relevantRanks = targetRanks.filter((rank) => rank !== null);
@@ -124,12 +123,12 @@ export function scoreSembleMetric(items, targets) {
 }
 
 /**
- * SWE-QA-specific file-only label projection, NOT Semble's official annotations.
+ * SWE-QA-specific file-only label projection from reviewed accepted paths.
  * One target per exact accepted path, in first occurrence order. Bridge labels
  * do not participate. Source anchors are not converted into optional spans:
  * an anchor identifies visible evidence, not the whole relevant source region.
  */
-export function projectSembleTargets(gold) {
+export function projectFileTargets(gold) {
   assert.ok(Array.isArray(gold?.targets), "Gold targets must be an array");
   const paths = new Set();
   for (const target of gold.targets) {

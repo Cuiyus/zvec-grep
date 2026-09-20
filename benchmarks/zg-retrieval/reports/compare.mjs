@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { scoreNdcg } from "../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
   summarizeFileRetrieval,
 } from "../metrics/files.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
-import { summarizeSembleOfficial } from "../metrics/summary.mjs";
+import { summarizeNdcg } from "../metrics/summary.mjs";
 import { validateZgReport, ZG_MODES } from "./validation.mjs";
 
 const MODES = ZG_MODES;
@@ -20,7 +20,7 @@ const difference = (before, after) => (before === null ? null : after - before);
 const key = (row) => JSON.stringify([row.task_id, row.mode]);
 
 function scoreView(row) {
-  const targets = row.semble_official.targets;
+  const targets = row.ndcg.targets;
   const file = fileRetrievalForRow(row);
   return {
     ...Object.fromEntries(
@@ -35,10 +35,7 @@ function scoreView(row) {
       ].map((field) => [field, row[field]]),
     ),
     file_retrieval: file,
-    semble_official:
-      file === null
-        ? null
-        : { targets, ...scoreSembleMetric(row.items, targets) },
+    ndcg: file === null ? null : { targets, ...scoreNdcg(row.items, targets) },
   };
 }
 
@@ -57,11 +54,9 @@ function filePair(pairs) {
   };
 }
 
-function officialPair(pairs) {
-  const baseline = summarizeSembleOfficial(pairs.map((pair) => pair.baseline));
-  const candidate = summarizeSembleOfficial(
-    pairs.map((pair) => pair.candidate),
-  );
+function ndcgPair(pairs) {
+  const baseline = summarizeNdcg(pairs.map((pair) => pair.baseline));
+  const candidate = summarizeNdcg(pairs.map((pair) => pair.candidate));
   return {
     baseline,
     candidate,
@@ -112,7 +107,7 @@ function compareValidatedReports(baseline, candidate, before, after) {
     candidate.preview,
     "incompatible preview arms",
   );
-  for (const field of ["source", "gold", "semble_gold", "protocol"])
+  for (const field of ["source", "gold", "file_gold", "protocol"])
     assert.equal(
       baseline.suite[field],
       candidate.suite[field],
@@ -134,9 +129,9 @@ function compareValidatedReports(baseline, candidate, before, after) {
           `${task_id}/${mode}: incompatible ${field}`,
         );
       assert.deepEqual(
-        oldRow.semble_official.targets,
-        newRow.semble_official.targets,
-        `${task_id}/${mode}: incompatible Semble target projection`,
+        oldRow.ndcg.targets,
+        newRow.ndcg.targets,
+        `${task_id}/${mode}: incompatible file-target projection`,
       );
       const oldFile = fileRetrievalForRow(oldRow);
       const newFile = fileRetrievalForRow(newRow);
@@ -159,12 +154,10 @@ function compareValidatedReports(baseline, candidate, before, after) {
         baseline: scoreView(oldRow),
         candidate: scoreView(newRow),
         file_retrieval_delta: fileDelta,
-        semble_official_delta: Object.fromEntries(
+        ndcg_delta: Object.fromEntries(
           ["ndcg_at_10"].map((metric) => [
             metric,
-            oldFile === null
-              ? null
-              : newRow.semble_official[metric] - oldRow.semble_official[metric],
+            oldFile === null ? null : newRow.ndcg[metric] - oldRow.ndcg[metric],
           ]),
         ),
         rank_change:
@@ -180,7 +173,7 @@ function compareValidatedReports(baseline, candidate, before, after) {
       });
     }
   return {
-    schema_version: 2,
+    schema_version: 3,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "full",
     quality_repetition: 5,
@@ -222,7 +215,7 @@ function compareValidatedReports(baseline, candidate, before, after) {
               ),
             },
             file_retrieval: filePair(rows),
-            semble_official: officialPair(rows),
+            ndcg: ndcgPair(rows),
           },
         ];
       }),
@@ -256,7 +249,7 @@ export function markdownComparison(result) {
       ["baseline", "candidate"].map((side) => {
         const entry = result.modes[mode],
           file = entry.file_retrieval[side];
-        return `| zg-${mode} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.semble_official[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
+        return `| zg-${mode} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.ndcg[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
       }),
     ),
     "",
@@ -279,7 +272,7 @@ export function markdownComparison(result) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...result.tasks.map(
       (row) =>
-        `| ${cell(row.task_id)} / zg-${cell(row.mode)} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.semble_official_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
+        `| ${cell(row.task_id)} / zg-${cell(row.mode)} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.ndcg_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
     ),
     "",
     "</details>",

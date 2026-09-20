@@ -17,14 +17,14 @@ import {
 } from "../metrics/files.mjs";
 import { loadSuite } from "../core/lib.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
-import { summarizeSembleOfficial } from "../metrics/summary.mjs";
-import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { summarizeNdcg } from "../metrics/summary.mjs";
+import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { validateZgReport, ZG_MODES } from "../reports/validation.mjs";
 
 const suite = await loadSuite();
 const clone = (value) => structuredClone(value);
 function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
-  const targets = suite.semble_gold[task.task_id].targets;
+  const targets = suite.file_gold[task.task_id].targets;
   const items = failed
     ? []
     : Array.from({ length: 10 }, (_, index) => ({
@@ -44,14 +44,14 @@ function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
     quality_observation: true,
     repository: task.repository,
     category: task.category,
-    language: suite.semble_gold[task.task_id].language,
+    language: suite.file_gold[task.task_id].language,
     gold_status: suite.gold[task.task_id].status,
     status: failed ? "product_error" : "scored",
     execution_status: failed ? "product_error" : "success",
     latency_ms: failed ? null : 12.34567,
     visible_output_bytes: failed ? null : 3584,
     items,
-    semble_official: { targets, ...scoreSembleMetric(items, targets) },
+    ndcg: { targets, ...scoreNdcg(items, targets) },
   };
   row.file_retrieval = fileRetrievalForRow(row);
   row.measurement_observations = Array.from({ length: 5 }, (_, index) => ({
@@ -66,7 +66,7 @@ function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
 function modeReport(rows) {
   return {
     file_retrieval: summarizeFileRetrieval(rows),
-    semble_official: summarizeSembleOfficial(rows),
+    ndcg: summarizeNdcg(rows),
     measurements: summarizeMeasurements(
       rows.flatMap((row) => row.measurement_observations),
     ),
@@ -82,7 +82,7 @@ function zgReport({ failedModes = [], rankForTask = () => 3 } = {}) {
     ),
   );
   return {
-    schema_version: 4,
+    schema_version: 5,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "full",
     quality_repetition: 5,
@@ -145,7 +145,7 @@ test("summary schema 3 has exactly the fixed three full-preview ZG arms", async 
   assert.deepEqual(result.quality_metrics, QUALITY_METRICS);
   assert.doesNotMatch(
     JSON.stringify(result),
-    /semble|comparison|previews|primary_preview/,
+    /comparison|previews|primary_preview/,
   );
 });
 
@@ -159,7 +159,7 @@ test("missing and invalid reports withhold all three arms instead of fabricating
 test("CI rejects old contracts and incomplete or misrouted three-mode matrices", async () => {
   for (const mutate of [
     (r) => {
-      r.schema_version = 3;
+      r.schema_version = 4;
     },
     (r) => {
       r.preview = "short";
@@ -208,10 +208,10 @@ test("per-question scores and frozen label identities cannot be changed", async 
       r.tasks[0].file_retrieval.mrr_at_10 = 999;
     },
     (r) => {
-      r.tasks[0].semble_official.ndcg_at_10 = 999;
+      r.tasks[0].ndcg.ndcg_at_10 = 999;
     },
     (r) => {
-      r.tasks[0].semble_official.targets = [{ path: "changed.py" }];
+      r.tasks[0].ndcg.targets = [{ path: "changed.py" }];
     },
     (r) => {
       r.tasks[0].repository = "forged/repository";
@@ -241,7 +241,7 @@ test("cached aggregates never override public items or per-call measurements", a
   for (const mode of ZG_MODES)
     report.modes[mode] = {
       file_retrieval: { mrr_at_10: 999 },
-      semble_official: { repository_macro: { ndcg_at_10: 999 } },
+      ndcg: { repository_macro: { ndcg_at_10: 999 } },
       measurements: { latency_ms_p50: 999 },
     };
   const result = await buildCiSummary({ zg: report });
@@ -253,7 +253,7 @@ test("cached aggregates never override public items or per-call measurements", a
     );
     assert.equal(
       result.rows[index].metrics.ndcg_at_10,
-      snapshot.modes[mode].semble_official.repository_macro.ndcg_at_10,
+      snapshot.modes[mode].ndcg.repository_macro.ndcg_at_10,
     );
     assert.equal(result.rows[index].measurements.latency_ms_p50, 12.34567);
   }
@@ -399,7 +399,7 @@ test("Markdown exposes exactly three arms, five quality metrics and two measurem
   );
   assert.doesNotMatch(
     text,
-    /Semble|SDK|Disabled|comparison\.json|short|nDCG@5|anchor/,
+    /SDK|Disabled|comparison\.json|short|nDCG@5|anchor/,
   );
 });
 
@@ -426,7 +426,7 @@ test("CLI accepts only --zg and --output and writes only the two overview artifa
       .schema_version,
     3,
   );
-  for (const unsupported of ["--semble", "--modes"])
+  for (const unsupported of ["--engine", "--modes"])
     assert.notEqual(
       spawnSync(
         process.execPath,

@@ -14,7 +14,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "semble-upstream"
+FIXTURE = Path(__file__).parent
 manifest = json.loads((FIXTURE / "source.json").read_text())
 assert manifest["commit"] == "0051e000fcaac69a9c5d081ebbc8d4cb8508160b"
 for entry in manifest["files"]:

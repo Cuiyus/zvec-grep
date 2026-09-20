@@ -12,7 +12,7 @@ test("report has one three-arm table with full preview, fixed averages and per-q
       hit_at_10_count: 15,
       mrr_at_10: 0.4055555556,
     },
-    semble_official: {
+    ndcg: {
       query_count: 20,
       repository_count: 11,
       language_count: 1,
@@ -32,7 +32,7 @@ test("report has one three-arm table with full preview, fixed averages and per-q
     observed_calls: 300,
     integrity_passed: true,
     expected_task_ids: Array.from({ length: 20 }, (_, i) => `task:${i}`),
-    schema_version: 4,
+    schema_version: 5,
     preview: "full",
     modes: { hybrid: mode, fts: mode, vector: mode },
     tasks: [],
@@ -56,7 +56,7 @@ test("report has one three-arm table with full preview, fixed averages and per-q
   assert.match(text, /100\*\* successful valid calls/);
   assert.doesNotMatch(
     text,
-    /Legacy|anchor|nDCG@5|By category|Preparation and latency|Mean output bytes|short|Semble|Paired retrieval/,
+    /Legacy|anchor|nDCG@5|By category|Preparation and latency|Mean output bytes|short|Paired retrieval/,
   );
   assert.equal((text.match(/\| Arm \|/g) ?? []).length, 1);
 });

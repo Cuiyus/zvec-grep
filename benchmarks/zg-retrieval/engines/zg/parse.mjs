@@ -35,7 +35,7 @@ function visibleText(response) {
     response.content[0]?.type !== "text" ||
     typeof response.content[0].text !== "string"
   ) {
-    fail("Expected the official search response's single text content block.");
+    fail("Expected the public search response's single text content block.");
   }
   return response.content[0].text;
 }

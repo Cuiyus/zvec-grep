@@ -21,9 +21,9 @@ export function markdownReport(report) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...modeEntries.map(([label, entry]) => {
       const file = entry?.file_retrieval,
-        official = entry?.semble_official?.repository_macro;
-      return file && official
-        ? `| ${label} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${display(file.mrr_at_10)} | ${display(official.ndcg_at_10)} | ${display(entry?.measurements?.output_bytes_mean == null ? null : entry.measurements.output_bytes_mean / 1024)} | ${display(entry?.measurements?.latency_ms_p50)} |`
+        ndcg = entry?.ndcg?.repository_macro;
+      return file && ndcg
+        ? `| ${label} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${display(file.mrr_at_10)} | ${display(ndcg.ndcg_at_10)} | ${display(entry?.measurements?.output_bytes_mean == null ? null : entry.measurements.output_bytes_mean / 1024)} | ${display(entry?.measurements?.latency_ms_p50)} |`
         : `| ${label} | N/A — invalid experiment | N/A | N/A | N/A | N/A | N/A | N/A |`;
     }),
     "",
@@ -40,7 +40,7 @@ export function markdownReport(report) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.tasks.map(
       (row) =>
-        `| ${row.task_id} / zg-${row.mode} | ${row.file_retrieval?.hit_at_1 ?? "N/A"} | ${row.file_retrieval?.hit_at_5 ?? "N/A"} | ${row.file_retrieval?.hit_at_10 ?? "N/A"} | ${display(row.file_retrieval?.rr_at_10)} | ${display(row.semble_official?.ndcg_at_10)} | ${row.status} | [response](${row.raw_path}) |`,
+        `| ${row.task_id} / zg-${row.mode} | ${row.file_retrieval?.hit_at_1 ?? "N/A"} | ${row.file_retrieval?.hit_at_5 ?? "N/A"} | ${row.file_retrieval?.hit_at_10 ?? "N/A"} | ${display(row.file_retrieval?.rr_at_10)} | ${display(row.ndcg?.ndcg_at_10)} | ${row.status} | [response](${row.raw_path}) |`,
     ),
     "",
     "</details>",

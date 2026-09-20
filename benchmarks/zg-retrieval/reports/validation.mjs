@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { validateSearchRoute } from "../engines/zg/parse.mjs";
-import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { scoreNdcg } from "../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
@@ -37,7 +37,7 @@ export function validateFrozenTask(row, suite, label) {
     assert.equal(row[field], task[field], `${label}: ${field} mismatch`);
   assert.equal(
     row.language,
-    suite.semble_gold[row.task_id].language,
+    suite.file_gold[row.task_id].language,
     `${label}: language mismatch`,
   );
   assert.equal(
@@ -46,8 +46,8 @@ export function validateFrozenTask(row, suite, label) {
     `${label}: Gold status mismatch`,
   );
   assert.deepEqual(
-    row.semble_official?.targets,
-    suite.semble_gold[row.task_id].targets,
+    row.ndcg?.targets,
+    suite.file_gold[row.task_id].targets,
     `${label}: frozen file targets differ`,
   );
 }
@@ -110,7 +110,7 @@ function validateMeasurements(row, label) {
 
 /** Recompute quality from native public items and verify saved row evidence. */
 function validateQualityRow(row, label) {
-  const targets = row.semble_official?.targets;
+  const targets = row.ndcg?.targets;
   assert.ok(
     Array.isArray(targets) && targets.length > 0,
     `${label}: missing frozen file-target projection`,
@@ -158,11 +158,11 @@ function validateQualityRow(row, label) {
     );
   }
   validateSearchRoute(row.items, row.mode);
-  const official = { targets, ...scoreSembleMetric(row.items, targets) };
-  const saved = { ...row.semble_official };
+  const ndcg = { targets, ...scoreNdcg(row.items, targets) };
+  const saved = { ...row.ndcg };
   assert.deepEqual(
     saved,
-    official,
+    ndcg,
     `${label}: nDCG score differs from public items or frozen projection`,
   );
   for (const field of [
@@ -178,7 +178,7 @@ function validateQualityRow(row, label) {
       !Object.hasOwn(row, field),
       `${label}: obsolete report field ${field}`,
     );
-  const normalized = { ...row, semble_official: official };
+  const normalized = { ...row, ndcg };
   const file = fileRetrievalForRow(normalized);
   assert.deepEqual(
     row.file_retrieval,
@@ -193,8 +193,8 @@ function validateQualityRow(row, label) {
 export function validateZgReport(report, label = "ZG", { suite } = {}) {
   assert.equal(
     report.schema_version,
-    4,
-    `${label}: unsupported report schema; schema 4 required`,
+    5,
+    `${label}: unsupported report schema; schema 5 required`,
   );
   assert.equal(report.preview, "full", `${label}: full preview required`);
   for (const field of [
@@ -237,7 +237,7 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
     report.product_error_calls === 0,
     `${label}: integrity flag and product errors disagree`,
   );
-  for (const field of ["source", "gold", "semble_gold", "protocol"])
+  for (const field of ["source", "gold", "file_gold", "protocol"])
     assert.match(
       report.suite?.[field] ?? "",
       /^[a-f0-9]{64}$/,

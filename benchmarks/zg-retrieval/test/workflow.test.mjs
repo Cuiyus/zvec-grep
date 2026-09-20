@@ -49,7 +49,7 @@ test("Retrieval-only is one manual workflow with no selectable inputs or baselin
     ["workflow_dispatch"],
   );
   assert.equal(block(workflow, "workflow_dispatch", 2).trim(), "");
-  assert.doesNotMatch(workflow, /\binputs[.:]|semble/i);
+  assert.doesNotMatch(workflow, /\binputs[.:]/i);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),

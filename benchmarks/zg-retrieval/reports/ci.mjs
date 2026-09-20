@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { summarizeFileRetrieval } from "../metrics/files.mjs";
 import { loadSuite, readJson, writeJson } from "../core/lib.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
-import { summarizeSembleOfficial } from "../metrics/summary.mjs";
+import { summarizeNdcg } from "../metrics/summary.mjs";
 import { validateZgReport, ZG_MODES } from "./validation.mjs";
 
 export const QUALITY_METRICS = Object.freeze([
@@ -17,7 +17,7 @@ export const QUALITY_METRICS = Object.freeze([
 
 function resultRow(label, rows) {
   const file = summarizeFileRetrieval(rows);
-  const official = summarizeSembleOfficial(rows);
+  const ndcg = summarizeNdcg(rows);
   assert.equal(file.scored_tasks, 20, `${label}: requires all 20 questions`);
   return {
     label,
@@ -34,7 +34,7 @@ function resultRow(label, rows) {
       file_hit_at_5: file.hit_at_5,
       file_hit_at_10: file.hit_at_10,
       file_mrr_at_10: file.mrr_at_10,
-      ndcg_at_10: official.repository_macro.ndcg_at_10,
+      ndcg_at_10: ndcg.repository_macro.ndcg_at_10,
     },
     measurements: summarizeMeasurements(
       rows.flatMap((row) => row.measurement_observations),

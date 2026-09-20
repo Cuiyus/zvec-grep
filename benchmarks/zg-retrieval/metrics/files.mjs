@@ -22,7 +22,7 @@ export function scoreFileRetrieval(items, targets) {
     paths.add(path);
   }
   // targetRank validates native consecutive ranks. Repeated file chunks consume
-  // ranks, exactly as in the official nDCG; no deduplication or compaction.
+  // ranks, exactly as in nDCG; no deduplication or compaction.
   const targetRanks = targets.map((target) => targetRank(items, target));
   const ranks = targetRanks.filter((rank) => rank !== null && rank <= 10);
   const rank = ranks.length ? Math.min(...ranks) : null;
@@ -60,7 +60,7 @@ export function fileRetrievalForRow(row) {
       0,
       "product errors cannot provide file retrieval credit",
     );
-  return scoreFileRetrieval(row.items, row.semble_official?.targets);
+  return scoreFileRetrieval(row.items, row.ndcg?.targets);
 }
 
 /** Each original question has equal weight; repeats and repositories add no votes. */

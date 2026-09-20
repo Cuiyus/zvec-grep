@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
-  SEMBLE_METRIC_SOURCE,
+  NDCG_SOURCE,
   ndcgAtK,
   pathMatches,
-  projectSembleTargets,
-  scoreSembleMetric,
+  projectFileTargets,
+  scoreNdcg,
   targetMatchesLocation,
   targetRank,
 } from "../metrics/ndcg.mjs";
@@ -63,7 +63,7 @@ test("upstream location matching uses any inclusive overlap and only complete sp
 });
 
 test("duplicate file chunks consume native ranks but do not repeatedly reward one target", () => {
-  const scored = scoreSembleMetric(
+  const scored = scoreNdcg(
     [item(1), item(2), item(3, "pkg/b.py")],
     [{ path: "pkg/a.py" }, { path: "pkg/b.py" }],
   );
@@ -77,7 +77,7 @@ test("duplicate file chunks consume native ranks but do not repeatedly reward on
 });
 
 test("repeated targets keep the upstream IDCG denominator while one result rank stays binary", () => {
-  const scored = scoreSembleMetric(
+  const scored = scoreNdcg(
     [item(1)],
     [{ path: "pkg/a.py" }, { path: "pkg/a.py" }],
   );
@@ -92,10 +92,7 @@ test("upstream first-target ranks are not optimally reassigned across overlappin
     { path: "pkg/a.py", start_line: 10, end_line: 20 },
     { path: "pkg/a.py", start_line: 15, end_line: 30 },
   ];
-  const scored = scoreSembleMetric(
-    [item(1), item(2, "pkg/a.py", 25, 30)],
-    targets,
-  );
+  const scored = scoreNdcg([item(1), item(2, "pkg/a.py", 25, 30)], targets);
   assert.deepEqual(scored.target_ranks, [1, 1]);
   assert.equal(scored.ndcg_at_10, 1 / (1 + 1 / Math.log2(3)));
 });
@@ -104,16 +101,16 @@ test("combined primary and secondary labels receive identical binary weight", ()
   const primary = [{ path: "pkg/a.py" }];
   const secondary = [{ path: "pkg/b.py" }];
   const inputs = [item(1, "pkg/b.py"), item(2, "pkg/a.py")];
-  const scored = scoreSembleMetric(inputs, [...primary, ...secondary]);
+  const scored = scoreNdcg(inputs, [...primary, ...secondary]);
   assert.deepEqual(scored.target_ranks, [2, 1]);
   assert.equal(scored.ndcg_at_10, 1);
   assert.deepEqual(
-    scoreSembleMetric(inputs, [...secondary, ...primary]).ndcg_at_10,
+    scoreNdcg(inputs, [...secondary, ...primary]).ndcg_at_10,
     scored.ndcg_at_10,
   );
 });
 
-test("official location metrics ignore visible text, snippet truncation, outline and score", () => {
+test("location metrics ignore visible text, snippet truncation, outline and score", () => {
   const plain = [item(1)];
   const decorated = [
     {
@@ -125,16 +122,12 @@ test("official location metrics ignore visible text, snippet truncation, outline
     },
   ];
   assert.deepEqual(
-    scoreSembleMetric(plain, [{ path: "pkg/a.py" }]),
-    scoreSembleMetric(decorated, [{ path: "pkg/a.py" }]),
+    scoreNdcg(plain, [{ path: "pkg/a.py" }]),
+    scoreNdcg(decorated, [{ path: "pkg/a.py" }]),
   );
   assert.deepEqual(
-    scoreSembleMetric(plain, [
-      { path: "pkg/a.py", start_line: 19, end_line: 30 },
-    ]),
-    scoreSembleMetric(decorated, [
-      { path: "pkg/a.py", start_line: 19, end_line: 30 },
-    ]),
+    scoreNdcg(plain, [{ path: "pkg/a.py", start_line: 19, end_line: 30 }]),
+    scoreNdcg(decorated, [{ path: "pkg/a.py", start_line: 19, end_line: 30 }]),
   );
 });
 
@@ -146,30 +139,26 @@ test("public non-text results can match file-only labels without invented source
       range: { kind: "other", label: "page:2" },
     },
   ];
+  assert.equal(scoreNdcg(input, [{ path: "doc/manual.pdf" }]).ndcg_at_10, 1);
   assert.equal(
-    scoreSembleMetric(input, [{ path: "doc/manual.pdf" }]).ndcg_at_10,
-    1,
-  );
-  assert.equal(
-    scoreSembleMetric(input, [
-      { path: "doc/manual.pdf", start_line: 1, end_line: 20 },
-    ]).ndcg_at_10,
+    scoreNdcg(input, [{ path: "doc/manual.pdf", start_line: 1, end_line: 20 }])
+      .ndcg_at_10,
     0,
   );
 });
 
 test("upstream empty and cutoff cases keep denominators and ignore out-of-window ranks", () => {
-  assert.deepEqual(scoreSembleMetric([], []), {
+  assert.deepEqual(scoreNdcg([], []), {
     ndcg_at_10: 0,
     target_ranks: [],
     n_relevant: 0,
     relevant_ranks: [],
   });
-  assert.equal(scoreSembleMetric([], [{ path: "missing.py" }]).ndcg_at_10, 0);
+  assert.equal(scoreNdcg([], [{ path: "missing.py" }]).ndcg_at_10, 0);
   const input = Array.from({ length: 11 }, (_, i) =>
     item(i + 1, `pkg/${i + 1}.py`),
   );
-  const scored = scoreSembleMetric(input, [
+  const scored = scoreNdcg(input, [
     { path: "pkg/6.py" },
     { path: "pkg/11.py" },
   ]);
@@ -200,48 +189,43 @@ test("SWE-QA projection deduplicates accepted paths without promoting bridge lab
     ],
   };
   const before = structuredClone(labels);
-  assert.deepEqual(projectSembleTargets(labels), [
+  assert.deepEqual(projectFileTargets(labels), [
     { path: "pkg/a.py" },
     { path: "pkg/b.py" },
   ]);
   assert.deepEqual(labels, before);
   assert.deepEqual(
-    projectSembleTargets({ targets: [{ role: "bridge", path: "pkg/a.py" }] }),
+    projectFileTargets({ targets: [{ role: "bridge", path: "pkg/a.py" }] }),
     [],
   );
 });
 
 test("the adapter rejects malformed or compacted native ranks instead of silently renumbering", () => {
+  assert.throws(() => scoreNdcg([item(2)], []), /consecutive native ranks/);
   assert.throws(
-    () => scoreSembleMetric([item(2)], []),
+    () => scoreNdcg([item(1), item(3)], []),
     /consecutive native ranks/,
   );
   assert.throws(
-    () => scoreSembleMetric([item(1), item(3)], []),
+    () => scoreNdcg([item(1), item(1)], []),
     /consecutive native ranks/,
   );
   assert.throws(
-    () => scoreSembleMetric([item(1), item(1)], []),
-    /consecutive native ranks/,
-  );
-  assert.throws(
-    () =>
-      scoreSembleMetric([item(1, "pkg/a.py", undefined, 10)], [{ path: 1 }]),
+    () => scoreNdcg([item(1, "pkg/a.py", undefined, 10)], [{ path: 1 }]),
     /target path/,
   );
   assert.throws(
-    () => scoreSembleMetric([item(1, "pkg/a.py", 20, 10)], []),
+    () => scoreNdcg([item(1, "pkg/a.py", 20, 10)], []),
     /valid native source range/,
   );
 });
 
 test("vendored oracle is pinned to byte-identical upstream sources and includes its license", () => {
-  const fixture = new URL("./fixtures/semble-upstream/", import.meta.url);
+  const fixture = new URL("./fixtures/ndcg-reference/", import.meta.url);
   const manifest = JSON.parse(
     readFileSync(new URL("source.json", fixture), "utf8"),
   );
-  assert.equal(manifest.commit, SEMBLE_METRIC_SOURCE.commit);
-  assert.equal(manifest.repository, SEMBLE_METRIC_SOURCE.repository);
+  assert.equal(manifest.commit, NDCG_SOURCE.commit);
   assert.equal(manifest.license, "MIT");
   const hashes = {
     "data.py":
@@ -336,7 +320,11 @@ test("JavaScript results agree with the original Python functions on boundary an
         ndcg.push({ ranks, n_relevant: nRelevant, k });
   const oracle = spawnSync(
     process.env.PYTHON || "python3",
-    [fileURLToPath(new URL("./semble-metrics-oracle.py", import.meta.url))],
+    [
+      fileURLToPath(
+        new URL("./fixtures/ndcg-reference/oracle.py", import.meta.url),
+      ),
+    ],
     {
       input: JSON.stringify({ paths, locations, scores, ndcg }),
       encoding: "utf8",
@@ -367,7 +355,7 @@ test("JavaScript results agree with the original Python functions on boundary an
     expected.target_matches_location,
   );
   for (const [index, input] of scores.entries()) {
-    const actual = scoreSembleMetric(input.items, input.targets);
+    const actual = scoreNdcg(input.items, input.targets);
     const reference = expected.scores[index];
     assert.deepEqual(
       actual.target_ranks,

@@ -4,13 +4,13 @@ const average = (values) =>
     ? values.reduce((sum, value) => sum + value, 0) / values.length
     : null;
 
-export function summarizeSembleOfficial(rows) {
+export function summarizeNdcg(rows) {
   // Canonical accumulation order keeps exact cached aggregates independent of
   // filesystem shard order and caller task order without changing the metric.
   rows = rows
     .filter(
       (row) =>
-        row.semble_official != null &&
+        row.ndcg != null &&
         (row.gold_status == null || row.gold_status === "reviewed"),
     )
     .sort((left, right) => {
@@ -37,7 +37,7 @@ export function summarizeSembleOfficial(rows) {
         {
           language: languages[0],
           query_count: selected.length,
-          ...mean(selected.map((row) => row.semble_official)),
+          ...mean(selected.map((row) => row.ndcg)),
         },
       ];
     }),
@@ -54,15 +54,14 @@ export function summarizeSembleOfficial(rows) {
     }),
   );
   return {
-    dataset:
-      "SWE-QA accepted-file projection; not the original Semble benchmark dataset",
+    dataset: "SWE-QA accepted-file projection",
     metric:
-      "Semble official first-target-rank binary nDCG; all projected targets; native ranks without result deduplication",
+      "First-target-rank binary nDCG; all projected targets; native ranks without result deduplication",
     quality_repetition: 5,
     query_count: rows.length,
     repository_count: Object.keys(byRepository).length,
     language_count: Object.keys(byLanguage).length,
-    query_mean: mean(rows.map((row) => row.semble_official)),
+    query_mean: mean(rows.map((row) => row.ndcg)),
     repository_macro: mean(Object.values(byRepository)),
     language_macro: mean(Object.values(byLanguage)),
     by_repository: byRepository,

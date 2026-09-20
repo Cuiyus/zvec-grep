@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { scoreNdcg } from "../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
@@ -41,7 +41,7 @@ function row(task_id, rank = null, options = {}) {
     visible_output_bytes: 1024,
     ...options,
     items,
-    semble_official: { targets, ...scoreSembleMetric(items, targets) },
+    ndcg: { targets, ...scoreNdcg(items, targets) },
   };
   delete value.targets;
   value.file_retrieval = fileRetrievalForRow(value);
@@ -69,7 +69,7 @@ function report(prototypes = [row("example:1", 1), row("example:2", 10)]) {
   const productErrors =
     rows.filter((item) => item.execution_status === "product_error").length * 5;
   return {
-    schema_version: 4,
+    schema_version: 5,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "full",
     quality_repetition: 5,
@@ -81,7 +81,7 @@ function report(prototypes = [row("example:1", 1), row("example:2", 10)]) {
     suite: {
       source: "a".repeat(64),
       gold: "b".repeat(64),
-      semble_gold: "b".repeat(64),
+      file_gold: "b".repeat(64),
       protocol: "c".repeat(64),
     },
     scope: ids.length === 20 ? "full-20-original-queries" : "explicit-subset",
@@ -119,7 +119,7 @@ test("comparison recomputes only the five quality metrics and both operational m
   assert.deepEqual(Object.keys(result.modes.hybrid).sort(), [
     "file_retrieval",
     "measurements",
-    "semble_official",
+    "ndcg",
   ]);
   const markdown = markdownComparison(result);
   assert.match(markdown, /0\.5500/);
@@ -153,7 +153,7 @@ test("file metric contracts and cached per-question scores cannot be silently ch
   }
 });
 
-test("new reports reject removed quality fields and corrupted official scores", () => {
+test("new reports reject removed quality fields and corrupted ndcg scores", () => {
   for (const mutate of [
     (value) => {
       value.tasks[0].rr_at_10 = 1;
@@ -162,10 +162,10 @@ test("new reports reject removed quality fields and corrupted official scores", 
       value.tasks[0].target_matches = [];
     },
     (value) => {
-      value.tasks[0].semble_official.ndcg_at_5 = 1;
+      value.tasks[0].ndcg.ndcg_at_5 = 1;
     },
     (value) => {
-      value.tasks[0].semble_official.ndcg_at_10 = 0;
+      value.tasks[0].ndcg.ndcg_at_10 = 0;
     },
   ]) {
     const before = report(),
@@ -246,9 +246,9 @@ for (const [name, mutate, pattern] of [
   [
     "file-Gold identity",
     (r) => {
-      r.suite.semble_gold = "2".repeat(64);
+      r.suite.file_gold = "2".repeat(64);
     },
-    /incompatible suite semble_gold/,
+    /incompatible suite file_gold/,
   ],
   [
     "protocol identity",
@@ -418,7 +418,7 @@ test("product-error zeros retain denominators and expose delivery transitions", 
     null,
   );
   assert.equal(
-    recovery.modes.hybrid.semble_official.baseline.repository_macro.ndcg_at_10,
+    recovery.modes.hybrid.ndcg.baseline.repository_macro.ndcg_at_10,
     0,
   );
   assert.match(recovery.warnings[0], /baseline: operational integrity failed/);
@@ -443,7 +443,7 @@ test("unreviewed Gold remains N/A and changed per-question eligibility is reject
   assert.equal(result.modes.hybrid.file_retrieval.baseline.planned_tasks, 2);
   assert.equal(result.modes.hybrid.file_retrieval.baseline.scored_tasks, 1);
   assert.equal(result.tasks[1].file_retrieval_delta.rr_at_10, null);
-  assert.equal(result.tasks[1].semble_official_delta.ndcg_at_10, null);
+  assert.equal(result.tasks[1].ndcg_delta.ndcg_at_10, null);
   assert.equal(result.tasks[1].rank_change, "unscored");
   assert.throws(
     () =>
@@ -486,7 +486,7 @@ test("writes JSON and Markdown with input hashes after validation and refuses ov
   await assert.rejects(stat(invalidOutput), { code: "ENOENT" });
 });
 
-test("official comparison preserves repeated chunk ranks and ignores cached macro totals", () => {
+test("ndcg comparison preserves repeated chunk ranks and ignores cached macro totals", () => {
   const targets = [{ path: "a.py" }, { path: "b.py" }];
   const before = report([row("example:1", null, { items: [], targets })]);
   const items = [
@@ -495,27 +495,24 @@ test("official comparison preserves repeated chunk ranks and ignores cached macr
     { rank: 3, path: "b.py" },
   ];
   const after = report([row("example:1", null, { items, targets })]);
-  after.modes.hybrid.semble_official = {
+  after.modes.hybrid.ndcg = {
     repository_macro: { ndcg_at_10: 999 },
   };
   const result = compareReports(before, after),
     expected = 1.5 / (1 + 1 / Math.log2(3));
-  assert.deepEqual(
-    result.tasks[0].candidate.semble_official.target_ranks,
-    [1, 3],
-  );
+  assert.deepEqual(result.tasks[0].candidate.ndcg.target_ranks, [1, 3]);
   assert.equal(
-    result.modes.hybrid.semble_official.candidate.repository_macro.ndcg_at_10,
+    result.modes.hybrid.ndcg.candidate.repository_macro.ndcg_at_10,
     expected,
   );
-  assert.equal(result.tasks[0].semble_official_delta.ndcg_at_10, expected);
+  assert.equal(result.tasks[0].ndcg_delta.ndcg_at_10, expected);
   assert.equal(result.modes.hybrid.file_retrieval.delta.mrr_at_10, 1);
 });
 
-test("official comparison rejects changed projection and old quality repetition", () => {
+test("ndcg comparison rejects changed projection and old quality repetition", () => {
   for (const mutate of [
     (r) => {
-      r.tasks[0].semble_official.targets = [{ path: "changed.py" }];
+      r.tasks[0].ndcg.targets = [{ path: "changed.py" }];
     },
     (r) => {
       r.quality_repetition = 1;
@@ -545,9 +542,9 @@ test("standalone validation covers all modes and total failure counts without mu
   );
 });
 
-test("schema 4 rejects legacy reports, preview matrices, and non-full result rows", () => {
+test("schema 5 rejects legacy reports, preview matrices, and non-full result rows", () => {
   for (const mutate of [
-    ...[1, 2, 3].map((schema) => (r) => {
+    ...[1, 2, 3, 4].map((schema) => (r) => {
       r.schema_version = schema;
     }),
     (r) => {
@@ -597,5 +594,5 @@ test("three fixed arms are rendered without preview variants", () => {
   const markdown = markdownComparison(result);
   for (const mode of ZG_MODES)
     assert.match(markdown, new RegExp(`zg-${mode} / candidate`));
-  assert.doesNotMatch(markdown, /short|Semble|SDK/);
+  assert.doesNotMatch(markdown, /short|SDK/);
 });

@@ -301,7 +301,7 @@ test("the fixed plan runs all three modes with five full-preview calls per quest
   );
 });
 
-test("code-only index arguments cover the frozen Semble extension set and reject leaked documents or oversized files", () => {
+test("code-only index arguments cover the frozen code extension set and reject leaked documents or oversized files", () => {
   const args = indexSelectionArguments(suite.protocol);
   assert.deepEqual(args.slice(0, 2), ["--max-filesize", "1000000"]);
   const extensions = [];
@@ -333,16 +333,16 @@ test("code-only index arguments cover the frozen Semble extension set and reject
   );
 });
 
-test("the independent Semble file-label projection is frozen and cannot silently inherit a new anchor target", async (t) => {
+test("the independent file-label projection is frozen and cannot silently inherit a new anchor target", async (t) => {
   assert.equal(
-    Object.values(suite.semble_gold).reduce(
+    Object.values(suite.file_gold).reduce(
       (n, entry) => n + entry.targets.length,
       0,
     ),
     39,
   );
   const fixture = await isolatedSuite(t);
-  const path = join(fixture.directory, "gold/semble-file-v1.json");
+  const path = join(fixture.directory, "gold/files-v1.json");
   const labels = await readJson(path);
   labels.tasks[fixedTask.task_id].targets.push({ path: "unreviewed.py" });
   await writeJson(path, labels);
@@ -435,7 +435,7 @@ function assertNoHeadline(report) {
   assert.ok(report.integrity_errors.length > 0);
   for (const mode of Object.values(report.modes)) {
     assert.equal(mode.file_retrieval, null);
-    assert.equal(mode.semble_official, null);
+    assert.equal(mode.ndcg, null);
   }
 }
 
@@ -453,7 +453,7 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.product_error_calls, 15);
   assert.deepEqual(report.integrity_errors, []);
   assert.equal(report.tasks.length, 3);
-  assert.equal(report.schema_version, 4);
+  assert.equal(report.schema_version, 5);
   assert.equal(report.preview, "full");
   assert.deepEqual(Object.keys(report.modes), ["hybrid", "fts", "vector"]);
   assert.equal(Object.hasOwn(report, "previews"), false);
@@ -465,10 +465,7 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(summary.scored_tasks, 1);
   for (const metric of ["hit_at_1", "hit_at_5", "hit_at_10", "mrr_at_10"])
     assert.equal(summary[metric], 0);
-  assert.equal(
-    report.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
-    0,
-  );
+  assert.equal(report.modes.hybrid.ndcg.repository_macro.ndcg_at_10, 0);
   assert.equal(Object.hasOwn(report.modes.hybrid, "summary"), false);
   assert.equal(Object.hasOwn(report.tasks[0], "first_hit_rank"), false);
   assert.equal(Object.hasOwn(report.tasks[0], "target_matches"), false);

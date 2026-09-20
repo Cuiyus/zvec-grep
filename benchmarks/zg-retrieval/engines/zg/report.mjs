@@ -10,7 +10,7 @@ import {
   fileHash,
 } from "../../core/lib.mjs";
 import { scoreResponse, validateSearchRoute } from "./parse.mjs";
-import { scoreSembleMetric } from "../../metrics/ndcg.mjs";
+import { scoreNdcg } from "../../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
@@ -22,7 +22,7 @@ import {
   validateCallLatency,
 } from "../../metrics/measurements.mjs";
 
-import { summarizeSembleOfficial } from "../../metrics/summary.mjs";
+import { summarizeNdcg } from "../../metrics/summary.mjs";
 import { markdownReport } from "../../reports/zg.mjs";
 
 async function findRuns(directory) {
@@ -53,7 +53,7 @@ function invalidate(score, reason) {
     execution_status: "harness_invalid",
     invalid_reason: reason,
     file_retrieval: null,
-    semble_official: null,
+    ndcg: null,
   };
 }
 
@@ -335,15 +335,15 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         ...call,
         ...score,
         visible_output_bytes: visibleOutputBytes,
-        language: suite.semble_gold[call.task_id].language,
-        semble_official:
+        language: suite.file_gold[call.task_id].language,
+        ndcg:
           score.status === "harness_invalid"
             ? null
             : {
-                targets: suite.semble_gold[call.task_id].targets,
-                ...scoreSembleMetric(
+                targets: suite.file_gold[call.task_id].targets,
+                ...scoreNdcg(
                   score.items ?? [],
-                  suite.semble_gold[call.task_id].targets,
+                  suite.file_gold[call.task_id].targets,
                 ),
               },
         category: task.category,
@@ -454,7 +454,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
               )
             : null,
           file_retrieval: complete ? summarizeFileRetrieval(rows) : null,
-          semble_official: complete ? summarizeSembleOfficial(rows) : null,
+          ndcg: complete ? summarizeNdcg(rows) : null,
           ranking_repeatable_tasks: rows.filter(
             (row) => row.ranking_repeatable === true,
           ).length,
@@ -466,7 +466,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     }),
   );
   const report = {
-    schema_version: 4,
+    schema_version: 5,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: suite.protocol.preview,
     quality_repetition: suite.protocol.quality_repetition,

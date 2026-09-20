@@ -19,7 +19,7 @@ const rowAt = (rank) => ({
   execution_status: "success",
   gold_status: "reviewed",
   items: itemsAt(rank),
-  semble_official: { targets },
+  ndcg: { targets },
 });
 
 test("standard file Hit and reciprocal rank cover cutoff boundaries and misses", () => {
@@ -111,7 +111,7 @@ test("row and query-mean summaries recompute public ranks instead of trusting ca
   ];
   for (const row of rows) {
     row.file_retrieval = { first_hit_rank: 1, rr_at_10: 999, hit_at_10: 999 };
-    row.semble_official.target_ranks = [1, 1];
+    row.ndcg.target_ranks = [1, 1];
     row.first_hit_rank = 1;
     row.rr_at_10 = 999;
   }
