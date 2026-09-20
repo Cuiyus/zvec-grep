@@ -245,6 +245,12 @@ export const zvecGrepIndexInputSchema = z.object({
 export const zvecGrepSearchInputSchema = z.object({
   root: absoluteRootSchema,
   ...searchFields,
+  preview: z
+    .enum(["short", "full"])
+    .optional()
+    .describe(
+      "Source display only, defaults to short: short returns bounded snippets; full returns all available content of each retrieved item, not the entire file. Does not change retrieval or ranking.",
+    ),
   freshness: z
     .enum(["eventual", "wait_for_fresh"])
     .default("eventual")

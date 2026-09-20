@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "xarray:46",
+  "question_sha256": "6a998ccc7984fec2a3ce4e405de3f4c8b317ed1a4702dba90de0fdebf4d4b663",
+  "repository": "pydata/xarray",
+  "repository_commit": "40119bf35c53fc222934894d842cfc07b2e264bf",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "nan-reduction-selection",
+      "path": "xarray/core/duck_array_ops.py",
+      "symbol": "_create_nan_agg_method",
+      "relevance_reason": "Selects nanops nancumprod when skipna applies and the array namespace cumprod otherwise; direct NaN-handling decision point.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "357f6454d10ae8532fa59f5c5b0d4f963081170960f28f15d22a22bd00deccc9",
+      "anchors": [
+        {
+          "start_line": 491,
+          "end_line": 491,
+          "text": "def _create_nan_agg_method(name, coerce_strings=False, invariant_0d=False):",
+          "sha256": "c34604f7359570831bc90ae5c599acf4eaaec611441db0872c7c7596b98f33e6"
+        },
+        {
+          "start_line": 491,
+          "end_line": 494,
+          "text": "def _create_nan_agg_method(name, coerce_strings=False, invariant_0d=False):\n    def f(values, axis=None, skipna=None, **kwargs):\n        if kwargs.pop(\"out\", None) is not None:\n            raise TypeError(f\"`out` is not valid for {name}\")",
+          "sha256": "94a630e41827ef2fabcf462eb5b80f179b0170f880959bb102532ceeaa665531"
+        },
+        {
+          "start_line": 508,
+          "end_line": 527,
+          "text": "        func = None\n        if skipna or (\n            skipna is None\n            and (\n                dtypes.isdtype(\n                    values.dtype, (\"complex floating\", \"real floating\"), xp=xp\n                )\n                or dtypes.is_object(values.dtype)\n            )\n        ):\n            from xarray.computation import nanops\n\n            nanname = \"nan\" + name\n            func = getattr(nanops, nanname)\n        else:\n            if name in [\"sum\", \"prod\"]:\n                kwargs.pop(\"min_count\", None)\n\n            xp = get_array_namespace(values)\n            func = getattr(xp, name)",
+          "sha256": "ae9deac0b2fc5b068725e0cc2dee4aa2671f5d38845fb219153e1b09c8b23af4"
+        }
+      ]
+    },
+    {
+      "id": "dataset-numeric-filter",
+      "path": "xarray/core/dataset.py",
+      "symbol": "Dataset.reduce",
+      "relevance_reason": "Direct numeric_only filtering and per-variable var.reduce dispatch queried by the second part of the question.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "fb56ab39f72e87639fa66eef101559d44124773137d2bbf6106cd8f0e70b5736",
+      "anchors": [
+        {
+          "start_line": 6704,
+          "end_line": 6713,
+          "text": "    def reduce(\n        self,\n        func: Callable,\n        dim: Dims = None,\n        *,\n        keep_attrs: bool | None = None,\n        keepdims: bool = False,\n        numeric_only: bool = False,\n        **kwargs: Any,\n    ) -> Self:",
+          "sha256": "5f49093df0d21a4bf9d2faae2dcdb64a9764b15d508be70fbf74ee3f836c5d91"
+        },
+        {
+          "start_line": 6791,
+          "end_line": 6818,
+          "text": "                if not reduce_dims:\n                    variables[name] = var\n            elif (\n                # Some reduction functions (e.g. std, var) need to run on variables\n                # that don't have the reduce dims: PR5393\n                not pd.api.types.is_extension_array_dtype(var.dtype)  # noqa: TID251\n                and (\n                    not reduce_dims\n                    or not numeric_only\n                    or np.issubdtype(var.dtype, np.number)\n                    or (var.dtype == np.bool_)\n                )\n            ):\n                # prefer to aggregate over axis=None rather than\n                # axis=(0, 1) if they will be equivalent, because\n                # the former is often more efficient\n                # keep single-element dims as list, to support Hashables\n                reduce_maybe_single = (\n                    None\n                    if len(reduce_dims) == var.ndim and var.ndim != 1\n                    else reduce_dims\n                )\n                variables[name] = var.reduce(\n                    func,\n                    dim=reduce_maybe_single,\n                    keep_attrs=keep_attrs,\n                    keepdims=keepdims,\n                    **kwargs,",
+          "sha256": "e96bb867f389e69b2082697d9550c4c9bbc6af95dffee3faffb6c721ae307655"
+        }
+      ]
+    },
+    {
+      "id": "cumprod-binding",
+      "path": "xarray/core/duck_array_ops.py",
+      "relevance_reason": "Binds cumprod_1d to the generic NaN aggregation factory, connecting its generic name parameter to cumprod.",
+      "role": "bridge",
+      "kind": "code_span",
+      "source_sha256": "357f6454d10ae8532fa59f5c5b0d4f963081170960f28f15d22a22bd00deccc9",
+      "anchors": [
+        {
+          "start_line": 563,
+          "end_line": 569,
+          "text": "prod = _create_nan_agg_method(\"prod\", invariant_0d=True)\nprod.numeric_only = True\nprod.available_min_count = True\ncumprod_1d = _create_nan_agg_method(\"cumprod\", invariant_0d=True)\ncumprod_1d.numeric_only = True\ncumsum_1d = _create_nan_agg_method(\"cumsum\", invariant_0d=True)\ncumsum_1d.numeric_only = True",
+          "sha256": "a1f58a42f666b6b6e0c2a3cb6ea0cf3ed276674ce21e438b7abb6d0fccb4032a"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Two independent requested aspects: skipna dispatch and Dataset numeric-only filtering.",
+    "groups": [
+      {
+        "id": "nan-policy",
+        "target_ids": ["nan-reduction-selection"]
+      },
+      {
+        "id": "dataset-filter",
+        "target_ids": ["dataset-numeric-filter"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Reference correction: filtering and var.reduce are interleaved within the loop, not a complete filtered-dictionary pass followed by all reductions. Non-numeric variables with no reduce_dims can pass this predicate. Array namespace is not assumed always NumPy. Independent audit_token source review: Read the full _create_nan_agg_method branch and cumprod binding plus Dataset.reduce loop; verified skipna dispatch and interleaved numeric_only filtering/var.reduce, including the no-reduce-dims exception. The two groups are complementary. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

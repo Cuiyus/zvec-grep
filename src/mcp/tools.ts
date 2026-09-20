@@ -236,7 +236,7 @@ function searchRoutingRules(exactTool: string, focusedTools: string): string[] {
     "Preserve the question's concepts, relationships, and constraints from the user request and established context in semantic queries. Treat inferred names as supplemental hypotheses, not replacements for or constraints on the stated intent.",
     "`query` creates one primary hybrid FTS-plus-vector group; `queries` creates one or more primary hybrid groups; `fts` and `vector` add supplemental lexical-only or semantic-only route groups. These are retrieval routes, not hard constraints. Without `fuse`, the response is one deduplicated and reranked list with query-group metadata; set `fuse: true` to collapse every group into one ranked search plan.",
     'For a fused mixed search, use arguments such as {"root":"/absolute/workspace","query":"how are results ranked and fused","fts":["RRF","score"],"fuse":true}.',
-    "Search results include bounded source snippets. Treat a sufficient snippet as already-read evidence, and open only the cited file or range when a required detail falls outside it.",
+    'Search results include bounded source snippets by default. Set preview: "full" for all available content of each retrieved item; this does not retrieve the entire file or change ranking. Treat sufficient returned content as already-read evidence, and open only the cited file or range when a required detail falls outside it.',
     `If semantic retrieval remains irrelevant, fall back to ${exactTool}.`,
     "Stop searching once the available evidence is sufficient for the requested task. Continue only to resolve a material gap or ambiguity; do not repeat similar searches or broaden the investigation merely to reconfirm what is already established.",
     "Do not launch a sub-agent solely to locate workspace material.",
@@ -254,7 +254,7 @@ const ZVEC_GREP_FULL_SEARCH_MCP_INSTRUCTIONS = searchRoutingRules(
 );
 
 const ZVEC_GREP_SEARCH_TOOL_DESCRIPTION =
-  "Search an existing workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. Results include bounded source snippets and query-group metadata; treat sufficient snippets as already-read evidence.";
+  'Search an existing workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. Results include bounded source snippets by default and query-group metadata; set preview: "full" to return all available content of each retrieved item without changing retrieval or ranking. Treat sufficient returned content as already-read evidence.';
 
 export const ZVEC_GREP_AGENT_MCP_INSTRUCTIONS = formatPromptRules(
   "Use zvec-grep with these workspace retrieval rules:",
@@ -485,14 +485,13 @@ export function registerZvecGrepTools(
                 ]
               : []),
           ];
-          // Mirror the compact rg output: return agent-formatted text only and drop
-          // the verbose structuredContent (per-item outline + full source), which
-          // otherwise dominates the agent's context. `short` keeps a bounded source
-          // snippet per hit so relevance is judgeable without extra file reads.
+          // Public search returns agent-formatted text only. Preview changes
+          // presentation of the retrieved items, never retrieval or ranking.
+          // Keep bounded snippets by default; full exposes all available content.
           const text = `${statusLines.join("\n")}\n${formatAgentContextResult(
             response.result,
             {
-              preview: "short",
+              preview: input.preview ?? "short",
             },
           )}`;
           return options.includeSearchStructuredContent
