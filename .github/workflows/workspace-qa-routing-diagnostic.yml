@@ -1,0 +1,69 @@
+name: Qoder zg instruction and routing diagnostic
+run-name: "Qoder 1.1.45 · instruction injection + two short routing diagnostics"
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - '.github/workflows/workspace-qa-routing-diagnostic.yml'
+      - 'benchmarks/workspace-qa/diagnostics/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: workspace-qa-routing-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[zg-routing-diagnostic]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify content-free observer
+        run: node --test benchmarks/workspace-qa/diagnostics/test_prompt_audit.mjs
+      - name: Install frozen harness dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Build published runtime and separate diagnostic layer
+        run: |
+          docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)" -f benchmarks/workspace-qa/Dockerfile -t zg-readonly-qa:0.2.2 benchmarks
+          docker build --build-arg QA_UID="$(id -u)" --build-arg QA_GID="$(id -g)" -f benchmarks/workspace-qa/diagnostics/Dockerfile -t zg-routing-diagnostic:0.2.2 benchmarks
+      - name: Observe memory and requests; natural selection then routing reminder
+        env:
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+        run: uv run --no-sync --project benchmarks/swe-qa-bench python benchmarks/workspace-qa/diagnostics/run_routing.py --output "$RUNNER_TEMP/zg-routing-diagnostic"
+      - name: Redact credentials from diagnostic artifacts
+        if: always()
+        env:
+          QODER_PERSONAL_ACCESS_TOKEN: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])/'zg-routing-diagnostic'
+          secrets = [os.environ[k].encode() for k in ('QODER_PERSONAL_ACCESS_TOKEN','QWEN_API_KEY') if os.environ.get(k)]
+          for p in root.rglob('*'):
+              if p.is_file() and p.suffix in {'.json','.jsonl','.txt','.md'} and not any(part in {'index','working-indexes','model-cache','.git'} for part in p.relative_to(root).parts):
+                  data=p.read_bytes()
+                  for secret in secrets:data=data.replace(secret,b'[REDACTED]')
+                  p.write_bytes(data)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zg-routing-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/zg-routing-diagnostic/*.json
+            ${{ runner.temp }}/zg-routing-diagnostic/*.md
+            ${{ runner.temp }}/zg-routing-diagnostic/natural/**
+            ${{ runner.temp }}/zg-routing-diagnostic/routing-reminder/**
+            ${{ runner.temp }}/zg-routing-diagnostic/index-preparation/**
+          if-no-files-found: warn
