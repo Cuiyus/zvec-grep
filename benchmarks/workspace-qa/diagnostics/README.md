@@ -26,7 +26,11 @@ Read/Grep/Glob + zg search, Qwen3.8-Max, zg 0.2.2 and remote Qwen embedding:
    or supply a query; it is a different diagnostic prompt, not a fair efficacy arm.
 
 Each session is limited to six model requests, twelve tool calls, 180k cumulative
-input tokens, 180 seconds and 2,048 tokens per model output, with one native retry.
+input tokens and 180 seconds, with one native retry. The CLI requests 2,048 tokens
+per model output; this is not a verified effective cap. The first diagnostic run
+observed `parameters.max_tokens = 32000` in all six client request objects despite
+the `--max-output-tokens 2048` argument. See the
+[2026-09-20 results and limitations](../reports/qoder-zg-routing-diagnostic-2026-09-20.md).
 The index is built once; each session has a writable copy and fresh HOME/install.
 Zero use is preserved. Missing observation, observer errors or failed installation
 fails the diagnostic gate; budget exhaustion can still provide a valid observation
