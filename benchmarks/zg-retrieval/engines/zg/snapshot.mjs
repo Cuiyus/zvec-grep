@@ -4,7 +4,13 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
-import { readJson, writeJson, objectHash, inside, fileHash } from "./lib.mjs";
+import {
+  readJson,
+  writeJson,
+  objectHash,
+  inside,
+  fileHash,
+} from "../../core/lib.mjs";
 
 export async function snapshotIndex({ packageRoot, root, output }) {
   const load = (path) =>

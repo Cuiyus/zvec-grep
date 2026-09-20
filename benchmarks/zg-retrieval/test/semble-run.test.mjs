@@ -4,11 +4,15 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { auditVisibleSource, compareSdkMcp } from "../semble-run.mjs";
+import {
+  auditVisibleSource,
+  compareSdkMcp,
+  sdkParityOutcome,
+} from "../engines/semble/evidence.mjs";
 import {
   createSembleResponseParser,
   scoreSembleResponse,
-} from "../semble-scoring.mjs";
+} from "../engines/semble/parse.mjs";
 
 const query = "Where is wanted defined?";
 const parse = createSembleResponseParser({ expectedQuery: query });
@@ -126,6 +130,47 @@ test("SDK parity compares native order, scores, ranges and complete content", ()
     compareSdkMcp(reordered, { ...sdk, results: [native, other] }, query)
       .length > 0,
   );
+});
+
+test("SDK parity outcome separates explicit product failures from successful mismatches", () => {
+  const native = { ...chunk("def wanted():\n", 1, 1), score: 0.9 };
+  const sdk = { task_id: "example:1", query, results: [native] };
+  for (const raw of [
+    { isError: true, content: [{ type: "text", text: "transport failure" }] },
+    {
+      content: [{ type: "text", text: "Failed to index '/tmp/repo': failure" }],
+    },
+  ]) {
+    assert.deepEqual(sdkParityOutcome(raw, sdk, query), {
+      status: "product_error",
+      matches: null,
+      errors: [],
+    });
+    assert.equal(
+      sdkParityOutcome(raw, { ...sdk, query: "changed" }, query).matches,
+      false,
+    );
+  }
+  assert.deepEqual(sdkParityOutcome(response(native), sdk, query), {
+    matches: true,
+    errors: [],
+  });
+  const mismatch = sdkParityOutcome(
+    response(native, "def different():\n"),
+    sdk,
+    query,
+  );
+  assert.equal(mismatch.matches, false);
+  assert.ok(mismatch.errors.length > 0);
+  assert.equal(mismatch.status, undefined);
+  const unknown = sdkParityOutcome(
+    { content: [{ type: "text", text: "unknown response" }] },
+    sdk,
+    query,
+  );
+  assert.equal(unknown.matches, false);
+  assert.ok(unknown.errors.length > 0);
+  assert.equal(unknown.status, undefined);
 });
 
 test("SDK parity accepts only the explicit empty response for an empty SDK result", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizeMeasurements } from "../measurement-metrics.mjs";
+import { summarizeMeasurements } from "../metrics/measurements.mjs";
 
 const row = (latency, repetition, bytes) => ({
   status: "scored",

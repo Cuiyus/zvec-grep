@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { parseVisibleResponse, scoreResponse } from "../scoring.mjs";
+import { parseVisibleResponse, scoreResponse } from "../engines/zg/parse.mjs";
 import {
   createSembleResponseParser,
   scoreSembleResponse,
-} from "../semble-scoring.mjs";
-import { scoreFileRetrieval } from "../file-retrieval-metrics.mjs";
+} from "../engines/semble/parse.mjs";
+import { scoreFileRetrieval } from "../metrics/files.mjs";
 
 const query = "How does wanted keep its result?";
 const sha = (text) => createHash("sha256").update(text).digest("hex");

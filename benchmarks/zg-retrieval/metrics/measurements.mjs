@@ -1,3 +1,14 @@
+import assert from "node:assert/strict";
+
+/** Reject incomplete timing evidence before any aggregation can omit it. */
+export function validateCallLatency({ latency_ms, execution_status }) {
+  assert.ok(
+    (Number.isFinite(latency_ms) && latency_ms >= 0) ||
+      (execution_status === "product_error" && latency_ms === null),
+    "invalid call latency",
+  );
+}
+
 /** Measurements describe public MCP calls, not indexing time or model tokens. */
 export function summarizeMeasurements(
   observations,

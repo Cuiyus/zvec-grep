@@ -1,4 +1,4 @@
-import { scoreResponse, VisibleFormatError } from "./scoring.mjs";
+import { scoreResponse, VisibleFormatError } from "../../core/response.mjs";
 
 function fail(message) {
   throw new VisibleFormatError(message);

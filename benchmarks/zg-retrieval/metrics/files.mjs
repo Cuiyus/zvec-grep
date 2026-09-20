@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { targetRank } from "./semble-metrics.mjs";
+import { targetRank } from "./ndcg.mjs";
 
 export const FILE_RETRIEVAL_CONTRACT = "sweqa-file-hit-rr-v1";
 

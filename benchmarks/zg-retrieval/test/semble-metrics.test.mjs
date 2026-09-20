@@ -12,7 +12,7 @@ import {
   scoreSembleMetric,
   targetMatchesLocation,
   targetRank,
-} from "../semble-metrics.mjs";
+} from "../metrics/ndcg.mjs";
 
 const item = (rank, path = "pkg/a.py", start = 10, end = 20) => ({
   rank,

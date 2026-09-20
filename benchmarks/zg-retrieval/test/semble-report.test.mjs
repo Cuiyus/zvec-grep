@@ -3,21 +3,19 @@ import { test } from "node:test";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  aggregateSemble,
-  compareSembleToZg,
-  validateSembleReport,
-  SEMBLE_PROTOCOL,
-  markdownSembleReport,
-} from "../semble-report.mjs";
-import { scoreSembleMetric } from "../semble-metrics.mjs";
+import { aggregateSemble } from "../engines/semble/report.mjs";
+import { SEMBLE_PROTOCOL } from "../engines/semble/protocol.mjs";
+import { compareSembleToZg } from "../reports/cross-engine.mjs";
+import { validateSembleReport } from "../reports/validation.mjs";
+import { markdownSembleReport } from "../reports/semble.mjs";
+import { scoreSembleMetric } from "../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
   summarizeFileRetrieval,
-} from "../file-retrieval-metrics.mjs";
-import { summarizeSembleOfficial } from "../report.mjs";
-import { summarizeMeasurements } from "../measurement-metrics.mjs";
+} from "../metrics/files.mjs";
+import { summarizeSembleOfficial } from "../metrics/summary.mjs";
+import { summarizeMeasurements } from "../metrics/measurements.mjs";
 import {
   fileHash,
   loadSuite,
@@ -25,7 +23,7 @@ import {
   readJson,
   repositorySlug,
   writeJson,
-} from "../lib.mjs";
+} from "../core/lib.mjs";
 
 const suite = await loadSuite();
 const emptyResponse = () => ({
@@ -701,6 +699,110 @@ test("complete preparation product failures remain quality zeros and fail operat
   );
 });
 
+async function replaceFifthWithProductFailure(
+  f,
+  raw,
+  { transportError = null, latency = 1 } = {},
+) {
+  const call = f.first.calls[4];
+  await writeJson(join(f.first.root, call.raw_path), raw);
+  call.raw_sha256 = await fileHash(join(f.first.root, call.raw_path));
+  call.transport_error = transportError;
+  call.latency_ms = latency;
+  Object.assign(f.first.audit.calls[4], {
+    raw_sha256: call.raw_sha256,
+    results_checked: 0,
+  });
+  // A relevant SDK result must not give a failed public MCP response any credit.
+  f.first.sdkReplay.queries[0].results = [
+    {
+      file_path: suite.semble_gold[call.task_id].targets[0].path,
+      start_line: 1,
+      end_line: 1,
+      score: 1,
+      content: "def relevant():\n",
+    },
+  ];
+  Object.assign(f.first.sdkParity.calls[0], {
+    raw_sha256: call.raw_sha256,
+    status: "product_error",
+    matches: null,
+    errors: [],
+  });
+  await f.save();
+}
+
+test("ready fifth-call product failures stay quality zeros without being SDK mismatches", async (t) => {
+  for (const [raw, options] of [
+    [productError(), {}],
+    [
+      {
+        content: [
+          {
+            type: "text",
+            text: "Failed to index '/locked/corpus': product failure",
+          },
+        ],
+      },
+      {},
+    ],
+    [
+      productError(),
+      { transportError: "MCP transport timeout", latency: null },
+    ],
+  ]) {
+    const f = await fixture(t);
+    await replaceFifthWithProductFailure(f, raw, options);
+    const report = await aggregateSemble(f.directory);
+    assert.equal(report.quality_score_valid, true);
+    assert.equal(report.integrity_passed, false);
+    assert.equal(report.product_error_calls, 1);
+    assert.deepEqual(report.integrity_errors, []);
+    assert.equal(report.observed_calls, 100);
+    assert.equal(report.tasks[0].status, "product_error");
+    assert.deepEqual(report.tasks[0].items, []);
+    assert.equal(report.tasks[0].file_retrieval.hit_at_10, 0);
+    assert.equal(report.tasks[0].semble_official.ndcg_at_10, 0);
+    assert.equal(report.modes.hybrid.file_retrieval.scored_tasks, 20);
+    assert.equal(report.modes.hybrid.measurements.output_sample_count, 19);
+    assert.equal(report.modes.hybrid.measurements.latency_sample_count, 99);
+    assert.equal(report.repositories[0].preparation_status, "ready");
+    assert.equal(report.repositories[0].post_run_integrity, "verified");
+    assert.equal(report.repositories[0].sdk_parity_verified, false);
+    assert.equal((await validateSembleReport(report, suite)).length, 20);
+  }
+});
+
+test("SDK parity cannot skip successful responses or omit the product-failure record", async (t) => {
+  const success = await fixture(t, { subset: true });
+  Object.assign(success.first.sdkParity.calls[0], {
+    status: "product_error",
+    matches: null,
+  });
+  await success.save();
+  expectInvalid(
+    await aggregateSemble(success.directory, { allowSubset: true }),
+    /successful response has an invalid status/,
+  );
+  const failed = await fixture(t, { subset: true });
+  await replaceFifthWithProductFailure(failed, productError());
+  delete failed.first.sdkParity.calls[0].status;
+  await failed.save();
+  expectInvalid(
+    await aggregateSemble(failed.directory, { allowSubset: true }),
+    /product failure status missing/,
+  );
+});
+
+test("ready product-error calls cannot claim null latency without transport or preparation evidence", async (t) => {
+  const f = await fixture(t, { subset: true });
+  await replaceFifthWithProductFailure(f, productError(), { latency: null });
+  expectInvalid(
+    await aggregateSemble(f.directory, { allowSubset: true }),
+    /invalid call latency/,
+  );
+});
+
 test("Semble protocol stays distinct and wrong source/Gold/protocol identity is rejected", async (t) => {
   const f = await fixture(t, { subset: true });
   assert.notEqual(f.experiment.suite.protocol, suite.identity.protocol);
@@ -856,7 +958,7 @@ test("baseline CLI option writes explicit cross-tool disclosure and comparison e
   await writeJson(baselinePath, bad);
   const invalid = await aggregateSemble(f.directory, { baselinePath });
   assert.equal(invalid.cross_tool_comparison, undefined);
-  assert.match(invalid.comparison_error, /identity mismatch/);
+  assert.match(invalid.comparison_error, /frozen suite(?: identity)? mismatch/);
   assert.equal(invalid.quality_score_valid, true);
 });
 

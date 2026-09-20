@@ -4,7 +4,7 @@ Updated September 20, 2026. See the [benchmark README](../benchmarks/zg-retrieva
 
 ## Running the benchmark
 
-The workflow accepts manual `workflow_dispatch` events only; it does not run on pushes, pull requests, or a schedule. Both the original actor and the actor requesting a rerun must have the repository's maintain or admin role. Every job rechecks authorization, including when a failed job is rerun independently. A failed permission lookup stops execution; write, triage, and read roles cannot run this benchmark.
+The workflow accepts manual `workflow_dispatch` events only; it does not run on pushes, pull requests, or a schedule. Both the original actor and the actor requesting a rerun must have the repository's maintain or admin role. Every job rechecks authorization, including when a failed job is rerun independently. A failed permission lookup stops execution; the checked-in authorization action rejects write, triage, and read roles. This check is not a permission boundary against contributors who can modify the workflow or its local action on another branch; that boundary requires repository- or organization-level Actions execution policies.
 
 ZG runs by default. Setting `run_semble=true` adds Semble to the same workflow. The `modes` input defaults to hybrid and also accepts hybrid,fts,vector. Each enabled ZG mode retains both short and full preview arms.
 

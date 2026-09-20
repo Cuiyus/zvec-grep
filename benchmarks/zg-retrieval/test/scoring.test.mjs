@@ -5,8 +5,8 @@ import {
   parseVisibleResponse,
   scoreResponse,
   VisibleFormatError,
-} from "../scoring.mjs";
-import { scoreFileRetrieval } from "../file-retrieval-metrics.mjs";
+} from "../engines/zg/parse.mjs";
+import { scoreFileRetrieval } from "../metrics/files.mjs";
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 const response = (body, extra = {}) => ({

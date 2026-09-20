@@ -3,17 +3,19 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { scoreSembleMetric } from "../semble-metrics.mjs";
+import { scoreSembleMetric } from "../metrics/ndcg.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
-} from "../file-retrieval-metrics.mjs";
+} from "../metrics/files.mjs";
 import {
   compareReports,
   selectPreviewReport,
   markdownComparison,
   writeComparison,
-} from "../compare.mjs";
+} from "../reports/compare.mjs";
+
+import { validateZgReport } from "../reports/validation.mjs";
 
 const clone = (value) => structuredClone(value);
 function row(task_id, rank = null, options = {}) {
@@ -649,4 +651,27 @@ test("official comparison rejects changed projection and old quality repetition"
       /Semble official score|quality repetition 5/,
     );
   }
+});
+
+test("standalone ZG validation covers both preview arms and the total error count without mutation", () => {
+  const value = pairedReport();
+  const snapshot = clone(value);
+  const checked = validateZgReport(value);
+  assert.equal(checked.previews.short.rows.size, 2);
+  assert.equal(checked.previews.full.rows.size, 2);
+  assert.deepEqual(value, snapshot);
+
+  const incomplete = clone(value);
+  incomplete.tasks.pop();
+  assert.throws(
+    () => validateZgReport(incomplete),
+    /missing task\/mode coverage/,
+  );
+  const inflated = clone(value);
+  inflated.product_error_calls = 1;
+  inflated.integrity_passed = false;
+  assert.throws(
+    () => validateZgReport(inflated),
+    /full preview matrix product error count/,
+  );
 });

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadSuite } from "../lib.mjs";
-import { markdownReport, summarizePreviewPairs } from "../report.mjs";
-import { scoreResponse } from "../scoring.mjs";
-import { scoreSembleMetric } from "../semble-metrics.mjs";
-import { fileRetrievalForRow } from "../file-retrieval-metrics.mjs";
+import { loadSuite } from "../core/lib.mjs";
+import { markdownReport, summarizePreviewPairs } from "../reports/zg.mjs";
+import { scoreResponse } from "../engines/zg/parse.mjs";
+import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { fileRetrievalForRow } from "../metrics/files.mjs";
 
 const suite = await loadSuite();
 const taskId = "sympy:38";

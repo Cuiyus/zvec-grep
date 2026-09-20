@@ -6,6 +6,8 @@ The suite uses the **20 unchanged SWE-QA questions and 11 pinned repositories** 
 
 There is one [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml), triggered **only by `workflow_dispatch`**. Push and pull-request events do not run this benchmark. The dispatch actor and the current re-run actor must have the repository **maintain or admin** role. Every job repeats this check, including partial re-runs; GitHub's ordinary write permission alone is insufficient.
 
+This in-workflow check applies to the checked-in workflow. Contributors who can modify the workflow or its local authorization action on another branch can bypass that check; a permission boundary against those contributors requires repository- or organization-level Actions execution policies.
+
 In GitHub Actions, select **Retrieval-only → Run workflow**:
 
 | Input | Default | Effect |
@@ -50,7 +52,7 @@ Frozen inputs are `data/source.lock.json`, `data/queries.jsonl`, `configs/protoc
 
 File Hit/RR/MRR use contract `sweqa-file-hit-rr-v1`. They share exactly the same frozen file targets and upstream normalized-path matching as nDCG@10. Native ranks are preserved; repeated file chunks are never collapsed or renumbered. Source declarations, outlines and preview length cannot alter these quality scores.
 
-`semble-metrics.mjs` preserves upstream first-target rank, binary gain and target-count IDCG. The byte-identical Python oracle and MIT attribution remain in `test/fixtures/semble-upstream/`; tests compare the JavaScript implementation against those original functions. The dataset is SWE-QA, not Semble's own benchmark dataset.
+`metrics/ndcg.mjs` preserves upstream first-target rank, binary gain and target-count IDCG. The byte-identical Python oracle and MIT attribution remain in `test/fixtures/semble-upstream/`; tests compare the JavaScript implementation against those original functions. The dataset is SWE-QA, not Semble's own benchmark dataset.
 
 ZG reports use schema **3**; Semble reports use schema **2**. New reports contain `file_retrieval`, `semble_official` (nDCG@10 only) and `measurements`. Each quality row preserves five `measurement_observations` to make measurement aggregation inspectable. Old top-level anchor scores and `summary` fields are removed. The same-engine comparator can read historical ZG schemas 1/2 by recomputing supported metrics from public items; old reports without complete measurement evidence show unavailable measurements. Raw response and index audits remain the aggregator's responsibility.
 
@@ -59,6 +61,27 @@ The combined CI `summary.json` uses schema **2** and names the quality metric `n
 ## CI structure
 
 Maintainer checks → contract tests → packed ZG candidate → 11 ZG repository shards (maximum four concurrent) → complete ZG report. Optional Semble runs alongside ZG after contract tests. The final result job waits for all required jobs and publishes one table even when an authorized upstream execution fails. Each job checks the current actor again, so partial re-runs cannot reuse an earlier actor's successful authorization.
+
+## Code structure
+
+```text
+zg-retrieval/
+  *.mjs              Stable command-line entrypoints
+  core/              Frozen suite, corpus, I/O and shared response scoring
+  metrics/           File ranking, nDCG and operational measurements
+  engines/
+    zg/              ZG runner, parser, index snapshots and raw-evidence report
+    semble/          Baseline runner, parser, preparation and evidence audits
+  reports/           Report validation, comparisons, rendering and CI overview
+  configs/           Frozen protocols and dependency constraints
+  data/              Frozen questions and repository/source lock
+  gold/              Frozen relevance labels and annotation provenance
+  test/              Contract tests and upstream scoring oracle
+```
+
+The command-line entrypoints keep existing CI and replay commands stable. Each engine owns its public response parser, runner and raw-evidence checks. `core/response.mjs` applies the shared failure and scoring rules to normalized public results; metric modules do not depend on either engine. The report layer validates frozen identities and recomputes scores and measurements before rendering or comparing reports. Validation is explicit, not implemented by comparing a report with itself.
+
+To add an engine, implement its public-response parser and evidence capture/audit, then supply its normalized observations to the existing metric functions. Add its report contract to `reports/validation.mjs` and its CI integration separately. Keep engine-specific request and index checks with that engine; do not duplicate the relevance formulas or introduce dependencies between engine implementations.
 
 ## Run locally
 
@@ -124,7 +147,7 @@ python3 -m venv "$semble_work/venv"
   "$semble_work/source[mcp]"
 mkdir -p "$semble_work/model"
 HF_HOME="$semble_work/hf-cache" "$semble_work/venv/bin/python" \
-  benchmarks/zg-retrieval/semble-prepare.py model \
+  benchmarks/zg-retrieval/engines/semble/prepare.py model \
   --revision e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b \
   --model-directory "$semble_work/model/weights" \
   --output "$semble_work/model/model.json"

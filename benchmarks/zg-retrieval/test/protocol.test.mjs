@@ -15,6 +15,7 @@ import test from "node:test";
 import {
   fileHash,
   loadSuite,
+  objectHash,
   readJson,
   repositorySlug,
   sha256,
@@ -22,14 +23,14 @@ import {
   validateGold,
   validateGoldSources,
   writeJson,
-} from "../lib.mjs";
+} from "../core/lib.mjs";
 import {
   callPlan,
   requestArguments,
   indexSelectionArguments,
   auditIndexSelection,
-} from "../run.mjs";
-import { aggregate } from "../report.mjs";
+} from "../engines/zg/run.mjs";
+import { aggregate } from "../engines/zg/report.mjs";
 
 const suite = await loadSuite();
 const clone = (value) => structuredClone(value);
@@ -43,11 +44,13 @@ async function temporary(t) {
 
 async function isolatedSuite(t) {
   const directory = await temporary(t);
-  for (const name of ["lib.mjs", "data", "configs", "gold"])
+  for (const name of ["core", "data", "configs", "gold"])
     await cp(join(suiteDirectory, name), join(directory, name), {
       recursive: true,
     });
-  const isolated = await import(pathToFileURL(join(directory, "lib.mjs")).href);
+  const isolated = await import(
+    pathToFileURL(join(directory, "core/lib.mjs")).href
+  );
   return { directory, load: isolated.loadSuite };
 }
 
@@ -493,6 +496,77 @@ test("a missing call cannot be dropped from the planned denominator or produce a
     await readFile(join(fixture.directory, "report.md"), "utf8"),
     /N\/A — invalid experiment/,
   );
+});
+
+test("successful raw calls with missing or invalid latency invalidate the standalone ZG report", async (t) => {
+  const fixture = await reportFixture(t);
+  const inventory = { entries: [{ path: "entry.py", sha256: "a".repeat(64) }] };
+  inventory.sha256 = objectHash(inventory.entries);
+  Object.assign(fixture.manifest, {
+    preparation_status: "ready",
+    post_run_integrity: "verified",
+    corpus_sha256: inventory.sha256,
+    model_files_sha256: inventory.sha256,
+    index_selection_audit: {
+      content: "code",
+      max_file_size_bytes: suite.protocol.index_selection.max_file_size_bytes,
+      indexed_files: 1,
+      verified: true,
+    },
+  });
+  delete fixture.manifest.preparation_error;
+  for (const name of [
+    "corpus.json",
+    "corpus-after.json",
+    "model-files.json",
+    "model-files-after.json",
+  ])
+    await writeJson(join(fixture.shard, name), inventory);
+  for (const phase of ["before", "after"]) {
+    const directory = join(fixture.shard, "stages", phase);
+    const artifacts = {};
+    for (const [name, value] of Object.entries({
+      "files.json": [{ relativePath: "entry.py", sizeBytes: 1 }],
+      "scan.json": {},
+      "manifest.json": {},
+      "fragments.jsonl": [],
+    })) {
+      await writeJson(join(directory, name), value);
+      artifacts[name] = await fileHash(join(directory, name));
+    }
+    await writeJson(join(directory, "summary.json"), {
+      logical_content_sha256: fixture.manifest.index_content_sha256,
+      artifacts,
+    });
+  }
+  for (const call of fixture.calls) {
+    delete call.preparation_error;
+    await writeJson(join(fixture.shard, call.raw_path), {
+      content: [{ type: "text", text: "freshness: fresh\nNo matches." }],
+    });
+    call.raw_sha256 = await fileHash(join(fixture.shard, call.raw_path));
+  }
+  await fixture.save();
+  assert.equal((await fixture.score()).integrity_passed, true);
+  for (const invalid of [undefined, null, -1, "slow"]) {
+    fixture.calls[1].latency_ms = invalid;
+    await fixture.save();
+    assertNoHeadline(await fixture.score());
+    const scored = (
+      await readFile(join(fixture.directory, "scores.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.match(
+      scored.find((row) => row.preview === "short" && row.repetition === 2)
+        .invalid_reason,
+      /invalid call latency/,
+    );
+  }
+  fixture.calls[1].latency_ms = 0;
+  await fixture.save();
+  assert.equal((await fixture.score()).integrity_passed, true);
 });
 
 test("a duplicate cannot replace a missing repetition even if the call count still equals the plan", async (t) => {

@@ -1,0 +1,362 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import {
+  FILE_RETRIEVAL_CONTRACT,
+  fileRetrievalForRow,
+  summarizeFileRetrieval,
+} from "../metrics/files.mjs";
+import { summarizeMeasurements } from "../metrics/measurements.mjs";
+import { summarizeSembleOfficial } from "../metrics/summary.mjs";
+import { selectPreviewReport, validateZgReport } from "./validation.mjs";
+export { selectPreviewReport } from "./validation.mjs";
+
+const MODES = ["hybrid", "fts", "vector"];
+const HITS = ["hit_at_1", "hit_at_5", "hit_at_10"];
+const FILE_METRICS = [...HITS, "rr_at_10"];
+const hash = (value) => createHash("sha256").update(value).digest("hex");
+const difference = (before, after) => (before === null ? null : after - before);
+const key = (row) => JSON.stringify([row.task_id, row.mode]);
+
+function scoreView(row) {
+  const targets = row.semble_official.targets;
+  const file = fileRetrievalForRow(row);
+  return {
+    ...Object.fromEntries(
+      [
+        "task_id",
+        "status",
+        "execution_status",
+        "gold_status",
+        "repository",
+        "language",
+        "items",
+      ].map((field) => [field, row[field]]),
+    ),
+    file_retrieval: file,
+    semble_official:
+      file === null
+        ? null
+        : { targets, ...scoreSembleMetric(row.items, targets) },
+  };
+}
+
+function filePair(pairs) {
+  const baseline = summarizeFileRetrieval(pairs.map((pair) => pair.baseline));
+  const candidate = summarizeFileRetrieval(pairs.map((pair) => pair.candidate));
+  return {
+    baseline,
+    candidate,
+    delta: Object.fromEntries(
+      [...HITS, "mrr_at_10"].map((field) => [
+        field,
+        difference(baseline[field], candidate[field]),
+      ]),
+    ),
+  };
+}
+
+function officialPair(pairs) {
+  const baseline = summarizeSembleOfficial(pairs.map((pair) => pair.baseline));
+  const candidate = summarizeSembleOfficial(
+    pairs.map((pair) => pair.candidate),
+  );
+  return {
+    baseline,
+    candidate,
+    delta: Object.fromEntries(
+      ["query_mean", "repository_macro", "language_macro"].map(
+        (aggregation) => [
+          aggregation,
+          Object.fromEntries(
+            ["ndcg_at_10"].map((metric) => [
+              metric,
+              difference(
+                baseline[aggregation][metric],
+                candidate[aggregation][metric],
+              ),
+            ]),
+          ),
+        ],
+      ),
+    ),
+  };
+}
+
+function reportIdentity(report) {
+  const unique = (getter) =>
+    [
+      ...new Set((report.repositories ?? []).map(getter).filter(Boolean)),
+    ].sort();
+  return {
+    generated_at: report.generated_at ?? null,
+    integrity_passed: report.integrity_passed,
+    product_error_calls: report.product_error_calls,
+    candidate_commits: unique((repo) => repo.candidate_commit),
+    package_sha256: unique((repo) => repo.package?.tarball_sha256),
+    model_files_sha256: unique((repo) => repo.model_files_sha256),
+  };
+}
+
+/** Compare validated quality rows; task ordering and cached aggregate summaries are not score inputs. */
+export function compareReports(baseline, candidate) {
+  const before = validateZgReport(baseline, "baseline");
+  const after = validateZgReport(candidate, "candidate");
+  return compareValidatedReports(baseline, candidate, before, after);
+}
+
+function compareValidatedReports(baseline, candidate, before, after) {
+  if (baseline.previews || candidate.previews) {
+    assert.ok(
+      baseline.previews && candidate.previews,
+      "incompatible preview arm sets",
+    );
+    const previews = Object.fromEntries(
+      ["short", "full"].map((preview) => [
+        preview,
+        compareValidatedReports(
+          selectPreviewReport(baseline, preview),
+          selectPreviewReport(candidate, preview),
+          before.previews[preview],
+          after.previews[preview],
+        ),
+      ]),
+    );
+    return { ...previews.short, primary_preview: "short", previews };
+  }
+  assert.equal(
+    baseline.preview,
+    candidate.preview,
+    "incompatible preview arms",
+  );
+  for (const field of ["source", "gold", "semble_gold", "protocol"])
+    assert.equal(
+      baseline.suite[field],
+      candidate.suite[field],
+      `incompatible suite ${field}`,
+    );
+  assert.equal(baseline.scope, candidate.scope, "incompatible report scopes");
+  assert.deepEqual(before.ids, after.ids, "incompatible expected task sets");
+  assert.deepEqual(before.modes, after.modes, "incompatible mode sets");
+  const modes = MODES.filter((mode) => before.modes.includes(mode));
+  const pairs = [];
+  for (const mode of modes)
+    for (const task_id of baseline.expected_task_ids) {
+      const oldRow = before.rows.get(key({ task_id, mode }));
+      const newRow = after.rows.get(key({ task_id, mode }));
+      for (const field of ["repository", "category", "gold_status", "language"])
+        assert.equal(
+          oldRow[field],
+          newRow[field],
+          `${task_id}/${mode}: incompatible ${field}`,
+        );
+      assert.deepEqual(
+        oldRow.semble_official.targets,
+        newRow.semble_official.targets,
+        `${task_id}/${mode}: incompatible Semble target projection`,
+      );
+      const oldFile = fileRetrievalForRow(oldRow);
+      const newFile = fileRetrievalForRow(newRow);
+      assert.equal(
+        oldFile === null,
+        newFile === null,
+        `${task_id}/${mode}: changed scoring eligibility`,
+      );
+      const fileDelta = Object.fromEntries(
+        FILE_METRICS.map((metric) => [
+          metric,
+          difference(oldFile?.[metric] ?? null, newFile?.[metric] ?? null),
+        ]),
+      );
+      pairs.push({
+        task_id,
+        mode,
+        repository: oldRow.repository,
+        category: oldRow.category,
+        baseline: scoreView(oldRow),
+        candidate: scoreView(newRow),
+        file_retrieval_delta: fileDelta,
+        semble_official_delta: Object.fromEntries(
+          ["ndcg_at_10"].map((metric) => [
+            metric,
+            oldFile === null
+              ? null
+              : newRow.semble_official[metric] - oldRow.semble_official[metric],
+          ]),
+        ),
+        rank_change:
+          fileDelta.rr_at_10 === null
+            ? "unscored"
+            : fileDelta.rr_at_10 > 0
+              ? "improved"
+              : fileDelta.rr_at_10 < 0
+                ? "regressed"
+                : "unchanged",
+        status_transition: `${oldRow.status} -> ${newRow.status}`,
+        execution_transition: `${oldRow.execution_status} -> ${newRow.execution_status}`,
+      });
+    }
+  return {
+    schema_version: 2,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
+    ...(baseline.preview === undefined ? {} : { preview: baseline.preview }),
+    quality_repetition: 5,
+    suite: structuredClone(baseline.suite),
+    scope: baseline.scope,
+    expected_task_ids: [...baseline.expected_task_ids],
+    task_order_policy:
+      "Task IDs and modes match as sets; tables follow baseline task order and hybrid/fts/vector mode order.",
+    quality_gate: "report-only; no quality threshold or causal attribution",
+    aggregation:
+      "Five metrics recomputed from matched repetition-5 public items on the SWE-QA accepted-file projection: file Hit@1/5/10 and MRR@10 use query means; nDCG@10 uses the repository macro.",
+    baseline: reportIdentity(baseline),
+    candidate: reportIdentity(candidate),
+    warnings: [baseline, candidate].flatMap((report, i) =>
+      report.integrity_passed
+        ? []
+        : [
+            `${i === 0 ? "baseline" : "candidate"}: operational integrity failed with ${report.product_error_calls} product-error calls; valid reviewed quality zeros are retained. Differences can include delivery failures and are not pure ranking effects.`,
+          ],
+    ),
+    modes: Object.fromEntries(
+      modes.map((mode) => {
+        const rows = pairs.filter((pair) => pair.mode === mode);
+        return [
+          mode,
+          {
+            measurements: {
+              baseline: summarizeMeasurements(
+                rows.flatMap(
+                  (pair) =>
+                    before.rows.get(key(pair)).measurement_observations ?? [],
+                ),
+              ),
+              candidate: summarizeMeasurements(
+                rows.flatMap(
+                  (pair) =>
+                    after.rows.get(key(pair)).measurement_observations ?? [],
+                ),
+              ),
+            },
+            file_retrieval: filePair(rows),
+            semble_official: officialPair(rows),
+          },
+        ];
+      }),
+    ),
+    tasks: pairs,
+  };
+}
+
+const cell = (value) =>
+  String(value ?? "N/A")
+    .replaceAll("|", "\\|")
+    .replace(/[\r\n]+/g, " ");
+const number = (value) =>
+  typeof value === "number" ? value.toFixed(4) : "N/A";
+const signed = (value) =>
+  typeof value === "number"
+    ? `${value > 0 ? "+" : ""}${value.toFixed(4)}`
+    : "N/A";
+
+export function markdownComparison(result) {
+  const variants = result.previews
+    ? Object.entries(result.previews)
+    : [[result.preview ?? "default", result]];
+  const lines = [
+    "# zg Retrieval-only version comparison",
+    "",
+    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. Quality uses the fifth call. Delta is candidate minus baseline.`,
+    "",
+    "Source, Gold, frozen accepted-file targets and protocol identities match; task/mode coverage and scoring eligibility are validated. All five metrics are recomputed from saved public result items. This is a report-only comparison with no quality threshold or causal attribution.",
+    "",
+    "| Mode / preview / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...variants.flatMap(([preview, report]) =>
+      Object.entries(report.modes).flatMap(([mode, entry]) =>
+        ["baseline", "candidate"].map((side) => {
+          const file = entry.file_retrieval[side];
+          return `| ${mode} / ${preview} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.semble_official[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
+        }),
+      ),
+    ),
+    "",
+    "File Hit@1/5/10 and MRR@10 weight original questions equally. nDCG@10 first averages questions within each repository, then weights repositories equally. Native ranks are preserved without deduplication. These SWE-QA accepted-file projection scores measure file localization, not sufficient answer evidence; five repetitions are not independent questions.",
+  ];
+  const warnings = [
+    ...new Set(variants.flatMap(([, report]) => report.warnings)),
+  ];
+  if (warnings.length)
+    lines.push(
+      "",
+      "Operational integrity warnings:",
+      "",
+      ...warnings.map((warning) => `- ${cell(warning)}`),
+    );
+  lines.push(
+    "",
+    "<details>",
+    "<summary>Per-question changes</summary>",
+    "",
+    "| Question / mode / preview | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...variants.flatMap(([preview, report]) =>
+      report.tasks.map(
+        (row) =>
+          `| ${cell(row.task_id)} / ${cell(row.mode)} / ${preview} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.semble_official_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
+      ),
+    ),
+    "",
+    "</details>",
+    "",
+    ...variants.flatMap(([preview, report]) =>
+      Object.entries(report.modes).flatMap(([mode, entry]) =>
+        ["baseline", "candidate"].map(
+          (side) =>
+            `${mode} / ${preview} / ${side}: output samples **${entry.measurements[side].output_sample_count}** (successful fifth calls); latency samples **${entry.measurements[side].latency_sample_count}** (all successful valid calls).`,
+        ),
+      ),
+    ),
+    "",
+    "Output means use public UTF-8 bytes / 1024; latency P50 includes session load and fixed-order cache effects. Measurements are recomputed from saved per-call metadata, whose raw-response identities are audited by aggregation; this comparison does not reread raw captures. Older reports without complete per-call measurement evidence show N/A. Cross-environment timings do not establish a speed winner.",
+    "",
+    "Product-error zeros remain in the denominator. Invalid experiments are rejected; unreviewed Gold is N/A. JSON retains input identities, target ranks and per-question status transitions.",
+  );
+  return lines.join("\n") + "\n";
+}
+
+export async function writeComparison(baselinePath, candidatePath, outputPath) {
+  const paths = [resolve(baselinePath), resolve(candidatePath)];
+  const bytes = await Promise.all(paths.map((path) => readFile(path)));
+  const result = compareReports(...bytes.map((raw) => JSON.parse(raw)));
+  result.inputs = Object.fromEntries(
+    paths.map((path, i) => [
+      i === 0 ? "baseline" : "candidate",
+      { path, sha256: hash(bytes[i]) },
+    ]),
+  );
+  const output = resolve(outputPath);
+  // Validate before creating artifacts; never overwrite a previous comparison.
+  await mkdir(output, { recursive: false });
+  await writeFile(
+    join(output, "comparison.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
+  await writeFile(join(output, "comparison.md"), markdownComparison(result));
+  return result;
+}
+
+export async function main() {
+  const args = process.argv.slice(2);
+  if (args.length !== 3) {
+    console.error(
+      "Usage: node compare.mjs BASELINE_REPORT.json CANDIDATE_REPORT.json NEW_OUTPUT_DIR",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  await writeComparison(...args);
+  console.log(`Comparison: ${join(resolve(args[2]), "comparison.md")}`);
+}

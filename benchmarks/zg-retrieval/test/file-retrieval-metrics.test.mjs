@@ -5,7 +5,7 @@ import {
   scoreFileRetrieval,
   fileRetrievalForRow,
   summarizeFileRetrieval,
-} from "../file-retrieval-metrics.mjs";
+} from "../metrics/files.mjs";
 
 const targets = [{ path: "src/answer.py" }, { path: "src/helper.py" }];
 const itemsAt = (rank) =>

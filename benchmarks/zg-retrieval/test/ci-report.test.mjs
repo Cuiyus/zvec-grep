@@ -4,17 +4,22 @@ import {
   buildCiSummary,
   markdownCiSummary,
   QUALITY_METRICS,
-} from "../ci-report.mjs";
+} from "../reports/ci.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
   summarizeFileRetrieval,
-} from "../file-retrieval-metrics.mjs";
-import { loadSuite, objectHash } from "../lib.mjs";
-import { summarizeMeasurements } from "../measurement-metrics.mjs";
-import { summarizeSembleOfficial } from "../report.mjs";
-import { scoreSembleMetric } from "../semble-metrics.mjs";
-import { SEMBLE_PROTOCOL } from "../semble-report.mjs";
+} from "../metrics/files.mjs";
+import { loadSuite, objectHash } from "../core/lib.mjs";
+import { summarizeMeasurements } from "../metrics/measurements.mjs";
+import { summarizeSembleOfficial } from "../metrics/summary.mjs";
+import { scoreSembleMetric } from "../metrics/ndcg.mjs";
+import { SEMBLE_PROTOCOL } from "../engines/semble/protocol.mjs";
+
+import {
+  validateZgReport,
+  validateSembleReport,
+} from "../reports/validation.mjs";
 
 const suite = await loadSuite();
 const clone = (value) => structuredClone(value);
@@ -543,4 +548,42 @@ test("combined CI table validates exact cached fractional scores after independe
       shuffledZg.previews[preview].modes.hybrid.semble_official,
     );
   }
+});
+
+test("both standalone validators reject successful calls with missing or invalid latency", async () => {
+  for (const latency_ms of [null, -1, Number.NaN]) {
+    const zg = zgReport();
+    zg.tasks[0].measurement_observations[0].latency_ms = latency_ms;
+    assert.throws(
+      () => validateZgReport(zg, "ZG", { suite }),
+      /measurement.*latency/,
+    );
+    const semble = sembleReport();
+    semble.tasks[0].measurement_observations[0].latency_ms = latency_ms;
+    await assert.rejects(
+      validateSembleReport(semble, suite),
+      /measurement.*latency/,
+    );
+  }
+});
+
+test("ZG product-error text does not invalidate a cross-engine comparison or enter measurements", async () => {
+  const zg = zgReport({ failed: true });
+  for (const row of zg.tasks) {
+    row.visible_output_bytes = 37;
+    for (const sample of row.measurement_observations)
+      sample.visible_output_bytes = 37;
+  }
+  const result = await buildCiSummary({
+    zg,
+    semble: sembleReport(),
+    sembleRequested: true,
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.rows[0].status, "product_error");
+  assert.equal(result.rows[0].metrics.file_hit_at_10, 0);
+  assert.equal(result.rows[0].measurements.output_sample_count, 0);
+  assert.equal(result.rows[0].measurements.output_bytes_mean, null);
+  assert.ok(result.comparison, result.errors.join("\n"));
+  assert.equal(result.comparison.file_retrieval.zg.hit_at_10, 0);
 });
