@@ -6,6 +6,7 @@ import {
   createSembleResponseParser,
   scoreSembleResponse,
 } from "../semble-scoring.mjs";
+import { scoreFileRetrieval } from "../file-retrieval-metrics.mjs";
 
 const query = "How does wanted keep its result?";
 const sha = (text) => createHash("sha256").update(text).digest("hex");
@@ -58,16 +59,27 @@ const score = (raw, labels = gold()) =>
 const parse = createSembleResponseParser({ expectedQuery: query });
 const filler = () => entry({ start_line: 2, content: "def other():" });
 
+const removedFields = [
+  "first_hit_rank",
+  "hit_at_1",
+  "hit_at_5",
+  "hit_at_10",
+  "rr_at_10",
+  "ndcg_at_5",
+  "ndcg_at_10",
+  "target_matches",
+];
+const assertNoLegacyScores = (parsed) => {
+  for (const key of removedFields)
+    assert.equal(Object.hasOwn(parsed, key), false, key);
+};
+
 for (const rank of [1, 5, 10]) {
   test(`Semble preserves native array rank ${rank} without file compaction`, () => {
     const raw = result([...Array.from({ length: rank - 1 }, filler), entry()]);
     const scored = score(raw);
     assert.equal(scored.status, "scored");
-    assert.equal(scored.first_hit_rank, rank);
-    assert.equal(scored.hit_at_1, Number(rank === 1));
-    assert.equal(scored.hit_at_5, Number(rank <= 5));
-    assert.equal(scored.hit_at_10, 1);
-    assert.equal(scored.rr_at_10, 1 / rank);
+    assertNoLegacyScores(scored);
     assert.equal(scored.items.length, rank);
     assert.deepEqual(
       scored.items.map((item) => item.rank),
@@ -98,7 +110,7 @@ test("Semble full chunks retain evidence beyond line ten and terminal blank line
   ]);
   const scored = score(raw, labels);
   assert.equal(scored.status, "scored");
-  assert.equal(scored.hit_at_1, 1);
+  assertNoLegacyScores(scored);
   assert.equal(scored.items[0].source_lines.length, 14);
   assert.deepEqual(scored.items[0].source_lines.at(-1), { line: 33, text: "" });
   assert.equal(scored.items[0].source_content, content);
@@ -120,132 +132,28 @@ test("Semble never expands the chunk range or hidden structured content", () => 
       outline: "def wanted():",
     },
   });
-  assert.equal(score(raw).hit_at_10, 0);
+  assert.equal(score(raw).items[0].source_content, "def other():");
+  assert.deepEqual(score(raw).items[0].outline, []);
+  assertNoLegacyScores(score(raw));
   const outsideSnippet = gold([
     target("body", {
       kind: "code_span",
       anchors: [anchor("    return state", 35)],
     }),
   ]);
-  assert.equal(score(result(), outsideSnippet).hit_at_10, 0);
+  assert.equal(score(result(), outsideSnippet).items[0].range.end_line, 21);
+  assert.equal(score(result(), outsideSnippet).items[0].source_lines.length, 2);
   assert.equal(
     score(result([entry({ content: "" })])).status,
     "harness_invalid",
   );
 });
 
-test("Semble applies the shared exact anchor position and complete-line rules", () => {
-  const labels = gold([
-    target("body", {
-      kind: "code_span",
-      anchors: [anchor("    state = lookup()\n    return state", 21)],
-    }),
-  ]);
-  assert.equal(
-    score(
-      result([
-        entry({
-          content: "def wanted():\n    state = lookup()\n    return state",
-        }),
-      ]),
-      labels,
-    ).hit_at_10,
-    1,
-  );
-  for (const bad of [
-    entry({ content: "def wanted():\n    state = lookup()" }),
-    entry({ content: "def wanted():\n    state = loo\n    return state" }),
-    entry({ content: "    state = lookup()\n    return state" }),
-    entry({
-      content: "def wanted():\nstate = lookup()\nreturn state",
-    }),
-  ])
-    assert.equal(score(result([bad]), labels).hit_at_10, 0);
-  assert.equal(
-    score(result([entry({ file_path: "pkg/other.py" })])).hit_at_10,
-    0,
-  );
-});
-
-test("Semble first-line AST indentation omission has the shared location restriction", () => {
-  const labels = gold([
-    target("method", { anchors: [anchor("    def wanted():")] }),
-  ]);
-  assert.equal(score(result(), labels).hit_at_10, 1);
-  assert.equal(
-    score(
-      result([
-        entry({ start_line: 19, content: "class Parent:\ndef wanted():" }),
-      ]),
-      labels,
-    ).hit_at_10,
-    0,
-  );
-});
-
-test("Semble repeated group evidence contributes once, and bridges earn no credit", () => {
-  const labels = gold(
-    [
-      target(),
-      target("second", {
-        symbol: "second",
-        anchors: [anchor("def second():", 50)],
-      }),
-      target("bridge", {
-        role: "bridge",
-        anchors: [anchor("def bridge():", 60)],
-      }),
-    ],
-    [
-      { id: "first", target_ids: ["wanted"] },
-      { id: "second", target_ids: ["second"] },
-    ],
-  );
-  const scored = score(
-    result([
-      entry(),
-      entry(),
-      entry({ start_line: 50, content: "def second():" }),
-      entry({ start_line: 60, content: "def bridge():" }),
-    ]),
-    labels,
-  );
-  assert.equal(
-    scored.ndcg_at_10,
-    (1 + 1 / Math.log2(4)) / (1 + 1 / Math.log2(3)),
-  );
-  assert.equal(scored.target_matches.length, 4);
-  const bridgeOnly = score(
-    result([entry({ start_line: 60, content: "def bridge():" })]),
-    labels,
-  );
-  assert.equal(bridgeOnly.hit_at_10, 0);
-  assert.equal(bridgeOnly.ndcg_at_10, 0);
-});
-
-test("Semble one native result can contribute at most one nDCG group", () => {
-  const labels = gold(
-    [
-      target(),
-      target("body", {
-        kind: "code_span",
-        anchors: [anchor("    return state", 21)],
-      }),
-    ],
-    [
-      { id: "declaration", target_ids: ["wanted"] },
-      { id: "body", target_ids: ["body"] },
-    ],
-  );
-  const scored = score(result(), labels);
-  assert.equal(scored.target_matches.length, 2);
-  assert.equal(scored.ndcg_at_10, 1 / (1 + 1 / Math.log2(3)));
-});
-
 test("Semble explicit no-results object is a valid miss; other errors are not empty", () => {
   const scored = score(response({ error: "No results found." }));
   assert.equal(scored.status, "scored");
-  assert.equal(scored.hit_at_10, 0);
+  assert.deepEqual(scored.items, []);
+  assertNoLegacyScores(scored);
   assert.equal(scored.empty_reason, "no_results");
   for (const payload of [
     { error: "No results found.", results: [] },
@@ -257,7 +165,7 @@ test("Semble explicit no-results object is a valid miss; other errors are not em
     assert.equal(score(response(payload)).status, "harness_invalid");
 });
 
-test("Semble indexing plaintext and MCP isError are product failures with zero scores", () => {
+test("Semble indexing plaintext and MCP isError retain product-failure eligibility", () => {
   const failures = [
     {
       content: [
@@ -273,8 +181,8 @@ test("Semble indexing plaintext and MCP isError are product failures with zero s
     const scored = score(raw);
     assert.equal(scored.status, "product_error");
     assert.equal(scored.execution_status, "product_error");
-    assert.equal(scored.hit_at_10, 0);
-    assert.equal(scored.rr_at_10, 0);
+    assert.deepEqual(scored.items, []);
+    assertNoLegacyScores(scored);
     assert.equal(scored.invalid_reason, null);
   }
   assert.equal(
@@ -328,7 +236,7 @@ test("Semble rejects unsupported ranks, paths, fields, ranges, scores and snippe
   for (const overrides of malformed) {
     const scored = score(result([entry(overrides)]));
     assert.equal(scored.status, "harness_invalid", JSON.stringify(overrides));
-    assert.equal(scored.hit_at_10, null);
+    assertNoLegacyScores(scored);
   }
   assert.equal(
     score(result(Array.from({ length: 11 }, () => entry()))).status,
@@ -365,5 +273,22 @@ test("the shared scorer keeps its default zg behavior unchanged", () => {
     scoreResponse(raw, gold()),
     scoreResponse(raw, gold(), { parseResponse: parseVisibleResponse }),
   );
-  assert.equal(scoreResponse(raw, gold()).hit_at_1, 1);
+  assert.equal(scoreResponse(raw, gold()).status, "scored");
+  assertNoLegacyScores(scoreResponse(raw, gold()));
+});
+
+test("Semble file relevance ignores anchor text and uses only frozen accepted paths", () => {
+  const targets = [{ path: "pkg/main.py" }];
+  for (const content of [
+    "def wanted():",
+    "a useful function body",
+    "an unrelated declaration",
+  ]) {
+    const parsed = score(result([entry({ start_line: 200, content })]));
+    assert.equal(parsed.status, "scored");
+    assert.equal(scoreFileRetrieval(parsed.items, targets).hit_at_1, 1);
+    assertNoLegacyScores(parsed);
+  }
+  const other = score(result([entry({ file_path: "pkg/else.py" })]));
+  assert.equal(scoreFileRetrieval(other.items, targets).hit_at_10, 0);
 });

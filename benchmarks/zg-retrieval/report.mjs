@@ -18,23 +18,30 @@ import {
   summarizeFileRetrieval,
 } from "./file-retrieval-metrics.mjs";
 
-const metricKeys = [
-  "hit_at_1",
-  "hit_at_5",
-  "hit_at_10",
-  "rr_at_10",
-  "ndcg_at_5",
-  "ndcg_at_10",
-];
+import { summarizeMeasurements } from "./measurement-metrics.mjs";
+
 const average = (values) =>
   values.length
     ? values.reduce((sum, value) => sum + value, 0) / values.length
     : null;
 const display = (value) =>
-  typeof value === "number" ? value.toFixed(3) : "N/A";
+  typeof value === "number" ? value.toFixed(4) : "N/A";
 
 export function summarizeSembleOfficial(rows) {
-  const metrics = ["ndcg_at_5", "ndcg_at_10"];
+  // Canonical accumulation order keeps exact cached aggregates independent of
+  // filesystem shard order and caller task order without changing the metric.
+  rows = rows
+    .filter(
+      (row) =>
+        row.semble_official != null &&
+        (row.gold_status == null || row.gold_status === "reviewed"),
+    )
+    .sort((left, right) => {
+      const a = String(left.task_id ?? ""),
+        b = String(right.task_id ?? "");
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  const metrics = ["ndcg_at_10"];
   const mean = (values) =>
     Object.fromEntries(
       metrics.map((key) => [key, average(values.map((value) => value[key]))]),
@@ -73,7 +80,7 @@ export function summarizeSembleOfficial(rows) {
     dataset:
       "SWE-QA accepted-file projection; not the original Semble benchmark dataset",
     metric:
-      "Semble official first-target-rank binary nDCG; all projected targets; no complementary-group substitution",
+      "Semble official first-target-rank binary nDCG; all projected targets; native ranks without result deduplication",
     quality_repetition: 5,
     query_count: rows.length,
     repository_count: Object.keys(byRepository).length,
@@ -86,69 +93,16 @@ export function summarizeSembleOfficial(rows) {
   };
 }
 
-export function markdownSembleOfficialTable(
-  modes,
-  { title = "Semble official metric — SWE-QA accepted-file projection" } = {},
-) {
-  const lines = [
+export function markdownSembleOfficialTable(modes) {
+  return [
     "",
-    `## ${title}`,
-    "",
-    "The algorithm and aggregation follow Semble; these are scores on this SWE-QA projection, not scores on Semble's original dataset. Quality uses the fifth native result list. Each distinct accepted file is one target; bridge-only files are excluded. No grouped-anchor nDCG is substituted.",
-    "",
-    "| Mode / aggregation | Queries | Repositories | Languages | nDCG@5 | nDCG@10 |",
-    "| --- | --- | --- | --- | --- | --- |",
-  ];
-  for (const [mode, entry] of Object.entries(modes)) {
-    const official = entry.semble_official;
-    if (!official) {
-      lines.push(
-        `| ${mode} | **Invalid experiment — official aggregate withheld** | | | | |`,
-      );
-      continue;
-    }
-    for (const [key, label] of [
-      ["query_mean", "query mean"],
-      ["repository_macro", "repository macro (JSON summary)"],
-      ["language_macro", "language macro (terminal Avg)"],
-    ])
-      lines.push(
-        `| ${mode} / ${label} | ${official.query_count} | ${official.repository_count} | ${official.language_count} | ${display(official[key].ndcg_at_5)} | ${display(official[key].ndcg_at_10)} |`,
-      );
-  }
-  lines.push(
-    "",
-    "Repository means weight their queries equally; repository macro weights repositories equally; language macro first averages repositories within each language, then weights languages equally. This suite contains only Python repositories, so its repository and language macros coincide.",
-  );
-  return lines;
-}
-
-function summarize(rows) {
-  const scored = rows.filter((row) => row.hit_at_10 !== null);
-  const ndcg = rows.filter((row) => row.ndcg_at_10 !== null);
-  return {
-    planned_tasks: rows.length,
-    scored_tasks: scored.length,
-    hit_at_1_count: scored.reduce((sum, row) => sum + row.hit_at_1, 0),
-    hit_at_5_count: scored.reduce((sum, row) => sum + row.hit_at_5, 0),
-    hit_at_10_count: scored.reduce((sum, row) => sum + row.hit_at_10, 0),
-    ...Object.fromEntries(
-      metricKeys.map((key) => [
-        key === "rr_at_10" ? "mrr_at_10" : key,
-        average(
-          rows
-            .map((row) => row[key])
-            .filter((value) => typeof value === "number"),
-        ),
-      ]),
+    "| Mode | Semble nDCG@10 (repository macro) |",
+    "| --- | --- |",
+    ...Object.entries(modes).map(
+      ([mode, entry]) =>
+        `| ${mode} | ${display(entry.semble_official?.repository_macro.ndcg_at_10)} |`,
     ),
-    ndcg_tasks: ndcg.length,
-    product_errors: rows.filter(
-      (row) => row.execution_status === "product_error",
-    ).length,
-    invalid_tasks: rows.filter((row) => row.status === "harness_invalid")
-      .length,
-  };
+  ];
 }
 
 /** Compare only public retrieval identities; preview-dependent text is deliberately excluded. */
@@ -196,15 +150,9 @@ export function summarizePreviewPairs(
       status: valid ? "compared" : "unavailable",
       ranking_equal: valid ? identity(primary) === identity(comparison) : null,
       official_ndcg_equal: valid
-        ? ["ndcg_at_5", "ndcg_at_10"].every(
-            (key) =>
-              primary.semble_official[key] === comparison.semble_official[key],
-          )
+        ? primary.semble_official.ndcg_at_10 ===
+          comparison.semble_official.ndcg_at_10
         : null,
-      primary_first_anchor_rank: primary?.first_hit_rank ?? null,
-      comparison_first_anchor_rank: comparison?.first_hit_rank ?? null,
-      primary_output_bytes: primary?.visible_output_bytes ?? null,
-      comparison_output_bytes: comparison?.visible_output_bytes ?? null,
     };
   });
   const counts = (rows) => ({
@@ -260,76 +208,8 @@ function invalidate(score, reason) {
     status: "harness_invalid",
     execution_status: "harness_invalid",
     invalid_reason: reason,
-    first_hit_rank: null,
-    ...Object.fromEntries(metricKeys.map((key) => [key, null])),
-  };
-}
-
-async function stageEvidence(directory, entry) {
-  const observations = [];
-  try {
-    const files = await readJson(join(directory, "stages/before/files.json"));
-    const scanned = new Set(
-      (await readJson(join(directory, "stages/before/scan.json"))).files.map(
-        (file) => file.relativePath,
-      ),
-    );
-    const fragments = (
-      await readFile(join(directory, "stages/before/fragments.jsonl"), "utf8")
-    )
-      .split("\n")
-      .filter(Boolean)
-      .map(JSON.parse);
-    for (const target of entry.targets) {
-      const file = files.find((file) => file.relativePath === target.path);
-      const carriers = fragments.filter(
-        (fragment) =>
-          fragment.path === target.path &&
-          target.anchors.some((anchor) => {
-            if (
-              !fragment.contiguous_source_from_range_start ||
-              fragment.range?.kind !== "text" ||
-              anchor.start_line < fragment.range.startLine ||
-              anchor.end_line > fragment.range.endLine
-            )
-              return false;
-            const content = (fragment.content ?? "").split(/\r?\n/);
-            return anchor.text.split("\n").every((line, index) => {
-              const offset =
-                anchor.start_line - fragment.range.startLine + index;
-              return (
-                content[offset] === line ||
-                (offset === 0 && content[offset] === line.trimStart())
-              );
-            });
-          }),
-      );
-      observations.push({
-        target_id: target.id,
-        role: target.role,
-        scanned: scanned.has(target.path),
-        indexed_file: Boolean(file),
-        file_error: file?.indexStatus?.error ?? null,
-        stored_anchor_carriers: carriers.map((carrier) => carrier.id),
-        earliest_observed_loss: !scanned.has(target.path)
-          ? "not_scanned"
-          : !file
-            ? "not_in_persisted_files"
-            : file.indexStatus?.error
-              ? "index_file_error"
-              : !carriers.length
-                ? "no_verified_source_carrier_outline_mapping_inconclusive"
-                : "unobserved_candidates_or_final_visibility",
-      });
-    }
-  } catch (error) {
-    return { status: "not_available", reason: error.message, targets: [] };
-  }
-  return {
-    status: "available",
-    targets: observations,
-    interpretation:
-      "per-target offline diagnostics; candidate pools and actual embedding inputs remain unobserved",
+    file_retrieval: null,
+    semble_official: null,
   };
 }
 
@@ -343,7 +223,6 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     manifests = [];
   const runDirectories = await findRuns(directory);
   const seen = new Set();
-  const evidence = new Map();
   for (const runDirectory of runDirectories) {
     const manifest = await readJson(join(runDirectory, "run.json"));
     manifests.push(manifest);
@@ -649,11 +528,6 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           }
         }
       }
-      if (suite.gold[taskId])
-        evidence.set(
-          taskId,
-          await stageEvidence(runDirectory, suite.gold[taskId]),
-        );
     }
     errors.push(
       ...invalid.map((reason) => `${manifest.repository}: ${reason}`),
@@ -717,12 +591,14 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           ? new Set(repeats.map((item) => item.visible_output_sha256)).size ===
             1
           : null,
-        repeat_ranks: repeats.map((item) => item.first_hit_rank),
-        call_latencies_ms: repeats.map((item) => item.latency_ms),
         freshness_values: repeats.map((item) => item.freshness ?? null),
-        stage_evidence: evidence.get(row.task_id) ?? {
-          status: "not_available",
-        },
+        measurement_observations: repeats.map((item) => ({
+          repetition: item.repetition,
+          status: item.status,
+          execution_status: item.execution_status,
+          latency_ms: item.latency_ms,
+          visible_output_bytes: item.visible_output_bytes,
+        })),
       };
     });
   const productErrors = observations.filter(
@@ -739,33 +615,19 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           modes: Object.fromEntries(
             modes.map((mode) => {
               const rows = tasks.filter((row) => row.mode === mode);
-              const outputBytes = rows
-                .filter(
-                  (row) =>
-                    row.execution_status === "success" &&
-                    row.status !== "harness_invalid",
-                )
-                .map((row) => row.visible_output_bytes)
-                .filter((value) => typeof value === "number");
               return [
                 mode,
                 {
-                  summary: complete ? summarize(rows) : null,
+                  measurements: summarizeMeasurements(
+                    observations.filter(
+                      (row) => row.mode === mode && row.preview === preview,
+                    ),
+                  ),
                   file_retrieval: complete
                     ? summarizeFileRetrieval(rows)
                     : null,
                   semble_official: complete
                     ? summarizeSembleOfficial(rows)
-                    : null,
-                  by_category: complete
-                    ? Object.fromEntries(
-                        ["what", "where", "how", "why"].map((category) => [
-                          category,
-                          summarize(
-                            rows.filter((row) => row.category === category),
-                          ),
-                        ]),
-                      )
                     : null,
                   ranking_repeatable_tasks: rows.filter(
                     (row) => row.ranking_repeatable === true,
@@ -773,15 +635,6 @@ export async function aggregate(directory, { expectedTasks } = {}) {
                   output_repeatable_tasks: rows.filter(
                     (row) => row.output_repeatable === true,
                   ).length,
-                  output_size: {
-                    unit: "UTF-8 bytes of the public text response, not model tokens",
-                    measured_quality_responses: outputBytes.length,
-                    quality_mean_bytes: average(outputBytes),
-                    quality_total_bytes: outputBytes.reduce(
-                      (sum, value) => sum + value,
-                      0,
-                    ),
-                  },
                 },
               ];
             }),
@@ -792,7 +645,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     }),
   );
   const report = {
-    schema_version: 2,
+    schema_version: 3,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     primary_preview: suite.protocol.primary_preview,
     quality_repetition: suite.protocol.quality_repetition,
@@ -808,7 +661,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5 separately for each preview; file Hit and MRR use equal weight per original question and the same frozen targets as Semble official nDCG; nDCG has query/repository/language means; legacy anchor diagnostics retain their declared subset",
+      "quality repetition 5 separately for each preview; file Hit@1/5/10 and MRR@10 weight original questions equally; Semble nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
     modes: previewReports[suite.protocol.primary_preview].modes,
     previews: previewReports,
     paired_preview_comparison: summarizePreviewPairs(observations, {
@@ -829,126 +682,77 @@ export async function aggregate(directory, { expectedTasks } = {}) {
 }
 
 export function markdownReport(report) {
-  const previewModes = Object.fromEntries(
-    Object.entries(
-      report.previews ?? { short: { modes: report.modes } },
-    ).flatMap(([preview, entry]) =>
-      Object.entries(entry.modes).map(([mode, value]) => [
-        `${mode} / ${preview}`,
-        value,
-      ]),
-    ),
+  const previewModes = Object.entries(
+    report.previews ?? { [report.preview ?? "short"]: { modes: report.modes } },
+  ).flatMap(([preview, entry]) =>
+    Object.entries(entry.modes).map(([mode, value]) => [
+      `${mode} / ${preview}`,
+      value,
+    ]),
   );
-  const previewComparison = [
+  const queryCount =
+    report.expected_task_ids?.length ??
+    new Set(report.tasks.map((row) => row.task_id)).size;
+  const repoCount = new Set(report.repositories.map((repo) => repo.repository))
+    .size;
+  const lines = [
+    "# zg Retrieval-only",
     "",
-    "## Short/full comparison",
+    `Status: **${report.integrity_passed ? "PASS" : "FAIL"}**. Dataset: **${queryCount} original questions / ${repoCount} repositories**. Quality: **fifth call per question and preview**. Five repetitions are stability observations, not additional questions.`,
     "",
-    "Both previews use the same frozen index, MCP session, original query and native top-10 limit. Full displays all stored source content of each returned retrieval unit, not the entire file; outline-only units remain outlines. The two arms are scored separately, with the fifth call per arm used for quality. Each row still contains the same original questions.",
-    "",
-    "| Mode / preview | Official nDCG@5 | Official nDCG@10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Mean output bytes |",
+    "| Mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Semble nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
-  ];
-  for (const [label, entry] of Object.entries(previewModes)) {
-    const s = entry.file_retrieval,
-      official = entry.semble_official?.repository_macro;
-    previewComparison.push(
-      s && official
-        ? `| ${label} | ${display(official.ndcg_at_5)} | ${display(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} | ${display(entry.output_size?.quality_mean_bytes)} |`
-        : `| ${label} | **Invalid experiment — aggregate quality withheld** | | | | | | |`,
-    );
-  }
-  previewComparison.push(
+    ...previewModes.map(([label, entry]) => {
+      const file = entry.file_retrieval,
+        official = entry.semble_official?.repository_macro;
+      return file && official
+        ? `| ${label} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${display(file.mrr_at_10)} | ${display(official.ndcg_at_10)} | ${display(entry.measurements?.output_bytes_mean == null ? null : entry.measurements.output_bytes_mean / 1024)} | ${display(entry.measurements?.latency_ms_p50)} |`
+        : `| ${label} | N/A — invalid experiment | N/A | N/A | N/A | N/A | N/A | N/A |`;
+    }),
     "",
-    "Official nDCG uses the repository macro; file Hit/MRR uses equal weight per scored original question. All headline metrics use the same frozen accepted-file targets and upstream path matching, preserve native chunk ranks, and ignore source/outline visibility. File Hit@K is 1 if the first matching file is within K; RR@10 is 1/r for its first native rank r, or 0 for a Top-10 miss; MRR is the query mean including misses and product errors. These measure file localization, not sufficient answer evidence. Output size is UTF-8 bytes of the public MCP text, not a model token estimate.",
-  );
+    "File Hit@1/5/10 and MRR@10 give every original question equal weight, including misses and product-error zeros. Semble nDCG@10 first averages questions within each repository, then weights repositories equally. All five metrics use the same frozen accepted-file targets and native result ranks; repeated chunks consume ranks without file deduplication. Finding a file does not establish sufficient answer evidence. These are SWE-QA accepted-file projection scores, not scores on Semble's original dataset.",
+    "",
+    "Short and full use the same frozen index, session, query and Top-10 limit. Full returns all available content of each retrieved unit, not the entire file. Preview text and output length do not affect these five metrics. Quality thresholds are report-only.",
+  ];
   if (report.paired_preview_comparison) {
     const pair = report.paired_preview_comparison;
-    previewComparison.push(
+    lines.push(
       "",
-      `Paired retrieval identities: **${pair.same_ranking_pairs}/${pair.compared_pairs}** equal across all successful paired repetitions; quality repetition: **${pair.quality.same_ranking_pairs}/${pair.quality.compared_pairs}**. Official nDCG is equal in **${pair.same_official_ndcg_pairs}/${pair.compared_pairs}** paired repetitions. Pairs unavailable for comparison: **${pair.observed_pairs - pair.compared_pairs}**.`,
-      "",
-      "Pairing compares ordered rank, path, range, matched range and match type. Source text, source locations and outline text are excluded because the preview is expected to change them. Hidden entity IDs are unavailable. Any ranking mismatch is reported as an uncontrolled retrieval difference; it does not by itself invalidate the saved experiment.",
+      `Paired retrieval identities: **${pair.same_ranking_pairs}/${pair.compared_pairs}** equal; fifth-call pairs: **${pair.quality.same_ranking_pairs}/${pair.quality.compared_pairs}**. Unavailable pairs: **${pair.observed_pairs - pair.compared_pairs}**. The identity check compares ordered rank, path, range, matched range and match type; it excludes displayed text.`,
     );
     if (pair.different_ranking_pairs)
-      previewComparison.push(
-        "",
-        `**Uncontrolled ranking differences: ${pair.different_ranking_pairs} paired repetitions.** Inspect paired_preview_comparison.pairs in report.json before attributing anchor changes solely to source visibility.`,
-      );
-  }
-  const lines = [
-    "# zg Retrieval-only — SWE-QA original queries",
-    "",
-    `Scope: **${report.scope}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
-    "",
-    "Quality uses repetition 5; five repeats measure stability, not five independent questions. File Hit/MRR and Semble official file-target nDCG are the retrieval metrics. Legacy strict source-anchor Hit/MRR and grouped nDCG are output-visibility diagnostics, not retrieval or answer accuracy. Quality thresholds are report-only.",
-    ...previewComparison,
-    ...markdownSembleOfficialTable(previewModes),
-    "",
-    "## Legacy strict-anchor visibility diagnostics",
-    "",
-    "These historical scores mix native retrieval, output rendering and agent-authored anchor selection. They are retained for diagnosis and continuity, not as a cross-tool retrieval quality score. Grouped anchor nDCG uses only reviewed complementary groups (12 of the full 20-question suite).",
-    "",
-    "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-  ];
-  for (const [mode, result] of Object.entries(previewModes)) {
-    const s = result.summary;
-    lines.push(
-      s
-        ? `| ${mode} | ${s.scored_tasks}/${s.planned_tasks} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} | ${display(s.ndcg_at_5)} | ${display(s.ndcg_at_10)} | ${s.ndcg_tasks} |`
-        : `| ${mode} | **Invalid experiment — aggregate quality withheld** | | | | | | | |`,
-    );
-  }
-  lines.push(
-    "",
-    "## Per task",
-    "",
-    "| Task / mode / preview | Official nDCG@5 / @10 | File first rank / RR@10 | Official target ranks | Anchor status / first rank | Anchor RR@10 / grouped nDCG@10 | Repeat anchor ranks | Same rank / text | Raw |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-  );
-  for (const task of report.tasks) {
-    lines.push(
-      `| ${task.task_id} / ${task.mode} / ${task.preview ?? report.primary_preview ?? "short"} | ${display(task.semble_official?.ndcg_at_5)} / ${display(task.semble_official?.ndcg_at_10)} | ${task.file_retrieval?.first_hit_rank ?? "N/A"} / ${display(task.file_retrieval?.rr_at_10)} | ${task.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${task.status} / ${task.first_hit_rank ?? "N/A"} | ${display(task.rr_at_10)} / ${display(task.ndcg_at_10)} | ${task.repeat_ranks.join(", ")} | ${task.ranking_repeatable ?? "N/A"} / ${task.output_repeatable ?? "N/A"} | [response](${task.raw_path}) |`,
-    );
-  }
-  lines.push(
-    "",
-    "## Legacy anchor diagnostics by category",
-    "",
-    "| Mode / category | Scored / planned | Hit@10 | MRR@10 |",
-    "| --- | --- | --- | --- |",
-  );
-  for (const [mode, result] of Object.entries(previewModes))
-    for (const [category, s] of Object.entries(result.by_category ?? {}))
       lines.push(
-        `| ${mode} / ${category} | ${s.scored_tasks}/${s.planned_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${display(s.mrr_at_10)} |`,
+        "",
+        `**${pair.different_ranking_pairs} pairs have different retrieval identities.** Inspect paired_preview_comparison in report.json before attributing differences to presentation.`,
       );
+  }
   lines.push(
     "",
-    "## Preparation and latency",
+    "<details>",
+    "<summary>Per-question results and captured responses</summary>",
     "",
-    "Index timing includes CLI startup and model loading/download where necessary; no index cache is restored. Individual MCP latencies, session-first-query flags and freshness values are in report.json/scores.jsonl. Each query runs five short calls followed by five full calls; cache/order effects prevent treating this as an unbiased short/full speed comparison. Five repetitions are insufficient to characterize tail latency.",
+    "| Question / mode / preview | File Hit@1 | File Hit@5 | File Hit@10 | File RR@10 | Semble nDCG@10 | Status | Response |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...report.tasks.map(
+      (row) =>
+        `| ${row.task_id} / ${row.mode} / ${row.preview ?? report.preview ?? "short"} | ${row.file_retrieval?.hit_at_1 ?? "N/A"} | ${row.file_retrieval?.hit_at_5 ?? "N/A"} | ${row.file_retrieval?.hit_at_10 ?? "N/A"} | ${display(row.file_retrieval?.rr_at_10)} | ${display(row.semble_official?.ndcg_at_10)} | ${row.status} | [response](${row.raw_path}) |`,
+    ),
     "",
-    "| Repository | Preparation | Full index seconds | MCP connect ms | Post-run integrity |",
-    "| --- | --- | --- | --- | --- |",
-  );
-  for (const repo of report.repositories)
-    lines.push(
-      `| ${repo.repository} | ${repo.preparation_status} | ${display(repo.index_seconds)} | ${display(repo.mcp_connect_ms)} | ${repo.post_run_integrity ?? "not_verified"} |`,
-    );
-  lines.push(
+    "</details>",
     "",
-    "Persisted chunks, vector hashes, file inventories and replayed scanner output are in stages/. Actual embedding inputs and preselection/fusion candidates are **not observed**; no embedding root cause is inferred from a miss. Ranking repeatability compares visible result identities, not hidden entity IDs.",
+    ...previewModes.map(
+      ([label, entry]) =>
+        `${label}: output uses **${entry.measurements?.output_sample_count ?? 0}** successful fifth-call responses; latency P50 uses **${entry.measurements?.latency_sample_count ?? 0}** successful valid calls. Output is public UTF-8 bytes / 1024, not model tokens. Latency includes engine/session load and fixed-order cache effects; no cross-environment speed claim is made.`,
+    ),
+    "",
+    "Raw run metadata, public result items, target ranks, preparation evidence, corpus/model/index identities and per-call observations are retained in the JSON artifacts. Incomplete or invalid experiments withhold aggregate quality; product failures retain zero credit and fail operational integrity.",
   );
   if (report.product_error_calls)
-    lines.push(
-      "",
-      `Product error calls: **${report.product_error_calls}**. Reviewed questions receive zero for undelivered entries; CI fails operational integrity.`,
-    );
+    lines.push("", `Product-error calls: **${report.product_error_calls}**.`);
   if (report.integrity_errors.length)
     lines.push(
       "",
-      "## Invalid experiment",
+      "Invalid experiment:",
       "",
       ...report.integrity_errors.map(
         (reason) => `- ${reason.replaceAll("\n", " ")}`,

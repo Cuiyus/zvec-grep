@@ -3,14 +3,6 @@ import { createHash } from "node:crypto";
 const sha256 = (text) =>
   createHash("sha256").update(text, "utf8").digest("hex");
 const HEX = /^[a-f0-9]{64}$/;
-const METRICS = [
-  "hit_at_1",
-  "hit_at_5",
-  "hit_at_10",
-  "rr_at_10",
-  "ndcg_at_5",
-  "ndcg_at_10",
-];
 
 export class VisibleFormatError extends Error {
   constructor(message) {
@@ -257,96 +249,6 @@ function validateGold(gold) {
   }
 }
 
-function outlineMatches(item, target, anchor) {
-  if (
-    target.kind !== "symbol" ||
-    typeof target.symbol !== "string" ||
-    item.range.kind !== "text" ||
-    item.range.start_line !== anchor.start_line
-  )
-    return false;
-  // Python SWE-QA targets: an exact definition is required, not a calls/member list or symbol metadata.
-  const name = target.symbol.split(".").at(-1);
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const definition = new RegExp(
-    `^(?:async\\s+)?(?:def|class)\\s+${escaped}(?=[\\s(:\\[])`,
-  );
-  const expected = anchor.text.trim();
-  const firstDefinition = expected
-    .split(/\r?\n/)
-    .map((line) => line.trimStart())
-    .find((line) => /^(?:async\s+)?(?:def|class)\s/.test(line));
-  if (!name || !firstDefinition || !definition.test(firstDefinition))
-    return false;
-  const actual = item.outline.join("\n").trim();
-  // Only the outline's leading definition; no substring search through parent members/calls.
-  return actual === expected || actual.startsWith(`${expected}\n`);
-}
-
-function matchTarget(item, target) {
-  if (item.path !== target.path) return null;
-  for (const [anchorIndex, anchor] of target.anchors.entries()) {
-    const expected = anchorLines(anchor);
-    const visible = new Map(
-      item.source_lines.map((line) => [line.line, line.text]),
-    );
-    if (
-      expected.every((line, i) => {
-        const number = anchor.start_line + i;
-        const actual = visible.get(number);
-        if (actual === line) return true;
-        // AST node.text begins at the syntax node, omitting indentation on its first
-        // source line. Permit only this location-bound product transformation.
-        const nodeStart =
-          item.matched_range?.kind === "text"
-            ? item.matched_range.start_line
-            : item.range.kind === "text"
-              ? item.range.start_line
-              : null;
-        return (
-          number === nodeStart &&
-          actual !== undefined &&
-          actual === line.trimStart()
-        );
-      })
-    )
-      return { anchor_index: anchorIndex, via: "source_anchor" };
-    if (outlineMatches(item, target, anchor))
-      return { anchor_index: anchorIndex, via: "definition_outline" };
-  }
-  return null;
-}
-
-/** Maximum-discount injective rank/group matching; bounded by 2^10 rank masks. */
-function ndcgAt(k, groups, matches) {
-  let states = new Map([[0, 0]]);
-  for (const group of groups) {
-    const ranks = [
-      ...new Set(
-        matches
-          .filter((m) => group.target_ids.includes(m.target_id) && m.rank <= k)
-          .map((m) => m.rank),
-      ),
-    ];
-    const next = new Map(states);
-    for (const [mask, gain] of states) {
-      for (const rank of ranks) {
-        const bit = 1 << (rank - 1);
-        if (mask & bit) continue;
-        const value = gain + 1 / Math.log2(rank + 1);
-        if (value > (next.get(mask | bit) ?? -Infinity))
-          next.set(mask | bit, value);
-      }
-    }
-    states = next;
-  }
-  const dcg = Math.max(...states.values());
-  let ideal = 0;
-  for (let rank = 1; rank <= Math.min(k, groups.length); rank++)
-    ideal += 1 / Math.log2(rank + 1);
-  return Math.min(1, dcg / ideal);
-}
-
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object")
@@ -357,7 +259,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-/** Score saved public output only. Source/commit validation remains the runner's mandatory preflight. */
+/** Parse saved public output and establish scoring eligibility. File metrics are computed separately. */
 export function scoreResponse(
   response,
   gold,
@@ -367,9 +269,6 @@ export function scoreResponse(
     status: "harness_invalid",
     execution_status: "unknown",
     gold_status: gold?.status ?? null,
-    first_hit_rank: null,
-    ...Object.fromEntries(METRICS.map((key) => [key, null])),
-    target_matches: [],
     items: [],
     visible_output_sha256: null,
     structured_output_sha256: null,
@@ -435,39 +334,6 @@ export function scoreResponse(
     return result;
   }
   result.status = productError ? "product_error" : "scored";
-  result.first_hit_rank = "not_in_top10";
-  for (const key of ["hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"])
-    result[key] = 0;
-  if (gold.ndcg?.enabled === true) result.ndcg_at_5 = result.ndcg_at_10 = 0;
-  if (productError) return result;
-  for (const item of parsed.items) {
-    for (const target of gold.targets) {
-      const match = matchTarget(item, target);
-      if (match)
-        result.target_matches.push({
-          target_id: target.id,
-          role: target.role,
-          rank: item.rank,
-          ...match,
-        });
-    }
-  }
-  const acceptedMatches = result.target_matches.filter(
-    (match) => match.role === "accepted",
-  );
-  const rank = acceptedMatches.length
-    ? Math.min(...acceptedMatches.map((match) => match.rank))
-    : null;
-  if (rank !== null) {
-    result.first_hit_rank = rank;
-    result.hit_at_1 = Number(rank <= 1);
-    result.hit_at_5 = Number(rank <= 5);
-    result.hit_at_10 = 1;
-    result.rr_at_10 = 1 / rank;
-  }
-  if (gold.ndcg?.enabled === true) {
-    result.ndcg_at_5 = ndcgAt(5, gold.ndcg.groups, acceptedMatches);
-    result.ndcg_at_10 = ndcgAt(10, gold.ndcg.groups, acceptedMatches);
-  }
+
   return result;
 }

@@ -1,25 +1,16 @@
 name: Retrieval-only
 
+run-name: Retrieval-only · ${{ inputs.run_semble && 'ZG + Semble' || 'ZG' }} · ${{ github.ref_name }}
+
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "package*.json"
-      - "benchmarks/zg-retrieval/**"
-      - ".github/workflows/retrieval-only.yml"
-      - "!**/*.md"
-  pull_request:
-    paths:
-      - "src/**"
-      - "package*.json"
-      - "benchmarks/zg-retrieval/**"
-      - ".github/workflows/retrieval-only.yml"
-      - "!**/*.md"
   workflow_dispatch:
     inputs:
+      run_semble:
+        description: Also run the Semble MCP baseline
+        type: boolean
+        default: false
       modes:
-        description: Retrieval modes (each compares short and full source previews)
+        description: ZG retrieval modes (each includes short and full previews)
         type: choice
         default: hybrid
         options:
@@ -30,28 +21,45 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  RETRIEVAL_MODES: ${{ inputs.modes || 'hybrid' }}
+  RETRIEVAL_MODES: ${{ inputs.modes }}
+  SEMBLE_SOURCE_COMMIT: 0051e000fcaac69a9c5d081ebbc8d4cb8508160b
+  SEMBLE_MODEL_REVISION: e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  quality-contract:
-    name: retrieval contract
+  authorize:
+    name: Check maintainer permission
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+
+  quality-contract:
+    name: Validate retrieval contracts
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Test the replay protocol, shared file Hit/RR/MRR and pinned upstream nDCG oracle
+      - name: Test the five metrics, replay protocol and upstream nDCG oracle
         run: node --test benchmarks/zg-retrieval/test/*.test.mjs
 
   package-candidate:
@@ -65,6 +73,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -112,6 +122,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -136,16 +148,8 @@ jobs:
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "$GITHUB_SHA" \
             --modes "$RETRIEVAL_MODES"
-      - name: Publish repository summary
-        if: always()
-        run: |
-          if [ -f "$RUNNER_TEMP/retrieval/report.md" ]; then
-            cat "$RUNNER_TEMP/retrieval/report.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'No repository report was produced; inspect the failed preparation step.' >> "$GITHUB_STEP_SUMMARY"
-          fi
       - name: Preserve repository evidence, including failures
-        if: always()
+        if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrieval-data-${{ matrix.slug }}
@@ -157,21 +161,23 @@ jobs:
           overwrite: true
           retention-days: 14
 
-  aggregate:
-    name: complete retrieval report
-    if: always()
-    needs: retrieval
+  zg-report:
+    name: Validate complete ZG results
+    if: ${{ always() && needs.authorize.result == 'success' }}
+    needs: [authorize, retrieval]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - name: Prepare aggregate directory
-        if: always()
+        if: ${{ always() && steps.access.outcome == 'success' }}
         run: mkdir -p "$RUNNER_TEMP/retrieval-combined"
       - name: Download repository evidence without merging shard roots
         uses: actions/download-artifact@v8
@@ -180,25 +186,156 @@ jobs:
           path: ${{ runner.temp }}/retrieval-combined
           merge-multiple: false
       - name: Require all 20 questions in both preview arms and valid execution evidence
-        if: always()
+        if: ${{ always() && steps.access.outcome == 'success' }}
         run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
-      - name: Publish full-suite summary
-        if: always()
-        run: |
-          if [ -f "$RUNNER_TEMP/retrieval-combined/report.md" ]; then
-            cat "$RUNNER_TEMP/retrieval-combined/report.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'No complete report was produced; this run is not a valid quality baseline.' >> "$GITHUB_STEP_SUMMARY"
-          fi
       - name: Preserve combined summary
-        if: always()
+        if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrieval-summary
+          name: retrieval-zg-report
           path: |
             ${{ runner.temp }}/retrieval-combined/report.md
             ${{ runner.temp }}/retrieval-combined/report.json
             ${{ runner.temp }}/retrieval-combined/scores.jsonl
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  semble:
+    name: Semble baseline (optional)
+    if: ${{ inputs.run_semble }}
+    needs: quality-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install the locked MCP client dependencies
+        run: npm ci
+      - name: Check out the fixed Semble source
+        run: |
+          git init --quiet "$RUNNER_TEMP/sourcesemble"
+          git -C "$RUNNER_TEMP/sourcesemble" remote add origin https://github.com/MinishLab/semble.git
+          git -C "$RUNNER_TEMP/sourcesemble" -c core.hooksPath=/dev/null fetch --depth=1 origin "$SEMBLE_SOURCE_COMMIT"
+          git -C "$RUNNER_TEMP/sourcesemble" -c core.hooksPath=/dev/null checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/sourcesemble" rev-parse HEAD)" = "$SEMBLE_SOURCE_COMMIT"
+          test -z "$(git -C "$RUNNER_TEMP/sourcesemble" status --porcelain)"
+      - name: Install Semble in an isolated Python environment
+        run: |
+          python -m venv "$RUNNER_TEMP/semble-venv"
+          "$RUNNER_TEMP/semble-venv/bin/python" -m pip install \
+            --constraint benchmarks/zg-retrieval/configs/semble-requirements.txt \
+            "$RUNNER_TEMP/sourcesemble[mcp]"
+          test -z "$(git -C "$RUNNER_TEMP/sourcesemble" status --porcelain)"
+      - name: Cache the pinned model download only
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: retrieval-semble-model-v1-${{ env.SEMBLE_MODEL_REVISION }}
+      - name: Prepare a separate copy of the fixed model
+        env:
+          HF_HOME: ${{ runner.temp }}/hf-cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/model"
+          "$RUNNER_TEMP/semble-venv/bin/python" benchmarks/zg-retrieval/semble-prepare.py model \
+            --revision "$SEMBLE_MODEL_REVISION" \
+            --model-directory "$RUNNER_TEMP/model/weights" \
+            --output "$RUNNER_TEMP/model/model.json"
+      - name: Run native Semble MCP and verify SDK parity on all 20 questions
+        run: |
+          node benchmarks/zg-retrieval/semble-run.mjs \
+            --python "$RUNNER_TEMP/semble-venv/bin/python" \
+            --source "$RUNNER_TEMP/sourcesemble" \
+            --model "$RUNNER_TEMP/model/weights" \
+            --model-info "$RUNNER_TEMP/model/model.json" \
+            --output "$RUNNER_TEMP/retrieval" \
+            --corpus "$RUNNER_TEMP/corpus"
+      - name: Preserve summary and evidence, including failures
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-semble-evidence
+          # Keep raw calls, audits, frozen inventories, chunks and metadata.
+          # Vector/BM25 payloads are available locally; model weights stay out.
+          path: |
+            ${{ runner.temp }}/retrieval/
+            !${{ runner.temp }}/retrieval/**/index-cache/**/bm25_index/**
+            !${{ runner.temp }}/retrieval/**/index-cache/**/semantic_index/**
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  results:
+    name: Retrieval results
+    if: ${{ always() && needs.authorize.result == 'success' }}
+    needs:
+      [
+        authorize,
+        quality-contract,
+        package-candidate,
+        retrieval,
+        zg-report,
+        semble,
+      ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Download ZG report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-zg-report
+          path: ${{ runner.temp }}/results-input/zg
+      - name: Download optional Semble evidence
+        if: ${{ always() && steps.access.outcome == 'success' && inputs.run_semble }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-semble-evidence
+          path: ${{ runner.temp }}/results-input/semble
+      - name: Build the single results table
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        env:
+          RETRIEVAL_SEMBLE_REQUESTED: ${{ inputs.run_semble }}
+          RETRIEVAL_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node benchmarks/zg-retrieval/ci-report.mjs \
+            --zg "$RUNNER_TEMP/results-input/zg/report.json" \
+            --semble "$RUNNER_TEMP/results-input/semble/report.json" \
+            --output "$RUNNER_TEMP/retrieval-results"
+      - name: Publish the results table
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/retrieval-results/summary.md" ]; then
+            cat "$RUNNER_TEMP/retrieval-results/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## Retrieval-only: FAILED' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No validated results table was produced. Inspect the failed job; missing results are not zero scores.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve the combined results
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-results
+          path: ${{ runner.temp }}/retrieval-results/
           if-no-files-found: error
           overwrite: true
           retention-days: 14

@@ -65,7 +65,14 @@ export function fileRetrievalForRow(row) {
 
 /** Each original question has equal weight; repeats and repositories add no votes. */
 export function summarizeFileRetrieval(rows) {
-  const scored = rows
+  // Stable task order avoids one-ULP differences between independently
+  // assembled shard reports and the same rows in frozen-suite order.
+  const scored = [...rows]
+    .sort((left, right) => {
+      const a = String(left.task_id ?? ""),
+        b = String(right.task_id ?? "");
+      return a < b ? -1 : a > b ? 1 : 0;
+    })
     .map(fileRetrievalForRow)
     .filter((score) => score !== null);
   const mean = (values) =>

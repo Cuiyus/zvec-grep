@@ -19,10 +19,8 @@ import {
   fileRetrievalForRow,
   summarizeFileRetrieval,
 } from "./file-retrieval-metrics.mjs";
-import {
-  summarizeSembleOfficial,
-  markdownSembleOfficialTable,
-} from "./report.mjs";
+import { summarizeSembleOfficial } from "./report.mjs";
+import { summarizeMeasurements } from "./measurement-metrics.mjs";
 
 export const SEMBLE_PROTOCOL = Object.freeze({
   id: "sweqa20-semble-mcp-v2",
@@ -37,17 +35,6 @@ export const SEMBLE_PROTOCOL = Object.freeze({
   model: "minishlab/potion-code-16M-v2",
 });
 
-const METRICS = [
-  "hit_at_1",
-  "hit_at_5",
-  "hit_at_10",
-  "rr_at_10",
-  "ndcg_at_5",
-  "ndcg_at_10",
-];
-const CATEGORIES = ["what", "where", "how", "why"];
-const average = (values) =>
-  values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 const same = (a, b, message) =>
   assert.equal(objectHash(a), objectHash(b), message);
 const cell = (value) =>
@@ -55,77 +42,17 @@ const cell = (value) =>
     .replaceAll("|", "\\|")
     .replace(/[\r\n]+/g, " ");
 const number = (value) =>
-  typeof value === "number" ? value.toFixed(3) : "N/A";
+  typeof value === "number" ? value.toFixed(4) : "N/A";
 const sha = (value, label) =>
   assert.match(value ?? "", /^[a-f0-9]{64}$/, label);
 const modeRows = (report) =>
   report.tasks.filter((row) => row.mode === "hybrid");
-const FILE_PRESENCE_RULE =
-  "Legacy diagnostic: repetition-5 native Top 10 contains an exact file path of at least one accepted Gold target. Bridge-only paths are excluded. This cached diagnostic is not used to calculate scores; headline file Hit/MRR are recomputed independently with upstream path matching. Neither establishes sufficient answer evidence.";
-
-function goldFilePresence(row, gold) {
-  const acceptedPaths = new Set(
-    gold.targets
-      .filter((target) => target.role === "accepted")
-      .map((target) => target.path),
-  );
-  const paths = [
-    ...new Set(
-      (row.items ?? [])
-        .filter(
-          (item) =>
-            Number.isInteger(item.rank) &&
-            item.rank >= 1 &&
-            item.rank <= 10 &&
-            acceptedPaths.has(item.path),
-        )
-        .map((item) => item.path),
-    ),
-  ].sort();
-  return {
-    gold_file_presence_at_10:
-      row.status === "harness_invalid" ? null : paths.length > 0,
-    gold_file_presence_paths: paths,
-  };
-}
-
-function summarize(rows) {
-  const scored = rows.filter((row) => typeof row.hit_at_10 === "number");
-  const ndcg = rows.filter((row) => typeof row.ndcg_at_10 === "number");
-  return {
-    planned_tasks: rows.length,
-    scored_tasks: scored.length,
-    ndcg_tasks: ndcg.length,
-    ...Object.fromEntries(
-      [1, 5, 10].map((cutoff) => [
-        `hit_at_${cutoff}_count`,
-        scored.reduce((sum, row) => sum + row[`hit_at_${cutoff}`], 0),
-      ]),
-    ),
-    ...Object.fromEntries(
-      METRICS.map((metric) => [
-        metric === "rr_at_10" ? "mrr_at_10" : metric,
-        average(
-          rows
-            .map((row) => row[metric])
-            .filter((value) => typeof value === "number"),
-        ),
-      ]),
-    ),
-    product_error_tasks: rows.filter(
-      (row) => row.execution_status === "product_error",
-    ).length,
-  };
-}
-
 function invalidScore(score, reason) {
   return {
     ...score,
     status: "harness_invalid",
     execution_status: "harness_invalid",
     invalid_reason: reason,
-    first_hit_rank: null,
-    ...Object.fromEntries(METRICS.map((metric) => [metric, null])),
   };
 }
 
@@ -624,7 +551,8 @@ export async function aggregateSemble(
       );
       const key = `${call.task_id}/${call.mode}/${call.repetition}`;
       const callInvalid = [...runInvalid];
-      let score = {};
+      let score = {},
+        rawResponse;
       try {
         assert.ok(
           task && tasks.some((item) => item.task_id === task.task_id),
@@ -673,11 +601,10 @@ export async function aggregateSemble(
           { path: call.raw_path, sha256: call.raw_sha256 },
           expectedRaw,
         );
-        score = scoreSembleResponse(
-          await readJson(rawPath),
-          suite.gold[task.task_id],
-          { expectedQuery: task.query },
-        );
+        rawResponse = await readJson(rawPath);
+        score = scoreSembleResponse(rawResponse, suite.gold[task.task_id], {
+          expectedQuery: task.query,
+        });
         if (score.status === "harness_invalid")
           throw new Error(score.invalid_reason ?? "invalid Semble response");
         assert.ok(
@@ -730,6 +657,13 @@ export async function aggregateSemble(
       observations.push({
         ...call,
         ...score,
+        visible_output_bytes:
+          score.status === "scored" && score.execution_status === "success"
+            ? Buffer.byteLength(
+                rawResponse.content.map((block) => block.text).join("\n"),
+                "utf8",
+              )
+            : null,
         language: task ? suite.semble_gold[task.task_id].language : null,
         semble_official:
           task && score.status !== "harness_invalid"
@@ -778,7 +712,6 @@ export async function aggregateSemble(
     return [
       {
         ...row,
-        ...goldFilePresence(row, suite.gold[task.task_id]),
         ranking_repeatable: valid
           ? new Set(repeats.map((item) => item.ranking_sha256)).size === 1
           : null,
@@ -786,8 +719,24 @@ export async function aggregateSemble(
           ? new Set(repeats.map((item) => item.visible_output_sha256)).size ===
             1
           : null,
-        repeat_ranks: repeats.map((item) => item.first_hit_rank),
-        call_latencies_ms: repeats.map((item) => item.latency_ms),
+        repeat_file_ranks: repeats.map(
+          (item) => item.file_retrieval?.first_hit_rank ?? null,
+        ),
+        measurement_observations: repeats.map(
+          ({
+            repetition,
+            status,
+            execution_status,
+            latency_ms,
+            visible_output_bytes,
+          }) => ({
+            repetition,
+            status,
+            execution_status,
+            latency_ms,
+            visible_output_bytes,
+          }),
+        ),
       },
     ];
   });
@@ -796,7 +745,7 @@ export async function aggregateSemble(
   ).length;
   const complete = errors.length === 0;
   const report = {
-    schema_version: 1,
+    schema_version: 2,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     quality_repetition: 5,
     engine: "semble",
@@ -814,30 +763,12 @@ export async function aggregateSemble(
     product_error_calls: productErrors,
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "equal weight per original question for file Hit/MRR; repetition 5 only; Semble nDCG reports query/repository/language means; legacy anchor nDCG uses the declared Gold subset",
+      "repetition 5 only; file Hit/MRR average all original questions equally; Semble nDCG@10 averages questions within each repository, then repositories equally; query/language means are retained in JSON",
     modes: {
       hybrid: {
-        summary: complete ? summarize(quality) : null,
         file_retrieval: complete ? summarizeFileRetrieval(quality) : null,
+        measurements: complete ? summarizeMeasurements(observations) : null,
         semble_official: complete ? summarizeSembleOfficial(quality) : null,
-        diagnostics: {
-          gold_file_presence_at_10: {
-            count: complete
-              ? quality.filter((row) => row.gold_file_presence_at_10 === true)
-                  .length
-              : null,
-            planned_tasks: selected.length,
-            rule: FILE_PRESENCE_RULE,
-          },
-        },
-        by_category: complete
-          ? Object.fromEntries(
-              CATEGORIES.map((category) => [
-                category,
-                summarize(quality.filter((row) => row.category === category)),
-              ]),
-            )
-          : null,
         ranking_repeatable_tasks: quality.filter(
           (row) => row.ranking_repeatable === true,
         ).length,
@@ -875,12 +806,11 @@ export async function aggregateSemble(
 }
 
 function validateQualityRows(report, suite, label) {
-  if (report.file_retrieval_contract !== undefined)
-    assert.equal(
-      report.file_retrieval_contract,
-      FILE_RETRIEVAL_CONTRACT,
-      `${label}: file retrieval contract mismatch`,
-    );
+  assert.equal(
+    report.file_retrieval_contract,
+    FILE_RETRIEVAL_CONTRACT,
+    `${label}: file retrieval contract mismatch`,
+  );
   assert.equal(
     report.quality_repetition,
     5,
@@ -897,9 +827,9 @@ function validateQualityRows(report, suite, label) {
     `${label}: full 20-question comparison required`,
   );
   same(
-    report.expected_task_ids?.slice().sort(),
-    suite.lock.tasks.map((task) => task.task_id).sort(),
-    `${label}: task set mismatch`,
+    report.expected_task_ids,
+    suite.lock.tasks.map((task) => task.task_id),
+    `${label}: task set/order mismatch`,
   );
   assert.ok(
     Array.isArray(report.integrity_errors) &&
@@ -929,9 +859,8 @@ function validateQualityRows(report, suite, label) {
     20,
     `${label}: duplicate hybrid task`,
   );
-  for (const task of suite.lock.tasks) {
-    const row = rows.find((item) => item.task_id === task.task_id),
-      gold = suite.gold[task.task_id];
+  const derived = suite.lock.tasks.map((task) => {
+    const row = rows.find((item) => item.task_id === task.task_id);
     assert.ok(row, `${label}: missing ${task.task_id}`);
     assert.equal(
       row.repository,
@@ -941,7 +870,7 @@ function validateQualityRows(report, suite, label) {
     assert.equal(row.category, task.category, `${label}: category mismatch`);
     assert.equal(
       row.gold_status,
-      gold.status,
+      suite.gold[task.task_id].status,
       `${label}: Gold status mismatch`,
     );
     assert.equal(row.repetition, 5, `${label}: quality repetition mismatch`);
@@ -950,32 +879,6 @@ function validateQualityRows(report, suite, label) {
       suite.semble_gold[task.task_id].language,
       `${label}: language mismatch`,
     );
-    if (row.execution_status === "product_error")
-      assert.equal(
-        row.items?.length ?? 0,
-        0,
-        `${label}: product errors cannot provide official retrieval credit`,
-      );
-    same(
-      row.semble_official,
-      {
-        targets: suite.semble_gold[task.task_id].targets,
-        ...scoreSembleMetric(
-          row.items ?? [],
-          suite.semble_gold[task.task_id].targets,
-        ),
-      },
-      `${label}: Semble official metric differs from public items or frozen projection`,
-    );
-    if (
-      report.file_retrieval_contract !== undefined ||
-      row.file_retrieval !== undefined
-    )
-      same(
-        row.file_retrieval,
-        fileRetrievalForRow(row),
-        `${label}: file retrieval metric differs from public items or frozen projection`,
-      );
     assert.equal(
       row.quality_observation,
       true,
@@ -990,47 +893,136 @@ function validateQualityRows(report, suite, label) {
       row.execution_status === "success" ? "scored" : "product_error",
       `${label}: invalid scoring status`,
     );
-    const rank = row.first_hit_rank;
-    assert.ok(
-      rank === "not_in_top10" ||
-        (Number.isInteger(rank) && rank >= 1 && rank <= 10),
-      `${label}: invalid first rank`,
-    );
-    for (const cutoff of [1, 5, 10])
-      assert.equal(
-        row[`hit_at_${cutoff}`],
-        Number(Number.isInteger(rank) && rank <= cutoff),
-        `${label}: rank/Hit mismatch`,
-      );
-    assert.equal(
-      row.rr_at_10,
-      Number.isInteger(rank) ? 1 / rank : 0,
-      `${label}: rank/RR mismatch`,
-    );
-    for (const metric of ["ndcg_at_5", "ndcg_at_10"]) {
-      assert.equal(
-        row[metric] === null,
-        !gold.ndcg.enabled,
-        `${label}: nDCG eligibility mismatch`,
-      );
-      if (gold.ndcg.enabled) {
-        assert.ok(
-          Number.isFinite(row[metric]) && row[metric] >= 0 && row[metric] <= 1,
-          `${label}: invalid nDCG`,
-        );
-        if (rank === "not_in_top10")
-          assert.equal(row[metric], 0, `${label}: nDCG without accepted hit`);
-      }
-    }
+    assert.ok(Array.isArray(row.items), `${label}: missing public items`);
     if (row.execution_status === "product_error")
-      assert.equal(rank, "not_in_top10", `${label}: product error cannot hit`);
-  }
-  if (report.file_retrieval_contract !== undefined)
+      assert.equal(
+        row.items.length,
+        0,
+        `${label}: product errors cannot provide retrieval credit`,
+      );
+    const official = {
+      targets: suite.semble_gold[task.task_id].targets,
+      ...scoreSembleMetric(row.items, suite.semble_gold[task.task_id].targets),
+    };
     same(
-      report.modes.hybrid.file_retrieval,
-      summarizeFileRetrieval(rows),
-      `${label}: file retrieval aggregate differs from public items`,
+      row.semble_official,
+      official,
+      `${label}: Semble metric differs from public items or frozen projection`,
     );
+    const normalized = { ...row, semble_official: official };
+    const file = fileRetrievalForRow(normalized);
+    same(
+      row.file_retrieval,
+      file,
+      `${label}: file retrieval metric differs from public items or frozen projection`,
+    );
+    assert.ok(
+      Array.isArray(row.measurement_observations),
+      `${label}: missing measurement observations`,
+    );
+    same(
+      row.measurement_observations.map((item) => item.repetition),
+      [1, 2, 3, 4, 5],
+      `${label}: incomplete measurement repetitions`,
+    );
+    for (const item of row.measurement_observations) {
+      assert.ok(
+        ["success", "product_error"].includes(item.execution_status),
+        `${label}: invalid measurement execution status`,
+      );
+      assert.equal(
+        item.status,
+        item.execution_status === "success" ? "scored" : "product_error",
+        `${label}: invalid measurement scoring status`,
+      );
+      assert.ok(
+        (Number.isFinite(item.latency_ms) && item.latency_ms >= 0) ||
+          (item.execution_status === "product_error" &&
+            item.latency_ms === null),
+        `${label}: invalid measurement latency`,
+      );
+      assert.ok(
+        item.execution_status === "success"
+          ? Number.isSafeInteger(item.visible_output_bytes) &&
+              item.visible_output_bytes >= 0
+          : item.visible_output_bytes === null,
+        `${label}: invalid measurement output size`,
+      );
+    }
+    const fifth = row.measurement_observations[4];
+    for (const field of [
+      "status",
+      "execution_status",
+      "latency_ms",
+      "visible_output_bytes",
+    ])
+      assert.equal(
+        fifth[field],
+        row[field],
+        `${label}: fifth measurement differs from quality row`,
+      );
+    return { ...normalized, file_retrieval: file };
+  });
+  same(
+    report.modes.hybrid.file_retrieval,
+    summarizeFileRetrieval(derived),
+    `${label}: file retrieval aggregate differs from public items`,
+  );
+  same(
+    report.modes.hybrid.semble_official,
+    summarizeSembleOfficial(derived),
+    `${label}: Semble aggregate differs from public items`,
+  );
+  same(
+    report.modes.hybrid.measurements,
+    summarizeMeasurements(
+      derived.flatMap((row) => row.measurement_observations),
+    ),
+    `${label}: measurement aggregate differs from observations`,
+  );
+  return derived;
+}
+
+/** Validate a standalone full Semble result without requiring a zg report. */
+export async function validateSembleReport(report, suite = undefined) {
+  suite ??= await loadSuite();
+  assert.equal(report.schema_version, 2, "Semble: unsupported report schema");
+  assert.equal(report.engine, "semble", "Semble: wrong engine");
+  same(report.protocol, SEMBLE_PROTOCOL, "Semble: protocol mismatch");
+  assert.equal(
+    report.suite?.protocol,
+    objectHash(SEMBLE_PROTOCOL),
+    "Semble: protocol hash mismatch",
+  );
+  assert.equal(
+    report.observed_calls,
+    100,
+    "Semble: full 100-call coverage required",
+  );
+  same(
+    Object.keys(report.modes ?? {}),
+    ["hybrid"],
+    "Semble: only hybrid mode is planned",
+  );
+  assert.ok(
+    Array.isArray(report.tasks) && report.tasks.length === 20,
+    "Semble: missing/duplicate or extra task coverage",
+  );
+  assert.ok(
+    report.tasks.every(
+      (row) => row.mode === "hybrid" && !Object.hasOwn(row, "preview"),
+    ),
+    "Semble: unplanned task mode or preview",
+  );
+  const rows = validateQualityRows(report, suite, "Semble");
+  assert.equal(
+    report.product_error_calls,
+    rows
+      .flatMap((row) => row.measurement_observations)
+      .filter((observation) => observation.execution_status === "product_error")
+      .length,
+    "Semble: product error count differs from all 100 measurement observations",
+  );
   return rows;
 }
 
@@ -1062,41 +1054,26 @@ export async function compareSembleToZg(
     suite.identity.protocol,
     "baseline: zg protocol mismatch",
   );
-  assert.equal(candidate.engine, "semble", "candidate is not Semble");
-  same(
-    candidate.protocol,
-    SEMBLE_PROTOCOL,
-    "candidate Semble protocol mismatch",
-  );
-  assert.equal(
-    candidate.suite.protocol,
-    objectHash(SEMBLE_PROTOCOL),
-    "candidate Semble protocol hash mismatch",
-  );
   assert.notEqual(
     candidate.suite.protocol,
     baseline.suite.protocol,
     "cross-tool protocols must retain their distinct identities",
   );
   const before = validateQualityRows(baseline, suite, "zg baseline");
-  const after = validateQualityRows(candidate, suite, "Semble candidate");
+  const after = await validateSembleReport(candidate, suite);
   const tasks = suite.lock.tasks.map((task) => {
     const oldRow = before.find((row) => row.task_id === task.task_id),
       newRow = after.find((row) => row.task_id === task.task_id);
     const view = (row) => ({
-      ...Object.fromEntries(
-        [
-          "first_hit_rank",
-          "execution_status",
-          "repository",
-          "language",
-          "semble_official",
-          "items",
-          ...METRICS,
-        ].map((key) => [key, row[key]]),
-      ),
-      file_retrieval: fileRetrievalForRow(row),
-      ...goldFilePresence(row, suite.gold[task.task_id]),
+      task_id: row.task_id,
+      execution_status: row.execution_status,
+      status: row.status,
+      gold_status: row.gold_status,
+      repository: row.repository,
+      language: row.language,
+      items: row.items,
+      file_retrieval: row.file_retrieval,
+      semble_official: row.semble_official,
     });
     return {
       task_id: task.task_id,
@@ -1107,41 +1084,19 @@ export async function compareSembleToZg(
       file_retrieval_delta: Object.fromEntries(
         ["hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"].map((key) => [
           key,
-          fileRetrievalForRow(newRow)[key] - fileRetrievalForRow(oldRow)[key],
+          newRow.file_retrieval[key] - oldRow.file_retrieval[key],
         ]),
       ),
-      semble_official_delta: Object.fromEntries(
-        ["ndcg_at_5", "ndcg_at_10"].map((key) => [
-          key,
-          newRow.semble_official[key] - oldRow.semble_official[key],
-        ]),
-      ),
-      delta: Object.fromEntries(
-        METRICS.map((key) => [
-          key,
-          oldRow[key] === null ? null : newRow[key] - oldRow[key],
-        ]),
-      ),
+      semble_official_delta: {
+        ndcg_at_10:
+          newRow.semble_official.ndcg_at_10 - oldRow.semble_official.ndcg_at_10,
+      },
     };
   });
-  const summarizePair = (pairs) => {
-    const zg = summarize(pairs.map((row) => row.zg)),
-      semble = summarize(pairs.map((row) => row.semble));
-    return {
-      zg,
-      semble,
-      delta: Object.fromEntries(
-        Object.keys(zg).map((key) => [
-          key,
-          zg[key] === null ? null : semble[key] - zg[key],
-        ]),
-      ),
-    };
-  };
   const fileZg = summarizeFileRetrieval(before),
     fileSemble = summarizeFileRetrieval(after);
   return {
-    schema_version: 1,
+    schema_version: 2,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     kind: "cross-tool-quality-observation",
     zg_preview: baseline.preview ?? "short",
@@ -1155,7 +1110,6 @@ export async function compareSembleToZg(
     },
     quality_gate:
       "report-only; no causal attribution to a single retrieval component",
-    summary: summarizePair(tasks),
     file_retrieval: {
       zg: fileZg,
       semble: fileSemble,
@@ -1166,28 +1120,18 @@ export async function compareSembleToZg(
         ]),
       ),
     },
+    measurements: {
+      zg: summarizeMeasurements(
+        before.flatMap((row) => row.measurement_observations),
+      ),
+      semble: summarizeMeasurements(
+        after.flatMap((row) => row.measurement_observations),
+      ),
+    },
     semble_official: {
       zg: summarizeSembleOfficial(tasks.map((row) => row.zg)),
       semble: summarizeSembleOfficial(tasks.map((row) => row.semble)),
     },
-    diagnostics: {
-      gold_file_presence_at_10: {
-        zg_count: tasks.filter(
-          (row) => row.zg.gold_file_presence_at_10 === true,
-        ).length,
-        semble_count: tasks.filter(
-          (row) => row.semble.gold_file_presence_at_10 === true,
-        ).length,
-        planned_tasks: tasks.length,
-        rule: FILE_PRESENCE_RULE,
-      },
-    },
-    by_category: Object.fromEntries(
-      CATEGORIES.map((category) => [
-        category,
-        summarizePair(tasks.filter((task) => task.category === category)),
-      ]),
-    ),
     tasks,
     differences: {
       endpoint: {
@@ -1234,8 +1178,8 @@ export async function compareSembleToZg(
         "No cross-environment timing ratio or speed winner is computed. Index/MCP timings are observations only; first query includes engine-specific load costs.",
     },
     warnings: [
-      "Same original queries, repository commits, partial Gold, file Hit/MRR, official nDCG and legacy anchor semantics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
-      "Semble official nDCG uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Supplementary anchor scores also depend on native rendering and frozen anchors; zero anchor score does not prove absence of relevant code.",
+      "Same original queries, repository commits, frozen accepted-file targets and five quality metrics; endpoint, representation, filtering, model runtime and environment are not controlled identically.",
+      "Semble nDCG@10 uses the SWE-QA accepted-file projection, not Semble's original benchmark annotations. Both engines use the same first-target-rank algorithm and aggregation. Finding a target file does not establish sufficient answer evidence.",
       ...[baseline, candidate].flatMap((report, i) =>
         report.product_error_calls
           ? [
@@ -1247,129 +1191,95 @@ export async function compareSembleToZg(
   };
 }
 
+const QUALITY_HEADER =
+  "| Arm | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Semble nDCG@10 | Output KiB (mean) | Latency P50 ms |";
+const QUALITY_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- |";
+const qualityRow = (label, file, official, measurements) =>
+  `| ${cell(label)} | ${number(file?.hit_at_1)} | ${number(file?.hit_at_5)} | ${number(file?.hit_at_10)} | ${number(file?.mrr_at_10)} | ${number(official?.repository_macro.ndcg_at_10)} | ${number(measurements?.output_bytes_mean == null ? null : measurements.output_bytes_mean / 1024)} | ${number(measurements?.latency_ms_p50)} |`;
+
 export function markdownSembleReport(report) {
-  const summary = report.modes.hybrid.summary;
-  const fileSummary = report.modes.hybrid.file_retrieval;
-  const official = report.modes.hybrid.semble_official?.repository_macro;
-  const lines = [
-    "# Semble Retrieval-only — SWE-QA original queries",
-    "",
-    `Scope: **${cell(report.scope)}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**.`,
-    "",
-    "Quality uses repetition 5; five repeats measure stability, not independent questions. File Hit/MRR and Semble official file-target nDCG are retrieval metrics; legacy strict-anchor scores are output-visibility diagnostics. No query rewrite, subquery, result deduplication or invisible source completion.",
-    "",
-    `Semble ${cell(report.tool?.version)}, commit \`${cell(report.tool?.source_commit)}\`. Native stdio MCP search; content=code; top_k=10; max_snippet_lines=null. Model: ${SEMBLE_PROTOCOL.model}.`,
-    "",
-    "| Mode | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    fileSummary && official
-      ? `| hybrid | ${fileSummary.hit_at_1_count}/${fileSummary.scored_tasks} | ${fileSummary.hit_at_5_count}/${fileSummary.scored_tasks} | ${fileSummary.hit_at_10_count}/${fileSummary.scored_tasks} | ${number(fileSummary.mrr_at_10)} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} |`
-      : "| hybrid | **Invalid experiment — aggregate withheld** | | | | | |",
-    "",
-    "File Hit/MRR use the same frozen accepted-file targets and upstream path matching as nDCG, preserving native ranks. Hit@K is 1 when the first matching file is within K; RR@10 is 1/r for its first native rank r, or 0 for a Top-10 miss. MRR is the mean over original questions, including misses and product errors. Source text, outlines and returned length do not affect these file-localization metrics; finding a file does not establish sufficient answer evidence.",
-    ...markdownSembleOfficialTable(report.modes),
-    "",
-    "## Legacy strict-anchor visibility diagnostics",
-    "",
-    "Historical anchor scores mix native retrieval, rendering and agent-authored anchor selection. They are retained for diagnosis and continuity, not as a cross-tool retrieval quality score.",
-    "",
-    "| Mode | Scored / planned | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@5 | nDCG@10 | nDCG tasks |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    summary
-      ? `| hybrid | ${summary.scored_tasks}/${summary.planned_tasks} | ${summary.hit_at_1_count}/${summary.scored_tasks} | ${summary.hit_at_5_count}/${summary.scored_tasks} | ${summary.hit_at_10_count}/${summary.scored_tasks} | ${number(summary.mrr_at_10)} | ${number(summary.ndcg_at_5)} | ${number(summary.ndcg_at_10)} | ${summary.ndcg_tasks} |`
-      : "| hybrid | **Invalid experiment — aggregate withheld** | | | | | | | |",
-    "",
-    "## Per task",
-    "",
-    "| Task | Official nDCG@5 / @10 | File first rank / RR@10 | Official target ranks | Anchor first rank | Anchor RR@10 / grouped nDCG@10 | Gold file present (diagnostic) | Repeat anchor ranks | Same rank / text | Raw |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...report.tasks.map(
-      (row) =>
-        `| ${cell(row.task_id)} | ${number(row.semble_official?.ndcg_at_5)} / ${number(row.semble_official?.ndcg_at_10)} | ${cell(row.file_retrieval?.first_hit_rank)} / ${number(row.file_retrieval?.rr_at_10)} | ${row.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | ${cell(row.first_hit_rank)} | ${number(row.rr_at_10)} / ${number(row.ndcg_at_10)} | ${cell(row.gold_file_presence_at_10)} | ${row.repeat_ranks.map(cell).join(", ")} | ${cell(row.ranking_repeatable)} / ${cell(row.output_repeatable)} | [response](${row.raw_path}) |`,
-    ),
-    "",
-    `Gold file presence at Top 10 (diagnostic only): **${cell(report.modes.hybrid.diagnostics.gold_file_presence_at_10.count)}/${report.modes.hybrid.diagnostics.gold_file_presence_at_10.planned_tasks}**. ${FILE_PRESENCE_RULE}`,
-    "",
-    "The public result may show a related file or a target function's body/docstring while omitting the frozen declaration anchor. Supplementary anchor scores measure retrieval, native rendering and anchor annotation together; a zero anchor score does not establish absence of relevant code. File presence alone cannot establish that the returned source text is relevant. Semble official nDCG uses the separately frozen file-target projection.",
-    "",
-    "## Preparation and latency",
-    "",
-    "| Repository | Preparation | Index seconds | MCP connect ms | Post-run integrity | Fifth-call SDK parity |",
-    "| --- | --- | --- | --- | --- | --- |",
-    ...report.repositories.map(
-      (run) =>
-        `| ${cell(run.repository)} | ${cell(run.preparation_status)} | ${number(run.index_seconds)} | ${number(run.mcp_connect_ms)} | ${cell(run.post_run_integrity)} | ${cell(run.sdk_parity_verified)} |`,
-    ),
-    "",
-    "Individual call latency and session-first-query flags are retained in scores.jsonl. Timings are observations for this environment; no cross-environment speed comparison is made. Five repeats do not characterize tail latency. Semble has no public auto-update disable switch; before/after corpus, model and index inventories must match. Native snippets are independently source-audited; the scoring input is only the public response.",
-  ];
-  if (report.cross_tool_comparison) {
-    const comparison = report.cross_tool_comparison;
-    const variants = comparison.zg_previews
+  const comparison = report.cross_tool_comparison;
+  const variants = comparison
+    ? comparison.zg_previews
       ? [
           ["zg MCP short", comparison.zg_previews.short, "zg"],
           ["zg MCP full", comparison.zg_previews.full, "zg"],
           ["Semble MCP full chunk", comparison, "semble"],
         ]
       : [
-          ["zg", comparison, "zg"],
-          ["Semble", comparison, "semble"],
-        ];
-    lines.push(
-      "",
-      "## Cross-tool quality comparison",
-      "",
-      "Delta = Semble minus zg. Different engine protocol identities are retained; source/Gold/task coverage and scoring eligibility match.",
-      "",
-      "| Arm | Official nDCG@5 (repo macro) | Official nDCG@10 (repo macro) | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
-      ...variants.map(([label, entry, engine]) => {
-        const s = entry.file_retrieval[engine];
-        const official = entry.semble_official[engine].repository_macro;
-        return `| ${label} | ${number(official.ndcg_at_5)} | ${number(official.ndcg_at_10)} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} |`;
-      }),
-      ...markdownSembleOfficialTable(
-        Object.fromEntries(
-          variants.map(([label, entry, engine]) => [
+          ["zg MCP", comparison, "zg"],
+          ["Semble MCP full chunk", comparison, "semble"],
+        ]
+    : null;
+  const lines = [
+    "# Semble Retrieval-only — SWE-QA original queries",
+    "",
+    `Scope: **${cell(report.scope)}**. Calls: **${report.observed_calls}**. Integrity: **${report.integrity_passed ? "PASS" : "FAIL"}**. Quality: **${report.quality_score_valid ? "VALID" : "INVALID — aggregate withheld"}**.`,
+    "",
+    ...(comparison ? ["Cross-tool quality comparison:", ""] : []),
+    QUALITY_HEADER,
+    QUALITY_SEPARATOR,
+    ...(variants
+      ? variants.map(([label, entry, engine]) =>
+          qualityRow(
             label,
-            { semble_official: entry.semble_official[engine] },
-          ]),
-        ),
-        { title: "Cross-tool Semble official metric" },
-      ),
-      "",
-      "Legacy strict-anchor visibility comparison (not retrieval quality):",
-      "",
-      "| Engine | Hit@1 | Hit@5 | Hit@10 | MRR@10 | nDCG@10 |",
-      "| --- | --- | --- | --- | --- | --- |",
-    );
-    for (const [label, entry, engine] of variants) {
-      const s = entry.summary[engine];
-      lines.push(
-        `| ${label} | ${s.hit_at_1_count}/${s.scored_tasks} | ${s.hit_at_5_count}/${s.scored_tasks} | ${s.hit_at_10_count}/${s.scored_tasks} | ${number(s.mrr_at_10)} | ${number(s.ndcg_at_10)} |`,
-      );
-    }
-    lines.push(
-      "",
-      `Separate Gold file presence diagnostic: zg **${comparison.diagnostics.gold_file_presence_at_10.zg_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**; Semble **${comparison.diagnostics.gold_file_presence_at_10.semble_count}/${comparison.diagnostics.gold_file_presence_at_10.planned_tasks}**. Both are recomputed from parsed public Top-10 items using the same exact accepted-file rule; neither alters primary scores.`,
-      "",
-      ...(comparison.zg_previews
-        ? [
-            "The per-question table below uses zg short. Both independently validated arm comparisons, deltas and per-question rows are retained in report.json under cross_tool_comparison.zg_previews.",
-            "",
-          ]
-        : []),
-      "| Task | zg official nDCG@5 / @10 | Semble official nDCG@5 / @10 | Δofficial nDCG@5 / @10 | zg / Semble target ranks | zg / Semble anchor rank | Δanchor RR@10 | Δgrouped nDCG@10 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
-      ...comparison.tasks.map(
-        (row) =>
-          `| ${cell(row.task_id)} | ${number(row.zg.semble_official.ndcg_at_5)} / ${number(row.zg.semble_official.ndcg_at_10)} | ${number(row.semble.semble_official.ndcg_at_5)} / ${number(row.semble.semble_official.ndcg_at_10)} | ${number(row.semble_official_delta.ndcg_at_5)} / ${number(row.semble_official_delta.ndcg_at_10)} | ${row.zg.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} / ${row.semble.semble_official.target_ranks.map((rank) => rank ?? "not found").join(", ")} | ${cell(row.zg.first_hit_rank)} / ${cell(row.semble.first_hit_rank)} | ${number(row.delta.rr_at_10)} | ${number(row.delta.ndcg_at_10)} |`,
-      ),
-      "",
-      ...comparison.warnings.map((warning) => `- ${warning}`),
-      "- Endpoint, visible content, native filtering, model runtime, freshness behavior and execution environment differ. The full disclosures are in report.json. Cross-environment latency ratios are intentionally absent.",
-    );
-  }
+            entry.file_retrieval[engine],
+            entry.semble_official[engine],
+            entry.measurements[engine],
+          ),
+        )
+      : [
+          qualityRow(
+            "Semble MCP full chunk",
+            report.modes.hybrid.file_retrieval,
+            report.modes.hybrid.semble_official,
+            report.modes.hybrid.measurements,
+          ),
+        ]),
+    "",
+    "Averaging: quality uses repetition 5. File Hit/MRR average all original questions equally; Semble nDCG@10 first averages questions within each repository, then averages repositories equally. Misses and product errors contribute zero. Invalid experiments have no aggregate. Five repeats do not add independent questions.",
+    "",
+    "Measurements: output is mean UTF-8 public MCP text size on successful fifth calls (1 KiB = 1024 bytes); latency is P50 across all successful search calls. Errors are excluded from measurement samples; timing includes engine-specific loading and is not a controlled speed comparison.",
+    ...(variants
+      ? variants.map(
+          ([label, entry, engine]) =>
+            `${label}: output samples=${entry.measurements[engine].output_sample_count}; latency samples=${entry.measurements[engine].latency_sample_count}.`,
+        )
+      : [
+          `Semble: output samples=${report.modes.hybrid.measurements?.output_sample_count ?? 0}; latency samples=${report.modes.hybrid.measurements?.latency_sample_count ?? 0}.`,
+        ]),
+    "",
+    "Both metrics use the frozen accepted-file targets and Semble path matching, preserving native result ranks without deduplication. Repeated chunks consume ranks; only the first match for each target contributes. File localization does not establish sufficient answer evidence. The labels are the SWE-QA projection, not Semble’s original benchmark annotations.",
+    "",
+    `Semble ${cell(report.tool?.version)}, commit \`${cell(report.tool?.source_commit)}\`. Native stdio MCP search; content=code; top_k=10; max_snippet_lines=null. Model: ${SEMBLE_PROTOCOL.model}. No query rewrite or subquery.`,
+    "",
+    "<details>",
+    "<summary>Per-question evidence and run integrity</summary>",
+    "",
+    "| Task | Status | File first rank | File RR@10 | Semble nDCG@10 | Target ranks | Public response |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...report.tasks.map(
+      (row) =>
+        `| ${cell(row.task_id)} | ${cell(row.execution_status)} | ${cell(row.file_retrieval?.first_hit_rank)} | ${number(row.file_retrieval?.rr_at_10)} | ${number(row.semble_official?.ndcg_at_10)} | ${row.semble_official?.target_ranks.map((rank) => rank ?? "not found").join(", ") ?? "N/A"} | [response](${row.raw_path}) |`,
+    ),
+    "",
+    "Source, model and index inventories must match before/after; public snippets are source-audited. Each question’s fifth MCP response is checked against the official SDK. Repository evidence, query/repository/language nDCG means, repeated outputs and call timing observations are retained in report.json and scores.jsonl.",
+    "",
+    ...report.repositories.map(
+      (run) =>
+        `- ${cell(run.repository)}: preparation=${cell(run.preparation_status)}; post-run integrity=${cell(run.post_run_integrity)}; fifth-call SDK parity=${cell(run.sdk_parity_verified)}.`,
+    ),
+    "",
+    ...(comparison
+      ? [
+          "Cross-tool deltas and per-question evidence are in report.json. Endpoints, representations, filtering, model runtime and environment differ; the comparison does not isolate a causal component or compute cross-environment speed ratios.",
+          "",
+          ...comparison.warnings.map((warning) => `- ${warning}`),
+          "",
+        ]
+      : []),
+    "</details>",
+  ];
   if (report.comparison_error)
     lines.push(
       "",
@@ -1378,14 +1288,17 @@ export function markdownSembleReport(report) {
   if (report.product_error_calls)
     lines.push(
       "",
-      `Product errors: **${report.product_error_calls}**. Reviewed quality zeros remain in the denominator; operational integrity fails.`,
+      `Product errors: **${report.product_error_calls}**. Quality zeros remain in the denominator; operational integrity fails.`,
     );
   if (report.integrity_errors.length)
     lines.push(
       "",
-      "## Invalid experiment",
+      "<details>",
+      "<summary>Invalid experiment</summary>",
       "",
       ...report.integrity_errors.map((error) => `- ${cell(error)}`),
+      "",
+      "</details>",
     );
   return lines.join("\n") + "\n";
 }

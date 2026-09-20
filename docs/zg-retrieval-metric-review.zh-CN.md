@@ -1,5 +1,7 @@
 # Retrieval-only 指标有效性复审与修订
 
+本文件记录 2026-09-18 的效度复审。2026-09-20 已进一步从当前实现中删除旧锚点评分，只保留五项文件检索质量指标，以及输出大小和延迟；当前使用方式见 [测试设计](./zg-retrieval-only-sweqa20-design.zh-CN.md)。
+
 本次复审以提交 `d8cc881` 的 [zg short/full CI](https://github.com/Cuiyus/zvec-grep/actions/runs/35314877482) 和 [Semble CI](https://github.com/Cuiyus/zvec-grep/actions/runs/35314877473) 为依据。两者使用相同 20 道 SWE-QA 原题和 11 个固定仓库提交。本次调整评分与报告，不修改检索、问题、Gold、源码或历史输出。
 
 ## 结论
@@ -19,7 +21,7 @@
 | outline 特判的实际影响 | 改善 django:21 首次锚点排名；没有改变 zg 的 Hit@10 命中题集合 | 不能把所有差异都归因于 outline，主要问题是声明标签与完整文本规则 |
 | short/full 配对检索身份 | 100/100 对相同，但 3 题锚点 RR 改变 | 旧指标混合了检索与展示行为 |
 
-[严格评分器](../benchmarks/zg-retrieval/scoring.mjs) 接受精确源码锚点或结果起始处的定义 outline；正文锚点则要求指定行的完整文本全部出现。[django 标签复核记录](../benchmarks/zg-retrieval/gold/v1/django-32.json) 明确记录了采用 declaration-only first anchors 的选择。该选择可以服务于入口导航诊断，但不证明获得了实现证据。
+[复审时的严格评分器](https://github.com/Cuiyus/zvec-grep/blob/c31fd9c82c46273b6b29fad2ca1ccf1d34554085/benchmarks/zg-retrieval/scoring.mjs) 接受精确源码锚点或结果起始处的定义 outline；正文锚点则要求指定行的完整文本全部出现。[django 标签复核记录](../benchmarks/zg-retrieval/gold/v1/django-32.json) 明确记录了采用 declaration-only first anchors 的选择。该选择可以服务于入口导航诊断，但不证明获得了实现证据。
 
 Gold 记录说明最初基于问题和固定源码选取目标，没有使用 zg 检索输出选标签；本次没有发现足以认定结果泄漏的证据。不过，两个 AI agents 的源码交叉检查不能替代人工盲审或与真实任务效果的效度验证。标签可能在概念设计上偏向某种产品形式，即使没有观察它的排名。
 
@@ -52,12 +54,10 @@ RR 是逐题值，MRR 是跨题平均，不能再把同一题的五次重复当�
 | 新：文件 Hit@10 | 11/20 | 11/20 | 18/20 |
 | 新：文件 MRR@10，按题平均 | 0.4056 | 0.4056 | 0.6267 |
 | 不变：Semble nDCG@10，仓库宏平均 | 0.2925 | 0.2925 | 0.5599 |
-| 旧：严格锚点 Hit@10，展示诊断 | 10/20 | 11/20 | 3/20 |
-| 旧：严格锚点 MRR@10，展示诊断 | 0.1397 | 0.1960 | 0.0806 |
 
 按文件 RR 逐题比较，Semble 领先 11 题、zg 领先 2 题、7 题相同。新的定位指标更有利于暴露 zg 的文件召回和前排排序差距。它不是以提高 zg 分数或使两产品排序符合预期为目标设计的。
 
-旧严格锚点和互补组 nDCG 保留在独立的 legacy presentation diagnostics 表中，供查阅输出裁剪和固定入口变化。它们不再占用主表的通用 Hit/MRR 名称，也不作为整体检索优劣或默认质量门禁。
+旧严格锚点和互补组 nDCG 最初降为诊断，2026-09-20 已按新要求删除其计算与输出。当前报告没有 legacy 评分表。
 
 ## 仍未解决的标签问题
 
@@ -69,6 +69,6 @@ RR 是逐题值，MRR 是跨题平均，不能再把同一题的五次重复当�
 
 ## 实现与兼容性
 
-运行的原始请求协议、原始响应和两份 Gold 均保持原版本。新报告增加 `file_retrieval_contract`、逐题 `file_retrieval` 和按模式的 `file_retrieval` 汇总；旧 JSON 的顶层 Hit/RR 以及 `summary` 字段继续保留旧锚点含义，避免静默改变已有消费者。Markdown 主表和新字段使用新的明确命名，旧结果单独标为历史诊断。
+原始查询、检索协议、原始响应与冻结标签不变。当前 ZG 报告 schema 3、Semble schema 2；五项质量指标位于 `file_retrieval` 和 `semble_official`，后者只保留 nDCG@10。旧 anchor 顶层分数与 mode summary 已移除。逐题首次文件排名和 RR 是 MRR 的计算证据，并非额外主指标。
 
-离线版本比较从公开 `items` 和冻结文件目标重算新指标；旧报告缺少新派生字段时也可比较，新报告的评分版本与逐题缓存会被校验。CI 中 zg short、zg full 和 Semble 应用同一套计算，不修改产品排名或选择性剔除失败题。
+新增 `measurements` 显示平均输出字节及全部成功搜索调用的 P50，保留样本数和五轮测量元数据。统一手动 CI 只发布一张清晰结果表；默认 ZG，可选 Semble。历史报告比较只重算当前指标，缺失的操作测量证据显示 N/A。

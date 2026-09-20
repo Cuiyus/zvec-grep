@@ -138,7 +138,7 @@ export function createSembleResponseParser({ expectedQuery } = {}) {
   };
 }
 
-/** Keep Gold matching, native rank Hit/MRR, and grouped nDCG shared with zg. */
+/** Keep public-response eligibility and frozen Gold integrity validation shared with zg. */
 export function scoreSembleResponse(response, gold, { expectedQuery } = {}) {
   return scoreResponse(response, gold, {
     parseResponse: createSembleResponseParser({ expectedQuery }),

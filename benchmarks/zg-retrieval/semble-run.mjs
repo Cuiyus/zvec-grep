@@ -310,7 +310,7 @@ async function runRepository(suite, repo, options, experiment) {
       manifest.invalid_reasons.push(...errors);
       if (repetition === SEMBLE_PROTOCOL.quality_repetition)
         console.log(
-          `${task.task_id}: ${scored.status}, first rank ${scored.first_hit_rank}`,
+          `${task.task_id}: ${scored.status}, native results ${scored.items.length}`,
         );
     }
     await client.close();

@@ -116,7 +116,6 @@ export function scoreSembleMetric(items, targets) {
   const targetRanks = targets.map((target) => firstTargetRank(items, target));
   const relevantRanks = targetRanks.filter((rank) => rank !== null);
   return {
-    ndcg_at_5: ndcgAtK(relevantRanks, targets.length, 5),
     ndcg_at_10: ndcgAtK(relevantRanks, targets.length, 10),
     target_ranks: targetRanks,
     n_relevant: targets.length,

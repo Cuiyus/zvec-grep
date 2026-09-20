@@ -431,13 +431,13 @@ function assertNoHeadline(report) {
   assert.equal(report.quality_score_valid, false);
   assert.ok(report.integrity_errors.length > 0);
   for (const mode of Object.values(report.modes)) {
-    assert.equal(mode.summary, null);
-    assert.equal(mode.by_category, null);
+    assert.equal(mode.file_retrieval, null);
+    assert.equal(mode.semble_official, null);
   }
   for (const preview of Object.values(report.previews)) {
     for (const mode of Object.values(preview.modes)) {
-      assert.equal(mode.summary, null);
-      assert.equal(mode.by_category, null);
+      assert.equal(mode.file_retrieval, null);
+      assert.equal(mode.semble_official, null);
     }
   }
 }
@@ -462,22 +462,21 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.tasks[0].repetition, 5);
   assert.equal(report.tasks[0].ranking_repeatable, null);
   assert.equal(report.tasks[0].output_repeatable, null);
-  const summary = report.modes.hybrid.summary;
+  const summary = report.modes.hybrid.file_retrieval;
   assert.equal(summary.planned_tasks, 1);
   assert.equal(summary.scored_tasks, 1);
-  assert.equal(summary.product_errors, 1);
-  for (const metric of [
-    "hit_at_1",
-    "hit_at_5",
-    "hit_at_10",
-    "mrr_at_10",
-    "ndcg_at_5",
-    "ndcg_at_10",
-  ])
+  for (const metric of ["hit_at_1", "hit_at_5", "hit_at_10", "mrr_at_10"])
     assert.equal(summary[metric], 0);
+  assert.equal(
+    report.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
+    0,
+  );
+  assert.equal(Object.hasOwn(report.modes.hybrid, "summary"), false);
+  assert.equal(Object.hasOwn(report.tasks[0], "first_hit_rank"), false);
+  assert.equal(Object.hasOwn(report.tasks[0], "target_matches"), false);
   assert.match(
     await readFile(join(fixture.directory, "report.md"), "utf8"),
-    /CI fails operational integrity/,
+    /fail operational integrity/,
   );
 });
 
@@ -492,7 +491,7 @@ test("a missing call cannot be dropped from the planned denominator or produce a
   );
   assert.match(
     await readFile(join(fixture.directory, "report.md"), "utf8"),
-    /aggregate quality withheld/,
+    /N\/A — invalid experiment/,
   );
 });
 

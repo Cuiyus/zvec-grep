@@ -16,41 +16,51 @@ import {
 } from "../compare.mjs";
 
 const clone = (value) => structuredClone(value);
-function row(task_id, rank = "not_in_top10", options = {}) {
-  const found = Number.isInteger(rank);
-  return {
+function row(task_id, rank = null, options = {}) {
+  const targets = options.targets ?? [{ path: "target.py" }];
+  const items =
+    options.items ??
+    Array.from({ length: 10 }, (_, index) => ({
+      rank: index + 1,
+      path: index + 1 === rank ? "target.py" : "other.py",
+    }));
+  const value = {
     task_id,
     mode: "hybrid",
+    preview: "short",
     repetition: 5,
     quality_observation: true,
     repository: "example/repo",
     language: "python",
-    items: [],
-    semble_official: {
-      targets: [{ path: "target.py" }],
-      ...scoreSembleMetric([], [{ path: "target.py" }]),
-    },
     category: "what",
     gold_status: "reviewed",
     status: "scored",
     execution_status: "success",
-    first_hit_rank: rank,
-    hit_at_1: Number(found && rank <= 1),
-    hit_at_5: Number(found && rank <= 5),
-    hit_at_10: Number(found),
-    rr_at_10: found ? 1 / rank : 0,
-    ndcg_at_5: null,
-    ndcg_at_10: null,
+    latency_ms: 50,
+    visible_output_bytes: 1024,
     ...options,
+    items,
+    semble_official: { targets, ...scoreSembleMetric(items, targets) },
   };
+  delete value.targets;
+  value.file_retrieval = fileRetrievalForRow(value);
+  value.measurement_observations = Array.from({ length: 5 }, (_, index) => ({
+    repetition: index + 1,
+    status: value.status,
+    execution_status: value.execution_status,
+    latency_ms: value.latency_ms,
+    visible_output_bytes: value.visible_output_bytes,
+  }));
+  return value;
 }
 function report(rows = [row("example:1", 1), row("example:2", 10)]) {
   const ids = [...new Set(rows.map((item) => item.task_id))];
-  const productErrors = rows.filter(
-    (item) => item.execution_status === "product_error",
-  ).length;
+  const productErrors =
+    rows.filter((item) => item.execution_status === "product_error").length * 5;
   return {
-    schema_version: 1,
+    schema_version: 3,
+    file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
+    preview: "short",
     quality_repetition: 5,
     quality_score_valid: true,
     integrity_passed: productErrors === 0,
@@ -65,10 +75,7 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
     scope: ids.length === 20 ? "full-20-original-queries" : "explicit-subset",
     expected_task_ids: ids,
     modes: Object.fromEntries(
-      [...new Set(rows.map((item) => item.mode))].map((mode) => [
-        mode,
-        { summary: { mrr_at_10: 999 } },
-      ]),
+      [...new Set(rows.map((item) => item.mode))].map((mode) => [mode, {}]),
     ),
     tasks: rows,
     repositories: [
@@ -80,64 +87,92 @@ function report(rows = [row("example:1", 1), row("example:2", 10)]) {
     ],
   };
 }
-
 function pairedReport() {
-  const result = report();
-  result.schema_version = 2;
-  result.primary_preview = "short";
-  result.tasks = ["short", "full"].flatMap((preview) =>
-    result.tasks.map((item) => ({ ...clone(item), preview })),
+  const value = report();
+  delete value.preview;
+  value.primary_preview = "short";
+  value.tasks = ["short", "full"].flatMap((preview) =>
+    value.tasks.map((item) => ({ ...clone(item), preview })),
   );
-  result.previews = Object.fromEntries(
+  value.previews = Object.fromEntries(
     ["short", "full"].map((preview) => [
       preview,
-      { modes: clone(result.modes) },
+      { modes: clone(value.modes) },
     ]),
   );
-  return result;
+  return value;
 }
 
-function fileRow(taskId, rank) {
-  const items = Array.from({ length: 10 }, (_, index) => ({
-    rank: index + 1,
-    path: index + 1 === rank ? "target.py" : "other.py",
-    range: { kind: "text", start_line: 100, end_line: 120 },
-    source_lines: [],
-    outline: [],
-  }));
-  const targets = [{ path: "target.py" }];
-  return row(taskId, "not_in_top10", {
-    items,
-    semble_official: { targets, ...scoreSembleMetric(items, targets) },
-  });
-}
-
-test("file comparisons use shared public file relevance even when every strict anchor misses", () => {
-  const baseline = report([
-    fileRow("example:1", 5),
-    fileRow("example:2", null),
-  ]);
-  const candidate = report([fileRow("example:1", 1), fileRow("example:2", 10)]);
-  candidate.file_retrieval_contract = FILE_RETRIEVAL_CONTRACT;
-  for (const value of candidate.tasks)
-    value.file_retrieval = fileRetrievalForRow(value);
-  // Cached aggregate summaries cannot control file scores.
+test("comparison recomputes only the five quality metrics and both operational measurements", () => {
+  const baseline = report([row("example:1", 5), row("example:2")]);
+  const candidate = report([row("example:1", 1), row("example:2", 10)]);
   candidate.modes.hybrid.file_retrieval = { mrr_at_10: 999 };
+  candidate.modes.hybrid.measurements = { latency_ms_p50: 999 };
   const result = compareReports(baseline, candidate);
   const metrics = result.modes.hybrid.file_retrieval;
   assert.equal(metrics.baseline.mrr_at_10, 0.1);
   assert.equal(metrics.candidate.mrr_at_10, 0.55);
-  assert.equal(result.modes.hybrid.summary.delta.mrr_at_10, 0);
   assert.equal(result.tasks[1].candidate.file_retrieval.first_hit_rank, 10);
   assert.equal(result.tasks[1].file_retrieval_delta.rr_at_10, 0.1);
-  assert.match(markdownComparison(result), /File MRR@10 \(query mean\)/);
-  assert.match(markdownComparison(result), /Legacy strict-anchor/);
+  assert.deepEqual(result.modes.hybrid.measurements.candidate, {
+    latency_ms_p50: 50,
+    latency_sample_count: 10,
+    output_bytes_mean: 1024,
+    output_sample_count: 2,
+  });
+  assert.deepEqual(Object.keys(result.modes.hybrid).sort(), [
+    "file_retrieval",
+    "measurements",
+    "semble_official",
+  ]);
+  const markdown = markdownComparison(result);
+  assert.match(markdown, /0\.5500/);
+  assert.match(markdown, /1\.0000 \| 50\.0000/);
+  assert.doesNotMatch(markdown, /anchor|nDCG@5|By category/);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /ndcg_at_5|target_matches|by_category/,
+  );
+});
+
+test("legacy schema 1/2 reports are rederived from public items without carrying removed metrics forward", () => {
+  const old = report([row("example:1", 5)]);
+  old.schema_version = 2;
+  delete old.file_retrieval_contract;
+  for (const value of old.tasks) {
+    delete value.file_retrieval;
+    delete value.measurement_observations;
+    Object.assign(value, {
+      first_hit_rank: 1,
+      hit_at_1: 1,
+      hit_at_5: 1,
+      hit_at_10: 1,
+      rr_at_10: 1,
+      ndcg_at_5: 1,
+      ndcg_at_10: 1,
+      target_matches: [],
+    });
+    value.semble_official.ndcg_at_5 = 1 / Math.log2(6);
+  }
+  const current = report([row("example:1", 1)]);
+  const result = compareReports(old, current);
+  assert.equal(result.modes.hybrid.file_retrieval.baseline.mrr_at_10, 0.2);
+  assert.equal(result.modes.hybrid.file_retrieval.candidate.mrr_at_10, 1);
+  assert.equal(result.modes.hybrid.measurements.baseline.latency_ms_p50, null);
+  assert.doesNotMatch(JSON.stringify(result), /ndcg_at_5|target_matches/);
+  assert.ok(!Object.hasOwn(result.tasks[0].baseline, "rr_at_10"));
+  const schema1 = clone(old);
+  schema1.schema_version = 1;
+  delete schema1.preview;
+  assert.equal(
+    compareReports(schema1, clone(schema1)).modes.hybrid.file_retrieval.baseline
+      .mrr_at_10,
+    0.2,
+  );
 });
 
 test("file metric contracts and cached per-question scores cannot be silently changed", () => {
-  const baseline = report([fileRow("example:1", 5)]);
-  baseline.file_retrieval_contract = FILE_RETRIEVAL_CONTRACT;
-  baseline.tasks[0].file_retrieval = fileRetrievalForRow(baseline.tasks[0]);
+  const baseline = report([row("example:1", 5)]);
   for (const mutate of [
     (value) => {
       value.file_retrieval_contract = "different-contract";
@@ -158,33 +193,58 @@ test("file metric contracts and cached per-question scores cannot be silently ch
   }
 });
 
-test("version comparisons keep preview arms separate and recompute from public rows", () => {
-  const baseline = pairedReport();
-  const candidate = clone(baseline);
-  candidate.tasks.find(
-    (item) => item.preview === "full" && item.task_id === "example:2",
-  ).first_hit_rank = 1;
-  Object.assign(
-    candidate.tasks.find(
-      (item) => item.preview === "full" && item.task_id === "example:2",
-    ),
-    {
-      hit_at_1: 1,
-      hit_at_5: 1,
-      hit_at_10: 1,
-      rr_at_10: 1,
+test("new reports reject removed quality fields and corrupted official scores", () => {
+  for (const mutate of [
+    (value) => {
+      value.tasks[0].rr_at_10 = 1;
     },
+    (value) => {
+      value.tasks[0].target_matches = [];
+    },
+    (value) => {
+      value.tasks[0].semble_official.ndcg_at_5 = 1;
+    },
+    (value) => {
+      value.tasks[0].semble_official.ndcg_at_10 = 0;
+    },
+  ]) {
+    const before = report(),
+      after = clone(before);
+    mutate(after);
+    assert.throws(
+      () => compareReports(before, after),
+      /obsolete report field|Semble official score/,
+    );
+  }
+});
+
+test("version comparisons keep preview arms separate and render one combined table", () => {
+  const baseline = pairedReport(),
+    candidate = clone(baseline);
+  candidate.tasks = candidate.tasks.map((item) =>
+    item.preview === "full" && item.task_id === "example:2"
+      ? row("example:2", 1, { preview: "full" })
+      : item,
   );
   const result = compareReports(baseline, candidate);
-  assert.equal(result.previews.short.modes.hybrid.summary.delta.mrr_at_10, 0);
+  assert.equal(
+    result.previews.short.modes.hybrid.file_retrieval.delta.mrr_at_10,
+    0,
+  );
   assert.ok(
-    Math.abs(result.previews.full.modes.hybrid.summary.delta.mrr_at_10 - 0.45) <
-      1e-12,
+    Math.abs(
+      result.previews.full.modes.hybrid.file_retrieval.delta.mrr_at_10 - 0.45,
+    ) < 1e-12,
   );
   assert.equal(result.previews.short.tasks.length, 2);
   assert.equal(result.previews.full.tasks.length, 2);
-  assert.match(markdownComparison(result), /short source/);
-  assert.match(markdownComparison(result), /full source/);
+  const markdown = markdownComparison(result);
+  assert.match(markdown, /hybrid \/ short \/ baseline/);
+  assert.match(markdown, /hybrid \/ full \/ candidate/);
+  assert.equal(
+    (markdown.match(/\| Mode \/ preview \/ version \|/g) ?? []).length,
+    1,
+  );
   assert.equal(selectPreviewReport(candidate, "full").tasks.length, 2);
 });
 
@@ -206,10 +266,10 @@ test("version comparisons reject incomplete, duplicated or unlabeled preview mat
       value.tasks.push(clone(value.tasks[0]));
     },
   ]) {
-    const baseline = pairedReport();
-    const changed = clone(baseline);
-    mutate(changed);
-    assert.throws(() => compareReports(baseline, changed));
+    const before = pairedReport(),
+      after = clone(before);
+    mutate(after);
+    assert.throws(() => compareReports(before, after));
   }
   assert.throws(
     () => compareReports(pairedReport(), report()),
@@ -225,40 +285,23 @@ test("version comparisons reject incomplete, duplicated or unlabeled preview mat
   );
 });
 
-test("comparison pairs quality rows, retains offsetting flips and recomputes summaries", () => {
-  const baseline = report([
-    row("example:1", 1, { ndcg_at_5: 0.7, ndcg_at_10: 0.8 }),
-    row("example:2"),
-  ]);
-  const candidate = report([
-    row("example:1", 10, { ndcg_at_5: 0, ndcg_at_10: 0.3 }),
-    row("example:2", 1),
-  ]);
-  const result = compareReports(baseline, candidate);
-  const summary = result.modes.hybrid.summary;
+test("offsetting hit changes remain visible per question", () => {
+  const baseline = report([row("example:1", 1), row("example:2")]);
+  const candidate = report([row("example:1", 10), row("example:2", 1)]);
+  const result = compareReports(baseline, candidate),
+    summary = result.modes.hybrid.file_retrieval;
   assert.equal(summary.baseline.mrr_at_10, 0.5);
   assert.equal(summary.candidate.mrr_at_10, 0.55);
   assert.ok(Math.abs(summary.delta.mrr_at_10 - 0.05) < 1e-12);
-  assert.equal(summary.delta.hit_at_1_count, 0);
-  assert.deepEqual(summary.hit_flips.hit_at_1, {
-    improvements: 1,
-    regressions: 1,
-  });
-  assert.equal(summary.delta.hit_at_10_count, 1);
-  assert.equal(summary.baseline.ndcg_tasks, 1);
-  assert.equal(summary.delta.ndcg_at_10, -0.5);
+  assert.equal(summary.delta.hit_at_1, 0);
+  assert.equal(result.tasks[0].file_retrieval_delta.hit_at_1, -1);
+  assert.equal(result.tasks[1].file_retrieval_delta.hit_at_1, 1);
   assert.equal(result.tasks[0].rank_change, "regressed");
   assert.equal(result.tasks[1].rank_change, "improved");
-  assert.equal(result.tasks[0].delta.rr_at_10, -0.9);
-  assert.equal(result.modes.hybrid.by_category.what.baseline.planned_tasks, 2);
-  assert.equal(
-    result.modes.hybrid.by_repository["example/repo"].candidate.scored_tasks,
-    2,
-  );
-  assert.match(markdownComparison(result), /report-only comparison/);
+  assert.equal(result.tasks[0].file_retrieval_delta.rr_at_10, -0.9);
 });
 
-test("ordering may differ while identical task and mode sets preserve baseline table order", () => {
+test("identical task and mode sets preserve baseline table order", () => {
   const baseline = report([
     row("example:1", 1),
     row("example:2", 5),
@@ -275,7 +318,7 @@ test("ordering may differ while identical task and mode sets preserve baseline t
     result.tasks.map((item) => `${item.task_id}/${item.mode}`),
     ["example:1/hybrid", "example:2/hybrid", "example:1/fts", "example:2/fts"],
   );
-  assert.equal(result.modes.fts.summary.delta.mrr_at_10, 0);
+  assert.equal(result.modes.fts.file_retrieval.delta.mrr_at_10, 0);
 });
 
 test("valid full-20 reports and identical explicit subsets are supported", () => {
@@ -311,6 +354,13 @@ for (const [name, mutate, pattern] of [
       r.suite.gold = "2".repeat(64);
     },
     /incompatible suite gold/,
+  ],
+  [
+    "file-Gold identity",
+    (r) => {
+      r.suite.semble_gold = "2".repeat(64);
+    },
+    /incompatible suite semble_gold/,
   ],
   [
     "protocol identity",
@@ -376,21 +426,21 @@ for (const [name, mutate, pattern] of [
     /quality repetition 5/,
   ],
   [
-    "hit-score corruption",
-    (r) => {
-      r.tasks[1].hit_at_1 = 1;
-    },
-    /hit\/rank mismatch/,
-  ],
-  [
     "RR corruption",
     (r) => {
-      r.tasks[1].rr_at_10 = 0;
+      r.tasks[1].file_retrieval.rr_at_10 = 0;
     },
-    /RR\/rank mismatch/,
+    /file retrieval score/,
   ],
   [
-    "status-score conflict",
+    "hit corruption",
+    (r) => {
+      r.tasks[1].file_retrieval.hit_at_1 = 1;
+    },
+    /file retrieval score/,
+  ],
+  [
+    "status conflict",
     (r) => {
       r.tasks[0].status = "product_error";
     },
@@ -403,94 +453,136 @@ for (const [name, mutate, pattern] of [
     },
     /integrity flag and product errors disagree/,
   ],
-]) {
+])
   test(`comparison rejects ${name}`, () => {
-    const baseline = report();
-    const candidate = clone(baseline);
+    const baseline = report(),
+      candidate = clone(baseline);
     mutate(candidate);
     assert.throws(() => compareReports(baseline, candidate), pattern);
   });
-}
 
-test("same-size but different task/mode sets cannot be compared", () => {
+test("measurement evidence cannot selectively omit repeats or successful calls", () => {
+  for (const mutate of [
+    (r) => {
+      r.tasks[0].measurement_observations.pop();
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].repetition = 5;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].execution_status =
+        "harness_invalid";
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].latency_ms = null;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].visible_output_bytes = -1;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[4].latency_ms = 999;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].status = "gold_unknown";
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].status = "product_error";
+      r.tasks[0].measurement_observations[0].execution_status = "product_error";
+    },
+  ]) {
+    const before = report(),
+      after = clone(before);
+    mutate(after);
+    assert.throws(
+      () => compareReports(before, after),
+      /measurement|successful-call/,
+    );
+  }
+});
+
+test("same-size but different task or mode sets cannot be compared", () => {
   const before = report([row("example:1")]);
   assert.throws(
     () => compareReports(before, report([row("example:2")])),
     /incompatible expected task sets/,
   );
-  const after = report([
-    row("example:1"),
-    row("example:1", 1, { mode: "vector" }),
-  ]);
-  assert.throws(() => compareReports(before, after), /incompatible mode sets/);
-});
-
-test("nDCG eligibility must match per task, not just by total denominator", () => {
-  const baseline = report([
-    row("example:1", 1, { ndcg_at_5: 1, ndcg_at_10: 1 }),
-    row("example:2", 1),
-  ]);
-  const candidate = report([
-    row("example:1", 1),
-    row("example:2", 1, { ndcg_at_5: 1, ndcg_at_10: 1 }),
-  ]);
   assert.throws(
-    () => compareReports(baseline, candidate),
-    /changed scoring eligibility/,
+    () =>
+      compareReports(
+        before,
+        report([row("example:1"), row("example:1", 1, { mode: "vector" })]),
+      ),
+    /incompatible mode sets/,
   );
 });
 
-test("product-error zeros retain denominators and expose recovery/failure transitions", () => {
-  const failed = row("example:1", "not_in_top10", {
+test("product-error zeros retain denominators and expose delivery transitions", () => {
+  const failed = row("example:1", null, {
+    items: [],
     status: "product_error",
     execution_status: "product_error",
-    ndcg_at_5: 0,
-    ndcg_at_10: 0,
+    latency_ms: null,
+    visible_output_bytes: null,
   });
-  const healthy = row("example:1", 1, { ndcg_at_5: 1, ndcg_at_10: 1 });
+  const healthy = row("example:1", 1);
   const recovery = compareReports(report([failed]), report([healthy]));
-  assert.equal(recovery.modes.hybrid.summary.baseline.scored_tasks, 1);
-  assert.equal(recovery.modes.hybrid.summary.delta.mrr_at_10, 1);
+  assert.equal(recovery.modes.hybrid.file_retrieval.baseline.scored_tasks, 1);
+  assert.equal(recovery.modes.hybrid.file_retrieval.delta.mrr_at_10, 1);
   assert.equal(recovery.tasks[0].status_transition, "product_error -> scored");
   assert.equal(
     recovery.tasks[0].execution_transition,
     "product_error -> success",
   );
+  assert.equal(
+    recovery.modes.hybrid.measurements.baseline.latency_ms_p50,
+    null,
+  );
+  assert.equal(
+    recovery.modes.hybrid.semble_official.baseline.repository_macro.ndcg_at_10,
+    0,
+  );
   assert.match(recovery.warnings[0], /baseline: operational integrity failed/);
   const failure = compareReports(report([healthy]), report([failed]));
   assert.equal(failure.tasks[0].rank_change, "regressed");
-  assert.equal(failure.modes.hybrid.summary.delta.product_error_tasks, 1);
   assert.match(markdownComparison(failure), /Operational integrity warnings/);
+  const forged = report([failed]);
+  forged.tasks[0].items = [{ rank: 1, path: "target.py" }];
+  assert.throws(
+    () => compareReports(forged, forged),
+    /product errors cannot provide/,
+  );
 });
 
-test("matched unreviewed Gold remains N/A and never becomes a zero", () => {
+test("unreviewed Gold remains N/A and changed per-question eligibility is rejected", () => {
   const unreviewed = row("example:2", null, {
     status: "gold_unknown",
     gold_status: "unknown",
-    hit_at_1: null,
-    hit_at_5: null,
-    hit_at_10: null,
-    rr_at_10: null,
   });
   const input = report([row("example:1", 1), unreviewed]);
   const result = compareReports(input, clone(input));
-  assert.equal(result.modes.hybrid.summary.baseline.planned_tasks, 2);
-  assert.equal(result.modes.hybrid.summary.baseline.scored_tasks, 1);
-  assert.equal(result.tasks[1].delta.rr_at_10, null);
+  assert.equal(result.modes.hybrid.file_retrieval.baseline.planned_tasks, 2);
+  assert.equal(result.modes.hybrid.file_retrieval.baseline.scored_tasks, 1);
+  assert.equal(result.tasks[1].file_retrieval_delta.rr_at_10, null);
+  assert.equal(result.tasks[1].semble_official_delta.ndcg_at_10, null);
   assert.equal(result.tasks[1].rank_change, "unscored");
+  assert.throws(
+    () =>
+      compareReports(input, report([row("example:1", 1), row("example:2")])),
+    /incompatible gold_status/,
+  );
 });
 
-test("writes JSON and Markdown with input hashes only after validation and refuses overwrite", async (t) => {
+test("writes JSON and Markdown with input hashes after validation and refuses overwrite", async (t) => {
   const temp = await mkdtemp(join(tmpdir(), "zg-compare-"));
   t.after(() => rm(temp, { recursive: true, force: true }));
-  const baselinePath = join(temp, "baseline.json");
-  const candidatePath = join(temp, "candidate.json");
-  const baseline = report();
-  const candidate = report([row("example:1", 5), row("example:2", 1)]);
+  const baselinePath = join(temp, "baseline.json"),
+    candidatePath = join(temp, "candidate.json");
+  const baseline = report(),
+    candidate = report([row("example:1", 5), row("example:2", 1)]);
   await writeFile(baselinePath, JSON.stringify(baseline));
   await writeFile(candidatePath, JSON.stringify(candidate));
-  const output = join(temp, "comparison");
-  const result = await writeComparison(baselinePath, candidatePath, output);
+  const output = join(temp, "comparison"),
+    result = await writeComparison(baselinePath, candidatePath, output);
   assert.match(result.inputs.baseline.sha256, /^[a-f0-9]{64}$/);
   assert.equal(
     JSON.parse(await readFile(join(output, "comparison.json"), "utf8")).tasks
@@ -514,49 +606,34 @@ test("writes JSON and Markdown with input hashes only after validation and refus
   await assert.rejects(stat(invalidOutput), { code: "ENOENT" });
 });
 
-test("official comparison re-scores native first target ranks and ignores cached macro totals", () => {
+test("official comparison preserves repeated chunk ranks and ignores cached macro totals", () => {
   const targets = [{ path: "a.py" }, { path: "b.py" }];
-  const oldRow = row("example:1", "not_in_top10", {
-    semble_official: { targets, ...scoreSembleMetric([], targets) },
-  });
+  const before = report([row("example:1", null, { items: [], targets })]);
   const items = [
     { rank: 1, path: "a.py" },
     { rank: 2, path: "a.py" },
     { rank: 3, path: "b.py" },
   ];
-  const newRow = row("example:1", "not_in_top10", {
-    items,
-    semble_official: { targets, ...scoreSembleMetric(items, targets) },
-  });
-  const baseline = report([oldRow]),
-    candidate = report([newRow]);
-  candidate.modes.hybrid.semble_official = {
+  const after = report([row("example:1", null, { items, targets })]);
+  after.modes.hybrid.semble_official = {
     repository_macro: { ndcg_at_10: 999 },
   };
-  const result = compareReports(baseline, candidate);
+  const result = compareReports(before, after),
+    expected = 1.5 / (1 + 1 / Math.log2(3));
   assert.deepEqual(
     result.tasks[0].candidate.semble_official.target_ranks,
     [1, 3],
   );
-  const expected = 1.5 / (1 + 1 / Math.log2(3));
   assert.equal(
     result.modes.hybrid.semble_official.candidate.repository_macro.ndcg_at_10,
     expected,
   );
   assert.equal(result.tasks[0].semble_official_delta.ndcg_at_10, expected);
-  assert.equal(result.modes.hybrid.summary.delta.mrr_at_10, 0);
-  assert.match(markdownComparison(result), /SWE-QA accepted-file projection/);
+  assert.equal(result.modes.hybrid.file_retrieval.delta.mrr_at_10, 1);
 });
 
-test("official comparison rejects score corruption, changed projection and old quality-repetition metadata", () => {
-  const baseline = report();
+test("official comparison rejects changed projection and old quality repetition", () => {
   for (const mutate of [
-    (r) => {
-      r.tasks[0].semble_official.ndcg_at_10 = 1;
-    },
-    (r) => {
-      r.suite.semble_gold = "9".repeat(64);
-    },
     (r) => {
       r.tasks[0].semble_official.targets = [{ path: "changed.py" }];
     },
@@ -564,11 +641,12 @@ test("official comparison rejects score corruption, changed projection and old q
       r.quality_repetition = 1;
     },
   ]) {
-    const candidate = clone(baseline);
+    const baseline = report(),
+      candidate = clone(baseline);
     mutate(candidate);
     assert.throws(
       () => compareReports(baseline, candidate),
-      /Semble official score|incompatible suite semble_gold|incompatible Semble target projection|quality repetition 5/,
+      /Semble official score|quality repetition 5/,
     );
   }
 });

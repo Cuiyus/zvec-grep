@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   aggregateSemble,
   compareSembleToZg,
+  validateSembleReport,
   SEMBLE_PROTOCOL,
   markdownSembleReport,
 } from "../semble-report.mjs";
@@ -16,6 +17,7 @@ import {
   summarizeFileRetrieval,
 } from "../file-retrieval-metrics.mjs";
 import { summarizeSembleOfficial } from "../report.mjs";
+import { summarizeMeasurements } from "../measurement-metrics.mjs";
 import {
   fileHash,
   loadSuite,
@@ -284,6 +286,9 @@ async function fixture(t, { subset = false, preparationError = false } = {}) {
 
 function zgBaseline(report) {
   const baseline = structuredClone(report);
+  baseline.schema_version = 3;
+  baseline.preview = "short";
+  for (const row of baseline.tasks) row.preview = "short";
   delete baseline.engine;
   baseline.suite.protocol = suite.identity.protocol;
   delete baseline.protocol;
@@ -293,7 +298,9 @@ function zgBaseline(report) {
 function expectInvalid(report, pattern) {
   assert.equal(report.quality_score_valid, false);
   assert.equal(report.integrity_passed, false);
-  assert.equal(report.modes.hybrid.summary, null);
+  assert.equal(report.modes.hybrid.file_retrieval, null);
+  assert.equal(report.modes.hybrid.semble_official, null);
+  assert.equal(report.modes.hybrid.measurements, null);
   assert.match(report.integrity_errors.join("\n"), pattern);
 }
 
@@ -302,7 +309,7 @@ test("Semble comparison retains both zg preview arms and publishes one shared me
   const report = await aggregateSemble(f.directory);
   const baseline = zgBaseline(report);
   baseline.primary_preview = "short";
-  baseline.schema_version = 2;
+  baseline.schema_version = 3;
   baseline.tasks = ["short", "full"].flatMap((preview) =>
     baseline.tasks.map((row) => ({ ...structuredClone(row), preview })),
   );
@@ -329,22 +336,60 @@ test("Semble comparison retains both zg preview arms and publishes one shared me
   assert.match(markdown, /\| Semble MCP full chunk \|/);
   assert.match(
     markdown,
-    /Official nDCG@10 \(repo macro\).*File Hit@1.*File MRR@10/,
+    /File Hit@1.*File MRR@10.*Semble nDCG@10.*Output KiB.*Latency P50/,
   );
-  assert.match(markdown, /Legacy strict-anchor visibility comparison/);
+  assert.doesNotMatch(
+    markdown,
+    /anchor|nDCG@5|file presence|Preparation and latency/i,
+  );
+  assert.equal(
+    markdown.split("\n").filter((line) => line.startsWith("| Arm |")).length,
+    1,
+  );
   baseline.tasks.pop();
   await assert.rejects(compareSembleToZg(baseline, report), /coverage/);
 });
 
-test("offline aggregation requires all 100 calls, re-scores raw and records 12 eligible nDCG tasks", async (t) => {
+test("offline aggregation re-scores all 100 public calls with only five quality metrics and audited measurements", async (t) => {
   const f = await fixture(t),
     report = await aggregateSemble(f.directory);
   assert.equal(report.quality_score_valid, true);
   assert.equal(report.integrity_passed, true);
   assert.equal(report.observed_calls, 100);
   assert.equal(report.tasks.length, 20);
-  assert.equal(report.modes.hybrid.summary.ndcg_tasks, 12);
-  assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
+  assert.equal(report.schema_version, 2);
+  assert.equal(report.modes.hybrid.semble_official.query_count, 20);
+  assert.equal(report.modes.hybrid.semble_official.repository_count, 11);
+  assert.equal(
+    report.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
+    0,
+  );
+  assert.equal(report.modes.hybrid.measurements.latency_sample_count, 100);
+  assert.equal(report.modes.hybrid.measurements.output_sample_count, 20);
+  assert.equal(
+    report.modes.hybrid.measurements.output_bytes_mean,
+    Buffer.byteLength(emptyResponse().content[0].text, "utf8"),
+  );
+  assert.ok(
+    report.tasks.every((row) => row.measurement_observations.length === 5),
+  );
+  for (const row of report.tasks)
+    for (const field of [
+      "first_hit_rank",
+      "hit_at_1",
+      "hit_at_5",
+      "hit_at_10",
+      "rr_at_10",
+      "ndcg_at_5",
+      "ndcg_at_10",
+      "target_matches",
+      "repeat_ranks",
+      "gold_file_presence_at_10",
+    ])
+      assert.ok(!Object.hasOwn(row, field), field);
+  assert.ok(!Object.hasOwn(report.modes.hybrid, "summary"));
+  assert.ok(!Object.hasOwn(report.modes.hybrid, "diagnostics"));
+  assert.ok(!Object.hasOwn(report.modes.hybrid, "by_category"));
   assert.equal(report.file_retrieval_contract, FILE_RETRIEVAL_CONTRACT);
   assert.equal(report.modes.hybrid.file_retrieval.scored_tasks, 20);
   assert.equal(report.modes.hybrid.file_retrieval.hit_at_10_count, 0);
@@ -360,6 +405,121 @@ test("offline aggregation requires all 100 calls, re-scores raw and records 12 e
   assert.match(
     await readFile(join(f.directory, "report.md"), "utf8"),
     /Integrity: \*\*PASS\*\*/,
+  );
+});
+
+test("standalone Semble validation accepts complete results and rejects protocol or call-coverage drift", async (t) => {
+  const f = await fixture(t),
+    report = await aggregateSemble(f.directory);
+  assert.equal((await validateSembleReport(report)).length, 20);
+  assert.equal((await validateSembleReport(report, suite)).length, 20);
+  for (const [mutate, pattern] of [
+    [
+      (r) => {
+        r.schema_version = 1;
+      },
+      /schema/,
+    ],
+    [
+      (r) => {
+        r.engine = "zg";
+      },
+      /engine/,
+    ],
+    [
+      (r) => {
+        r.protocol.limit = 9;
+      },
+      /protocol/,
+    ],
+    [
+      (r) => {
+        r.suite.protocol = "f".repeat(64);
+      },
+      /protocol/,
+    ],
+    [
+      (r) => {
+        r.observed_calls = 99;
+      },
+      /100-call coverage/,
+    ],
+    [
+      (r) => {
+        r.observed_calls = 101;
+      },
+      /100-call coverage/,
+    ],
+    [
+      (r) => {
+        r.tasks.pop();
+      },
+      /missing\/duplicate/,
+    ],
+  ]) {
+    const changed = structuredClone(report);
+    mutate(changed);
+    await assert.rejects(validateSembleReport(changed, suite), pattern);
+  }
+});
+
+test("standalone Semble validation rejects hidden modes, previews, and extra task rows", async (t) => {
+  const f = await fixture(t),
+    report = await aggregateSemble(f.directory);
+  for (const mutate of [
+    (r) => {
+      r.modes.vector = structuredClone(r.modes.hybrid);
+    },
+    (r) => {
+      r.tasks[0].mode = "vector";
+    },
+    (r) => {
+      r.tasks[0].preview = "full";
+    },
+    (r) => {
+      r.tasks[0].preview = null;
+    },
+    (r) => {
+      r.tasks.push({ ...structuredClone(r.tasks[0]), mode: "vector" });
+    },
+  ]) {
+    const changed = structuredClone(report);
+    mutate(changed);
+    await assert.rejects(
+      validateSembleReport(changed, suite),
+      /mode|preview|coverage/,
+    );
+  }
+});
+
+test("Semble product error count must include every repetition even if measurement caches are recomputed", async (t) => {
+  const f = await fixture(t),
+    report = await aggregateSemble(f.directory);
+  const changed = structuredClone(report);
+  Object.assign(changed.tasks[0].measurement_observations[0], {
+    status: "product_error",
+    execution_status: "product_error",
+    latency_ms: null,
+    visible_output_bytes: null,
+  });
+  changed.modes.hybrid.measurements = summarizeMeasurements(
+    changed.tasks.flatMap((row) => row.measurement_observations),
+  );
+  assert.equal(changed.modes.hybrid.measurements.latency_sample_count, 99);
+  await assert.rejects(
+    validateSembleReport(changed, suite),
+    /product error count/,
+  );
+  changed.product_error_calls = 1;
+  changed.integrity_passed = false;
+  assert.equal((await validateSembleReport(changed, suite)).length, 20);
+  const failed = await fixture(t, { preparationError: true });
+  const failedReport = await aggregateSemble(failed.directory);
+  assert.equal((await validateSembleReport(failedReport, suite)).length, 20);
+  failedReport.product_error_calls = 99;
+  await assert.rejects(
+    validateSembleReport(failedReport, suite),
+    /product error count/,
   );
 });
 
@@ -523,8 +683,18 @@ test("complete preparation product failures remain quality zeros and fail operat
   assert.equal(report.quality_score_valid, true);
   assert.equal(report.integrity_passed, false);
   assert.equal(report.product_error_calls, 100);
-  assert.equal(report.modes.hybrid.summary.scored_tasks, 20);
-  assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
+  assert.equal(report.modes.hybrid.file_retrieval.scored_tasks, 20);
+  assert.equal(report.modes.hybrid.file_retrieval.hit_at_10_count, 0);
+  assert.equal(
+    report.modes.hybrid.semble_official.repository_macro.ndcg_at_10,
+    0,
+  );
+  assert.deepEqual(report.modes.hybrid.measurements, {
+    latency_ms_p50: null,
+    latency_sample_count: 0,
+    output_bytes_mean: null,
+    output_sample_count: 0,
+  });
   assert.equal(
     report.tasks.every((row) => row.ranking_repeatable === null),
     true,
@@ -542,25 +712,43 @@ test("Semble protocol stays distinct and wrong source/Gold/protocol identity is 
   );
 });
 
-test("cross-tool comparison recomputes matched quality without pretending protocols match", async (t) => {
+function refreshMetrics(report) {
+  for (const row of report.tasks) {
+    row.semble_official = {
+      targets: suite.semble_gold[row.task_id].targets,
+      ...scoreSembleMetric(row.items, suite.semble_gold[row.task_id].targets),
+    };
+    row.file_retrieval = fileRetrievalForRow(row);
+  }
+  report.modes.hybrid.file_retrieval = summarizeFileRetrieval(report.tasks);
+  report.modes.hybrid.semble_official = summarizeSembleOfficial(report.tasks);
+}
+
+test("cross-tool comparison derives five metrics from public file ranks with distinct protocols", async (t) => {
   const f = await fixture(t),
     report = await aggregateSemble(f.directory),
     baseline = zgBaseline(report);
-  baseline.modes.hybrid.summary.hit_at_10_count = 999;
   const row = report.tasks[0];
-  Object.assign(row, {
-    first_hit_rank: 1,
-    hit_at_1: 1,
-    hit_at_5: 1,
-    hit_at_10: 1,
-    rr_at_10: 1,
-  });
+  row.items = [
+    { rank: 1, path: suite.semble_gold[row.task_id].targets[0].path },
+  ];
+  refreshMetrics(report);
   const comparison = await compareSembleToZg(baseline, report);
-  assert.equal(comparison.summary.zg.hit_at_10_count, 0);
-  assert.equal(comparison.summary.semble.hit_at_10_count, 1);
-  assert.equal(comparison.summary.delta.mrr_at_10, 1 / 20);
+  assert.equal(comparison.file_retrieval.zg.hit_at_10_count, 0);
+  assert.equal(comparison.file_retrieval.semble.hit_at_10_count, 1);
+  assert.equal(comparison.file_retrieval.delta.mrr_at_10, 1 / 20);
+  assert.equal(comparison.tasks[0].file_retrieval_delta.rr_at_10, 1);
+  assert.deepEqual(Object.keys(comparison.tasks[0].semble_official_delta), [
+    "ndcg_at_10",
+  ]);
+  assert.ok(!Object.hasOwn(comparison, "summary"));
+  assert.ok(!Object.hasOwn(comparison, "diagnostics"));
+  assert.ok(!Object.hasOwn(comparison, "by_category"));
   assert.notEqual(comparison.protocols.zg, comparison.protocols.semble);
-  assert.equal(comparison.tasks[0].delta.rr_at_10, 1);
+  assert.deepEqual(
+    comparison.measurements.semble,
+    report.modes.hybrid.measurements,
+  );
   assert.match(
     comparison.differences.latency,
     /No cross-environment timing ratio/,
@@ -574,19 +762,28 @@ test("cross-tool comparison recomputes matched quality without pretending protoc
   );
 });
 
-test("cross-tool comparison rejects incomplete task sets, changed eligibility, identity and score corruption", async (t) => {
+test("cross-tool comparison rejects incomplete coverage, frozen-label drift and forged metric or measurement caches", async (t) => {
   const f = await fixture(t),
     report = await aggregateSemble(f.directory);
   for (const mutate of [
     (r) => r.tasks.pop(),
     (r) => {
+      r.schema_version = 1;
+    },
+    (r) => {
       r.suite.gold = "f".repeat(64);
     },
     (r) => {
-      r.tasks[0].hit_at_10 = 1;
+      r.tasks[0].semble_official.ndcg_at_10 = 1;
     },
     (r) => {
-      r.tasks.find((row) => row.ndcg_at_10 !== null).ndcg_at_10 = null;
+      r.tasks[0].semble_official.targets = [{ path: "forged.py" }];
+    },
+    (r) => {
+      r.tasks[0].items = [{ rank: 2, path: "invalid-native-rank.py" }];
+    },
+    (r) => {
+      r.tasks[0].gold_status = "unknown";
     },
     (r) => {
       r.protocol.content = "all";
@@ -606,6 +803,24 @@ test("cross-tool comparison rejects incomplete task sets, changed eligibility, i
     (r) => {
       r.modes.hybrid.file_retrieval.mrr_at_10 = 1;
     },
+    (r) => {
+      r.modes.hybrid.semble_official.repository_macro.ndcg_at_10 = 1;
+    },
+    (r) => {
+      r.modes.hybrid.measurements.latency_ms_p50 += 100;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations.pop();
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].repetition = 5;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[0].visible_output_bytes = -1;
+    },
+    (r) => {
+      r.tasks[0].measurement_observations[4].latency_ms += 1;
+    },
   ]) {
     const changed = structuredClone(report);
     mutate(changed);
@@ -613,27 +828,15 @@ test("cross-tool comparison rejects incomplete task sets, changed eligibility, i
   }
 });
 
-test("older saved reports are re-scored into the file contract without changing anchor history", async (t) => {
-  const f = await fixture(t);
-  const report = await aggregateSemble(f.directory);
-  const baseline = zgBaseline(report);
-  for (const saved of [baseline, report]) {
-    delete saved.file_retrieval_contract;
-    delete saved.modes.hybrid.file_retrieval;
-    for (const row of saved.tasks) delete row.file_retrieval;
-  }
-  const previousAnchors = structuredClone(
-    report.tasks.map((row) => row.rr_at_10),
-  );
+test("cross-tool comparison never mutates public evidence or recalculates from cached scores", async (t) => {
+  const f = await fixture(t),
+    report = await aggregateSemble(f.directory),
+    baseline = zgBaseline(report);
+  const snapshot = structuredClone([baseline, report]);
   const comparison = await compareSembleToZg(baseline, report);
-  assert.equal(comparison.file_retrieval_contract, FILE_RETRIEVAL_CONTRACT);
   assert.equal(comparison.file_retrieval.semble.scored_tasks, 20);
   assert.equal(comparison.file_retrieval.semble.mrr_at_10, 0);
-  assert.deepEqual(
-    report.tasks.map((row) => row.rr_at_10),
-    previousAnchors,
-  );
-  assert.ok(report.tasks.every((row) => row.file_retrieval === undefined));
+  assert.deepEqual([baseline, report], snapshot);
 });
 
 test("baseline CLI option writes explicit cross-tool disclosure and comparison errors are withheld", async (t) => {
@@ -642,7 +845,7 @@ test("baseline CLI option writes explicit cross-tool disclosure and comparison e
     baselinePath = join(f.directory, "baseline.json");
   await writeJson(baselinePath, zgBaseline(original));
   const report = await aggregateSemble(f.directory, { baselinePath });
-  assert.equal(report.cross_tool_comparison.summary.zg.scored_tasks, 20);
+  assert.equal(report.cross_tool_comparison.file_retrieval.zg.scored_tasks, 20);
   assert.equal(
     report.cross_tool_comparison.baseline_input.sha256,
     await fileHash(baselinePath),
@@ -713,17 +916,16 @@ test("a successful call cannot claim unknown latency while unissued product fail
     allowSubset: true,
   });
   assert.equal(report.quality_score_valid, true);
-  assert.deepEqual(report.tasks[0].call_latencies_ms, [
-    null,
-    null,
-    null,
-    null,
-    null,
-  ]);
+  assert.deepEqual(
+    report.tasks[0].measurement_observations.map((row) => row.latency_ms),
+    [null, null, null, null, null],
+  );
 });
 
-test("Gold file presence is a separate public-item diagnostic and cannot turn a missing anchor into a hit", async (t) => {
+test("file localization receives credit from the public path without requiring a visible declaration", async (t) => {
   const f = await fixture(t, { subset: true });
+  for (const [index, measurement] of f.first.calls.entries())
+    measurement.latency_ms = [100, 1, 7, 3, 5][index];
   const call = f.first.calls[4],
     task = suite.lock.tasks.find((task) => task.task_id === call.task_id);
   const path = suite.gold[task.task_id].targets.find(
@@ -741,7 +943,7 @@ test("Gold file presence is a separate public-item diagnostic and cannot turn a 
               start_line: 1,
               end_line: 1,
               score: 1,
-              content: "# unrelated visible prefix",
+              content: "# 无关可见前缀 🧪",
             },
           ],
         }),
@@ -761,26 +963,37 @@ test("Gold file presence is a separate public-item diagnostic and cannot turn a 
   await f.save();
   const report = await aggregateSemble(f.directory, { allowSubset: true });
   assert.equal(report.quality_score_valid, true);
-  assert.equal(report.tasks[0].gold_file_presence_at_10, true);
-  assert.deepEqual(report.tasks[0].gold_file_presence_paths, [path]);
+  const publicText = (await readJson(join(f.first.root, call.raw_path)))
+    .content[0].text;
   assert.equal(
-    report.modes.hybrid.diagnostics.gold_file_presence_at_10.count,
-    1,
+    report.tasks[0].visible_output_bytes,
+    Buffer.byteLength(publicText, "utf8"),
   );
-  assert.equal(report.tasks[0].hit_at_10, 0);
-  assert.equal(report.tasks[0].rr_at_10, 0);
+  assert.ok(report.tasks[0].visible_output_bytes > publicText.length);
+  assert.equal(
+    report.modes.hybrid.measurements.output_bytes_mean,
+    Buffer.byteLength(publicText, "utf8"),
+  );
+  assert.equal(report.modes.hybrid.measurements.output_sample_count, 1);
+  assert.equal(report.modes.hybrid.measurements.latency_ms_p50, 5);
+  assert.equal(report.modes.hybrid.measurements.latency_sample_count, 5);
   assert.equal(report.tasks[0].file_retrieval.rr_at_10, 1);
   assert.equal(report.modes.hybrid.file_retrieval.hit_at_1_count, 1);
   assert.equal(report.tasks[0].repetition, 5);
   assert.ok(report.tasks[0].semble_official.ndcg_at_10 > 0);
-  assert.equal(report.modes.hybrid.summary.hit_at_10_count, 0);
+  assert.ok(!Object.hasOwn(report.tasks[0], "target_matches"));
+  assert.ok(!Object.hasOwn(report.tasks[0], "hit_at_10"));
   assert.match(
     markdownSembleReport(report),
-    /zero anchor score does not establish absence of relevant code/,
+    /\| Semble MCP full chunk \| 1\.0000 \| 1\.0000 \| 1\.0000 \| 1\.0000 \|/,
+  );
+  assert.doesNotMatch(
+    markdownSembleReport(report),
+    /anchor|nDCG@5|file presence/i,
   );
 });
 
-test("cross-tool file presence uses exact accepted paths in native Top 10, excludes bridge-only files and recomputes both sides", async (t) => {
+test("cross-tool file metrics preserve native Top-10 ranks and exclude bridge-only targets", async (t) => {
   const f = await fixture(t),
     report = await aggregateSemble(f.directory),
     baseline = zgBaseline(report);
@@ -802,7 +1015,6 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   }));
   before.items[0].path = bridgeOnly;
   before.items[1].path = `${accepted}.extra`;
-  before.gold_file_presence_at_10 = true; // Cached diagnostic must not be trusted.
   report.tasks.find((row) => row.task_id === "requests:16").items = Array.from(
     { length: 10 },
     (_, i) => ({ rank: i + 1, path: i === 9 ? accepted : "unrelated.py" }),
@@ -810,30 +1022,9 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   report.tasks.find((row) => row.task_id === "xarray:46").items = [
     { rank: 1, path: shared },
   ];
-  for (const r of [baseline, report]) {
-    for (const row of r.tasks) {
-      row.semble_official = {
-        targets: suite.semble_gold[row.task_id].targets,
-        ...scoreSembleMetric(row.items, suite.semble_gold[row.task_id].targets),
-      };
-      row.file_retrieval = fileRetrievalForRow(row);
-    }
-    r.modes.hybrid.file_retrieval = summarizeFileRetrieval(r.tasks);
-  }
+  for (const r of [baseline, report]) refreshMetrics(r);
   const result = await compareSembleToZg(baseline, report);
-  assert.equal(result.diagnostics.gold_file_presence_at_10.zg_count, 0);
-  assert.equal(result.diagnostics.gold_file_presence_at_10.semble_count, 2);
   const pair = result.tasks.find((row) => row.task_id === "requests:16");
-  assert.equal(pair.zg.gold_file_presence_at_10, false);
-  assert.equal(pair.semble.gold_file_presence_at_10, true);
-  assert.equal(
-    result.tasks.find((row) => row.task_id === "xarray:46").semble
-      .gold_file_presence_at_10,
-    true,
-  );
-  assert.equal(result.summary.zg.hit_at_10_count, 0);
-  assert.equal(result.summary.semble.hit_at_10_count, 0);
-  assert.equal(result.summary.delta.mrr_at_10, 0);
   assert.equal(result.file_retrieval.zg.hit_at_10_count, 0);
   assert.equal(result.file_retrieval.semble.hit_at_10_count, 2);
   assert.equal(result.file_retrieval.semble.mrr_at_10, 1.1 / 20);
@@ -841,11 +1032,11 @@ test("cross-tool file presence uses exact accepted paths in native Top 10, exclu
   assert.equal(pair.file_retrieval_delta.rr_at_10, 0.1);
 });
 
-test("official means preserve query/repository/language weighting instead of substituting the grouped subset", () => {
+test("official nDCG10 retains query/repository/language weighting over all questions", () => {
   const row = (repository, language, value) => ({
     repository,
     language,
-    semble_official: { ndcg_at_5: value, ndcg_at_10: value },
+    semble_official: { ndcg_at_10: value },
   });
   const result = summarizeSembleOfficial([
     row("a", "python", 1),

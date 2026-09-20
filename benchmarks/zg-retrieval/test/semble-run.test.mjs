@@ -251,8 +251,9 @@ test("Semble full chunk exposes its native evidence beyond line ten without sour
   assert.deepEqual(await auditVisibleSource(scored.items, root, [native]), []);
   assert.deepEqual(scored.items, before);
   assert.equal(scored.status, "scored");
-  assert.equal(scored.hit_at_10, 1);
-  assert.equal(scored.target_matches.length, 1);
+  assert.ok(!Object.hasOwn(scored, "hit_at_10"));
+  assert.ok(!Object.hasOwn(scored, "target_matches"));
+  assert.equal(scored.items[0].source_lines.at(-1).line, 11);
   assert.equal(scored.items[0].source_lines.at(-1).line, 11);
   const truncated = scoreSembleResponse(
     response(native, prefix.join("\n")),

@@ -106,7 +106,7 @@ test("combined primary and secondary labels receive identical binary weight", ()
   const inputs = [item(1, "pkg/b.py"), item(2, "pkg/a.py")];
   const scored = scoreSembleMetric(inputs, [...primary, ...secondary]);
   assert.deepEqual(scored.target_ranks, [2, 1]);
-  assert.equal(scored.ndcg_at_5, 1);
+  assert.equal(scored.ndcg_at_10, 1);
   assert.deepEqual(
     scoreSembleMetric(inputs, [...secondary, ...primary]).ndcg_at_10,
     scored.ndcg_at_10,
@@ -160,7 +160,6 @@ test("public non-text results can match file-only labels without invented source
 
 test("upstream empty and cutoff cases keep denominators and ignore out-of-window ranks", () => {
   assert.deepEqual(scoreSembleMetric([], []), {
-    ndcg_at_5: 0,
     ndcg_at_10: 0,
     target_ranks: [],
     n_relevant: 0,
@@ -175,7 +174,7 @@ test("upstream empty and cutoff cases keep denominators and ignore out-of-window
     { path: "pkg/11.py" },
   ]);
   assert.deepEqual(scored.target_ranks, [6, 11]);
-  assert.equal(scored.ndcg_at_5, 0);
+  assert.equal(Object.hasOwn(scored, "ndcg_at_5"), false);
   assert.equal(scored.ndcg_at_10, 1 / Math.log2(7) / (1 + 1 / Math.log2(3)));
   assert.equal(ndcgAtK([0, -1, 11], 2, 10), 0);
   assert.equal(ndcgAtK([1, 2], 2, 0), 0);
@@ -381,11 +380,7 @@ test("JavaScript results agree with the original Python functions on boundary an
       `score case ${index}`,
     );
     assert.equal(actual.n_relevant, reference.n_relevant);
-    approximate(
-      actual.ndcg_at_5,
-      reference.ndcg_at_5,
-      `score case ${index} @5`,
-    );
+    assert.equal(Object.hasOwn(actual, "ndcg_at_5"), false);
     approximate(
       actual.ndcg_at_10,
       reference.ndcg_at_10,
