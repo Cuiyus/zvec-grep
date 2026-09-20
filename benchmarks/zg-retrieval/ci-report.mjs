@@ -261,7 +261,7 @@ export function markdownCiSummary(result) {
   if (result.commit) lines.push("", `测试提交：\`${cell(result.commit)}\`。`);
   lines.push(
     "",
-    "详细结果：下载本次运行的 `retrieval-results` artifact（summary.json 与 comparison.json）；逐题原始记录见 ZG / Semble evidence artifacts。",
+    "详细结果：下载本次运行的 `retrieval-results` artifact（summary.json；ZG 与 Semble 均通过校验时另含 comparison.json）；逐题原始记录见已运行测试组的 evidence artifacts。",
   );
   if (result.run_url)
     lines.push("", `[打开本次运行及 artifacts](${result.run_url})`);
