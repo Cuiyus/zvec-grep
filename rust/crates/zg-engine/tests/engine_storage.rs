@@ -28,6 +28,12 @@ use zg_engine::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+fn text_prefix_with_invalid_suffix() -> Vec<u8> {
+    let mut bytes = vec![b'a'; 1024];
+    bytes.push(0xff);
+    bytes
+}
+
 #[tokio::test]
 async fn one_text_model_indexes_text_and_skips_images_without_embedding_them() -> TestResult {
     use zg_engine::api::index::result::SkippedFileReason;
@@ -463,7 +469,8 @@ async fn public_engine_persists_searches_updates_and_drops_real_storage() -> Tes
 
     let engine = ZvecGrep::new();
     let initial = engine.index(index_options(root)).await?;
-    assert_eq!(initial.files_added, 3, "{initial:?}");
+    assert_eq!(initial.files_added, 2, "{initial:?}");
+    assert!(initial.skipped.iter().any(|file| file.path == root.join("tmp")));
     assert_eq!(initial.files_failed, 0);
     let info = engine.info(info_options(root)).await?;
     assert!(info.indexed);
@@ -477,7 +484,7 @@ async fn public_engine_persists_searches_updates_and_drops_real_storage() -> Tes
         .expect("FTS info");
     assert_eq!(fts.tokenizer, "jieba");
     assert_eq!(fts.filters, ["lowercase"]);
-    assert_eq!(info.status.as_ref().expect("status").files_indexed, 3);
+    assert_eq!(info.status.as_ref().expect("status").files_indexed, 2);
     assert_eq!(
         fts_paths(&engine, root, "orchard").await?,
         [PathBuf::from("auth.rs")]
@@ -504,7 +511,7 @@ async fn public_engine_persists_searches_updates_and_drops_real_storage() -> Tes
     );
     let calls = server.requests.load(Ordering::Acquire);
     let unchanged = engine.index(index_options(root)).await?;
-    assert_eq!(unchanged.files_unchanged, 3);
+    assert_eq!(unchanged.files_unchanged, 2);
     assert_eq!(server.requests.load(Ordering::Acquire), calls);
     engine.close();
     assert_eq!(
@@ -578,7 +585,7 @@ async fn public_engine_persists_searches_updates_and_drops_real_storage() -> Tes
             ..index_options(root)
         })
         .await?;
-    assert_eq!(rebuilt.files_added, 3);
+    assert_eq!(rebuilt.files_added, 2);
     let after_rebuild = engine.info(info_options(root)).await?;
     assert_eq!(
         after_rebuild
@@ -643,7 +650,7 @@ async fn initial_build_publishes_successes_and_incrementally_retries_failed_file
     let home = root.join(".zvec-grep");
     let server = EmbeddingServer::start()?;
     configure_remote_model(root, server.address)?;
-    fs::write(root.join("broken.txt"), [255_u8, 254, 255])?;
+    fs::write(root.join("broken.txt"), text_prefix_with_invalid_suffix())?;
     fs::write(root.join("stable.txt"), "Stable orchard baseline.\n")?;
     let engine = ZvecGrep::new();
     let initial = engine.index(index_options(root)).await?;
@@ -716,7 +723,7 @@ async fn rebuild_publishes_successful_files_and_records_failures_for_incremental
     engine.index(index_options(root)).await?;
     let original_path = engine.info(info_options(root)).await?.index_path;
     let original_inputs = server.inputs.load(Ordering::Acquire);
-    fs::write(root.join("note.txt"), [255_u8, 254, 255])?;
+    fs::write(root.join("note.txt"), text_prefix_with_invalid_suffix())?;
     let rebuilt = engine
         .index(IndexOptions {
             rebuild: true,
@@ -776,7 +783,7 @@ async fn incremental_failure_removes_all_old_searchable_content_for_the_file() -
     engine.index(index_options(root)).await?;
     let index_path = engine.info(info_options(root)).await?.index_path;
     let inputs = server.inputs.load(Ordering::Acquire);
-    fs::write(root.join("note.txt"), [255_u8, 254, 255])?;
+    fs::write(root.join("note.txt"), text_prefix_with_invalid_suffix())?;
     let updated = engine.index(index_options(root)).await?;
     assert_eq!((updated.files_unchanged, updated.files_failed), (1, 1));
     assert_eq!(updated.failed_files[0].path, Path::new("note.txt"));
