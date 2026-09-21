@@ -470,7 +470,12 @@ async fn public_engine_persists_searches_updates_and_drops_real_storage() -> Tes
     let engine = ZvecGrep::new();
     let initial = engine.index(index_options(root)).await?;
     assert_eq!(initial.files_added, 2, "{initial:?}");
-    assert!(initial.skipped.iter().any(|file| file.path == root.join("tmp")));
+    assert!(
+        initial
+            .skipped
+            .iter()
+            .any(|file| file.path == root.join("tmp"))
+    );
     assert_eq!(initial.files_failed, 0);
     let info = engine.info(info_options(root)).await?;
     assert!(info.indexed);
