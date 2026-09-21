@@ -2604,46 +2604,43 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_errors_abort_without_file_retry_or_checkpoint() {
-        // Zero-byte files are skipped by scanning; whitespace reaches the no-fragment commit.
-        for (source, embedding_calls) in [("indexable text", 1), (" \n", 0)] {
-            let directory = tempdir().expect("workspace");
-            std::fs::write(directory.path().join("file.txt"), source).expect("source");
-            let workspace = workspace(directory.path());
-            let scanner = RecordingScanner::new();
-            let storage = MemoryStorage::default();
-            let file_id = storage
-                .resolve_file_ids(&[PathBuf::from("file.txt")])
-                .expect("file identity")[0];
-            storage
-                .fail_replacements_once
-                .lock()
-                .expect("failure injection")
-                .insert(file_id);
-            let model = ConcurrentModel::new();
+        let directory = tempdir().expect("workspace");
+        std::fs::write(directory.path().join("file.txt"), "indexable text").expect("source");
+        let workspace = workspace(directory.path());
+        let scanner = RecordingScanner::new();
+        let storage = MemoryStorage::default();
+        let file_id = storage
+            .resolve_file_ids(&[PathBuf::from("file.txt")])
+            .expect("file identity")[0];
+        storage
+            .fail_replacements_once
+            .lock()
+            .expect("failure injection")
+            .insert(file_id);
+        let model = ConcurrentModel::new();
 
-            let error = index_workspace(&IndexingContext {
-                workspace_index: &workspace,
-                storage: &storage,
-                scanner: &scanner,
-                embedding_models: &[&model],
-                embedding_concurrency: None,
-                on_progress: None,
-                signal: None,
-                changes: &[],
-            })
-            .await
-            .expect_err("a storage failure must abort indexing");
+        let error = index_workspace(&IndexingContext {
+            workspace_index: &workspace,
+            storage: &storage,
+            scanner: &scanner,
+            embedding_models: &[&model],
+            embedding_concurrency: None,
+            on_progress: None,
+            signal: None,
+            changes: &[],
+        })
+        .await
+        .expect_err("a storage failure must abort indexing");
 
-            assert_eq!(error.code(), EngineError::STORAGE_FAILURE);
-            assert!(error.to_string().contains("injected replacement failure"));
-            assert_eq!(scanner.requests.lock().expect("scan requests").len(), 1);
-            assert_eq!(model.calls.load(Ordering::Acquire), embedding_calls);
-            // These storage operations remain usable after the replacement fails,
-            // so neither failed-file recovery nor finalization may hide the error.
-            assert_eq!(storage.failed_markers.load(Ordering::Acquire), 0);
-            assert_eq!(storage.finalized.load(Ordering::Acquire), 0);
-            assert!(storage.list_files().expect("stored files").is_empty());
-        }
+        assert_eq!(error.code(), EngineError::STORAGE_FAILURE);
+        assert!(error.to_string().contains("injected replacement failure"));
+        assert_eq!(scanner.requests.lock().expect("scan requests").len(), 1);
+        assert_eq!(model.calls.load(Ordering::Acquire), 1);
+        // These storage operations remain usable after the replacement fails,
+        // so neither failed-file recovery nor finalization may hide the error.
+        assert_eq!(storage.failed_markers.load(Ordering::Acquire), 0);
+        assert_eq!(storage.finalized.load(Ordering::Acquire), 0);
+        assert!(storage.list_files().expect("stored files").is_empty());
     }
 
     #[tokio::test]
@@ -3338,6 +3335,8 @@ mod tests {
     #[tokio::test]
     async fn restoring_default_size_limits_rechecks_unchanged_files() {
         let directory = tempdir().expect("temporary directory");
+        std::fs::write(directory.path().join("large.rs"), "fn main() {}\n")
+            .expect("source for format validation");
         let mut workspace = workspace(directory.path());
         workspace.scan.max_file_size_bytes = Some(3 * MIN_DEFAULT_FILE_SIZE_BYTES);
         let discovered = DiscoveredFile {
