@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve, isAbsolute, extname } from "node:path";
+import { join, resolve, isAbsolute } from "node:path";
 import {
   loadSuite,
   readJson,
@@ -103,61 +103,50 @@ export async function aggregate(directory, { expectedTasks } = {}) {
             join(runDirectory, `stages/${phase}/summary.json`),
           );
           assert.equal(
+            snapshot.schema_version,
+            2,
+            "unsupported native snapshot",
+          );
+          assert.equal(snapshot.kind, "rust-public-status");
+          assert.equal(
             snapshot.logical_content_sha256,
             manifest.index_content_sha256,
             "index identity drift",
           );
           assert.ok(
-            snapshot.artifacts && Object.keys(snapshot.artifacts).length === 4,
+            snapshot.artifacts && Object.keys(snapshot.artifacts).length === 2,
             "missing snapshot artifact identities",
           );
           for (const [path, hash] of Object.entries(snapshot.artifacts)) {
-            assert.ok(
-              [
-                "files.json",
-                "scan.json",
-                "manifest.json",
-                "fragments.jsonl",
-              ].includes(path),
-            );
+            assert.ok(["status.txt", "status.json"].includes(path));
             assert.equal(
               await fileHash(join(runDirectory, `stages/${phase}`, path)),
               hash,
               `snapshot artifact drift: ${path}`,
             );
           }
-          const files = await readJson(
-            join(runDirectory, `stages/${phase}/files.json`),
+          const status = await readJson(
+            join(runDirectory, `stages/${phase}/status.json`),
           );
           assert.ok(
-            Array.isArray(files) && files.length > 0,
-            "code-only index contains no files",
-          );
-          const selection = suite.protocol.index_selection;
-          const extensions = new Set(selection.code_extensions);
-          for (const file of files) {
-            assert.ok(
-              extensions.has(extname(file.relativePath).toLowerCase()),
-              `non-code extension entered index: ${file.relativePath}`,
-            );
-            assert.ok(
-              Number.isFinite(file.sizeBytes) &&
-                file.sizeBytes >= 0 &&
-                file.sizeBytes <= selection.max_file_size_bytes,
-              `oversized or invalid file entered index: ${file.relativePath}`,
-            );
-          }
-          assert.deepEqual(
-            manifest.index_selection_audit,
-            {
-              content: "code",
-              max_file_size_bytes: selection.max_file_size_bytes,
-              indexed_files: files.length,
-              verified: true,
-            },
-            "index selection audit differs from recorded files",
+            Number.isSafeInteger(status.files_indexed) &&
+              status.files_indexed > 0 &&
+              status.files_pending === 0 &&
+              status.files_failed === 0,
+            "native public status does not describe a ready index",
           );
         }
+        const selection = suite.protocol.index_selection;
+        assert.deepEqual(
+          manifest.index_selection_audit,
+          {
+            content: "code",
+            max_file_size_bytes: selection.max_file_size_bytes,
+            requested_extensions: selection.code_extensions.length,
+            verified: "request_arguments_and_public_status",
+          },
+          "index selection audit differs from the frozen request",
+        );
         for (const [path, hash] of [
           ["corpus.json", manifest.corpus_sha256],
           ["corpus-after.json", manifest.corpus_sha256],
@@ -279,7 +268,6 @@ export async function aggregate(directory, { expectedTasks } = {}) {
           : { [call.mode]: [task.query] }),
         limit: suite.protocol.limit,
         ...suite.protocol.request,
-        preview: call.preview,
       };
       if (
         call.request?.name !== "zvec_grep_search" ||
@@ -466,7 +454,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     }),
   );
   const report = {
-    schema_version: 5,
+    schema_version: 6,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: suite.protocol.preview,
     quality_repetition: suite.protocol.quality_repetition,

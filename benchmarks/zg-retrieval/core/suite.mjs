@@ -15,7 +15,7 @@ export async function loadSuite() {
     join(suiteDirectory, "configs/protocol.json"),
   );
   assert.deepEqual(protocol.modes, ["hybrid", "fts", "vector"]);
-  assert.equal(protocol.preview, "full");
+  assert.equal(protocol.preview, "mcp-default");
   assert.equal(protocol.request.preferSymbol, false);
   assert.equal(protocol.repetitions, 5);
   assert.equal(protocol.quality_repetition, 5);

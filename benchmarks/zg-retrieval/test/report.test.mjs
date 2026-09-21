@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { markdownReport } from "../reports/zg.mjs";
 
-test("report has one three-arm table with full preview, fixed averages and per-query evidence", () => {
+test("report has one three-arm table with Rust MCP output, fixed averages and per-query evidence", () => {
   const mode = {
     file_retrieval: {
       planned_tasks: 20,
@@ -32,8 +32,8 @@ test("report has one three-arm table with full preview, fixed averages and per-q
     observed_calls: 300,
     integrity_passed: true,
     expected_task_ids: Array.from({ length: 20 }, (_, i) => `task:${i}`),
-    schema_version: 5,
-    preview: "full",
+    schema_version: 6,
+    preview: "mcp-default",
     modes: { hybrid: mode, fts: mode, vector: mode },
     tasks: [],
     repositories: Array.from({ length: 11 }, (_, i) => ({
@@ -49,9 +49,9 @@ test("report has one three-arm table with full preview, fixed averages and per-q
       ),
     );
   assert.match(text, /20 original questions \/ 11 repositories/);
-  assert.match(text, /fifth call per question and mode; full preview/);
+  assert.match(text, /fifth call per question and mode; Rust MCP default/);
   assert.match(text, /weights repositories equally/);
-  assert.match(text, /not the entire file/);
+  assert.match(text, /does not send a preview override/);
   assert.match(text, /<details>/);
   assert.match(text, /100\*\* successful valid calls/);
   assert.doesNotMatch(

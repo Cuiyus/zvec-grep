@@ -64,12 +64,19 @@ export function parseVisibleResponse(response) {
   if (text.includes("\x1b") || text.includes("\r"))
     fail("Unexpected terminal escapes or line framing.");
   const lines = text.split("\n");
-  const first = /^freshness: (fresh|possibly_stale)$/.exec(lines.shift() ?? "");
+  const first =
+    /^freshness: (fresh|possibly_stale|served_from_current_index)$/.exec(
+      lines.shift() ?? "",
+    );
   if (!first) fail("Missing public MCP freshness header.");
   if (lines[0] === "results: served_from_current_index") {
     lines.shift();
     if (!/^background_refresh: \S.*$/.test(lines.shift() ?? ""))
       fail("Missing background refresh status.");
+  } else if (lines[0]?.startsWith("background_refresh: ")) {
+    if (first[1] !== "served_from_current_index")
+      fail("Unexpected background refresh status.");
+    lines.shift();
   }
   // An empty string is not a successful empty search. The product has explicit empty labels.
   if (lines[0] === "No matches." || lines[0] === "No searchable files.") {
@@ -123,6 +130,10 @@ export function parseVisibleResponse(response) {
       section = "outline";
       continue;
     }
+    if (line.startsWith("outline: ") && section === "metadata") {
+      item.outline.push(line.slice("outline: ".length));
+      continue;
+    }
     if (/^matched: /.test(line)) {
       item.matched_range = parseRange(line.slice(9));
       continue;
@@ -160,6 +171,10 @@ export function parseVisibleResponse(response) {
     ) {
       item.unnumbered_source.push(line.slice(1));
       section = "source";
+      continue;
+    }
+    if (line.startsWith("  ") && section === "source") {
+      item.unnumbered_source.push(line.slice(2));
       continue;
     }
     if (line === "" || line === "...") {

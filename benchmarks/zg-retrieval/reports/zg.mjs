@@ -15,7 +15,7 @@ export function markdownReport(report) {
   const lines = [
     "# zg Retrieval-only",
     "",
-    `Status: **${report.integrity_passed ? "PASS" : "FAIL"}**. Dataset: **${queryCount} original questions / ${repoCount} repositories**. Quality: **fifth call per question and mode; full preview**. Five repetitions are stability observations, not additional questions.`,
+    `Status: **${report.integrity_passed ? "PASS" : "FAIL"}**. Dataset: **${queryCount} original questions / ${repoCount} repositories**. Quality: **fifth call per question and mode; Rust MCP default presentation**. Five repetitions are stability observations, not additional questions.`,
     "",
     "| Arm | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -29,7 +29,7 @@ export function markdownReport(report) {
     "",
     "File Hit@1/5/10 and MRR@10 give every original question equal weight, including misses and product-error zeros. nDCG@10 first averages questions within each repository, then weights repositories equally. All five metrics use the same frozen accepted-file targets and native result ranks; repeated chunks consume ranks without file deduplication. Finding a file does not establish sufficient answer evidence.",
     "",
-    "Hybrid, fts and vector use full preview on the same frozen repository index with the original query and Top-10 limit. Full returns all available content of each retrieved unit, not the entire file. Preview text and output length do not affect these five metrics. Quality thresholds are report-only.",
+    "Hybrid, fts and vector use the Rust public MCP default presentation on the same frozen repository index with the original query and Top-10 limit. The benchmark does not send a preview override because the current Rust MCP schema does not expose one. Presentation text and output length do not affect the five file-ranking metrics. Quality thresholds are report-only.",
   ];
   lines.push(
     "",

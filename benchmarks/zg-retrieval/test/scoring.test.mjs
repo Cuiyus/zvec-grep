@@ -215,6 +215,44 @@ test("lexical line markers, whitespace and matched source ranges remain exact pu
   assertNoLegacyScores(parsed);
 });
 
+test("Rust MCP default outline and unnumbered source remain public evidence", () => {
+  const parsed = parseVisibleResponse(
+    response(
+      [
+        "#1 matchedBy=vector score=0.75 pkg/main.py:20-40",
+        "outline: function wanted",
+        "source:",
+        "  def wanted():",
+        "    return result",
+      ].join("\n"),
+    ),
+  );
+  assert.deepEqual(parsed.items[0].outline, ["function wanted"]);
+  assert.deepEqual(parsed.items[0].unnumbered_source, [
+    "def wanted():",
+    "  return result",
+  ]);
+});
+
+test("Rust MCP served-from-current-index framing is parsed without changing ranks", () => {
+  const parsed = parseVisibleResponse({
+    content: [
+      {
+        type: "text",
+        text: [
+          "freshness: served_from_current_index",
+          "background_refresh: scheduled",
+          "#1 matchedBy=fts pkg/main.py:20-40",
+          "source:",
+          "  def wanted():",
+        ].join("\n"),
+      },
+    ],
+  });
+  assert.equal(parsed.freshness, "served_from_current_index");
+  assert.equal(parsed.items[0].rank, 1);
+});
+
 test("explicit empty is valid; missing, unrelated and malformed formats invalidate the harness", () => {
   for (const label of ["No matches.", "No searchable files."]) {
     const parsed = scoreResponse(response(label), gold());

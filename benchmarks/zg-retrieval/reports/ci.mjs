@@ -55,7 +55,9 @@ export async function buildCiSummary({
   zg = null,
   jobResults = {},
   runUrl = null,
-  commit = null,
+  harnessCommit = null,
+  candidateCommit = null,
+  candidateRef = null,
 } = {}) {
   const suite = await loadSuite();
   const rows = [],
@@ -101,12 +103,16 @@ export async function buildCiSummary({
       if (jobResults[job]?.result !== "success")
         errors.push(`${job}: ${jobResults[job]?.result ?? "missing job"}`);
   return {
-    schema_version: 3,
+    schema_version: 4,
     status: errors.length ? "failed" : "success",
-    preview: "full",
+    preview: "mcp-default",
     quality_metrics: QUALITY_METRICS,
     run_url: runUrl,
-    commit,
+    harness_commit: harnessCommit,
+    candidate: {
+      ref: candidateRef,
+      commit: candidateCommit,
+    },
     rows,
     errors,
   };
@@ -123,7 +129,7 @@ export function markdownCiSummary(result) {
   const lines = [
     "# Retrieval-only results",
     "",
-    `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · full preview`,
+    `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
     "",
     "| Arm | Status | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -146,7 +152,7 @@ export function markdownCiSummary(result) {
   }
   lines.push(
     "",
-    "All three arms use full preview and five calls per question. Each arm has 20 quality observations from the fifth call: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
+    "All three arms use the Rust public MCP default presentation and five calls per question. No preview override is sent. Each arm has 20 quality observations from the fifth call: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
     "",
     "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of all successful MCP search calls, excluding indexing. Failed calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
     "",
@@ -164,8 +170,16 @@ export function markdownCiSummary(result) {
       "",
       ...result.errors.map((error) => `- ${cell(error)}`),
     );
-  if (result.commit)
-    lines.push("", `Tested commit: \`${cell(result.commit)}\`.`);
+  if (result.candidate?.commit)
+    lines.push(
+      "",
+      `Rust candidate: \`${cell(result.candidate.ref)}\` at \`${cell(result.candidate.commit)}\`.`,
+    );
+  if (result.harness_commit)
+    lines.push(
+      "",
+      `Benchmark harness commit: \`${cell(result.harness_commit)}\`.`,
+    );
   lines.push(
     "",
     "Details: download the `retrieval-results` artifact for summary.md and summary.json. Per-question raw records are available in the repository evidence artifacts.",
@@ -201,7 +215,9 @@ export async function main() {
     zg: await maybeRead(args.zg),
     jobResults: JSON.parse(process.env.RETRIEVAL_JOB_RESULTS ?? "{}"),
     runUrl,
-    commit: process.env.GITHUB_SHA ?? null,
+    harnessCommit: process.env.RETRIEVAL_HARNESS_COMMIT ?? null,
+    candidateCommit: process.env.RETRIEVAL_CANDIDATE_COMMIT ?? null,
+    candidateRef: process.env.RETRIEVAL_CANDIDATE_REF ?? null,
   });
   const directory = resolve(args.output);
   await mkdir(directory, { recursive: true });

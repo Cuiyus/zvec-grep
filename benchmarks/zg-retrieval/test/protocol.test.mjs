@@ -235,7 +235,6 @@ test("each mode receives the unmodified original question exactly once, without 
         "autoUpdate",
         "freshness",
         "preferSymbol",
-        "preview",
       ].sort(),
     );
     assert.deepEqual(
@@ -245,7 +244,7 @@ test("each mode receives the unmodified original question exactly once, without 
     assert.equal(args.autoUpdate, false);
     assert.equal(args.freshness, "eventual");
     assert.equal(args.limit, 10);
-    assert.equal(args.preview, "full");
+    assert.equal(Object.hasOwn(args, "preview"), false);
     assert.equal(args.preferSymbol, false);
   }
   assert.throws(
@@ -256,13 +255,13 @@ test("each mode receives the unmodified original question exactly once, without 
     () =>
       requestArguments(task, "/app", "hybrid", {
         ...suite.protocol,
-        preview: "short",
+        preview: "full",
       }),
-    /requires full preview/,
+    /requires the public MCP default presentation/,
   );
 });
 
-test("the fixed plan runs all three modes with five full-preview calls per question", () => {
+test("the fixed plan runs all three modes with five Rust MCP calls per question", () => {
   const tasks = suite.lock.tasks;
   const plan = callPlan(tasks, suite.protocol);
   assert.equal(plan.length, 300);
@@ -279,7 +278,8 @@ test("the fixed plan runs all three modes with five full-preview calls per quest
       assert.ok(
         repeats.every(
           (call) =>
-            call.task.task_id === task.task_id && call.preview === "full",
+            call.task.task_id === task.task_id &&
+            call.preview === "mcp-default",
         ),
       );
       assert.deepEqual(
@@ -453,8 +453,8 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.product_error_calls, 15);
   assert.deepEqual(report.integrity_errors, []);
   assert.equal(report.tasks.length, 3);
-  assert.equal(report.schema_version, 5);
-  assert.equal(report.preview, "full");
+  assert.equal(report.schema_version, 6);
+  assert.equal(report.preview, "mcp-default");
   assert.deepEqual(Object.keys(report.modes), ["hybrid", "fts", "vector"]);
   assert.equal(Object.hasOwn(report, "previews"), false);
   assert.equal(report.tasks[0].repetition, 5);
@@ -502,8 +502,9 @@ test("successful raw calls with missing or invalid latency invalidate the standa
     index_selection_audit: {
       content: "code",
       max_file_size_bytes: suite.protocol.index_selection.max_file_size_bytes,
-      indexed_files: 1,
-      verified: true,
+      requested_extensions:
+        suite.protocol.index_selection.code_extensions.length,
+      verified: "request_arguments_and_public_status",
     },
   });
   delete fixture.manifest.preparation_error;
@@ -516,17 +517,31 @@ test("successful raw calls with missing or invalid latency invalidate the standa
     await writeJson(join(fixture.shard, name), inventory);
   for (const phase of ["before", "after"]) {
     const directory = join(fixture.shard, "stages", phase);
-    const artifacts = {};
-    for (const [name, value] of Object.entries({
-      "files.json": [{ relativePath: "entry.py", sizeBytes: 1 }],
-      "scan.json": {},
-      "manifest.json": {},
-      "fragments.jsonl": [],
-    })) {
-      await writeJson(join(directory, name), value);
-      artifacts[name] = await fileHash(join(directory, name));
-    }
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "status.txt"), "Workspace index: ready\n");
+    await writeJson(join(directory, "status.json"), {
+      state: "ready",
+      root: "/app",
+      index_path: "/app/.zvec-grep",
+      embedding: suite.protocol.model,
+      files_scanned: 1,
+      files_indexed: 1,
+      files_pending: 0,
+      files_failed: 0,
+      entities_indexed: 1,
+      indexed_source_bytes: 1,
+    });
+    const artifacts = Object.fromEntries(
+      await Promise.all(
+        ["status.txt", "status.json"].map(async (name) => [
+          name,
+          await fileHash(join(directory, name)),
+        ]),
+      ),
+    );
     await writeJson(join(directory, "summary.json"), {
+      schema_version: 2,
+      kind: "rust-public-status",
       logical_content_sha256: fixture.manifest.index_content_sha256,
       artifacts,
     });

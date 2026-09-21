@@ -41,15 +41,18 @@ function steps(job) {
   );
 }
 
-test("Retrieval-only is one manual workflow with no selectable inputs or baseline", async () => {
+test("Retrieval-only is one manual workflow with one candidate source input", async () => {
   assert.deepEqual(
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
     ),
     ["workflow_dispatch"],
   );
-  assert.equal(block(workflow, "workflow_dispatch", 2).trim(), "");
-  assert.doesNotMatch(workflow, /\binputs[.:]/i);
+  const dispatch = block(workflow, "workflow_dispatch", 2);
+  assert.match(dispatch, /^ {4}inputs:$/m);
+  assert.match(dispatch, /^ {6}candidate_ref:$/m);
+  assert.match(dispatch, /^ {8}default: main$/m);
+  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 1);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),
@@ -63,9 +66,10 @@ test("Retrieval-only is one manual workflow with no selectable inputs or baselin
     "zg-report",
     "results",
   ]);
+  assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
 });
 
-test("every repository runs the fixed three ZG modes with full previews, yielding 16 jobs", async () => {
+test("every repository runs the fixed three ZG modes through Rust MCP, yielding 16 jobs", async () => {
   const protocol = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
@@ -73,7 +77,7 @@ test("every repository runs the fixed three ZG modes with full previews, yieldin
     ),
   );
   assert.deepEqual(protocol.modes, ["hybrid", "fts", "vector"]);
-  assert.equal(protocol.preview, "full");
+  assert.equal(protocol.preview, "mcp-default");
   const lock = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/data/source.lock.json", repository),
@@ -103,6 +107,55 @@ test("every repository runs the fixed three ZG modes with full previews, yieldin
     /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
   );
   assert.doesNotMatch(workflow, /pip install|python -m venv|SDK parity/);
+});
+
+test("the selected workflow ref is frozen once for every downstream job", () => {
+  const authorizeCheckout = steps(jobs.authorize)[0];
+  assert.doesNotMatch(authorizeCheckout, /^ {10}ref:/m);
+  assert.match(
+    jobs.authorize,
+    /harness-commit: \$\{\{ steps\.harness\.outputs\.commit \}\}/,
+  );
+  for (const name of [
+    "quality-contract",
+    "package-candidate",
+    "retrieval",
+    "zg-report",
+    "results",
+  ])
+    assert.match(
+      jobs[name],
+      /ref: \$\{\{ needs\.authorize\.outputs\.harness-commit \}\}/,
+      name,
+    );
+});
+
+test("the selected source is built from rust/ and exact-commit package caching bypasses recompilation", () => {
+  const job = jobs["package-candidate"];
+  assert.match(job, /ref: \$\{\{ inputs\.candidate_ref \}\}/);
+  assert.match(job, /path: candidate/);
+  assert.match(job, /working-directory: candidate\/rust/);
+  assert.match(job, /candidate\/rust\/target\//);
+  assert.match(job, /candidate\/rust\/Cargo\.lock/);
+  assert.match(
+    job,
+    /retrieval-rust-package-v1-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.source\.outputs\.commit \}\}/,
+  );
+  assert.match(
+    job,
+    /if: steps\.rust-package-cache\.outputs\.cache-hit != 'true'/,
+  );
+  assert.match(job, /npm run pack:local/);
+  assert.match(job, /--source \.\./);
+  assert.doesNotMatch(
+    job,
+    /node-version[^\n]*\$\{\{|NODE_VERSION|node.*cache.*key/i,
+  );
+  assert.match(jobs.retrieval, /Verify the candidate package identity/);
+  assert.match(
+    jobs.retrieval,
+    /--commit "\$\{\{ needs\.package-candidate\.outputs\.candidate-commit \}\}"/,
+  );
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {

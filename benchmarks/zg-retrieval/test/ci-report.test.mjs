@@ -39,7 +39,7 @@ function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
   const row = {
     task_id: task.task_id,
     mode,
-    preview: "full",
+    preview: "mcp-default",
     repetition: 5,
     quality_observation: true,
     repository: task.repository,
@@ -82,9 +82,9 @@ function zgReport({ failedModes = [], rankForTask = () => 3 } = {}) {
     ),
   );
   return {
-    schema_version: 5,
+    schema_version: 6,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    preview: "full",
+    preview: "mcp-default",
     quality_repetition: 5,
     quality_score_valid: true,
     integrity_passed: failedModes.length === 0,
@@ -120,11 +120,11 @@ function assertUnavailable(result) {
   }
 }
 
-test("summary schema 3 has exactly the fixed three full-preview ZG arms", async () => {
+test("summary schema 4 has exactly the fixed three Rust MCP ZG arms", async () => {
   const result = await buildCiSummary({ zg: zgReport() });
-  assert.equal(result.schema_version, 3);
+  assert.equal(result.schema_version, 4);
   assert.equal(result.status, "success");
-  assert.equal(result.preview, "full");
+  assert.equal(result.preview, "mcp-default");
   assert.deepEqual(result.quality_metrics, [
     "file_hit_at_1",
     "file_hit_at_5",
@@ -159,7 +159,7 @@ test("missing and invalid reports withhold all three arms instead of fabricating
 test("CI rejects old contracts and incomplete or misrouted three-mode matrices", async () => {
   for (const mutate of [
     (r) => {
-      r.schema_version = 4;
+      r.schema_version = 5;
     },
     (r) => {
       r.preview = "short";
@@ -376,15 +376,20 @@ test("fractional results are stable across task ordering and do not mutate evide
 test("Markdown exposes exactly three arms, five quality metrics and two measurements", async () => {
   const result = await buildCiSummary({
     zg: zgReport(),
-    commit: "a".repeat(40),
+    harnessCommit: "a".repeat(40),
+    candidateCommit: "b".repeat(40),
+    candidateRef: "feature/rust-search",
   });
   const text = markdownCiSummary(result);
-  assert.match(text, /full preview/);
+  assert.match(text, /Rust public MCP default presentation/);
   assert.match(text, /20 quality observations/);
   assert.match(text, /Hit\/MRR weight all 20 questions equally/);
   assert.match(text, /nDCG@10 uses a repository macro average/);
   assert.match(text, /1 KiB = 1024 bytes/);
   assert.match(text, /20 output samples; 100 latency samples/);
+  assert.match(text, /feature\/rust-search/);
+  assert.match(text, new RegExp("a{40}"));
+  assert.match(text, new RegExp("b{40}"));
   for (const label of ["zg-hybrid", "zg-fts", "zg-vector"])
     assert.match(
       text,
@@ -424,7 +429,7 @@ test("CLI accepts only --zg and --output and writes only the two overview artifa
   assert.equal(
     JSON.parse(await readFile(join(output, "summary.json"), "utf8"))
       .schema_version,
-    3,
+    4,
   );
   for (const unsupported of ["--engine", "--modes"])
     assert.notEqual(

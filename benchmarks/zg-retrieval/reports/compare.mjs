@@ -173,9 +173,9 @@ function compareValidatedReports(baseline, candidate, before, after) {
       });
     }
   return {
-    schema_version: 3,
+    schema_version: 4,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
-    preview: "full",
+    preview: "mcp-default",
     quality_repetition: 5,
     suite: structuredClone(baseline.suite),
     scope: baseline.scope,
@@ -239,7 +239,7 @@ export function markdownComparison(result) {
   const lines = [
     "# zg Retrieval-only version comparison",
     "",
-    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. All modes use full preview. Quality uses the fifth call. Delta is candidate minus baseline.`,
+    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. All modes use the Rust public MCP default presentation. Quality uses the fifth call. Delta is candidate minus baseline.`,
     "",
     "Source, Gold, frozen accepted-file targets and protocol identities match; task/mode coverage and scoring eligibility are validated. All five metrics are recomputed from saved public result items. This is a report-only comparison with no quality threshold or causal attribution.",
     "",

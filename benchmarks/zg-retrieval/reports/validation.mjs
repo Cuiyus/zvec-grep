@@ -189,14 +189,18 @@ function validateQualityRow(row, label) {
   return { ...normalized, file_retrieval: file };
 }
 
-/** Validate the full-preview, three-mode report from saved public evidence. */
+/** Validate the Rust MCP-default, three-mode report from saved public evidence. */
 export function validateZgReport(report, label = "ZG", { suite } = {}) {
   assert.equal(
     report.schema_version,
-    5,
-    `${label}: unsupported report schema; schema 5 required`,
+    6,
+    `${label}: unsupported report schema; schema 6 required`,
   );
-  assert.equal(report.preview, "full", `${label}: full preview required`);
+  assert.equal(
+    report.preview,
+    "mcp-default",
+    `${label}: Rust MCP default presentation required`,
+  );
   for (const field of [
     "previews",
     "primary_preview",
@@ -285,7 +289,11 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
   const rows = new Map();
   for (const row of report.tasks) {
     const context = `${label}: ${row.task_id}/${row.mode}`;
-    assert.equal(row.preview, "full", `${context}: full preview required`);
+    assert.equal(
+      row.preview,
+      "mcp-default",
+      `${context}: Rust MCP default presentation required`,
+    );
     assert.ok(
       ids.includes(row.task_id) && modes.includes(row.mode),
       `${context}: unexpected task/mode`,
