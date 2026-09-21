@@ -301,38 +301,29 @@ fn uppercase_language_suffixes_are_explicit_catalog_entries() {
 }
 
 #[test]
-fn known_paths_skip_content_detection() {
+fn catalog_matches_are_validated_by_content() {
     let directory = tempdir().expect("temporary directory");
     let cases: &[(&str, &[FileFormat])] = &[
-        ("missing.eps", &[Eps]),
-        ("missing.JPG", &[Jpeg]),
-        ("missing.Jpg", &[Jpeg]),
-        ("missing.Jpeg", &[Jpeg]),
-        ("missing.Jpe", &[Jpeg]),
-        ("missing.Jfif", &[Jpeg]),
-        ("header.h", &[C, Cpp]),
-        ("header.H", &[Cpp]),
-        ("module.d.ts", &[TypeScript]),
+        ("image.eps", &[Eps]),
+        ("image.rs", &[Unknown]),
+        ("source.rs", &[Rust]),
+        ("source.h", &[C, Cpp]),
         ("Dockerfile", &[Dockerfile]),
-        ("package-lock.json", &[Json]),
         ("tsconfig.json", &[Json, TypeScript]),
-        ("jsconfig.json", &[JavaScript, Json]),
-        ("CMakePresets.json", &[Cmake, Json]),
-        ("program.EXE", &[Binary]),
-        ("library.dll", &[Binary]),
-        ("library.so", &[Binary]),
-        ("library.dylib", &[Binary]),
-        ("installer.msi", &[Binary]),
-        ("package.deb", &[Binary]),
-        ("package.rpm", &[Binary]),
-        ("package.apk", &[Binary]),
-        ("program.elf", &[Binary]),
-        ("data.bin", &[Binary]),
+        ("notes.md", &[Markdown]),
+        ("wrong-script.rs", &[Unknown]),
     ];
     for &(name, expected) in cases {
         let path = directory.path().join(name);
+        let bytes: &[u8] = match name {
+            "image.eps" => b"%!PS-Adobe-3.0 EPSF-3.0\n",
+            "image.rs" => b"\x89PNG\r\n\x1a\n",
+            "wrong-script.rs" => b"#!/bin/sh\necho hello\n",
+            _ => b"fn main() {}\n",
+        };
+        fs::write(&path, bytes).expect("write sample");
         assert_eq!(
-            FileFormat::from_path(&path).expect("name hint without an existing file"),
+            FileFormat::from_path(&path).expect("validated catalog match"),
             expected,
             "{name}"
         );
@@ -341,34 +332,37 @@ fn known_paths_skip_content_detection() {
     let misleading = directory.path().join("binary.rs");
     fs::write(&misleading, [0, 1, 2, 3]).expect("write sample");
     assert_eq!(
-        FileFormat::from_path(&misleading).expect("trusted suffix"),
-        [Rust]
+        FileFormat::from_path(&misleading).expect("binary content"),
+        [Unknown]
     );
 }
 
 #[test]
-fn unknown_paths_use_content_detection() {
+fn unmatched_paths_only_detect_shebang_scripts() {
     let directory = tempdir().expect("temporary directory");
     let cases: &[(&str, &[u8], FileFormat)] = &[
-        ("image", b"\x89PNG\r\n\x1a\n", Png),
-        ("document", b"%PDF-1.7\n", Pdf),
+        ("image", b"\x89PNG\r\n\x1a\n", Unknown),
+        ("document", b"%PDF-1.7\n", Unknown),
         (
             "script",
             b"#!/usr/bin/env python3\nprint('hello')\n",
             Python,
         ),
-        ("README", b"Plain text without an extension.\n", Text),
-        ("unexpected.custom", b"plain text", Text),
-        ("main.RS", b"fn main() {}\n", Text),
-        ("image.RS", b"\x89PNG\r\n\x1a\n", Png),
+        ("script.custom", b"#!/bin/sh\necho hello\n", Shell),
+        ("unsupported-script", b"#!/usr/bin/env awk\nBEGIN {}\n", Unknown),
+        ("hashbang-text", b"not a script\n#!/bin/sh\n", Unknown),
+        ("README", b"Plain text without an extension.\n", Unknown),
+        ("unexpected.custom", b"plain text", Unknown),
+        ("main.RS", b"fn main() {}\n", Unknown),
+        ("image.RS", b"\x89PNG\r\n\x1a\n", Unknown),
         (
             "drawing.EPS",
             b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\n",
-            Eps,
+            Unknown,
         ),
-        ("drawing.custom", b"%!PS-Adobe-3.0 EPSF-3.0\n", Eps),
-        ("utf16", b"\xff\xfeh\0i\0\n\0", Text),
-        ("encoded", b"-----BEGIN CERTIFICATE-----\nMIIB", Pem),
+        ("drawing.custom", b"%!PS-Adobe-3.0 EPSF-3.0\n", Unknown),
+        ("utf16", b"\xff\xfeh\0i\0\n\0", Unknown),
+        ("encoded", b"-----BEGIN CERTIFICATE-----\nMIIB", Unknown),
         ("binary", b"\0\x01\x02\xff", Unknown),
         ("binary.custom", b"\0\x01\x02\xff", Unknown),
         ("invalid-utf8", b"otherwise readable\xff", Unknown),
@@ -448,7 +442,7 @@ fn content_refines_ambiguous_formats() {
 #[test]
 fn probing_respects_sample_boundaries() {
     let directory = tempdir().expect("temporary directory");
-    let path = directory.path().join("sample");
+    let path = directory.path().join("sample.txt");
     let mut utf8 = vec![b'a'; HEADER_BYTES - 2];
     utf8.extend_from_slice(b"\xe4\xb8");
     let mut utf16 = vec![0xfe, 0xff];
@@ -481,7 +475,7 @@ fn probing_respects_sample_boundaries() {
     let mut bytes = vec![b'a'; HEADER_BYTES];
     bytes.extend_from_slice(&[0; HEADER_BYTES]);
     for (name, expected) in [
-        ("sample", &[Text][..]),
+        ("sample", &[Unknown][..]),
         ("sample.m", &[Matlab, ObjectiveC][..]),
     ] {
         let path = directory.path().join(name);
@@ -497,7 +491,7 @@ fn probing_respects_sample_boundaries() {
 #[test]
 fn invalid_paths_report_errors() {
     let directory = tempdir().expect("temporary directory");
-    for name in ["missing", "missing.m", "missing.ts", "missing.RS"] {
+    for name in ["missing", "missing.m", "missing.ts", "missing.RS", "missing.rs"] {
         let path = directory.path().join(name);
         let error = FileFormat::from_path(&path).expect_err("content detection requires a file");
         assert_eq!(error.code(), EngineError::NOT_FOUND, "{name}");
@@ -522,12 +516,15 @@ fn file_names_preserve_platform_encodings() {
 
         let directory = tempdir().expect("temporary directory");
         for (name, expected) in [(&b"\xff.JPG"[..], Jpeg), (&b"tsconfig.\xff.json"[..], Json)] {
-            let path = directory.path().join(OsString::from_vec(name.to_vec()));
-            assert_eq!(
-                FileFormat::from_path(&path).expect("extension hint"),
-                [expected],
-                "{name:?}"
-            );
+            let name = OsString::from_vec(name.to_vec());
+            assert_eq!(match_longest_extension(&name), [expected]);
+            #[cfg(target_os = "linux")]
+            {
+                let bytes: &[u8] = if expected == Jpeg { b"\xff\xd8\xff" } else { b"{}" };
+                let path = directory.path().join(name);
+                fs::write(&path, bytes).expect("write sample");
+                assert_eq!(FileFormat::from_path(&path).expect("validated extension"), [expected]);
+            }
         }
         for name in [b"Dockerfile.\xff".as_slice(), b".env.\xff"] {
             let path = directory.path().join(OsString::from_vec(name.to_vec()));
@@ -539,7 +536,7 @@ fn file_names_preserve_platform_encodings() {
         {
             let text = directory.path().join(OsString::from_vec(b"\xff".to_vec()));
             fs::write(&text, "plain text").expect("write sample");
-            assert_eq!(FileFormat::from_path(&text).expect("content hint"), [Text]);
+            assert_eq!(FileFormat::from_path(&text).expect("content hint"), [Unknown]);
         }
     }
     #[cfg(windows)]
@@ -547,9 +544,6 @@ fn file_names_preserve_platform_encodings() {
         use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
         let name = OsString::from_wide(&[0xd800, 0x2e, 0x4a, 0x50, 0x47]);
-        assert_eq!(
-            FileFormat::from_path(Path::new(&name)).expect("suffix hint"),
-            [Jpeg]
-        );
+        assert_eq!(match_longest_extension(&name), [Jpeg]);
     }
 }

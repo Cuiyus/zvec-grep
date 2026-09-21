@@ -3163,9 +3163,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indexes_readable_unknown_sources_and_skips_binary_or_unavailable_readers() {
+    async fn indexes_catalog_sources_and_shebang_scripts_only() {
         let directory = tempdir().expect("temporary directory");
         std::fs::write(directory.path().join("readable"), "ordinary text 中文 😀").expect("text");
+        std::fs::write(directory.path().join("known.txt"), "ordinary text 中文 😀")
+            .expect("catalog text");
+        std::fs::write(directory.path().join("script"), "#!/bin/sh\necho hello\n")
+            .expect("shebang script");
         let mut utf16 = vec![0xff, 0xfe];
         utf16.extend("UTF-16 文本 😀".encode_utf16().flat_map(u16::to_le_bytes));
         std::fs::write(directory.path().join("encoded"), utf16).expect("UTF-16");
@@ -3201,18 +3205,18 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|file| file.index_status.is_indexed()));
         assert_eq!(storage.identities.lock().expect("catalog").len(), 2);
-        assert_eq!(result.skipped.len(), 3);
+        assert_eq!(result.skipped.len(), 5);
     }
 
     #[tokio::test]
     async fn classification_errors_stay_with_files_and_missing_timestamps_are_not_cached() {
         let directory = tempdir().expect("temporary directory");
-        let path = directory.path().join("fixture");
+        let path = directory.path().join("fixture.txt");
         std::fs::write(&path, "text").expect("fixture");
         let workspace = workspace(directory.path());
         let discovered = DiscoveredFile {
             root: directory.path().to_path_buf(),
-            relative_path: PathBuf::from("fixture"),
+            relative_path: PathBuf::from("fixture.txt"),
             size_bytes: 4,
             modified_epoch_ms: None,
             source_fingerprint: "metadata-v1:4:unknown".to_owned(),
@@ -3389,7 +3393,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn large_unchanged_extensionless_text_keeps_its_index_after_classification() {
+    async fn large_unchanged_extensionless_text_is_skipped_after_classification() {
         let directory = tempdir().expect("temporary directory");
         let workspace = workspace(directory.path());
         let size = MIN_DEFAULT_FILE_SIZE_BYTES + 1;
@@ -3426,12 +3430,9 @@ mod tests {
         )
         .await
         .expect("text classification");
-        assert!(skipped.is_empty());
-        assert_eq!(
-            scanned[0].formats.as_deref(),
-            Some([FileFormat::Text].as_slice())
-        );
-        assert_eq!(compute_diff(scanned, &[stored]).unchanged, 1);
+        assert!(scanned.is_empty());
+        assert_eq!(skipped[0].reason, SkippedFileReason::Unsupported);
+        assert_eq!(compute_diff(scanned, &[stored]).deleted.len(), 1);
     }
 
     #[test]

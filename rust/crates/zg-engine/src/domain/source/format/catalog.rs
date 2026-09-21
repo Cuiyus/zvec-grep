@@ -163,14 +163,6 @@ file_formats! {
     Zstd => ("zstd", [Archive], ["zst", "zstd"], []),
 }
 
-/// Some extensions legitimately match multiple formats and need no further probing.
-pub(super) fn needs_sniff(formats: &[FileFormat]) -> bool {
-    formats.len() > 1
-        && !formats
-            .iter()
-            .all(|format| matches!(format, FileFormat::C | FileFormat::Cpp))
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

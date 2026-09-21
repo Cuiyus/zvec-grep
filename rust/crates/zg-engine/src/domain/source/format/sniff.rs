@@ -2,17 +2,20 @@ use crate::utils::decode_text;
 
 use super::{FileFormat, normalize_formats};
 
-/// Infers a format for empty input; otherwise only filters existing candidates.
+/// Accepts only shebang scripts without a catalog match; otherwise validates candidates.
 pub(super) fn refine(
     mut format_candidates: Vec<FileFormat>,
     sample_bytes: &[u8],
     complete: bool,
 ) -> Vec<FileFormat> {
-    let detected_format = detect(sample_bytes, complete);
     if format_candidates.is_empty() {
-        format_candidates.push(detected_format);
+        let script = decode_text(sample_bytes, complete)
+            .filter(|text| is_readable_text(text))
+            .and_then(|text| shebang(&text, complete));
+        format_candidates.push(script.unwrap_or(FileFormat::Unknown));
         return format_candidates;
     }
+    let detected_format = detect(sample_bytes, complete);
     match detected_format {
         FileFormat::Unknown => format_candidates.clear(),
         FileFormat::Text => {
