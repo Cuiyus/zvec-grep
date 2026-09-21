@@ -349,7 +349,11 @@ fn unmatched_paths_only_detect_shebang_scripts() {
             Python,
         ),
         ("script.custom", b"#!/bin/sh\necho hello\n", Shell),
-        ("unsupported-script", b"#!/usr/bin/env awk\nBEGIN {}\n", Unknown),
+        (
+            "unsupported-script",
+            b"#!/usr/bin/env awk\nBEGIN {}\n",
+            Unknown,
+        ),
         ("hashbang-text", b"not a script\n#!/bin/sh\n", Unknown),
         ("README", b"Plain text without an extension.\n", Unknown),
         ("unexpected.custom", b"plain text", Unknown),
@@ -491,7 +495,13 @@ fn probing_respects_sample_boundaries() {
 #[test]
 fn invalid_paths_report_errors() {
     let directory = tempdir().expect("temporary directory");
-    for name in ["missing", "missing.m", "missing.ts", "missing.RS", "missing.rs"] {
+    for name in [
+        "missing",
+        "missing.m",
+        "missing.ts",
+        "missing.RS",
+        "missing.rs",
+    ] {
         let path = directory.path().join(name);
         let error = FileFormat::from_path(&path).expect_err("content detection requires a file");
         assert_eq!(error.code(), EngineError::NOT_FOUND, "{name}");
@@ -520,10 +530,17 @@ fn file_names_preserve_platform_encodings() {
             assert_eq!(match_longest_extension(&name), [expected]);
             #[cfg(target_os = "linux")]
             {
-                let bytes: &[u8] = if expected == Jpeg { b"\xff\xd8\xff" } else { b"{}" };
+                let bytes: &[u8] = if expected == Jpeg {
+                    b"\xff\xd8\xff"
+                } else {
+                    b"{}"
+                };
                 let path = directory.path().join(name);
                 fs::write(&path, bytes).expect("write sample");
-                assert_eq!(FileFormat::from_path(&path).expect("validated extension"), [expected]);
+                assert_eq!(
+                    FileFormat::from_path(&path).expect("validated extension"),
+                    [expected]
+                );
             }
         }
         for name in [b"Dockerfile.\xff".as_slice(), b".env.\xff"] {
@@ -536,7 +553,10 @@ fn file_names_preserve_platform_encodings() {
         {
             let text = directory.path().join(OsString::from_vec(b"\xff".to_vec()));
             fs::write(&text, "plain text").expect("write sample");
-            assert_eq!(FileFormat::from_path(&text).expect("content hint"), [Unknown]);
+            assert_eq!(
+                FileFormat::from_path(&text).expect("content hint"),
+                [Unknown]
+            );
         }
     }
     #[cfg(windows)]
