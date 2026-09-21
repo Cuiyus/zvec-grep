@@ -1,6 +1,6 @@
 // Passive audit through the native candidate's public status command.
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileHash, objectHash, run, writeJson } from "../../core/lib.mjs";
 
@@ -54,6 +54,7 @@ export function parseNativeStatus(stdout) {
 }
 
 export async function snapshotIndex({ cli, root, output, env }) {
+  await mkdir(output, { recursive: true });
   const result = await run(
     cli,
     ["status", root, "--mode", "direct", "--check-ready", "--debug"],
