@@ -85,6 +85,14 @@ fn is_readable_text(text: &str) -> bool {
 
 fn signature(bytes: &[u8]) -> Option<FileFormat> {
     // Prefix signatures, not container validation or identification of embedded formats.
+    if bytes.starts_with(b"%!PS-Adobe-")
+        && bytes
+            .split(|byte| *byte == b'\n')
+            .next()
+            .is_some_and(|line| line.windows(5).any(|part| part == b"EPSF-"))
+    {
+        return Some(FileFormat::Eps);
+    }
     const SIGNATURES: &[(&[u8], FileFormat)] = &[
         (b"\x89PNG\r\n\x1a\n", FileFormat::Png),
         (b"\xff\xd8\xff", FileFormat::Jpeg),

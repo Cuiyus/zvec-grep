@@ -361,6 +361,8 @@ fn unknown_paths_use_content_detection() {
         ("unexpected.custom", b"plain text", Text),
         ("main.RS", b"fn main() {}\n", Text),
         ("image.RS", b"\x89PNG\r\n\x1a\n", Png),
+        ("drawing.EPS", b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\n", Eps),
+        ("drawing.custom", b"%!PS-Adobe-3.0 EPSF-3.0\n", Eps),
         ("utf16", b"\xff\xfeh\0i\0\n\0", Text),
         ("encoded", b"-----BEGIN CERTIFICATE-----\nMIIB", Pem),
         ("binary", b"\0\x01\x02\xff", Unknown),
