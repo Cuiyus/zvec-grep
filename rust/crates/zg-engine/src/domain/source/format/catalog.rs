@@ -36,7 +36,7 @@ file_formats! {
     Dotenv => ("dotenv", [Data], ["env"], [".env", ".flaskenv", ".env.local", ".env.development", ".env.production", ".env.test", ".env.development.local", ".env.production.local", ".env.test.local"]),
     Elixir => ("elixir", [Code], ["ex", "exs"], []),
     Eml => ("eml", [Document], ["eml"], []),
-    Eps => ("eps", [Image], ["eps", "EPS", "Eps"], []),
+    Eps => ("eps", [Image], ["eps"], []),
     Epub => ("epub", [Document], ["epub"], []),
     Erlang => ("erlang", [Code], ["erl", "hrl"], []),
     Excel => ("excel", [Document], ["xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xla", "xlam", "XLS", "XLSB", "XLSM", "XLSX", "XLT", "XLTM", "XLTX", "XLA", "XLAM", "Xls", "Xlsb", "Xlsm", "Xlsx", "Xlt", "Xltm", "Xltx", "Xla", "Xlam"], []),

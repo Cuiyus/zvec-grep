@@ -162,7 +162,7 @@ fn file_names_resolve_registered_formats() {
 #[test]
 fn extensions_match_longest_registered_suffix() {
     let aliases: &[(&[&str], FileFormat)] = &[
-        (&["eps", "EPS", "Eps"], Eps),
+        (&["eps"], Eps),
         (&["jpg", "JPEG", "jfif", "Jpg", "Jpeg", "Jpe", "Jfif"], Jpeg),
         (&["doc", "DOCX", "docm", "dotx"], Word),
         (&["xls", "XLSX", "xlsb"], Excel),
@@ -305,7 +305,6 @@ fn known_paths_skip_content_detection() {
     let directory = tempdir().expect("temporary directory");
     let cases: &[(&str, &[FileFormat])] = &[
         ("missing.eps", &[Eps]),
-        ("missing.EPS", &[Eps]),
         ("missing.JPG", &[Jpeg]),
         ("missing.Jpg", &[Jpeg]),
         ("missing.Jpeg", &[Jpeg]),
@@ -365,6 +364,7 @@ fn unknown_paths_use_content_detection() {
         ("utf16", b"\xff\xfeh\0i\0\n\0", Text),
         ("encoded", b"-----BEGIN CERTIFICATE-----\nMIIB", Pem),
         ("binary", b"\0\x01\x02\xff", Unknown),
+        ("binary.custom", b"\0\x01\x02\xff", Unknown),
         ("invalid-utf8", b"otherwise readable\xff", Unknown),
         ("empty", b"", Unknown),
         ("whitespace", b" \t\r\n", Unknown),
