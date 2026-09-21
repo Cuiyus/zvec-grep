@@ -2604,43 +2604,46 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_errors_abort_without_file_retry_or_checkpoint() {
-        let directory = tempdir().expect("workspace");
-        std::fs::write(directory.path().join("file.txt"), "indexable text").expect("source");
-        let workspace = workspace(directory.path());
-        let scanner = RecordingScanner::new();
-        let storage = MemoryStorage::default();
-        let file_id = storage
-            .resolve_file_ids(&[PathBuf::from("file.txt")])
-            .expect("file identity")[0];
-        storage
-            .fail_replacements_once
-            .lock()
-            .expect("failure injection")
-            .insert(file_id);
-        let model = ConcurrentModel::new();
+        // Zero-byte files are skipped by scanning; whitespace reaches the no-fragment commit.
+        for (source, embedding_calls) in [("indexable text", 1), (" \n", 0)] {
+            let directory = tempdir().expect("workspace");
+            std::fs::write(directory.path().join("file.txt"), source).expect("source");
+            let workspace = workspace(directory.path());
+            let scanner = RecordingScanner::new();
+            let storage = MemoryStorage::default();
+            let file_id = storage
+                .resolve_file_ids(&[PathBuf::from("file.txt")])
+                .expect("file identity")[0];
+            storage
+                .fail_replacements_once
+                .lock()
+                .expect("failure injection")
+                .insert(file_id);
+            let model = ConcurrentModel::new();
 
-        let error = index_workspace(&IndexingContext {
-            workspace_index: &workspace,
-            storage: &storage,
-            scanner: &scanner,
-            embedding_models: &[&model],
-            embedding_concurrency: None,
-            on_progress: None,
-            signal: None,
-            changes: &[],
-        })
-        .await
-        .expect_err("a storage failure must abort indexing");
+            let error = index_workspace(&IndexingContext {
+                workspace_index: &workspace,
+                storage: &storage,
+                scanner: &scanner,
+                embedding_models: &[&model],
+                embedding_concurrency: None,
+                on_progress: None,
+                signal: None,
+                changes: &[],
+            })
+            .await
+            .expect_err("a storage failure must abort indexing");
 
-        assert_eq!(error.code(), EngineError::STORAGE_FAILURE);
-        assert!(error.to_string().contains("injected replacement failure"));
-        assert_eq!(scanner.requests.lock().expect("scan requests").len(), 1);
-        assert_eq!(model.calls.load(Ordering::Acquire), 1);
-        // These storage operations remain usable after the replacement fails,
-        // so neither failed-file recovery nor finalization may hide the error.
-        assert_eq!(storage.failed_markers.load(Ordering::Acquire), 0);
-        assert_eq!(storage.finalized.load(Ordering::Acquire), 0);
-        assert!(storage.list_files().expect("stored files").is_empty());
+            assert_eq!(error.code(), EngineError::STORAGE_FAILURE);
+            assert!(error.to_string().contains("injected replacement failure"));
+            assert_eq!(scanner.requests.lock().expect("scan requests").len(), 1);
+            assert_eq!(model.calls.load(Ordering::Acquire), embedding_calls);
+            // These storage operations remain usable after the replacement fails,
+            // so neither failed-file recovery nor finalization may hide the error.
+            assert_eq!(storage.failed_markers.load(Ordering::Acquire), 0);
+            assert_eq!(storage.finalized.load(Ordering::Acquire), 0);
+            assert!(storage.list_files().expect("stored files").is_empty());
+        }
     }
 
     #[tokio::test]
@@ -3208,15 +3211,15 @@ mod tests {
     #[tokio::test]
     async fn classification_errors_stay_with_files_and_missing_timestamps_are_not_cached() {
         let directory = tempdir().expect("temporary directory");
-        let path = directory.path().join("fixture.txt");
-        std::fs::write(&path, "text").expect("fixture");
+        let path = directory.path().join("fixture");
+        std::fs::write(&path, "#!/bin/sh\necho hello\n").expect("fixture");
         let workspace = workspace(directory.path());
         let discovered = DiscoveredFile {
             root: directory.path().to_path_buf(),
-            relative_path: PathBuf::from("fixture.txt"),
-            size_bytes: 4,
+            relative_path: PathBuf::from("fixture"),
+            size_bytes: 21,
             modified_epoch_ms: None,
-            source_fingerprint: "metadata-v1:4:unknown".to_owned(),
+            source_fingerprint: "metadata-v1:21:unknown".to_owned(),
         };
         let control = TaskControl::default();
         let (first, _) = classify_files(&workspace, vec![discovered.clone()], &[], &control)
@@ -3240,7 +3243,7 @@ mod tests {
         .expect("reclassify");
         assert_eq!(
             second[0].formats.as_deref(),
-            Some([FileFormat::Text].as_slice())
+            Some([FileFormat::Shell].as_slice())
         );
         assert_eq!(compute_diff(second, &[stored]).modified, 1);
         std::fs::remove_file(path).expect("remove source during scan");

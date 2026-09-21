@@ -301,17 +301,18 @@ fn uppercase_language_suffixes_are_explicit_catalog_entries() {
 }
 
 #[test]
-fn catalog_matches_are_validated_by_content() {
+fn catalog_matches_do_not_probe_content() {
     let directory = tempdir().expect("temporary directory");
     let cases: &[(&str, &[FileFormat])] = &[
         ("image.eps", &[Eps]),
-        ("image.rs", &[Unknown]),
+        ("image.rs", &[Rust]),
         ("source.rs", &[Rust]),
         ("source.h", &[C, Cpp]),
         ("Dockerfile", &[Dockerfile]),
         ("tsconfig.json", &[Json, TypeScript]),
         ("notes.md", &[Markdown]),
-        ("wrong-script.rs", &[Unknown]),
+        ("wrong-script.rs", &[Rust]),
+        ("missing.eps", &[Eps]),
     ];
     for &(name, expected) in cases {
         let path = directory.path().join(name);
@@ -321,9 +322,11 @@ fn catalog_matches_are_validated_by_content() {
             "wrong-script.rs" => b"#!/bin/sh\necho hello\n",
             _ => b"fn main() {}\n",
         };
-        fs::write(&path, bytes).expect("write sample");
+        if name != "missing.eps" {
+            fs::write(&path, bytes).expect("write sample");
+        }
         assert_eq!(
-            FileFormat::from_path(&path).expect("validated catalog match"),
+            FileFormat::from_path(&path).expect("catalog match"),
             expected,
             "{name}"
         );
@@ -332,8 +335,8 @@ fn catalog_matches_are_validated_by_content() {
     let misleading = directory.path().join("binary.rs");
     fs::write(&misleading, [0, 1, 2, 3]).expect("write sample");
     assert_eq!(
-        FileFormat::from_path(&misleading).expect("binary content"),
-        [Unknown]
+        FileFormat::from_path(&misleading).expect("trusted suffix"),
+        [Rust]
     );
 }
 
@@ -348,7 +351,7 @@ fn unmatched_paths_only_detect_shebang_scripts() {
             b"#!/usr/bin/env python3\nprint('hello')\n",
             Python,
         ),
-        ("script.custom", b"#!/bin/sh\necho hello\n", Shell),
+        ("script.custom", b"#!/bin/sh\necho hello\n", Unknown),
         (
             "unsupported-script",
             b"#!/usr/bin/env awk\nBEGIN {}\n",
@@ -385,60 +388,18 @@ fn unmatched_paths_only_detect_shebang_scripts() {
 }
 
 #[test]
-fn content_refines_ambiguous_formats() {
+fn catalog_ambiguity_does_not_probe_content() {
     let directory = tempdir().expect("temporary directory");
-    let cases: &[(&str, &[u8], &[FileFormat])] = &[
-        ("script.pl", b"#!/usr/bin/perl\nprint 1;\n", &[Perl]),
-        ("main.ts", b"export const answer = 42;\n", &[TypeScript]),
-        ("source.m", b"\0\xff\x01", &[Unknown]),
-        (
-            "source.m",
-            b"function example\nend\n",
-            &[Matlab, ObjectiveC],
-        ),
-        ("unknown.ts", b"\0\xff\x01", &[Unknown]),
-        ("empty.ts", b"", &[Unknown]),
-        ("whitespace.ts", b" \t\r\n", &[Unknown]),
-        ("document.dot", b"%PDF-1.7\n", &[Unknown]),
-        ("presentation.key", b"PK\x03\x04", &[Keynote]),
-        ("private.key", b"-----BEGIN PRIVATE KEY-----\nMIIB", &[Pem]),
-    ];
-    for &(name, bytes, expected) in cases {
+    for (name, expected) in [
+        ("main.ts", &[Mpeg, TypeScript][..]),
+        ("source.m", &[Matlab, ObjectiveC][..]),
+        ("private.key", &[Der, Keynote, Pem][..]),
+    ] {
         let path = directory.path().join(name);
-        fs::write(&path, bytes).expect("write sample");
         assert_eq!(
-            FileFormat::from_path(&path).expect("content hint"),
+            FileFormat::from_path(&path).expect("catalog match"),
             expected,
             "{name}"
-        );
-    }
-
-    let path = directory.path().join("video.ts");
-    for (packet_size, offset) in [(188, 0), (192, 4), (204, 0)] {
-        let mut bytes = vec![0xff; packet_size * 4];
-        for index in 0..4 {
-            let start = offset + index * packet_size;
-            bytes[start..start + 4].copy_from_slice(&[0x47, 0x1f, 0xff, 0x10]);
-        }
-        fs::write(&path, &bytes).expect("write stream");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("stream"),
-            [Mpeg],
-            "packet size: {packet_size}"
-        );
-
-        fs::write(&path, &bytes[..packet_size * 3]).expect("write partial stream");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("partial stream"),
-            [Unknown],
-            "packet size: {packet_size}"
-        );
-        bytes[offset + packet_size] = 0;
-        fs::write(&path, &bytes).expect("write inconsistent stream");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("inconsistent stream"),
-            [Unknown],
-            "packet size: {packet_size}"
         );
     }
 }
@@ -446,68 +407,42 @@ fn content_refines_ambiguous_formats() {
 #[test]
 fn probing_respects_sample_boundaries() {
     let directory = tempdir().expect("temporary directory");
-    let path = directory.path().join("sample.txt");
-    let mut utf8 = vec![b'a'; HEADER_BYTES - 2];
-    utf8.extend_from_slice(b"\xe4\xb8");
-    let mut utf16 = vec![0xfe, 0xff];
-    for _ in 0..(HEADER_BYTES - 4) / 2 {
-        utf16.extend_from_slice(b"\0a");
-    }
-    utf16.extend_from_slice(b"\xd8\x3e");
+    let path = directory.path().join("script");
+    let mut bytes = b"#!/bin/sh\n".to_vec();
+    bytes.resize(HEADER_BYTES - 2, b'a');
+    bytes.extend_from_slice(b"\xe4\xb8");
+    assert_eq!(bytes.len(), HEADER_BYTES);
+    fs::write(&path, &bytes).expect("write incomplete character at EOF");
+    assert_eq!(
+        FileFormat::from_path(&path).expect("complete file"),
+        [Unknown]
+    );
 
-    for (encoding, mut bytes, remaining) in [
-        ("UTF-8", utf8, &b"\xad"[..]),
-        ("UTF-16", utf16, &b"\xdd\x80"[..]),
-    ] {
-        assert_eq!(bytes.len(), HEADER_BYTES);
-        fs::write(&path, &bytes).expect("write incomplete character at EOF");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("complete file"),
-            [Unknown],
-            "{encoding}"
-        );
-
-        bytes.extend_from_slice(remaining);
-        fs::write(&path, &bytes).expect("write character spanning the sample boundary");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("partial sample"),
-            [Text],
-            "{encoding}"
-        );
-    }
-
-    let mut bytes = vec![b'a'; HEADER_BYTES];
-    bytes.extend_from_slice(&[0; HEADER_BYTES]);
-    for (name, expected) in [
-        ("sample", &[Unknown][..]),
-        ("sample.m", &[Matlab, ObjectiveC][..]),
-    ] {
-        let path = directory.path().join(name);
-        fs::write(&path, &bytes).expect("write binary data after the text prefix");
-        assert_eq!(
-            FileFormat::from_path(&path).expect("prefix hint"),
-            expected,
-            "{name}"
-        );
-    }
+    bytes.extend_from_slice(b"\xad");
+    fs::write(&path, &bytes).expect("write character spanning the sample boundary");
+    assert_eq!(
+        FileFormat::from_path(&path).expect("partial sample"),
+        [Shell]
+    );
 }
 
 #[test]
 fn invalid_paths_report_errors() {
     let directory = tempdir().expect("temporary directory");
-    for name in [
-        "missing",
-        "missing.m",
-        "missing.ts",
-        "missing.RS",
-        "missing.rs",
-    ] {
-        let path = directory.path().join(name);
-        let error = FileFormat::from_path(&path).expect_err("content detection requires a file");
-        assert_eq!(error.code(), EngineError::NOT_FOUND, "{name}");
-        assert!(error.message().contains(name), "{error}");
-        assert!(error.message().contains("detect file format"), "{error}");
-    }
+    let path = directory.path().join("missing");
+    let error = FileFormat::from_path(&path).expect_err("suffixless file requires content detection");
+    assert_eq!(error.code(), EngineError::NOT_FOUND);
+    assert!(error.message().contains("missing"), "{error}");
+    assert!(error.message().contains("detect file format"), "{error}");
+
+    assert_eq!(
+        FileFormat::from_path(&directory.path().join("missing.rs")).expect("catalog"),
+        [Rust]
+    );
+    assert_eq!(
+        FileFormat::from_path(&directory.path().join("missing.RS")).expect("unknown suffix"),
+        [Unknown]
+    );
 
     let child = directory.path().join("directory");
     fs::create_dir(&child).expect("create directory");
@@ -545,7 +480,10 @@ fn file_names_preserve_platform_encodings() {
         }
         for name in [b"Dockerfile.\xff".as_slice(), b".env.\xff"] {
             let path = directory.path().join(OsString::from_vec(name.to_vec()));
-            FileFormat::from_path(&path).expect_err("unregistered names require file access");
+            assert_eq!(
+                FileFormat::from_path(&path).expect("unknown suffix"),
+                [Unknown]
+            );
         }
 
         // The macOS filesystem used for tests rejects non-UTF-8 names on creation.
