@@ -3,6 +3,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   findSchemaVariant,
+  isProductPreparationFailure,
   nativeCandidate,
   schemaAllowsType,
 } from "../engines/zg/run.mjs";
@@ -97,4 +98,23 @@ test("Rust JSON Schema nullable type arrays retain their concrete type", () => {
     true,
   );
   assert.equal(schemaAllowsType({ type: ["string", "null"] }, "array"), false);
+});
+
+test("public index-readiness failures are product errors", () => {
+  assert.equal(isProductPreparationFailure("index", new Error("failed")), true);
+  assert.equal(
+    isProductPreparationFailure(
+      "snapshot",
+      Object.assign(new Error("not ready"), { result: { code: 1 } }),
+    ),
+    true,
+  );
+  assert.equal(
+    isProductPreparationFailure("snapshot", new Error("bad harness path")),
+    false,
+  );
+  assert.equal(
+    isProductPreparationFailure("mcp_contract", new Error("schema mismatch")),
+    false,
+  );
 });

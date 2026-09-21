@@ -223,6 +223,13 @@ export function schemaAllowsType(schema, type) {
     : schema?.type === type;
 }
 
+export function isProductPreparationFailure(phase, error) {
+  return (
+    ["installation", "index", "mcp"].includes(phase) ||
+    (phase === "snapshot" && Boolean(error?.result))
+  );
+}
+
 async function runRepository({ suite, repo, tasks, candidate, options }) {
   const { protocol, gold, identity } = suite;
   const modes = protocol.modes;
@@ -525,7 +532,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     await writeFile(join(output, "mcp-stderr.log"), mcpStderr);
   } catch (error) {
     manifest.preparation_status = `${phase}_failed`;
-    if (["installation", "index", "mcp"].includes(phase))
+    if (isProductPreparationFailure(phase, error))
       productFailure = error.message;
     else manifest.invalid_reasons.push(`${phase}: ${error.message}`);
     console.error(`${repo.repository}: ${phase}: ${error.message}`);
