@@ -217,6 +217,12 @@ export function findSchemaVariant(schema, root, predicate, seen = new Set()) {
   return null;
 }
 
+export function schemaAllowsType(schema, type) {
+  return Array.isArray(schema?.type)
+    ? schema.type.includes(type)
+    : schema?.type === type;
+}
+
 async function runRepository({ suite, repo, tasks, candidate, options }) {
   const { protocol, gold, identity } = suite;
   const modes = protocol.modes;
@@ -421,14 +427,16 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       assert.ok(fields?.[field], `candidate search schema lacks ${field}`);
     }
     const typed = (field, type) =>
-      findSchemaVariant(fields[field], schema, (entry) => entry.type === type);
+      findSchemaVariant(fields[field], schema, (entry) =>
+        schemaAllowsType(entry, type),
+      );
     assert.ok(typed("root", "string"));
     const queryString = typed("query", "string");
     assert.ok(queryString);
     assert.ok(typed("autoUpdate", "boolean"));
     assert.ok(typed("preferSymbol", "boolean"));
     const limitNumber = findSchemaVariant(fields.limit, schema, (entry) =>
-      ["number", "integer"].includes(entry.type),
+      ["number", "integer"].some((type) => schemaAllowsType(entry, type)),
     );
     assert.ok(limitNumber);
     assert.ok(
@@ -447,16 +455,12 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     );
     for (const mode of modes) {
       if (mode !== "hybrid") {
-        const array = findSchemaVariant(
-          fields[mode],
-          schema,
-          (entry) => entry.type === "array",
+        const array = findSchemaVariant(fields[mode], schema, (entry) =>
+          schemaAllowsType(entry, "array"),
         );
         assert.ok(array, `candidate ${mode} route does not accept an array`);
-        const item = findSchemaVariant(
-          array.items,
-          schema,
-          (entry) => entry.type === "string",
+        const item = findSchemaVariant(array.items, schema, (entry) =>
+          schemaAllowsType(entry, "string"),
         );
         assert.ok(item, `candidate ${mode} route does not accept strings`);
         assert.ok(

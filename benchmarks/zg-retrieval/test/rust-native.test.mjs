@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
-import { findSchemaVariant, nativeCandidate } from "../engines/zg/run.mjs";
+import {
+  findSchemaVariant,
+  nativeCandidate,
+  schemaAllowsType,
+} from "../engines/zg/run.mjs";
 import { parseNativeStatus } from "../engines/zg/snapshot.mjs";
 
 test("the packed Rust npm metadata resolves to a native zg binary", () => {
@@ -84,4 +88,13 @@ test("Rust-generated optional and referenced JSON Schema variants are resolved",
     (entry) => entry.type === "array",
   );
   assert.equal(array.items.maxLength, 4000);
+});
+
+test("Rust JSON Schema nullable type arrays retain their concrete type", () => {
+  assert.equal(schemaAllowsType({ type: ["string", "null"] }, "string"), true);
+  assert.equal(
+    schemaAllowsType({ type: ["integer", "null"] }, "integer"),
+    true,
+  );
+  assert.equal(schemaAllowsType({ type: ["string", "null"] }, "array"), false);
 });
