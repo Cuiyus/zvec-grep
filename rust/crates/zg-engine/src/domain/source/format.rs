@@ -142,7 +142,9 @@ impl FileFormat {
             })?;
         let complete = header.len() <= HEADER_BYTES;
         header.truncate(HEADER_BYTES);
-        Ok(vec![sniff::script(&header, complete).unwrap_or(Self::Unknown)])
+        Ok(vec![
+            sniff::script(&header, complete).unwrap_or(Self::Unknown),
+        ])
     }
 }
 

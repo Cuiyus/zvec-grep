@@ -39,7 +39,6 @@ fn formats_have_query_names_and_categories() {
         (Eps, "eps", &[Category::Image]),
         (Svg, "svg", &[Category::Image]),
         (Mp3, "mp3", &[Category::Audio]),
-        (Mpeg, "mpeg", &[Category::Video]),
         (Ogg, "ogg", &[Category::Audio, Category::Video]),
         (Tar, "tar", &[Category::Archive]),
         (Jar, "jar", &[Category::Archive, Category::Binary]),
@@ -198,10 +197,13 @@ fn extensions_match_longest_registered_suffix() {
         ("module.d.ts", &[TypeScript]),
         ("module.d.cts", &[TypeScript]),
         ("module.d.mts", &[TypeScript]),
-        ("module.D.MTS", &[Mpeg]),
+        ("module.D.MTS", &[Unknown]),
         ("header.H", &[Cpp]),
-        ("file.ts", &[Mpeg, TypeScript]),
-        ("file.MTS", &[Mpeg]),
+        ("file.ts", &[TypeScript]),
+        ("file.mts", &[TypeScript]),
+        ("file.MTS", &[Unknown]),
+        ("video.mpeg", &[Unknown]),
+        ("video.m2ts", &[Unknown]),
         ("file.m", &[Matlab, ObjectiveC]),
         ("file.dot", &[Graphviz, Word]),
         ("file.pot", &[Gettext, PowerPoint]),
@@ -391,7 +393,7 @@ fn unmatched_paths_only_detect_shebang_scripts() {
 fn catalog_ambiguity_does_not_probe_content() {
     let directory = tempdir().expect("temporary directory");
     for (name, expected) in [
-        ("main.ts", &[Mpeg, TypeScript][..]),
+        ("main.ts", &[TypeScript][..]),
         ("source.m", &[Matlab, ObjectiveC][..]),
         ("private.key", &[Der, Keynote, Pem][..]),
     ] {
@@ -430,7 +432,8 @@ fn probing_respects_sample_boundaries() {
 fn invalid_paths_report_errors() {
     let directory = tempdir().expect("temporary directory");
     let path = directory.path().join("missing");
-    let error = FileFormat::from_path(&path).expect_err("suffixless file requires content detection");
+    let error =
+        FileFormat::from_path(&path).expect_err("suffixless file requires content detection");
     assert_eq!(error.code(), EngineError::NOT_FOUND);
     assert!(error.message().contains("missing"), "{error}");
     assert!(error.message().contains("detect file format"), "{error}");

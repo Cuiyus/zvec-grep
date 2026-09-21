@@ -243,9 +243,9 @@ mod tests {
                 vec![false, true, true],
             ),
             (
-                FileFormat::Mpeg,
-                vec!["module.ts", "module.d.ts", ".d.ts"],
-                vec![true, false, true],
+                FileFormat::TypeScript,
+                vec!["module.ts", "module.d.ts", "video.mpeg", "video.m2ts"],
+                vec![true, true, false, false],
             ),
             (
                 FileFormat::Text,

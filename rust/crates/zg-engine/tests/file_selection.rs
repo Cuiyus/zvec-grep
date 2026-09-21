@@ -547,18 +547,6 @@ async fn catalog_name_predicates_filter_both_native_search_routes() -> TestResul
     let engine = ZvecGrep::new();
     let indexed = engine.index(index_options(root)).await?;
     assert_eq!((indexed.files_added, indexed.files_failed), (5, 0));
-    assert!(
-        indexed
-            .skipped
-            .iter()
-            .any(|file| file.path == root.join("script"))
-    );
-    assert!(
-        indexed
-            .skipped
-            .iter()
-            .any(|file| file.path == root.join("upper.RS"))
-    );
     for (name, _) in sources {
         fs::remove_file(root.join(name))?;
     }

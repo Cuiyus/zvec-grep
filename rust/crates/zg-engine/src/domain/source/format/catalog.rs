@@ -86,7 +86,6 @@ file_formats! {
     Mov => ("mov", [Video], ["mov", "qt", "MOV", "QT", "Mov", "Qt"], []),
     Mp3 => ("mp3", [Audio], ["mp3", "MP3", "Mp3"], []),
     Mp4 => ("mp4", [Video], ["mp4", "MP4", "Mp4"], []),
-    Mpeg => ("mpeg", [Video], ["mpeg", "mpg", "m2ts", "mts", "ts", "MPEG", "MPG", "M2TS", "MTS", "TS", "Mpeg", "Mpg", "M2ts", "Mts", "Ts"], []),
     Msg => ("msg", [Document], ["msg"], []),
     Numbers => ("numbers", [Document], ["numbers"], []),
     ObjectiveC => ("objective-c", [Code], ["mm", "m"], []),
