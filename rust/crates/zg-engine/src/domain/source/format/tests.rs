@@ -36,6 +36,7 @@ fn formats_have_query_names_and_categories() {
         (Html, "html", &[Category::Code, Category::Document]),
         (Latex, "latex", &[Category::Code, Category::Document]),
         (Odg, "odg", &[Category::Document, Category::Image]),
+        (Eps, "eps", &[Category::Image]),
         (Svg, "svg", &[Category::Image]),
         (Mp3, "mp3", &[Category::Audio]),
         (Mpeg, "mpeg", &[Category::Video]),
@@ -161,6 +162,7 @@ fn file_names_resolve_registered_formats() {
 #[test]
 fn extensions_match_longest_registered_suffix() {
     let aliases: &[(&[&str], FileFormat)] = &[
+        (&["eps", "EPS", "Eps"], Eps),
         (&["jpg", "JPEG", "jfif", "Jpg", "Jpeg", "Jpe", "Jfif"], Jpeg),
         (&["doc", "DOCX", "docm", "dotx"], Word),
         (&["xls", "XLSX", "xlsb"], Excel),
@@ -302,6 +304,8 @@ fn uppercase_language_suffixes_are_explicit_catalog_entries() {
 fn known_paths_skip_content_detection() {
     let directory = tempdir().expect("temporary directory");
     let cases: &[(&str, &[FileFormat])] = &[
+        ("missing.eps", &[Eps]),
+        ("missing.EPS", &[Eps]),
         ("missing.JPG", &[Jpeg]),
         ("missing.Jpg", &[Jpeg]),
         ("missing.Jpeg", &[Jpeg]),
