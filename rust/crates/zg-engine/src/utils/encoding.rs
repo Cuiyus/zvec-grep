@@ -11,7 +11,9 @@ pub(crate) fn decode_index_text<'a>(
         return decode_text(bytes, true);
     }
     if formats.contains(&FileFormat::Python) && python_declares_latin_one(bytes) {
-        return Some(Cow::Owned(bytes.iter().map(|byte| char::from(*byte)).collect()));
+        return Some(Cow::Owned(
+            bytes.iter().map(|byte| char::from(*byte)).collect(),
+        ));
     }
     if let Some(text) = decode_text(bytes, true) {
         return Some(text);

@@ -138,7 +138,11 @@ async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult 
     let engine = ZvecGrep::new();
     let indexed = engine.index(index_options(root)).await?;
     assert_eq!(
-        (indexed.files_added, indexed.files_failed, indexed.files_pending),
+        (
+            indexed.files_added,
+            indexed.files_failed,
+            indexed.files_pending
+        ),
         (2, 0, 0)
     );
     let info = engine.info(info_options(root)).await?;
