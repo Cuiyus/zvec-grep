@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import native_session
 import runner
+from zg_bench.swe_qa.readonly_agents import qoder_contract
 
 
 class OfficialPairContractTests(unittest.TestCase):
@@ -46,6 +47,20 @@ class OfficialPairContractTests(unittest.TestCase):
         self.assertEqual(lock["experiment"]["embedding"]["model"], "qwen/qwen3.7-text-embedding")
         self.assertEqual(lock["experiment"]["integration"]["command"],
                          ["zg", "install", "--target", "qoder", "--yes"])
+        self.assertEqual(lock["experiment"]["protocol"], runner.PROTOCOL)
+
+    def test_writable_contract_accepts_default_tools_in_both_arms(self):
+        builtins = ["Read", "Grep", "Glob", "Bash", "Write", "TaskCreate"]
+        for zg in (False, True):
+            tools = builtins + (["mcp__zvec_grep__zvec_grep_search",
+                                 "mcp__zvec_grep__zvec_grep_rg"] if zg else [])
+            events = [{"type": "system", "subtype": "init", "tools": tools,
+                       "permissionMode": "bypassPermissions",
+                       "mcp_servers": [{"name": "zvec_grep", "status": "connected"}] if zg else []},
+                      {"type": "assistant", "message": {"content": [
+                          {"type": "tool_use", "name": "Write"}]}}]
+            self.assertTrue(qoder_contract(events, zg=zg, official_writable=True)["valid"])
+            self.assertFalse(qoder_contract(events, zg=zg)["valid"])
 
 
 if __name__ == "__main__":

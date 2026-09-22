@@ -129,7 +129,8 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
         result["status"] = "launch_failure"
     conversion = {}
     try:
-        conversion = r.convert_agent_trace(agent, r.SPEC, prompt, zg=zg)
+        conversion = r.convert_agent_trace(agent, r.SPEC, prompt, zg=zg,
+            official_writable=official_writable)
         result.update(conversion)
         if conversion.get("contract_error_count"):
             result["status"] = "contract_failure"
