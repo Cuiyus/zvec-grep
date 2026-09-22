@@ -35,44 +35,59 @@ fn looks_binary(bytes: &[u8]) -> bool {
 }
 
 fn python_declares_latin_one(bytes: &[u8]) -> bool {
-    for line in bytes.split(|byte| *byte == b'\n').take(2) {
-        let trimmed = line.trim_ascii_start();
-        let Some(comment) = trimmed.strip_prefix(b"#") else {
-            return false;
-        };
-        for (start, _) in comment.windows(6).enumerate() {
-            if &comment[start..start + 6] != b"coding" {
-                continue;
-            }
-            let rest = comment[start + 6..]
-                .strip_prefix(b":")
-                .or_else(|| comment[start + 6..].strip_prefix(b"="));
-            let Some(rest) = rest else { continue };
-            let label = rest.trim_ascii_start();
-            let end = label
-                .iter()
-                .position(|byte| {
-                    !byte.is_ascii_alphanumeric() && !matches!(*byte, b'-' | b'_' | b'.')
-                })
-                .unwrap_or(label.len());
-            let label = &label[..end];
-            if [
-                b"latin1".as_slice(),
-                b"latin-1".as_slice(),
-                b"latin_1".as_slice(),
-                b"iso-8859-1".as_slice(),
-                b"iso_8859_1".as_slice(),
-                b"iso8859-1".as_slice(),
-                b"iso8859_1".as_slice(),
-            ]
+    let mut lines = bytes.split(|byte| *byte == b'\n');
+    let first = lines.next().unwrap_or_default();
+    if let Some(label) = python_encoding_cookie(first) {
+        return is_latin_one_alias(label);
+    }
+
+    // Python only checks line two if line one contains no code.
+    let remainder = first.trim_ascii_start();
+    if !remainder.is_empty() && !matches!(remainder[0], b'#' | b'\r') {
+        return false;
+    }
+    lines
+        .next()
+        .and_then(python_encoding_cookie)
+        .is_some_and(is_latin_one_alias)
+}
+
+fn python_encoding_cookie(line: &[u8]) -> Option<&[u8]> {
+    let comment = line.trim_ascii_start().strip_prefix(b"#")?;
+    for (start, _) in comment.windows(6).enumerate() {
+        if &comment[start..start + 6] != b"coding" {
+            continue;
+        }
+        let rest = comment[start + 6..]
+            .strip_prefix(b":")
+            .or_else(|| comment[start + 6..].strip_prefix(b"="));
+        let Some(rest) = rest else { continue };
+        let label = rest.trim_ascii_start();
+        let end = label
             .iter()
-            .any(|alias| label.eq_ignore_ascii_case(alias))
-            {
-                return true;
-            }
+            .position(|byte| {
+                !byte.is_ascii_alphanumeric() && !matches!(*byte, b'-' | b'_' | b'.')
+            })
+            .unwrap_or(label.len());
+        if end > 0 {
+            return Some(&label[..end]);
         }
     }
-    false
+    None
+}
+
+fn is_latin_one_alias(label: &[u8]) -> bool {
+    [
+        b"latin1".as_slice(),
+        b"latin-1".as_slice(),
+        b"latin_1".as_slice(),
+        b"iso-8859-1".as_slice(),
+        b"iso_8859_1".as_slice(),
+        b"iso8859-1".as_slice(),
+        b"iso8859_1".as_slice(),
+    ]
+    .iter()
+    .any(|alias| label.eq_ignore_ascii_case(alias))
 }
 
 /// Decodes UTF-8, or UTF-16/32 with a BOM, without replacing invalid input.
@@ -154,6 +169,40 @@ mod tests {
         let text = decode_index_text(&[FileFormat::Python], bytes).expect("Latin-1 Python");
         assert!(text.contains("Café"));
         assert!(!text.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn first_python_cookie_takes_precedence_over_second() {
+        let utf_eight = "# coding: utf-8\n# coding: latin1\nname = 'Café'\n";
+        let text = decode_index_text(&[FileFormat::Python], utf_eight.as_bytes())
+            .expect("UTF-8 declaration on first line");
+        assert_eq!(text, utf_eight);
+
+        let latin_one = b"# coding: latin1\n# coding: utf-8\nname = 'Caf\xe9'\n";
+        let text = decode_index_text(&[FileFormat::Python], latin_one)
+            .expect("Latin-1 declaration on first line");
+        assert!(text.contains("Café"));
+        assert!(!text.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn blank_first_python_line_allows_second_line_cookie() {
+        for first_line in [b"\n".as_slice(), b" \t\n", b" \t\x0c\r\n"] {
+            let mut bytes = first_line.to_vec();
+            bytes.extend_from_slice(b"# coding: latin_1\nname = 'Caf\xe9'\n");
+            let text = decode_index_text(&[FileFormat::Python], &bytes)
+                .expect("Latin-1 declaration on second line");
+            assert!(text.contains("Café"));
+            assert!(!text.contains('\u{fffd}'));
+        }
+    }
+
+    #[test]
+    fn python_code_on_first_line_ignores_second_line_cookie() {
+        let bytes = b"value = 1\n# coding: latin1\nname = 'Caf\xe9'\n";
+        let text = decode_index_text(&[FileFormat::Python], bytes)
+            .expect("invalid UTF-8 is replaced without a valid cookie");
+        assert!(text.contains("Caf\u{fffd}"));
     }
 
     #[test]

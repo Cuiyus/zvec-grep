@@ -119,7 +119,7 @@ async fn one_text_model_indexes_text_and_skips_images_without_embedding_them() -
 }
 
 #[tokio::test]
-async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult {
+async fn declared_python_encodings_and_invalid_utf_eight_css_are_indexed() -> TestResult {
     use zg_engine::api::info::result::IndexStatus;
 
     let temporary = tempdir()?;
@@ -134,6 +134,14 @@ async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult 
         root.join("legacy.css"),
         b"/* \xe9viter \xe9crasement */\n.test { margin: 1rem; }\n",
     )?;
+    fs::write(
+        root.join("blank-first.py"),
+        b"\n# coding: latin_1\nname = 'Cr\xe8me'\n",
+    )?;
+    fs::write(
+        root.join("utf8-first.py"),
+        "# coding: utf-8\n# coding: latin1\nname = 'Résumé'\n",
+    )?;
 
     let engine = ZvecGrep::new();
     let indexed = engine.index(index_options(root)).await?;
@@ -143,7 +151,7 @@ async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult 
             indexed.files_failed,
             indexed.files_pending
         ),
-        (2, 0, 0)
+        (4, 0, 0)
     );
     let info = engine.info(info_options(root)).await?;
     assert_eq!(info.index_status(), IndexStatus::Ready);
@@ -153,6 +161,18 @@ async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult 
             .ok()
             .flatten()
             .is_some_and(|value| value.contains("Café"))
+    }));
+    assert!(entities.iter().any(|doc| {
+        doc.get_string("payload")
+            .ok()
+            .flatten()
+            .is_some_and(|value| value.contains("Crème"))
+    }));
+    assert!(entities.iter().any(|doc| {
+        doc.get_string("payload")
+            .ok()
+            .flatten()
+            .is_some_and(|value| value.contains("Résumé"))
     }));
     assert!(entities.iter().any(|doc| {
         doc.get_string("payload")
