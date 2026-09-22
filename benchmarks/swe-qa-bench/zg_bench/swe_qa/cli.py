@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from zg_bench.core.protocol import JUDGE_MODELS
 from zg_bench.reports.aggregate import aggregate_reports
@@ -14,6 +14,7 @@ from zg_bench.reports.aggregate import aggregate_reports
 from . import SweQaError
 from .collect import collect_pair
 from .judge import judge_pairs
+from .selection import CI_SCOPES, matrix_outputs
 from .validation import validate_assets
 
 
@@ -30,6 +31,10 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--selection", type=Path, required=True)
     validate.add_argument("--references", type=Path, required=True)
     validate.add_argument("--dataset", type=Path, required=True)
+
+    matrix = commands.add_parser("matrix", help="select the locked CI task scope")
+    matrix.add_argument("--selection", type=Path, required=True)
+    matrix.add_argument("--scope", choices=CI_SCOPES, required=True)
 
     collect = commands.add_parser("collect", help="collect one Harbor profile pair")
     collect.add_argument("--runs-dir", type=Path, required=True)
@@ -64,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dataset_path=args.dataset,
             )
             print(json.dumps(result, ensure_ascii=False))
+        elif args.command == "matrix":
+            print(matrix_outputs(args.selection, args.scope), end="")
         elif args.command == "collect":
             pair = collect_pair(
                 runs_dir=args.runs_dir,

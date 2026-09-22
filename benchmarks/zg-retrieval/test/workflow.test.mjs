@@ -11,6 +11,10 @@ const action = await readFile(
   new URL(".github/actions/retrieval-authorize/action.yml", repository),
   "utf8",
 );
+const rustAction = await readFile(
+  new URL(".github/actions/rust-candidate-package/action.yml", repository),
+  "utf8",
+);
 
 // These bounded layout readers check our checked-in workflow contract. They are
 // not YAML parsers; actionlint validates the complete workflow/action syntax.
@@ -132,21 +136,28 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
 
 test("the selected source is built from rust/ and exact-commit package caching bypasses recompilation", () => {
   const job = jobs["package-candidate"];
-  assert.match(job, /ref: \$\{\{ inputs\.candidate_ref \}\}/);
-  assert.match(job, /path: candidate/);
-  assert.match(job, /working-directory: candidate\/rust/);
-  assert.match(job, /candidate\/rust\/target\//);
-  assert.match(job, /candidate\/rust\/Cargo\.lock/);
+  assert.match(job, /uses: \.\/\.github\/actions\/rust-candidate-package/);
+  assert.match(job, /candidate_ref: \$\{\{ inputs\.candidate_ref \}\}/);
+  assert.match(job, /cache_namespace: retrieval-rust/);
   assert.match(
     job,
-    /retrieval-rust-package-v1-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.source\.outputs\.commit \}\}/,
+    /candidate-commit: \$\{\{ steps\.rust-candidate\.outputs\.commit \}\}/,
+  );
+  assert.match(rustAction, /ref: \$\{\{ inputs\.candidate_ref \}\}/);
+  assert.match(rustAction, /path: candidate/);
+  assert.match(rustAction, /working-directory: candidate\/rust/);
+  assert.match(rustAction, /candidate\/rust\/target\//);
+  assert.match(rustAction, /candidate\/rust\/Cargo\.lock/);
+  assert.match(
+    rustAction,
+    /\$\{\{ inputs\.cache_namespace \}\}-package-v1-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.source\.outputs\.commit \}\}/,
   );
   assert.match(
-    job,
+    rustAction,
     /if: steps\.rust-package-cache\.outputs\.cache-hit != 'true'/,
   );
-  assert.match(job, /npm run pack:local/);
-  assert.match(job, /--source \.\./);
+  assert.match(rustAction, /npm run pack:local/);
+  assert.match(rustAction, /--source \.\./);
   assert.doesNotMatch(
     job,
     /node-version[^\n]*\$\{\{|NODE_VERSION|node.*cache.*key/i,

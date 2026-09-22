@@ -5,28 +5,23 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any
 
 from zg_bench.core.errors import SweQaError
 from zg_bench.core.protocol import (
     PROFILE_NAMES,
     SCORE_KEYS,
     judge_label,
+    model_request_spec,
 )
 from zg_bench.metrics.usage import (
     SESSION_USAGE_METRICS,
     usage_scope,
 )
 from zg_bench.settings import (
-    BENCHMARK_MAX_OUTPUT_TOKENS,
     BENCHMARK_SEED,
-    BENCHMARK_TEMPERATURE,
-    OPENCODE_GLM_ENABLE_THINKING,
-    OPENCODE_GLM_REASONING_EFFORT,
-    OPENCODE_QWEN_ENABLE_THINKING,
-    OPENCODE_QWEN_REASONING_EFFORT,
-    OPENCODE_QWEN_TEMPERATURE,
 )
 
 DEFAULT_JUDGE_CONCURRENCY = 3
@@ -42,22 +37,15 @@ Completion = Callable[..., Any]
 
 
 def judge_temperature(model: str) -> float:
-    return (
-        OPENCODE_QWEN_TEMPERATURE if model == "qwen3.8-max" else BENCHMARK_TEMPERATURE
-    )
+    return model_request_spec(model).temperature
 
 
 def judge_generation_metadata(model: str = "glm-5.2") -> dict[str, Any]:
-    judge_label(model)
-    is_qwen = model == "qwen3.8-max"
+    spec = model_request_spec(model)
     return {
-        "enable_thinking": OPENCODE_QWEN_ENABLE_THINKING
-        if is_qwen
-        else OPENCODE_GLM_ENABLE_THINKING,
-        "reasoning_effort": OPENCODE_QWEN_REASONING_EFFORT
-        if is_qwen
-        else OPENCODE_GLM_REASONING_EFFORT,
-        "max_tokens": BENCHMARK_MAX_OUTPUT_TOKENS,
+        "enable_thinking": spec.enable_thinking,
+        "reasoning_effort": spec.reasoning_effort,
+        "max_tokens": spec.max_tokens,
         # The rubric prompt requests JSON; no API-enforced format is enabled.
         # Parsing and retries enforce valid scores for both supported models.
         "response_format": None,
@@ -212,11 +200,11 @@ def judge_candidate(
                 # LiteLLM's OpenAI model registry may not know this provider.
                 # Explicitly forward it rather than silently dropping it.
                 allowed_openai_params=["reasoning_effort"],
-                max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
+                max_tokens=generation["max_tokens"],
                 messages=[{"role": "user", "content": prompt}],
                 extra_body={"enable_thinking": generation["enable_thinking"]},
             )
-        except Exception as error:  # Provider errors have no shared stable base.
+        except Exception as error:  # noqa: BLE001 - providers share no stable error base.
             last_failure = f"transport error ({type(error).__name__})"
         else:
             try:

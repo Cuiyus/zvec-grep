@@ -110,47 +110,9 @@ jobs:
         env:
           SCOPE: ${{ inputs.scope }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          selection = json.loads(
-              Path(
-                  "benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json"
-              ).read_text(encoding="utf-8")
-          )
-          tasks = selection["tasks"]
-          tasks_by_id = {task["task_id"]: task for task in tasks}
-          scope = os.environ["SCOPE"]
-          if scope == "smoke":
-              task_ids = selection["gate"]["auto_tasks"]
-          elif scope == "repro-3":
-              # Relative low / medium / high variability in run 35206585943.
-              task_ids = ["reflex:6", "requests:16", "conan:39"]
-          elif scope in {"all-full", "gate-20"}:
-              # gate-20 remains accepted for legacy API/CLI dispatches.
-              task_ids = [task["task_id"] for task in tasks]
-          else:
-              raise SystemExit(f"unsupported SWE-QA scope: {scope}")
-          if not task_ids:
-              raise SystemExit(f"SWE-QA scope {scope} selected no tasks")
-          if len(task_ids) != len(set(task_ids)):
-              raise SystemExit(f"SWE-QA scope {scope} selected duplicate tasks")
-          missing = sorted(set(task_ids) - tasks_by_id.keys())
-          if missing:
-              raise SystemExit(
-                  f"SWE-QA scope {scope} selected unknown tasks: {missing}"
-              )
-          selected = [tasks_by_id[task_id] for task_id in task_ids]
-          slugs = [task["task_slug"] for task in selected]
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"tasks={json.dumps(slugs, separators=(',', ':'))}\n")
-              output.write(f"count={len(slugs)}\n")
-              output.write(
-                  f"task_ids_json={json.dumps(task_ids, separators=(',', ':'))}\n"
-              )
-          PY
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa matrix \
+            --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json \
+            --scope "$SCOPE" >> "$GITHUB_OUTPUT"
       - name: Install pinned OpenCode for local request verification
         run: npm install --global opencode-ai@1.18.4
       - name: Run benchmark tests and verify sampling and web-tool restrictions
@@ -166,7 +128,7 @@ jobs:
           path: ${{ runner.temp }}/package
       - name: Verify the preflight candidate identity
         run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+          node benchmarks/shared/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Verify the Harbor command without credentials
@@ -189,7 +151,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      candidate-commit: ${{ steps.source.outputs.commit }}
+      candidate-commit: ${{ steps.rust-candidate.outputs.commit }}
     permissions:
       contents: read
     steps:
@@ -200,65 +162,12 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-      - name: Check out the selected Rust source
-        uses: actions/checkout@v6
+      - name: Build and verify the selected Rust package
+        id: rust-candidate
+        uses: ./.github/actions/rust-candidate-package
         with:
-          ref: ${{ inputs.candidate_ref }}
-          path: candidate
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Resolve the immutable Rust source commit
-        id: source
-        run: |
-          commit="$(git -C candidate rev-parse HEAD)"
-          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Selected Rust ref did not resolve to a full commit SHA" >&2
-            exit 1
-          fi
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      - name: Restore the compiled Rust npm package
-        id: rust-package-cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/rust-package-cache
-          key: swe-qa-rust-package-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.source.outputs.commit }}
-      - name: Restore Cargo build state after a package cache miss
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            candidate/rust/target/
-          key: swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-${{ steps.source.outputs.commit }}
-          restore-keys: |
-            swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-
-            swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install the candidate's pinned Rust toolchain
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        working-directory: candidate/rust
-        run: rustup show active-toolchain
-      - name: Build and pack the selected Rust candidate
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        working-directory: candidate/rust
-        run: |
-          npm ci
-          npm run pack:local
-          mapfile -t packages < <(find dist/npm -maxdepth 1 -type f -name '*.tgz' -print)
-          if [ "${#packages[@]}" -ne 1 ]; then
-            echo "Expected one local Rust npm package, found ${#packages[@]}" >&2
-            exit 1
-          fi
-          node ../../benchmarks/zg-retrieval/rust-package-cache.mjs create \
-            --source .. \
-            --package "${packages[0]}" \
-            --output "$RUNNER_TEMP/rust-package-cache"
-      - name: Verify the cached package belongs to the selected commit
-        run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/rust-package-cache" \
-            --commit "${{ steps.source.outputs.commit }}"
+          candidate_ref: ${{ inputs.candidate_ref }}
+          cache_namespace: swe-qa-rust
       - uses: actions/upload-artifact@v7
         with:
           name: swe-qa-rust-candidate-${{ github.run_id }}
@@ -297,7 +206,7 @@ jobs:
           path: ${{ runner.temp }}/package
       - name: Verify the candidate package identity
         run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+          node benchmarks/shared/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Restore this task's zvec index seed
@@ -571,7 +480,7 @@ jobs:
       - name: Verify and archive the candidate identity
         if: steps.report-set.outputs.complete == 'true'
         run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+          node benchmarks/shared/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/aggregate-candidate" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
           cp "$RUNNER_TEMP/aggregate-candidate/manifest.json" \

@@ -7,11 +7,11 @@ these records without maintaining their own parallel lists of model names.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
+from ..core.protocol import model_request_spec
 from ..settings import (
-    BENCHMARK_MAX_OUTPUT_TOKENS,
     BENCHMARK_TEMPERATURE,
     CLAUDE_OPUS_5_MODEL,
     OPENCODE_ALIYUN_GLM_MODEL,
@@ -25,11 +25,6 @@ from ..settings import (
     OPENCODE_CUSTOM_QWEN_MODEL,
     OPENCODE_CUSTOM_QWEN_MODEL_ID,
     OPENCODE_DASHSCOPE_BASE_URL,
-    OPENCODE_GLM_ENABLE_THINKING,
-    OPENCODE_GLM_REASONING_EFFORT,
-    OPENCODE_QWEN_ENABLE_THINKING,
-    OPENCODE_QWEN_REASONING_EFFORT,
-    OPENCODE_QWEN_TEMPERATURE,
     ZVEC_GREP_API_KEY_ENV_VARS,
     ZVEC_GREP_EMBEDDING,
     ZVEC_GREP_EMBEDDING_ENDPOINT,
@@ -40,6 +35,9 @@ CLAUDE_CODE_CREDENTIAL_ENV_VARS = (
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
 )
+
+_GLM_REQUEST = model_request_spec("glm-5.2")
+_QWEN_REQUEST = model_request_spec("qwen3.8-max")
 
 
 @dataclass(frozen=True)
@@ -92,10 +90,10 @@ AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
             model_id=OPENCODE_ALIYUN_GLM_MODEL_ID,
             base_url=OPENCODE_DASHSCOPE_BASE_URL,
             credential_env_vars=("DASHSCOPE_API_KEY", "OPENAI_API_KEY"),
-            temperature=BENCHMARK_TEMPERATURE,
-            enable_thinking=OPENCODE_GLM_ENABLE_THINKING,
-            reasoning_effort=OPENCODE_GLM_REASONING_EFFORT,
-            output_limit=BENCHMARK_MAX_OUTPUT_TOKENS,
+            temperature=_GLM_REQUEST.temperature,
+            enable_thinking=_GLM_REQUEST.enable_thinking,
+            reasoning_effort=_GLM_REQUEST.reasoning_effort,
+            output_limit=_GLM_REQUEST.max_tokens,
         ),
     ),
     AgentModelSupport(
@@ -106,10 +104,10 @@ AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
             model_id=OPENCODE_CUSTOM_GLM_MODEL_ID,
             base_url=OPENCODE_CUSTOM_GLM_BASE_URL,
             credential_env_vars=("GLM_API_KEY", "OPENAI_API_KEY"),
-            temperature=BENCHMARK_TEMPERATURE,
-            enable_thinking=OPENCODE_GLM_ENABLE_THINKING,
-            reasoning_effort=OPENCODE_GLM_REASONING_EFFORT,
-            output_limit=BENCHMARK_MAX_OUTPUT_TOKENS,
+            temperature=_GLM_REQUEST.temperature,
+            enable_thinking=_GLM_REQUEST.enable_thinking,
+            reasoning_effort=_GLM_REQUEST.reasoning_effort,
+            output_limit=_GLM_REQUEST.max_tokens,
             display_name="GLM 5.2",
         ),
     ),
@@ -134,10 +132,10 @@ AGENT_MODEL_SUPPORT: tuple[AgentModelSupport, ...] = (
             model_id=OPENCODE_CUSTOM_QWEN_MODEL_ID,
             base_url=OPENCODE_CUSTOM_QWEN_BASE_URL,
             credential_env_vars=("GLM_API_KEY", "OPENAI_API_KEY"),
-            temperature=OPENCODE_QWEN_TEMPERATURE,
-            enable_thinking=OPENCODE_QWEN_ENABLE_THINKING,
-            reasoning_effort=OPENCODE_QWEN_REASONING_EFFORT,
-            output_limit=BENCHMARK_MAX_OUTPUT_TOKENS,
+            temperature=_QWEN_REQUEST.temperature,
+            enable_thinking=_QWEN_REQUEST.enable_thinking,
+            reasoning_effort=_QWEN_REQUEST.reasoning_effort,
+            output_limit=_QWEN_REQUEST.max_tokens,
             display_name="Qwen 3.8 Max",
             interleaved=True,
         ),
@@ -191,13 +189,15 @@ def validate_profile_credentials(
     embedding_endpoint: str | None = ZVEC_GREP_EMBEDDING_ENDPOINT,
 ) -> None:
     support = resolve_agent_model(agent, model)
-    if agent == "claude-code":
-        if first_nonempty_env(CLAUDE_CODE_CREDENTIAL_ENV_VARS) is None:
-            accepted = ", ".join(CLAUDE_CODE_CREDENTIAL_ENV_VARS)
-            raise ValueError(
-                "Claude Code requires Anthropic API or OAuth credentials; "
-                f"export one of: {accepted}"
-            )
+    if (
+        agent == "claude-code"
+        and first_nonempty_env(CLAUDE_CODE_CREDENTIAL_ENV_VARS) is None
+    ):
+        accepted = ", ".join(CLAUDE_CODE_CREDENTIAL_ENV_VARS)
+        raise ValueError(
+            "Claude Code requires Anthropic API or OAuth credentials; "
+            f"export one of: {accepted}"
+        )
     if support.opencode is not None:
         provider = support.opencode
         if first_nonempty_env(provider.credential_env_vars) is None:

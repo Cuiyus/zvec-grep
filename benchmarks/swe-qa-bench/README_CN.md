@@ -133,7 +133,7 @@ swe-qa-bench/
     cli.py                 稳定的 zg-bench 命令入口
     runner.py              Suite/profile 执行编排与安装缓存
     retries.py             失败 trial 的重试策略
-    core/                  公共异常、JSON 读写与报告协议
+    core/                  公共异常、JSON 读写、模型请求与报告协议
     engines/
       registry.py          Agent/模型支持目录与凭证路由
       judge.py             模型请求、评分解析与评审重试
@@ -143,8 +143,9 @@ swe-qa-bench/
     agents/                稳定的 Harbor 适配器导入路径与会话导出
     swe_qa/                Suite 校验、配对结果采集与评审编排
       cli.py               稳定的 python -m zg_bench.swe_qa 命令入口
+      selection.py         锁定的 CI 范围选择与矩阵输出
       data/                锁定的任务选择与隔离参考答案
-    settings.py            共用的模型请求参数
+    settings.py            版本、endpoint 与请求常量
   suites/                  Runner 的 suite 配置
   datasets/                锁定的 Harbor 任务与环境
   tests/                   CLI、用量、报告与 provider 契约测试
@@ -152,9 +153,9 @@ swe-qa-bench/
 
 Suite 适配层采集并校验执行证据，judge engine 对最终答案评分，metrics 基于规范化记录计算指标，reports 校验和聚合这些记录后再渲染。指标计算不调用模型，也不依赖具体 Agent engine；Markdown 渲染不发起模型请求。Runner 负责 Harbor 执行编排，不定义报告中的统计公式。
 
-新增执行模型或 Agent 时，扩展 engine 配置/注册及对应的 provider 或 Harbor 适配器测试。新增评审模型还需在 `core/protocol.py` 声明身份、在 `engines/judge.py` 配置生成参数，并在 `swe_qa/judge.py` 选择服务端点。新增指标时，在 `metrics/` 中定义计算方式与用量检查，再更新报告校验和渲染。新增 suite 负责自身的输入校验和证据转换，不向公共指标代码添加数据集分支。两个 CLI、Harbor 适配器导入路径及锁定资源路径保持稳定。
+新增执行模型或 Agent 时，扩展 engine 注册及对应的 provider 或 Harbor 适配器测试。执行与评审共用的模型在 `core/protocol.py` 使用同一份请求规格；评审的 endpoint 路由仍在 `swe_qa/judge.py`。新增 CI 任务范围时修改 `swe_qa/selection.py`。新增指标时，在 `metrics/` 中定义计算方式与用量检查，再更新报告校验和渲染。新增 suite 负责自身的输入校验和证据转换，不向公共指标代码添加数据集分支。两个 CLI、Harbor 适配器导入路径及锁定资源路径保持稳定。
 
-这里统一的是与 Retrieval-only 的目录职责；两个 benchmark 分别保留自己的 Python 或 JavaScript 实现和统计协议。模块迁移不改变任务选择、trial 次数、用量统计范围或 Aggregate 排除规则。
+这里统一的是与 Retrieval-only 的目录职责；两个 benchmark 分别保留自己的 Python 或 JavaScript 实现和统计协议。两套工作流共用 [`rust-candidate-package`](../../.github/actions/rust-candidate-package/action.yml) 构建 Rust 候选包，并用共享的 [`rust-package-cache.mjs`](../shared/rust-package-cache.mjs) 校验清单。模块迁移不改变任务选择、trial 次数、用量统计范围或 Aggregate 排除规则。
 
 ## 本地配置
 

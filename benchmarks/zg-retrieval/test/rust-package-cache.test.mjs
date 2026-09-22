@@ -8,7 +8,7 @@ import test from "node:test";
 import {
   createPackageCache,
   verifyPackageCache,
-} from "../rust-package-cache.mjs";
+} from "../../shared/rust-package-cache.mjs";
 
 const exec = promisify(execFile);
 

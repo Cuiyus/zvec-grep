@@ -1,0 +1,79 @@
+name: Build Rust candidate package
+description: Pack a selected Rust source ref and verify the commit-bound tarball.
+inputs:
+  candidate_ref:
+    description: Branch, tag, or commit containing rust/.
+    required: true
+  cache_namespace:
+    description: Benchmark-specific cache prefix.
+    required: true
+outputs:
+  commit:
+    description: Immutable candidate source commit.
+    value: ${{ steps.source.outputs.commit }}
+runs:
+  using: composite
+  steps:
+    - name: Check out the selected Rust source
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.candidate_ref }}
+        path: candidate
+        fetch-depth: 1
+        persist-credentials: false
+    - name: Resolve the immutable Rust source commit
+      id: source
+      shell: bash
+      run: |
+        commit="$(git -C candidate rev-parse HEAD)"
+        if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "Selected Rust ref did not resolve to a full commit SHA" >&2
+          exit 1
+        fi
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+    - name: Restore the compiled Rust npm package
+      id: rust-package-cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/rust-package-cache
+        key: ${{ inputs.cache_namespace }}-package-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.source.outputs.commit }}
+    - name: Restore Cargo build state after a package cache miss
+      if: steps.rust-package-cache.outputs.cache-hit != 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          candidate/rust/target/
+        key: ${{ inputs.cache_namespace }}-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-${{ steps.source.outputs.commit }}
+        restore-keys: |
+          ${{ inputs.cache_namespace }}-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-
+          ${{ inputs.cache_namespace }}-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install the candidate's pinned Rust toolchain
+      if: steps.rust-package-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: candidate/rust
+      run: rustup show active-toolchain
+    - name: Build and pack the selected Rust candidate
+      if: steps.rust-package-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: candidate/rust
+      run: |
+        npm ci
+        npm run pack:local
+        mapfile -t packages < <(find dist/npm -maxdepth 1 -type f -name '*.tgz' -print)
+        if [ "${#packages[@]}" -ne 1 ]; then
+          echo "Expected one local Rust npm package, found ${#packages[@]}" >&2
+          exit 1
+        fi
+        node "$GITHUB_WORKSPACE/benchmarks/shared/rust-package-cache.mjs" create \
+          --source .. \
+          --package "${packages[0]}" \
+          --output "$RUNNER_TEMP/rust-package-cache"
+    - name: Verify the cached package belongs to the selected commit
+      shell: bash
+      run: |
+        node benchmarks/shared/rust-package-cache.mjs verify \
+          --directory "$RUNNER_TEMP/rust-package-cache" \
+          --commit "${{ steps.source.outputs.commit }}"

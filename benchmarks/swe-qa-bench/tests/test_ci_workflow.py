@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -36,28 +35,40 @@ class BenchmarkWorkflowTests(unittest.TestCase):
             "swe-qa-rust-candidate-${{ github.run_id }}",
         )
         self.assertEqual(package_artifact["with"]["overwrite"], "true")
+        build_step = next(
+            step for step in package_job["steps"] if step.get("id") == "rust-candidate"
+        )
+        self.assertEqual(build_step["uses"], "./.github/actions/rust-candidate-package")
+        self.assertEqual(
+            build_step["with"]["candidate_ref"], "${{ inputs.candidate_ref }}"
+        )
+        self.assertEqual(build_step["with"]["cache_namespace"], "swe-qa-rust")
+        self.assertEqual(
+            package_job["outputs"]["candidate-commit"],
+            "${{ steps.rust-candidate.outputs.commit }}",
+        )
+        action = yaml.load(
+            (ROOT / ".github/actions/rust-candidate-package/action.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        action_steps = action["runs"]["steps"]
         candidate_checkout = next(
             step
-            for step in package_job["steps"]
+            for step in action_steps
             if step.get("uses", "").startswith("actions/checkout@")
-            and step.get("with", {}).get("path") == "candidate"
-        )
-        self.assertEqual(candidate_checkout["with"]["ref"], "${{ inputs.candidate_ref }}")
-        build = next(
-            step["run"]
-            for step in package_job["steps"]
-            if step.get("name") == "Build and pack the selected Rust candidate"
         )
         self.assertEqual(
-            next(
-                step["working-directory"]
-                for step in package_job["steps"]
-                if step.get("name") == "Build and pack the selected Rust candidate"
-            ),
-            "candidate/rust",
+            candidate_checkout["with"]["ref"], "${{ inputs.candidate_ref }}"
         )
-        self.assertIn("npm run pack:local", build)
-        self.assertIn("rust-package-cache.mjs create", build)
+        build = next(
+            step
+            for step in action_steps
+            if step.get("name") == "Build and pack the selected Rust candidate"
+        )
+        self.assertEqual(build["working-directory"], "candidate/rust")
+        self.assertIn("npm run pack:local", build["run"])
+        self.assertIn("benchmarks/shared/rust-package-cache.mjs", build["run"])
+        self.assertIn("--source ..", build["run"])
         verify = next(
             step["run"]
             for step in pair_job["steps"]
@@ -66,15 +77,26 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         self.assertIn("rust-package-cache.mjs verify", verify)
         self.assertIn("needs.package-candidate.outputs.candidate-commit", verify)
         self.assertLess(
-            next(i for i, step in enumerate(validate_job["steps"]) if step.get("name") == "Download the selected Rust package for preflight"),
-            next(i for i, step in enumerate(validate_job["steps"]) if step.get("name") == "Verify the Harbor command without credentials"),
+            next(
+                i
+                for i, step in enumerate(validate_job["steps"])
+                if step.get("name")
+                == "Download the selected Rust package for preflight"
+            ),
+            next(
+                i
+                for i, step in enumerate(validate_job["steps"])
+                if step.get("name") == "Verify the Harbor command without credentials"
+            ),
         )
         run_pair = next(
             step["run"]
             for step in pair_job["steps"]
             if step.get("name") == "Run baseline and zvec-grep on the same runner"
         )
-        self.assertIn('--zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz"', run_pair)
+        self.assertIn(
+            '--zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz"', run_pair
+        )
         self.assertNotIn('--zvec-grep-package "$GITHUB_WORKSPACE"', run_pair)
 
     def test_ci_scope_resolves_locked_tasks_and_five_trials_per_profile(self) -> None:
@@ -83,16 +105,23 @@ class BenchmarkWorkflowTests(unittest.TestCase):
             Loader=yaml.BaseLoader,
         )
         selection = json.loads(
-            (ROOT / "benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json")
-            .read_text()
+            (
+                ROOT / "benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json"
+            ).read_text()
         )
-        script = next(
-            step["run"]
+        matrix_step = next(
+            step
             for step in workflow["jobs"]["validate"]["steps"]
             if step.get("id") == "task-matrix"
         )
-        python_script = script.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-        default_scope = workflow["on"]["workflow_dispatch"]["inputs"]["scope"]["default"]
+        self.assertIn("python -m zg_bench.swe_qa matrix", matrix_step["run"])
+        self.assertIn('--scope "$SCOPE"', matrix_step["run"])
+        selection_path = (
+            ROOT / "benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json"
+        )
+        default_scope = workflow["on"]["workflow_dispatch"]["inputs"]["scope"][
+            "default"
+        ]
         self.assertEqual(default_scope, "repro-3")
         trials = int(workflow["env"]["SWE_QA_TRIALS_PER_PROFILE"])
         self.assertEqual(trials, 5)
@@ -104,17 +133,28 @@ class BenchmarkWorkflowTests(unittest.TestCase):
             "repro-3": ["reflex:6", "requests:16", "conan:39"],
         }
         for scope, expected_ids in scopes.items():
-            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "outputs"
-                subprocess.run(
-                    [sys.executable, "-c", python_script],
+            with self.subTest(scope=scope):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "zg_bench.swe_qa",
+                        "matrix",
+                        "--selection",
+                        str(selection_path),
+                        "--scope",
+                        scope,
+                    ],
                     cwd=ROOT,
-                    env={"SCOPE": scope, "GITHUB_OUTPUT": str(output)},
+                    env={
+                        **os.environ,
+                        "PYTHONPATH": str(ROOT / "benchmarks/swe-qa-bench"),
+                    },
                     check=True,
                     capture_output=True,
                     text=True,
                 )
-                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                values = dict(line.split("=", 1) for line in result.stdout.splitlines())
                 self.assertEqual(json.loads(values["task_ids_json"]), expected_ids)
                 self.assertEqual(
                     json.loads(values["tasks"]),

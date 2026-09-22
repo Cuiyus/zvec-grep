@@ -60,7 +60,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
-      candidate-commit: ${{ steps.source.outputs.commit }}
+      candidate-commit: ${{ steps.rust-candidate.outputs.commit }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -86,65 +86,12 @@ jobs:
           assert.ok(lock.tasks.every(task => include.some(row => row.repository === task.repository)));
           appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
           NODE
-      - name: Check out the selected candidate source
-        uses: actions/checkout@v6
+      - name: Build and verify the selected Rust package
+        id: rust-candidate
+        uses: ./.github/actions/rust-candidate-package
         with:
-          ref: ${{ inputs.candidate_ref }}
-          path: candidate
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Resolve the immutable Rust candidate commit
-        id: source
-        run: |
-          commit=$(git -C candidate rev-parse HEAD)
-          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Selected Rust ref did not resolve to a full commit SHA" >&2
-            exit 1
-          fi
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      - name: Restore the compiled Rust npm package
-        id: rust-package-cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/rust-package-cache
-          key: retrieval-rust-package-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.source.outputs.commit }}
-      - name: Restore Cargo build state after a package cache miss
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            candidate/rust/target/
-          key: retrieval-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-${{ steps.source.outputs.commit }}
-          restore-keys: |
-            retrieval-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-
-            retrieval-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install the candidate's pinned Rust toolchain
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        working-directory: candidate/rust
-        run: rustup show active-toolchain
-      - name: Build and pack the selected Rust candidate
-        if: steps.rust-package-cache.outputs.cache-hit != 'true'
-        working-directory: candidate/rust
-        run: |
-          npm ci
-          npm run pack:local
-          mapfile -t packages < <(find dist/npm -maxdepth 1 -type f -name '*.tgz' -print)
-          if [ "${#packages[@]}" -ne 1 ]; then
-            echo "Expected one local Rust npm package, found ${#packages[@]}" >&2
-            exit 1
-          fi
-          node ../../benchmarks/zg-retrieval/rust-package-cache.mjs create \
-            --source .. \
-            --package "${packages[0]}" \
-            --output "$RUNNER_TEMP/rust-package-cache"
-      - name: Verify the cached package belongs to the selected commit
-        run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/rust-package-cache" \
-            --commit "${{ steps.source.outputs.commit }}"
+          candidate_ref: ${{ inputs.candidate_ref }}
+          cache_namespace: retrieval-rust
       - uses: actions/upload-artifact@v7
         with:
           name: package-retrieval-candidate
@@ -175,7 +122,7 @@ jobs:
           path: ${{ runner.temp }}/package
       - name: Verify the candidate package identity
         run: |
-          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+          node benchmarks/shared/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Cache model artifacts only
