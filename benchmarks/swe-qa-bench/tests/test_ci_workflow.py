@@ -22,7 +22,9 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         dispatch = workflow["on"]["workflow_dispatch"]
         self.assertEqual(dispatch["inputs"]["candidate_ref"]["default"], "main")
         package_job = workflow["jobs"]["package-candidate"]
+        validate_job = workflow["jobs"]["validate"]
         pair_job = workflow["jobs"]["run-pair"]
+        self.assertEqual(validate_job["needs"], "package-candidate")
         self.assertIn("package-candidate", pair_job["needs"])
         candidate_checkout = next(
             step
@@ -53,6 +55,10 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         )
         self.assertIn("rust-package-cache.mjs verify", verify)
         self.assertIn("needs.package-candidate.outputs.candidate-commit", verify)
+        self.assertLess(
+            next(i for i, step in enumerate(validate_job["steps"]) if step.get("name") == "Download the selected Rust package for preflight"),
+            next(i for i, step in enumerate(validate_job["steps"]) if step.get("name") == "Verify the Harbor command without credentials"),
+        )
         run_pair = next(
             step["run"]
             for step in pair_job["steps"]

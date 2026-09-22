@@ -42,6 +42,7 @@ concurrency:
 jobs:
   validate:
     name: Validate locked selection
+    needs: package-candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -158,6 +159,16 @@ jobs:
         run: >-
           uv run --project benchmarks/swe-qa-bench python -m unittest discover
           -s benchmarks/swe-qa-bench/tests -v
+      - name: Download the selected Rust package for preflight
+        uses: actions/download-artifact@v8
+        with:
+          name: swe-qa-rust-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package
+      - name: Verify the preflight candidate identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Verify the Harbor command without credentials
         run: >-
           uv run --project benchmarks/swe-qa-bench zg-bench run
