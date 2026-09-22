@@ -65,9 +65,7 @@ fn python_encoding_cookie(line: &[u8]) -> Option<&[u8]> {
         let label = rest.trim_ascii_start();
         let end = label
             .iter()
-            .position(|byte| {
-                !byte.is_ascii_alphanumeric() && !matches!(*byte, b'-' | b'_' | b'.')
-            })
+            .position(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'-' | b'_' | b'.'))
             .unwrap_or(label.len());
         if end > 0 {
             return Some(&label[..end]);
