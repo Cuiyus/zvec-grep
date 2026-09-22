@@ -171,8 +171,9 @@ def prepare(metadata_path: Path, task_dir: Path, output: Path, *, completion_fn=
 def load_verified(packet: Path, metadata_path: Path, task_dir: Path, max_source_bytes: int) -> dict:
     evidence = judge.read_object(packet)
     metadata = json.loads(metadata_path.read_text())
+    protocol = evidence.get("source_selection", {}).get("protocol")
     if (evidence.get("metadata") != metadata or evidence.get("metadata_sha256") != sha(metadata_path.read_bytes())
-            or evidence.get("source_selection", {}).get("protocol") != PROTOCOL
+            or protocol not in {PROTOCOL, "pdf-334-keyword-evidence-v1"}
             or evidence["source_selection"].get("prepared_before_qa") is not True):
         raise judge.JudgeError("Frozen PDF evidence identity mismatch")
     sources = evidence.get("sources", [])
@@ -186,12 +187,18 @@ def load_verified(packet: Path, metadata_path: Path, task_dir: Path, max_source_
             raise judge.JudgeError("Frozen PDF source hash differs")
         pages = extract_pages(path)
         selected = row["selected_pages"]
-        selection = parse_selection({"model": "frozen", "choices": [{"finish_reason": "stop", "message": {
-            "content": json.dumps({"criteria": row.get("criteria_page_selection"),
-                                   "company_pages": row.get("company_page_selection")})}}]},
-            "frozen", len(metadata["rubrics"]), len(pages))
-        union = sorted({p for ps in selection["company_pages"].values() for p in ps}
-                       | {p for r in selection["criteria"] for p in r["pages"]})
+        if protocol == "pdf-334-keyword-evidence-v1":
+            from pdf_judge_evidence_334 import TERMS, selection_for_pages
+            if tuple(evidence["source_selection"].get("terms", ())) != TERMS:
+                raise judge.JudgeError("Frozen Task 334 page predicate changed")
+            union = selection_for_pages(pages)
+        else:
+            selection = parse_selection({"model": "frozen", "choices": [{"finish_reason": "stop", "message": {
+                "content": json.dumps({"criteria": row.get("criteria_page_selection"),
+                                       "company_pages": row.get("company_page_selection")})}}]},
+                "frozen", len(metadata["rubrics"]), len(pages))
+            union = sorted({p for ps in selection["company_pages"].values() for p in ps}
+                           | {p for r in selection["criteria"] for p in r["pages"]})
         if selected != union:
             raise judge.JudgeError("Frozen PDF pages omit recorded company/rubric evidence")
         if selected != sorted(set(selected)) or any(type(p) is not int or not 1 <= p <= len(pages) for p in selected):

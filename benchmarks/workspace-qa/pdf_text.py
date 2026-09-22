@@ -5,6 +5,7 @@ from collections import Counter
 import hashlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import time
 
@@ -24,6 +25,23 @@ def sha(data: bytes) -> str:
 
 
 def extract_pages(path: Path) -> list[str]:
+    if os.environ.get("WORKSPACE_QA_PDF_ENGINE") == "pdfium":
+        import pypdfium2 as pdfium
+        doc = pdfium.PdfDocument(path)
+        pages = []
+        try:
+            for page in doc:
+                textpage = page.get_textpage()
+                try:
+                    pages.append(textpage.get_text_range().replace("\r\n", "\n").replace("\r", "\n"))
+                finally:
+                    textpage.close()
+                    page.close()
+        finally:
+            doc.close()
+        if not pages or any("\x00" in text for text in pages):
+            raise ValueError("PDF has no pages or contains NUL in extracted text")
+        return pages
     from pypdf import PdfReader
     reader = PdfReader(path)
     if reader.is_encrypted and not reader.decrypt(""):
@@ -86,6 +104,7 @@ def convert_workspace(source: Path, output: Path) -> dict:
         print(json.dumps({"phase": "pdf_conversion", "completed": index + 1, "total": len(inputs),
                           "path": relative, "status": row["status"]}, ensure_ascii=False), flush=True)
     result = {"schema_version": 1, "variant": VARIANT, "converter_sha256": sha(Path(__file__).read_bytes()),
+        "engine": os.environ.get("WORKSPACE_QA_PDF_ENGINE", "pypdf"),
         "versions": versions(), "policy": "all PDF originals in full persona; no source truncation or splitting; no OCR",
         "status_counts": dict(Counter(r["status"] for r in rows)), "files": rows,
         "oversize_text_files": sum(not o["index_eligible_by_size"] for r in rows for o in r["outputs"]),

@@ -80,13 +80,14 @@ def identity_digest(files: dict[str, str]) -> str:
     return hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def answer_filename(value: str | None) -> str:
+def answer_filename(value: str | None, *, allow_pdf: bool = False) -> str:
     if not isinstance(value, str) or not value or "\\" in value or any(ord(c) < 32 for c in value):
         raise ValueError("answer filename must be a relative text-output path")
     path = PurePosixPath(value)
+    suffixes = {".md", ".txt", ".csv"} | ({".pdf"} if allow_pdf else set())
     if (path.is_absolute() or any(p in {"", ".", ".."} for p in value.split("/"))
-            or path.suffix.lower() not in {".md", ".txt", ".csv"}):
-        raise ValueError("answer filename must be a safe relative .md, .txt or .csv path")
+            or path.suffix.lower() not in suffixes):
+        raise ValueError("answer filename must be a safe relative output path")
     return path.as_posix()
 
 
@@ -155,6 +156,17 @@ def instruction(question: str, filename: str, *, zg: bool, delivery_policy: str 
             + ", ".join(expected_tools(SPEC, zg=zg))
             + ". Use their exact identifiers when making tool calls."
             + ("\n\n" + DELIVERY_POLICIES[delivery_policy] if DELIVERY_POLICIES[delivery_policy] else ""))
+
+
+def official_instruction(question: str, filename: str, *, task_id: str) -> str:
+    """Identical task prompt for both arms; zg is supplied only by installation."""
+    if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") != "pdf-text-v1":
+        raise ValueError("official writable pilot requires the common PDF text corpus")
+    from pdf_text import COMMON_NOTICE
+    relative = f"output/{filename}" if task_id == "363" else filename
+    return (question + "\n\nThe complete task workspace is available at /app. " + COMMON_NOTICE
+            + " Save the requested output file at " + json.dumps("/app/" + relative, ensure_ascii=False)
+            + ". This path comes from the benchmark's output_files field and is the same in both profiles.")
 
 
 def number(value: Any) -> int | float | None:
@@ -363,7 +375,8 @@ def execute(args: argparse.Namespace) -> int:
         raise ValueError("Unknown report delivery policy")
     if getattr(args, "continue_from", None) and (output_limit is not None or delivery_policy != "original"):
         raise ValueError("Explicit output controls require a fresh pair, not continuation of older trials")
-    filename = answer_filename(args.answer_filename) if args.answer_filename else None
+    official = os.environ.get("WORKSPACE_QA_EXECUTION_MODE") == "official-writable"
+    filename = answer_filename(args.answer_filename, allow_pdf=official) if args.answer_filename else None
     if not filename and not args.dry_run:
         raise ValueError("--answer-filename is required for an actual run")
     source, output = args.source_root.resolve(), args.output.resolve()

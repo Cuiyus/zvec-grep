@@ -57,7 +57,8 @@ def native_progress(agent: Path) -> dict:
 
 def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path, *,
                      prompt: str, profile: str, limits: dict, image: str = IMAGE,
-                     model_request_retries: int = 0, max_output_tokens: int | None = None) -> dict:
+                     model_request_retries: int = 0, max_output_tokens: int | None = None,
+                     official_writable: bool = False) -> dict:
     """Installation is setup; all model and MCP runtime work is timed by qa-session."""
     agent.mkdir(parents=True, exist_ok=True)
     zg = profile == "with-zg"
@@ -66,10 +67,13 @@ def run_native_trial(source: Path, agent: Path, index: Path | None, cache: Path,
     spec = {"protocol": PROTOCOL, "profile": profile, "prompt": prompt, "model": r.SPEC.cli_model,
             "embedding_model": r.EMBEDDING, "root": "/app", "limits": limits,
             "model_request_retries": model_request_retries}
+    if official_writable:
+        spec.update(task_mode="official_writable", reasoning_effort="high")
     if max_output_tokens is not None:
         spec["max_output_tokens"] = max_output_tokens
     r.write_json(agent / "native-spec.json", spec)
-    command = r.docker_command(image, source, agent, cache, index=index) + ["--init"]
+    command = r.docker_command(image, source, agent, cache, index=index,
+                               workspace_readonly=not official_writable) + ["--init"]
     if zg:
         command = remote_environment(command)
     name = "native-qa-" + hashlib.sha256(str(agent).encode()).hexdigest()[:12]
@@ -174,6 +178,9 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
     limits = {"model_requests": 60, "tool_calls": 120,
               "input_tokens": getattr(args, "input_token_limit", 600000), "wall_seconds": args.timeout}
     delivery_policy = getattr(args, "delivery_policy", "original")
+    official_writable = os.environ.get("WORKSPACE_QA_EXECUTION_MODE") == "official-writable"
+    if official_writable and args.task_id not in {"334", "363"}:
+        raise ValueError("official writable protocol is locked to Tasks 334 and 363")
     output_limit = getattr(args, "max_output_tokens", None)
     prepared = output / "preparation"
     index, cache, logs = prepared / "index", prepared / "model-cache", prepared / "runtime"
@@ -196,13 +203,18 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         "preprocessing_manifest_sha256": os.environ.get("WORKSPACE_QA_PREPROCESSING_SHA256"),
         "run_limits": limits, "model_request_retries": getattr(args, "model_request_retries", 0),
         "repetitions_per_profile": args.repetitions, "order_seed": args.order_seed,
-        "gold_visible_to_agent": False, "corpus_readonly_mount": True,
+        "gold_visible_to_agent": False, "corpus_readonly_mount": not official_writable,
         "index_options": {"root": "/app", "maxFileSizeBytes": r.INDEX_MAX_FILE_SIZE_BYTES},
         "index_policy": "native CLI seed; separate writable copy per with-zg trial; normal native refresh allowed",
         "wall_seconds_scope": "qa-session agent interval including native MCP startup/search; native install, index preparation and host integrity checks are recorded separately",
-        "answer_delivery": "Harness saves terminal response verbatim outside corpus to requested report path",
+        "answer_delivery": ("Agent writes original requested output in its isolated writable workspace"
+                            if official_writable else "Harness saves terminal response verbatim outside corpus to requested report path"),
         "ci_identity": {k: os.environ.get(k) for k in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW", "RUNNER_OS", "RUNNER_ARCH")}, **identity}
     manifest["delivery_policy"] = delivery_policy
+    if official_writable:
+        manifest["reasoning_effort"] = "high"
+        manifest["built_in_tools"] = "Qoder default tools, identical in both profiles"
+        manifest["task_prompt_identical_across_profiles"] = True
     manifest["delivery_policy_sha256"] = hashlib.sha256(r.DELIVERY_POLICIES[delivery_policy].encode()).hexdigest()
     if output_limit is not None:
         manifest["model_controls"].update(max_output_tokens=output_limit,
@@ -263,20 +275,51 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         root = output / trial["trial_id"]
         root.mkdir()
         zg = trial["profile"] == "with-zg"
-        prompt = r.instruction(question, filename, zg=zg, delivery_policy=delivery_policy)
+        prompt = (r.official_instruction(question, filename, task_id=args.task_id) if official_writable else
+                  r.instruction(question, filename, zg=zg, delivery_policy=delivery_policy))
         r.write_json(root / "instruction.json", {"text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
+        trial_source = source
+        source_copy_before = None
+        if official_writable:
+            trial_source = prepared / "working-workspaces" / trial["trial_id"]
+            shutil.copytree(source, trial_source,
+                            ignore=shutil.ignore_patterns(".git", ".zvec-grep"))
+            (trial_source / ".zvec-grep").mkdir()
+            source_copy_before = r.directory_identity(trial_source)
         working = r.working_index(index, prepared / "working-indexes" / trial["trial_id"]) if zg else None
         index_before = r.directory_identity(working) if zg else None
         trial["status"] = "running"
         r.write_json(output / "plan.json", plan)
         r.collect_results(output, plan)
         print(json.dumps({"phase": "agent_trial", "trial_id": trial["trial_id"], "status": "running"}), flush=True)
-        result = {**trial, **run_native_trial(source, root / "agent", working, cache,
+        result = {**trial, **run_native_trial(trial_source, root / "agent", working, cache,
                   prompt=prompt, profile=trial["profile"], limits=limits, image=args.image,
-                  model_request_retries=getattr(args, "model_request_retries", 0), max_output_tokens=output_limit),
+                  model_request_retries=getattr(args, "model_request_retries", 0), max_output_tokens=output_limit,
+                  official_writable=official_writable),
                   "candidate_output_path": None, "provenance": {"manifest_path": "manifest.json",
                   "source_git_commit": commit, "question_sha256": manifest["question_sha256"], "image_id": identity["image_id"]}}
-        if result.get("answer"):
+        if official_writable:
+            candidates = [p for p in trial_source.rglob(filename)
+                          if p.is_file() and ".zvec-grep" not in p.parts]
+            fresh = (len(candidates) == 1 and source_copy_before.get(
+                candidates[0].relative_to(trial_source).as_posix()) != r.sha256(candidates[0]))
+            if fresh:
+                candidate = root / "candidate" / filename
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(candidates[0], candidate)
+                result["candidate_output_path"] = candidate.relative_to(output).as_posix()
+                result["candidate_source_path"] = candidates[0].relative_to(trial_source).as_posix()
+                result["candidate_sha256"] = r.sha256(candidate)
+                result["candidate_bytes"] = candidate.stat().st_size
+            else:
+                result["candidate_discovery_count"] = len(candidates)
+                result["candidate_fresh"] = False
+                if result["status"] == "completed":
+                    result["status"] = "missing_output"
+            result["working_workspace_changes"] = r.physical_changes(
+                source_copy_before, r.directory_identity(trial_source))
+            shutil.rmtree(trial_source)
+        elif result.get("answer"):
             candidate = root / "candidate" / filename
             candidate.parent.mkdir(parents=True)
             candidate.write_text(result["answer"])

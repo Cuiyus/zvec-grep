@@ -1,0 +1,71 @@
+name: Workspace Lite CN · official Tasks 334 and 363
+run-name: "Qoder 1.1.45 · Qwen3.8-Max high · zg 0.2.2 · Tasks 334 + 363 · ${{ github.ref_name }}"
+
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - '.github/workflows/workspace-qa-334-363.yml'
+      - '.github/actions/workspace-qa/**'
+      - 'benchmarks/workspace-qa/**'
+      - 'benchmarks/swe-qa-bench/zg_bench/swe_qa/readonly_run.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-qa-334-363-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pair:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[workspace-qa-334-363]')
+    name: "Task ${{ matrix.task }} · baseline 1 + zg 1 · judge"
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ['334', '363']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned PDF extraction and audit engines
+        run: python -m pip install -r benchmarks/workspace-qa/pdf-requirements.txt
+      - name: Validate and select one frozen original task
+        env:
+          TASK_ID: ${{ matrix.task }}
+        run: |
+          python -m unittest discover -s benchmarks/workspace-qa/tests -v
+          cp benchmarks/workspace-qa/data/official-tasks-334-363-one-pair-lock.json benchmarks/workspace-qa/data/lock.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          lock = json.loads(Path('benchmarks/workspace-qa/data/lock.json').read_text())
+          experiment = lock['experiment']
+          assert [t['task_id'] for t in lock['tasks']] == ['334', '363']
+          assert os.environ['TASK_ID'] in {'334', '363'} and lock['repetitions'] == 1
+          assert experiment['agent'] == 'qodercli' and experiment['qoder_version'] == '1.1.45'
+          assert experiment['requested_model'] == 'qwen3.8-max' and experiment['reasoning_effort'] == 'high'
+          assert experiment['zg_version'] == '0.2.2'
+          assert experiment['integration']['command'] == ['zg','install','--target','qoder','--yes']
+          assert experiment['embedding']['model'] == 'qwen/qwen3.7-text-embedding'
+          assert experiment['execution_mode'] == 'official-writable'
+          assert experiment['tool_policy'] == 'same Qoder built-in defaults in both arms; zg install adds native MCP only'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f"Original Task {os.environ['TASK_ID']}: one fresh baseline/with-zg pair; Qoder 1.1.45, Qwen3.8-Max, high reasoning, zg 0.2.2 through zg install + native MCP. Both arms use the same default built-in tools and full converted persona workspace. Original question, file output and rubrics retained. Custom GLM rubric adapter, not official leaderboard scoring.\n")
+          PY
+      - uses: ./.github/actions/workspace-qa
+        with:
+          task-id: ${{ matrix.task }}
+          repetitions: '1'
+          phase: smoke
+          artifact-prefix: workspace-lite-cn-official-334-363
+          qoder-token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          judge-key: ${{ secrets.GLM_API_KEY }}
+          embedding-key: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}

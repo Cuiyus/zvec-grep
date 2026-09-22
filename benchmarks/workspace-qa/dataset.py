@@ -310,15 +310,19 @@ def prepare(lock: dict, task_id: str, destination: Path, upstream: Path) -> dict
             print("::endgroup::", flush=True)
             print("::group::Task 328 conversion completeness gate", flush=True)
             audit = verify(source, conversion, destination / audit_dir)
-        elif preprocessing == "pdf-text-v1" and task_id == "192":
+        elif preprocessing == "pdf-text-v1" and task_id in {"192", "334", "363"}:
             from pdf_text import convert_workspace
             from pdf_audit import verify
             conversion_name, audit_dir = "pdf-text-manifest.json", "pdf-audit"
+            engine = task.get("pdf_text_engine", "pypdf")
+            if engine not in {"pypdf", "pdfium"}:
+                raise ValueError("Unreviewed PDF text engine")
+            os.environ["WORKSPACE_QA_PDF_ENGINE"] = engine
             print("::group::Convert all full-persona PDFs to shared text sidecars", flush=True)
             conversion = convert_workspace(source, destination / conversion_name)
             print("::endgroup::", flush=True)
-            print("::group::Task 192 independent PDF text coverage gate", flush=True)
-            review = json.loads((HERE / "data/task-192-pdf-review.json").read_text())
+            print(f"::group::Task {task_id} PDF text coverage gate", flush=True)
+            review = json.loads((HERE / f"data/task-{task_id}-pdf-review.json").read_text())
             audit = verify(source, conversion, destination / audit_dir, review)
         else:
             raise ValueError("Only the reviewed Task 328 Office and Task 192 PDF pilots are enabled")

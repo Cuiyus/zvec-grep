@@ -142,6 +142,7 @@ def cache_plan(lock: dict[str, Any], task_id: str, cache_root: Path, *,
                       "embedding_type": embedding.get("type"), "allow_local_fallback": embedding.get("allow_local_fallback"),
                       "max_file_size_bytes": configured_cap, "source_mount": "/app",
                       "preprocessing": experiment.get("preprocessing", "original"),
+                      "pdf_text_engine": tasks[0].get("pdf_text_engine", "pypdf"),
                       "corpus_policy": experiment.get("corpus_policy"), "build": build}
     root = cache_root.expanduser().resolve()
     required_string(str(root), "cache-root")

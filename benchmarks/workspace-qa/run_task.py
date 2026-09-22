@@ -243,7 +243,8 @@ def main(argv=None):
     lock = json.loads((HERE / "data/lock.json").read_text())
     variant = lock.get("experiment", {}).get("preprocessing", "original")
     if variant != "original":
-        if ((variant, args.task_id) not in {("office-markdown-v1", "328"), ("pdf-text-v1", "192")}
+        if ((variant, args.task_id) not in {("office-markdown-v1", "328"),
+                ("pdf-text-v1", "192"), ("pdf-text-v1", "334"), ("pdf-text-v1", "363")}
                 or args.phase != "smoke" or args.repetitions != 1 or continuing):
             raise ValueError("Conversion pilot requires the matching reviewed task, smoke, exactly one fresh pair")
     os.environ["WORKSPACE_QA_CORPUS_VARIANT"] = variant
@@ -268,6 +269,13 @@ def main(argv=None):
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
     task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
+    if args.task_id in {"334", "363"}:
+        if (lock["experiment"].get("execution_mode") != "official-writable"
+                or lock["experiment"].get("reasoning_effort") != "high"
+                or lock["experiment"].get("zg_version") != "0.2.2"):
+            raise ValueError("Official task lock must pin writable execution, high reasoning, and zg 0.2.2")
+        os.environ["WORKSPACE_QA_EXECUTION_MODE"] = "official-writable"
+    os.environ["WORKSPACE_QA_PDF_ENGINE"] = task.get("pdf_text_engine", "pypdf")
     if args.repetitions < 1:
         raise ValueError("repetitions must be positive")
     root = args.output.resolve()
@@ -316,11 +324,16 @@ def main(argv=None):
             if os.environ.get("GITHUB_STEP_SUMMARY"):
                 with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
                     summary.write((preparation / audit_dir / "summary.md").read_text())
-        if variant == "pdf-text-v1":
+        if variant == "pdf-text-v1" and args.task_id in {"192", "334"}:
             from pdf_judge_evidence import prepare as prepare_pdf_evidence
-            print("::group::Freeze candidate-blind judge evidence from all five complete reports", flush=True)
-            packet = prepare_pdf_evidence(preparation / "tasks" / args.task_id / "metadata.json",
-                preparation / "tasks" / args.task_id, root / "pdf-judge-evidence")
+            print("::group::Freeze candidate-blind PDF judge evidence", flush=True)
+            if args.task_id == "334":
+                from pdf_judge_evidence_334 import prepare as prepare_334
+                packet = prepare_334(preparation / "tasks" / args.task_id / "metadata.json",
+                    preparation / "tasks" / args.task_id, root / "pdf-judge-evidence")
+            else:
+                packet = prepare_pdf_evidence(preparation / "tasks" / args.task_id / "metadata.json",
+                    preparation / "tasks" / args.task_id, root / "pdf-judge-evidence")
             os.environ["WORKSPACE_QA_PDF_EVIDENCE"] = str(packet)
             os.environ["WORKSPACE_QA_PDF_EVIDENCE_SHA256"] = hashlib.sha256(packet.read_bytes()).hexdigest()
             print("::endgroup::", flush=True)

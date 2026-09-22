@@ -90,6 +90,9 @@ def settings() -> tuple[str, str]:
 
 def source_text(source: Path, raw: bytes) -> str:
     suffix = source.suffix.lower()
+    if suffix == ".pdf" and os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "pdf-text-v1":
+        from pdf_text import extract_pages, render_pages
+        return render_pages(source.name, extract_pages(source))
     if (os.environ.get("WORKSPACE_QA_CORPUS_VARIANT", "original") == "office-markdown-v1"
             and suffix in {".docx", ".pptx", ".xlsx"}):
         from office_markdown import convert_file
@@ -139,7 +142,9 @@ def source_text(source: Path, raw: bytes) -> str:
 
 def load_evidence(metadata_path: Path, task_dir: Path, *, max_source_bytes: int = MAX_SOURCE_BYTES) -> dict[str, Any]:
     """Read every listed source in manifest order; never truncate or skip a file."""
-    if os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "pdf-text-v1":
+    if (os.environ.get("WORKSPACE_QA_CORPUS_VARIANT") == "pdf-text-v1"
+            and (os.environ.get("WORKSPACE_QA_PDF_EVIDENCE")
+                 or os.environ.get("WORKSPACE_QA_EXECUTION_MODE") != "official-writable")):
         from pdf_judge_evidence import load_verified
         packet = Path(os.environ.get("WORKSPACE_QA_PDF_EVIDENCE", ""))
         expected = os.environ.get("WORKSPACE_QA_PDF_EVIDENCE_SHA256", "")
@@ -199,6 +204,9 @@ def build_messages(evidence: dict[str, Any], answer: str, candidate_outputs: lis
                "source_files": evidence["sources"], "candidate_answer": answer,
                "candidate_outputs": candidate_outputs or []}
     system = SYSTEM_PROMPT
+    if any(item.get("materialized_by") == "agent" for item in candidate_outputs or []):
+        system = system.replace("File creation is a harness action and does not establish candidate tool use.",
+                                "Candidate output files were copied from the agent's writable task workspace; supplied file metadata may establish their existence and format.")
     if "source_selection" in evidence:
         payload["source_selection"] = evidence["source_selection"]
         system = system.replace("complete input source files", "verified original pages selected from every input source before any candidate ran")
@@ -311,6 +319,27 @@ def candidate_outputs(trial: dict[str, Any], runs_dir: Path, answer: str) -> lis
     path = (runs_dir / relative).resolve()
     if not path.is_relative_to(runs_dir.resolve()):
         raise JudgeError("candidate output path escapes runs directory")
+    if trial.get("candidate_sha256"):
+        if sha256(path.read_bytes()) != trial["candidate_sha256"]:
+            raise JudgeError("agent-created output hash differs from trial evidence")
+        if path.suffix.lower() == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(path, strict=True)
+            pages = [page.extract_text() or "" for page in reader.pages]
+            if not pages or not any(page.strip() for page in pages):
+                raise JudgeError("agent-created PDF has no extractable text")
+            links = []
+            for page in reader.pages:
+                for ref in page.get("/Annots", []):
+                    obj = ref.get_object()
+                    action = obj.get("/A")
+                    if action and action.get("/URI"):
+                        links.append(str(action["/URI"]))
+            return [{"filename": path.name, "text": "\n\n".join(pages),
+                     "materialized_by": "agent", "pdf_valid": True,
+                     "pdf_pages": len(pages), "pdf_hyperlinks": links}]
+        return [{"filename": path.name, "text": path.read_text(encoding="utf-8"),
+                 "materialized_by": "agent"}]
     content = path.read_text(encoding="utf-8")
     if content != answer:
         raise JudgeError("materialized candidate output does not exactly match final answer")
