@@ -92,6 +92,8 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。上文的 Claude Code 配置对应已发布的本地测试协议。
 
+CI 的固定 trial 次数、失败重试上限和 Embedding 模型由版本化的 [`ci-config.json`](ci-config.json) 指定。模型、任务范围和 Rust 源码是手动运行的输入；密钥与百炼 endpoint 属于运行环境配置。
+
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 
 每次失败的日志和轨迹保存在 Harbor job 的 `.retry-history/` 下，并随原始证据上传；Job Summary 展示重试次数和最终错误数。报告中的 token、工具调用、耗时及费用仅统计每个 trial 最终成功的那次执行，不包含失败尝试的额外开销；这些开销可在归档证据中查看。用尽重试次数仍失败时，该任务保持失败。每个任务 job 的总时限为 6 小时，包含准备和重试时间。

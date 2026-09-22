@@ -7,6 +7,8 @@
 3. 在同一页面新增仓库 **variable** `SWE_QA_MODEL_BASE_URL`，例如 `https://YOUR-WORKSPACE.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。填入**你自己业务空间**的 OpenAI 兼容地址，确保区域与密钥匹配；执行与评审都会使用它。如未配置，工作流会继续使用代码中原维护者的 endpoint，你的密钥未必可用。CI 使用本地 `local/potion-code-16m-v2` Embedding，无需另配 Embedding API Key。
 4. 进入 **Actions → SWE-QA Bench → Run workflow**，选择 harness 分支并设置 `candidate_ref`、`model`、`scope`。建议先运行 `repro-3`：3 题 × 2 组 × 5 次，共 30 个 trial。`smoke` 是 5 题 / 50 个 trial；`all-full` 是 20 题 / 200 个 trial。失败的 trial 最多额外重试两次，可能产生更多模型调用。执行和评审使用同一个所选模型，默认 `glm-5.2`。
 
+固定 trial 次数、失败重试上限和本地 Embedding 模型由版本化的 [`ci-config.json`](../ci-config.json) 指定。要修改这些实验规则，应在 harness 分支修改此文件；环境变量只传递运行时选择、路径、endpoint 和密钥。
+
 也可以通过 CLI 触发：
 
 ```sh

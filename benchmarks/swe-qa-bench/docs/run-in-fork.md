@@ -19,6 +19,8 @@ gh workflow run swe-qa-bench.yml --repo OWNER/zvec-grep \
 
 Use your fork's Rust branch name or full commit SHA for `candidate_ref` when evaluating a change. `--ref` selects the **benchmark harness**; `candidate_ref` selects the **Rust package**. The workflow does not run from a pull request or push, and it does not use upstream CI resources. A GitHub user with only `write` access may see the dispatch button, but the workflow rejects the run before checkout or model-secret use.
 
+The versioned [`ci-config.json`](../ci-config.json) sets the trial count, failure retry limit, and local embedding model. Change that file on the harness branch to change the fixed protocol; environment variables carry only runtime selections, paths, endpoint, and credentials.
+
 The run Summary shows the selected Rust commit, task reports and, for a complete run, the aggregate report. Download the `swe-qa-aggregate-report-*` artifact for `report.md`, `report.json`, and `candidate-manifest.json` (commit and tarball hash); individual task reports are retained for 90 days. Paired Harbor evidence, including failed attempts under `.retry-history/`, is retained for 30 days. An incomplete run shows available task reports but does not publish a partial cross-task Aggregate.
 
 References: [GitHub manual workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow), [Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets), [Bailian API keys](https://help.aliyun.com/zh/model-studio/get-api-key), [Bailian regions and endpoints](https://help.aliyun.com/zh/model-studio/regions/).

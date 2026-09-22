@@ -172,6 +172,9 @@ profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
 execution and judging. The existing secret name is retained for both models;
 its Bailian business-space API key must have access to the selected model.
 The Claude Code configuration above describes the published local protocol.
+CI reads the fixed trial count, failure retry limit, and embedding model from
+[`ci-config.json`](ci-config.json). The workflow's model, scope, and Rust source
+are manual run inputs; credentials and the Bailian endpoint are runtime settings.
 
 The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
 trials. CI passes `--max-retries 2`: an exception, including an agent timeout,

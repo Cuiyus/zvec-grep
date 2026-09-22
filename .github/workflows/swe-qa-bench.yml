@@ -30,8 +30,6 @@ on:
 permissions: {}
 
 env:
-  SWE_QA_TRIALS_PER_PROFILE: "5"
-  SWE_QA_MAX_RETRIES: "2"
   SWE_QA_MODEL: ${{ inputs.model || 'glm-5.2' }}
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
 
@@ -132,19 +130,20 @@ jobs:
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Verify the Harbor command without credentials
-        run: >-
-          uv run --project benchmarks/swe-qa-bench zg-bench run
-          swe-qa-bench
-          --tier full
-          --agent opencode
-          --model "custom-openai/$SWE_QA_MODEL"
-          --profile all
-          --n-attempts "$SWE_QA_TRIALS_PER_PROFILE"
-          --max-retries "$SWE_QA_MAX_RETRIES"
-          --embedding-model local/potion-code-16m-v2
-          --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz"
-          --job-name preflight
-          --dry-run
+        run: |
+          config=benchmarks/swe-qa-bench/ci-config.json
+          uv run --project benchmarks/swe-qa-bench zg-bench run \
+            swe-qa-bench \
+            --tier full \
+            --agent opencode \
+            --model "custom-openai/$SWE_QA_MODEL" \
+            --profile all \
+            --n-attempts "$(jq -r '.trials_per_profile' "$config")" \
+            --max-retries "$(jq -r '.max_retries' "$config")" \
+            --embedding-model "$(jq -r '.embedding_model' "$config")" \
+            --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
+            --job-name preflight \
+            --dry-run
 
   package-candidate:
     name: Build selected Rust candidate
@@ -231,6 +230,8 @@ jobs:
             exit 2
           fi
           runs_dir="$RUNNER_TEMP/swe-qa-runs/$TASK_NAME"
+          config=benchmarks/swe-qa-bench/ci-config.json
+          trials="$(jq -r '.trials_per_profile' "$config")"
           uv run --project benchmarks/swe-qa-bench zg-bench run \
             swe-qa-bench \
             --tier full \
@@ -238,16 +239,16 @@ jobs:
             --agent opencode \
             --model "custom-openai/$SWE_QA_MODEL" \
             --profile all \
-            --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
-            --max-retries "$SWE_QA_MAX_RETRIES" \
-            --embedding-model local/potion-code-16m-v2 \
+            --n-attempts "$trials" \
+            --max-retries "$(jq -r '.max_retries' "$config")" \
+            --embedding-model "$(jq -r '.embedding_model' "$config")" \
             --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
             --jobs-dir "$runs_dir" \
             --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa collect \
             --runs-dir "$runs_dir" \
             --task "$TASK_NAME" \
-            --expected-trials "$SWE_QA_TRIALS_PER_PROFILE" \
+            --expected-trials "$trials" \
             --output "$RUNNER_TEMP/pair-${TASK_NAME}.json"
       - name: Judge this pair and write its independent report
         env:
@@ -272,8 +273,9 @@ jobs:
           from pathlib import Path
 
           root = Path(os.environ["RUNNER_TEMP"]) / "swe-qa-runs" / os.environ["TASK_NAME"]
-          trials = int(os.environ["SWE_QA_TRIALS_PER_PROFILE"])
-          retries = int(os.environ["SWE_QA_MAX_RETRIES"])
+          config = json.loads(Path("benchmarks/swe-qa-bench/ci-config.json").read_text())
+          trials = config["trials_per_profile"]
+          retries = config["max_retries"]
           lines = [
               "## Trial retries",
               "",
