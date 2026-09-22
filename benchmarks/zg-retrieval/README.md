@@ -32,7 +32,7 @@ Every request also uses `limit: 10`, `autoUpdate: false`, `freshness: eventual` 
 
 Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. Only the fifth result supplies quality and output-size observations. A complete run contains **300 calls and 60 quality observations**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
 
-Missing or invalid evidence withholds aggregate results and fails CI. Product failures retain zero quality observations and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
+Isolated public-response format failures still fail CI, but the overview displays diagnostic scores from validated questions with explicit question/repository coverage and a failed-task table. Invalid evidence is excluded, never counted as a miss or a zero. Protocol, identity, missing-call and other integrity errors still withhold all aggregates. Product failures with valid evidence retain zero quality credit and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
 
 ## Dataset and scoring
 
@@ -54,7 +54,7 @@ Questions, labels and reports remain outside indexed source checkouts. Indexing 
 
 Evidence retention is 14 days. The final results job publishes the combined page; each pilot job publishes its own result when it completes. Missing artifacts and failed upstream jobs remain explicit in the overview.
 
-SWE-QA20 ZG reports use **schema 6**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the existing **schema 4** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. Quality rows retain five `measurement_observations` so validators can recompute measurements. The `file_retrieval` field holds Hit/MRR, `ndcg` holds nDCG and its target evidence, and `measurements` holds output size, latency and sample counts.
+SWE-QA20 ZG reports use **schema 6**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain five `measurement_observations` so validators can recompute measurements. The `file_retrieval` field holds Hit/MRR, `ndcg` holds nDCG and its target evidence, and `measurements` holds output size, latency and sample counts.
 
 The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v6`. The comparator accepts schema 6 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
 
@@ -112,7 +112,7 @@ node benchmarks/zg-retrieval/ci-report.mjs \
   --output /absolute/path/to/overview
 ```
 
-A partial or incompatible experiment cannot produce a valid overview. Candidate source selection happens through `candidate_ref`; the harness comes from the workflow ref selected for that manual run. Do not add automatic triggers to test it.
+An isolated task/mode failure can produce a diagnostic partial overview while the command and CI still fail. Incompatible or globally invalid evidence produces no scores. Candidate source selection happens through `candidate_ref`; the harness comes from the workflow ref selected for that manual run. Do not add automatic triggers to test it.
 
 ## Limits
 

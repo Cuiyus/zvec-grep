@@ -15,40 +15,87 @@ export const QUALITY_METRICS = Object.freeze([
   "ndcg_at_10",
 ]);
 
-function resultRow(label, rows) {
+function resultRow(label, rows, expectedQuestions, expectedRepositories) {
   const file = summarizeFileRetrieval(rows);
   const ndcg = summarizeNdcg(rows);
-  assert.equal(file.scored_tasks, 20, `${label}: requires all 20 questions`);
   return {
     label,
-    status: rows.some((row) =>
-      row.measurement_observations.some(
-        (sample) => sample.execution_status === "product_error",
-      ),
-    )
-      ? "product_error"
-      : "success",
+    status:
+      file.scored_tasks < expectedQuestions
+        ? "partial"
+        : rows.some((row) =>
+              row.measurement_observations.some(
+                (sample) => sample.execution_status === "product_error",
+              ),
+            )
+          ? "product_error"
+          : "success",
     questions: file.scored_tasks,
-    metrics: {
-      file_hit_at_1: file.hit_at_1,
-      file_hit_at_5: file.hit_at_5,
-      file_hit_at_10: file.hit_at_10,
-      file_mrr_at_10: file.mrr_at_10,
-      ndcg_at_10: ndcg.repository_macro.ndcg_at_10,
-    },
-    measurements: summarizeMeasurements(
-      rows.flatMap((row) => row.measurement_observations),
-    ),
+    expected_questions: expectedQuestions,
+    repositories: ndcg.repository_count,
+    expected_repositories: expectedRepositories,
+    metrics: file.scored_tasks
+      ? {
+          file_hit_at_1: file.hit_at_1,
+          file_hit_at_5: file.hit_at_5,
+          file_hit_at_10: file.hit_at_10,
+          file_mrr_at_10: file.mrr_at_10,
+          ndcg_at_10: ndcg.repository_macro.ndcg_at_10,
+        }
+      : null,
+    measurements: rows.length
+      ? summarizeMeasurements(
+          rows.flatMap((row) => row.measurement_observations),
+        )
+      : null,
   };
 }
 
-const unavailableRow = (label, status) => ({
+const unavailableRow = (
   label,
   status,
-  questions: null,
+  expectedQuestions,
+  expectedRepositories,
+) => ({
+  label,
+  status,
+  questions: 0,
+  expected_questions: expectedQuestions,
+  repositories: 0,
+  expected_repositories: expectedRepositories,
   metrics: null,
   measurements: null,
 });
+
+function failedTasks(checked) {
+  const failures = new Map();
+  const add = (row, kind, reason) => {
+    const key = JSON.stringify([row.task_id, kind, reason]);
+    if (!failures.has(key))
+      failures.set(key, {
+        task_id: row.task_id,
+        repository: row.repository,
+        modes: [],
+        kind,
+        reason,
+      });
+    failures.get(key).modes.push(row.mode);
+  };
+  for (const row of checked.invalidRows)
+    add(row, "invalid_evidence", row.invalid_reason);
+  for (const row of checked.rows.values()) {
+    const count = row.measurement_observations.filter(
+      (sample) => sample.execution_status === "product_error",
+    ).length;
+    if (count) add(row, "product_error", `${count}/5 MCP calls failed`);
+  }
+  return [...failures.values()]
+    .map((entry) => ({
+      ...entry,
+      modes: ZG_MODES.filter((mode) => entry.modes.includes(mode)),
+    }))
+    .sort((a, b) => a.task_id.localeCompare(b.task_id));
+}
 
 /** Fixed ZG arms; invalid evidence never becomes a zero score. */
 export async function buildCiSummary({
@@ -62,9 +109,13 @@ export async function buildCiSummary({
   const suite = await loadSuite();
   const rows = [],
     errors = [];
+  let failures = [];
   try {
     assert.ok(zg, "missing ZG report");
-    const checked = validateZgReport(zg, "ZG", { suite });
+    const checked = validateZgReport(zg, "ZG", {
+      suite,
+      allowPartial: true,
+    });
     assert.equal(
       zg.scope,
       "full-20-original-queries",
@@ -80,15 +131,29 @@ export async function buildCiSummary({
         resultRow(
           `zg-${mode}`,
           [...checked.rows.values()].filter((row) => row.mode === mode),
+          suite.lock.tasks.length,
+          suite.lock.repositories.length,
         ),
       );
-    if (!zg.integrity_passed)
+    failures = failedTasks(checked);
+    if (checked.invalidRows.length)
+      errors.push(
+        `ZG: ${checked.invalidRows.length} task/mode observations have invalid evidence; partial metrics exclude them`,
+      );
+    if (zg.product_error_calls)
       errors.push(`ZG: ${zg.product_error_calls} product calls failed`);
   } catch (error) {
     errors.push(`ZG: ${error.message}`);
     rows.length = 0;
     rows.push(
-      ...ZG_MODES.map((mode) => unavailableRow(`zg-${mode}`, "invalid")),
+      ...ZG_MODES.map((mode) =>
+        unavailableRow(
+          `zg-${mode}`,
+          "invalid",
+          suite.lock.tasks.length,
+          suite.lock.repositories.length,
+        ),
+      ),
     );
   }
   const requiredJobs = [
@@ -103,7 +168,7 @@ export async function buildCiSummary({
       if (jobResults[job]?.result !== "success")
         errors.push(`${job}: ${jobResults[job]?.result ?? "missing job"}`);
   return {
-    schema_version: 4,
+    schema_version: 5,
     status: errors.length ? "failed" : "success",
     preview: "mcp-default",
     quality_metrics: QUALITY_METRICS,
@@ -114,6 +179,7 @@ export async function buildCiSummary({
       commit: candidateCommit,
     },
     rows,
+    failed_tasks: failures,
     errors,
   };
 }
@@ -131,13 +197,14 @@ export function markdownCiSummary(result) {
     "",
     `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
     "",
-    "| Arm | Status | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Arm | Status | Coverage | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
+    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
   for (const row of result.rows) {
     const state = {
       success: "✅ Valid",
       product_error: "⚠️ Product-call failure",
+      partial: "⚠️ Partial",
       invalid: "❌ No valid report",
     }[row.status];
     const hits = [1, 5, 10].map((cutoff) => {
@@ -147,14 +214,14 @@ export function markdownCiSummary(result) {
         : "—";
     });
     lines.push(
-      `| ${cell(row.label)} | ${state} | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
+      `| ${cell(row.label)} | ${state} | ${row.questions}/${row.expected_questions} questions; ${row.repositories}/${row.expected_repositories} repositories | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
     );
   }
   lines.push(
     "",
-    "All three arms use the Rust public MCP default presentation and five calls per question. No preview override is sent. Each arm has 20 quality observations from the fifth call: Hit/MRR weight all 20 questions equally; nDCG@10 uses a repository macro average. All quality metrics use the same labeled relevant files. Finding a file does not establish sufficient answer evidence.",
+    "All three arms use the Rust public MCP default presentation and five calls per question. No preview override is sent. Each arm targets 20 fifth-call quality observations. Hit/MRR average over the valid questions shown in Coverage; nDCG@10 is a macro average over the represented repositories. Invalid evidence is excluded, never converted to a zero. Product errors with valid evidence retain zero quality credit. Partial scores are diagnostic and are not directly comparable with complete 20-question scores. Finding a file does not establish sufficient answer evidence.",
     "",
-    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of all successful MCP search calls, excluding indexing. Failed calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
+    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of successful valid MCP search calls, excluding indexing. Failed and invalid calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
     "",
     ...result.rows
       .filter((row) => row.measurements)
@@ -163,6 +230,18 @@ export function markdownCiSummary(result) {
           `- ${cell(row.label)}: ${row.measurements.output_sample_count} output samples; ${row.measurements.latency_sample_count} latency samples.`,
       ),
   );
+  if (result.failed_tasks.length)
+    lines.push(
+      "",
+      "## Failed tasks",
+      "",
+      "| Question | Repository | Arm(s) | Failure | Reason |",
+      "| --- | --- | --- | --- | --- |",
+      ...result.failed_tasks.map(
+        (task) =>
+          `| ${cell(task.task_id)} | ${cell(task.repository)} | ${task.modes.map((mode) => `zg-${mode}`).join(", ")} | ${cell(task.kind)} | ${cell(task.reason)} |`,
+      ),
+    );
   if (result.errors.length)
     lines.push(
       "",
