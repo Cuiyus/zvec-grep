@@ -26,6 +26,16 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         pair_job = workflow["jobs"]["run-pair"]
         self.assertEqual(validate_job["needs"], "package-candidate")
         self.assertIn("package-candidate", pair_job["needs"])
+        package_artifact = next(
+            step
+            for step in package_job["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        )
+        self.assertEqual(
+            package_artifact["with"]["name"],
+            "swe-qa-rust-candidate-${{ github.run_id }}",
+        )
+        self.assertEqual(package_artifact["with"]["overwrite"], "true")
         candidate_checkout = next(
             step
             for step in package_job["steps"]
