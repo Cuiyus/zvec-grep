@@ -40,6 +40,7 @@ async function checkPilot(name, report, candidateCommit) {
       actual.every((key) => expected.has(key)),
       "unknown query/mode result",
     );
+    assert.equal(actual.length, expected.size, "incomplete per-query report");
     for (const row of report.rows) {
       const task = pilot.lock.tasks.find((item) => item.id === row.task_id);
       assert.equal(row.query, task.query, `rewritten query ${row.task_id}`);
@@ -52,23 +53,28 @@ async function checkPilot(name, report, candidateCommit) {
         paths.map((path) => ({ path })),
         `changed gold ${row.task_id}`,
       );
-      assert.equal(row.calls.length, 5);
+      assert.ok(row.calls.length <= 5);
       assert.deepEqual(
         row.calls.map((call) => call.repetition),
-        [1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5].slice(0, row.calls.length),
       );
       for (const call of row.calls) {
         assert.ok(["success", "failed"].includes(call.status));
         assert.ok(Number.isFinite(call.latency_ms) && call.latency_ms >= 0);
       }
       if (row.status === "success") {
+        assert.equal(row.calls.length, 5);
         assert.equal(row.calls[4].status, "success");
         assert.ok(
           Number.isSafeInteger(row.output_bytes) && row.output_bytes >= 0,
         );
         assert.deepEqual(row.file, scoreFileRetrieval(row.items, row.targets));
         assert.deepEqual(row.ndcg, scoreNdcg(row.items, row.targets));
-      } else assert.equal(row.status, "failed");
+      } else {
+        assert.equal(row.status, "failed");
+        if (row.calls.length < 5)
+          assert.ok(typeof row.reason === "string" && row.reason.length);
+      }
     }
     assert.deepEqual(
       report.summary,
@@ -77,7 +83,6 @@ async function checkPilot(name, report, candidateCommit) {
     );
     assert.ok(["success", "failed"].includes(report.status));
     if (report.status === "success") {
-      assert.equal(actual.length, expected.size, "incomplete success report");
       assert.equal(report.failures.length, 0);
       assert.ok(report.summary.every((row) => row.completed === 10));
     }
@@ -158,7 +163,7 @@ export function markdownCombined(result) {
   lines.push(
     "",
     markdownCiSummary(result.sweqa).replace(
-      /^# Retrieval-only results/,
+      /^# SWE-QA20 Retrieval-only results/,
       "## SWE-QA20",
     ),
   );

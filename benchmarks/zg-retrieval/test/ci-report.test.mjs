@@ -144,6 +144,12 @@ test("summary schema 5 has exactly the fixed three Rust MCP ZG arms", async () =
     assert.equal(row.measurements.output_sample_count, 20);
     assert.equal(row.measurements.latency_sample_count, 100);
   }
+  assert.equal(result.tasks.length, 60);
+  assert.ok(result.tasks.every((task) => task.status === "scored"));
+  assert.match(
+    markdownCiSummary(result),
+    /Per-question results \(60 question\/mode rows\)/,
+  );
   assert.deepEqual(result.quality_metrics, QUALITY_METRICS);
   assert.doesNotMatch(
     JSON.stringify(result),
@@ -193,6 +199,11 @@ test("isolated invalid question is excluded from partial scores and named in the
       reason: "format_unknown: public source range mismatch",
     },
   ]);
+  assert.equal(result.tasks.length, 60);
+  assert.equal(
+    result.tasks.filter((row) => row.status === "invalid_evidence").length,
+    3,
+  );
   const markdown = markdownCiSummary(result);
   assert.match(markdown, /19\/20 questions; 11\/11 repositories/);
   assert.match(markdown, /pylint-dev\/pylint/);
@@ -393,13 +404,9 @@ test("an earlier repetition failure does not replace the successful fifth-call q
 
 test("required job failures fail the summary without changing valid measured values", async () => {
   const jobs = Object.fromEntries(
-    [
-      "authorize",
-      "quality-contract",
-      "package-candidate",
-      "retrieval",
-      "zg-report",
-    ].map((name) => [name, { result: "success" }]),
+    ["authorize", "quality-contract", "package-candidate", "sweqa"].map(
+      (name) => [name, { result: "success" }],
+    ),
   );
   assert.equal(
     (await buildCiSummary({ zg: zgReport(), jobResults: jobs })).status,

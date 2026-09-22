@@ -10,7 +10,7 @@ The workflow freezes the selected harness ref to a full commit, checks out the c
 
 The original dispatch actor and current re-run actor must have the repository **maintain or admin** role. Every job checks both, including partial re-runs. This in-workflow check applies to the checked-in workflow. Contributors who can modify the workflow or its local authorization action on another branch can bypass that check; a permission boundary against those contributors requires repository- or organization-level Actions execution policies.
 
-The **Retrieval results** job publishes one page with a suite overview and a separate three-mode table for SWE-QA20, BEIR and Quarry. The BEIR and Quarry jobs also publish their own tables as soon as each job finishes. In the SWE-QA20 section, the three rows are:
+The **Retrieval results** job publishes one page with a suite overview and a separate three-mode table for SWE-QA20, BEIR and Quarry. All three suite jobs also publish their own aggregate and per-question tables as soon as each job finishes. In the SWE-QA20 section, the three rows are:
 
 | Arm | Public MCP search input | Presentation |
 | --- | --- | --- |
@@ -47,12 +47,12 @@ Questions, labels and reports remain outside indexed source checkouts. Indexing 
 ## Reports and artifacts
 
 - `retrieval-results`: the unified `summary.md` and machine-readable `summary.json`.
-- `retrieval-zg-report`: `report.json`, `report.md` and per-call `scores.jsonl`.
-- `retrieval-data-<owner>__<repo>`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for each repository.
+- `retrieval-zg-report`: the SWE-QA20 suite conclusion (`summary.json` and `summary.md`), validated `report.json`, `report.md` and per-call `scores.jsonl`.
+- `retrieval-zg-evidence`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for all 11 repositories.
 - `retrieval-beir-report` and `retrieval-quarry-report`: independent ten-query pilot summaries.
 - `retrieval-beir-evidence` and `retrieval-quarry-evidence`: pilot public requests/responses and index status.
 
-Evidence retention is 14 days. The final results job publishes the combined page; each pilot job publishes its own result when it completes. Missing artifacts and failed upstream jobs remain explicit in the overview.
+Evidence retention is 14 days. After a shared candidate build, SWE-QA20, BEIR and Quarry run as three independent suite jobs. Each suite publishes its own aggregate metrics and a per-question table even if an individual question fails. The final results job publishes the combined page. Missing artifacts and failed upstream jobs remain explicit in the overview.
 
 SWE-QA20 ZG reports use **schema 6**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain five `measurement_observations` so validators can recompute measurements. The `file_retrieval` field holds Hit/MRR, `ndcg` holds nDCG and its target evidence, and `measurements` holds output size, latency and sample counts.
 
@@ -102,7 +102,7 @@ Add `--repository reflex-dev/reflex` or `--tasks reflex:6` for an explicitly lab
 
 ## Offline replay and comparisons
 
-Download all `retrieval-data-*` artifacts into separate artifact-named subdirectories beneath one directory, then recompute:
+Download `retrieval-zg-evidence` into one directory, then recompute:
 
 ```sh
 node benchmarks/zg-retrieval/report.mjs /absolute/path/to/downloaded-shards

@@ -30,5 +30,7 @@ The pilot response parser tolerates one empty trailing source line immediately
 after a Markdown result's public range; the frozen SWE-QA20 parser remains
 strict, and nonempty out-of-range source is still rejected.
 
-The CI jobs publish their own GitHub job summaries and artifacts. The final
-`Retrieval results` job publishes one page with all three suite sections.
+After one shared Rust package build, SWE-QA20, BEIR and Quarry run in three
+parallel suite jobs. Each job publishes its own aggregate metrics and
+per-question results, including failed questions. The final `Retrieval results`
+job publishes one page with all three suite sections, even if a suite fails.

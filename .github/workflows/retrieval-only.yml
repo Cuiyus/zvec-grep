@@ -59,7 +59,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
       candidate-commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@v6
@@ -68,24 +67,6 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
-      - name: Read all repositories from the frozen suite
-        id: matrix
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync, appendFileSync } from 'node:fs';
-          const lock = JSON.parse(readFileSync('benchmarks/zg-retrieval/data/source.lock.json', 'utf8'));
-          assert.equal(lock.repositories.length, 11);
-          assert.equal(lock.tasks.length, 20);
-          const include = lock.repositories.map(({ repository }) => {
-            assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
-            return { repository, slug: repository.replace('/', '__') };
-          });
-          assert.equal(new Set(include.map(({ repository }) => repository)).size, 11);
-          assert.equal(new Set(include.map(({ slug }) => slug)).size, 11);
-          assert.ok(lock.tasks.every(task => include.some(row => row.repository === task.repository)));
-          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
-          NODE
       - name: Check out the selected candidate source
         uses: actions/checkout@v6
         with:
@@ -153,15 +134,11 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  retrieval:
-    name: retrieval (${{ matrix.repository }})
+  sweqa:
+    name: SWE-QA20 (20 questions)
     needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 80
-    strategy:
-      max-parallel: 4
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.package-candidate.outputs.matrix) }}
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
         with:
@@ -178,71 +155,56 @@ jobs:
           node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Cache model artifacts only
+      - name: Cache the code model
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/model-cache
-          key: retrieval-rust-model-v1-${{ runner.os }}-${{ runner.arch }}-${{ needs.package-candidate.outputs.candidate-commit }}
-      - name: Run zg-hybrid, zg-fts and zg-vector through the Rust MCP server
-        env:
-          RETRIEVAL_REPOSITORY: ${{ matrix.repository }}
+          key: retrieval-sweqa-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run all SWE-QA20 repositories through the Rust MCP server
         run: |
           node benchmarks/zg-retrieval/run.mjs \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
-            --output "$RUNNER_TEMP/retrieval" \
+            --output "$RUNNER_TEMP/sweqa" \
             --corpus "$RUNNER_TEMP/corpus" \
-            --repository "$RETRIEVAL_REPOSITORY" \
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Preserve repository evidence, including failures
+      - name: Build the SWE-QA20 conclusion report
         if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: retrieval-data-${{ matrix.slug }}
-          path: |
-            ${{ runner.temp }}/retrieval/
-            !${{ runner.temp }}/retrieval/consumer/**
-            !${{ runner.temp }}/retrieval/**/runtime-home/**
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 14
-
-  zg-report:
-    name: Validate complete ZG results
-    if: ${{ always() && needs.authorize.result == 'success' }}
-    needs: [authorize, retrieval]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
-          persist-credentials: false
-      - uses: ./.github/actions/retrieval-authorize
-        id: access
-      - name: Prepare aggregate directory
+        run: |
+          node benchmarks/zg-retrieval/ci-report.mjs \
+            --zg "$RUNNER_TEMP/sweqa/report.json" \
+            --output "$RUNNER_TEMP/sweqa"
+      - name: Publish SWE-QA20 results for this job
         if: ${{ always() && steps.access.outcome == 'success' }}
-        run: mkdir -p "$RUNNER_TEMP/retrieval-combined"
-      - name: Download repository evidence without merging shard roots
-        uses: actions/download-artifact@v8
-        with:
-          pattern: retrieval-data-*
-          path: ${{ runner.temp }}/retrieval-combined
-          merge-multiple: false
-      - name: Require all 20 questions in all three modes with valid evidence
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
-      - name: Preserve combined summary
+        run: |
+          if [ -f "$RUNNER_TEMP/sweqa/summary.md" ]; then
+            cat "$RUNNER_TEMP/sweqa/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## SWE-QA20: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve SWE-QA20 conclusion report
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrieval-zg-report
           path: |
-            ${{ runner.temp }}/retrieval-combined/report.md
-            ${{ runner.temp }}/retrieval-combined/report.json
-            ${{ runner.temp }}/retrieval-combined/scores.jsonl
-          if-no-files-found: error
-          overwrite: true
+            ${{ runner.temp }}/sweqa/report.json
+            ${{ runner.temp }}/sweqa/report.md
+            ${{ runner.temp }}/sweqa/summary.json
+            ${{ runner.temp }}/sweqa/summary.md
+            ${{ runner.temp }}/sweqa/scores.jsonl
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve SWE-QA20 public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-zg-evidence
+          path: |
+            ${{ runner.temp }}/sweqa/
+            !${{ runner.temp }}/sweqa/consumer/**
+            !${{ runner.temp }}/sweqa/**/runtime-home/**
+          if-no-files-found: warn
           retention-days: 14
 
   beir:
@@ -374,16 +336,7 @@ jobs:
   results:
     name: Retrieval results
     if: ${{ always() && needs.authorize.result == 'success' }}
-    needs:
-      [
-        authorize,
-        quality-contract,
-        package-candidate,
-        retrieval,
-        zg-report,
-        beir,
-        quarry,
-      ]
+    needs: [authorize, quality-contract, package-candidate, sweqa, beir, quarry]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

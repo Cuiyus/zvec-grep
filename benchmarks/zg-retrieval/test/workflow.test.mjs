@@ -62,8 +62,7 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
     "authorize",
     "quality-contract",
     "package-candidate",
-    "retrieval",
-    "zg-report",
+    "sweqa",
     "beir",
     "quarry",
     "results",
@@ -71,7 +70,7 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
 });
 
-test("the three suites run in independent jobs with 18 total jobs", async () => {
+test("the three suites run in independent jobs using one candidate package", async () => {
   const protocol = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
@@ -91,19 +90,19 @@ test("the three suites run in independent jobs with 18 total jobs", async () => 
     new Set(lock.repositories.map((repo) => repo.repository)).size,
     11,
   );
-  assert.equal(Object.keys(jobs).length - 1 + lock.repositories.length, 18);
-  assert.match(jobs["package-candidate"], /lock\.repositories\.map/);
-  assert.match(
-    jobs.retrieval,
-    /matrix: \$\{\{ fromJSON\(needs\.package-candidate\.outputs\.matrix\) \}\}/,
-  );
-  const runner = steps(jobs.retrieval).find((entry) =>
+  assert.equal(Object.keys(jobs).length, 7);
+  assert.doesNotMatch(workflow, /strategy:|fromJSON\(/);
+  const runner = steps(jobs.sweqa).find((entry) =>
     entry.includes("node benchmarks/zg-retrieval/run.mjs"),
   );
   assert.ok(runner);
   assert.doesNotMatch(runner, /--(?:modes|preview)\b|RETRIEVAL_MODES|inputs\./);
-  assert.match(runner, /--repository "\$RETRIEVAL_REPOSITORY"/);
+  assert.doesNotMatch(runner, /--repository\b/);
   assert.match(jobs["quality-contract"], /uses: actions\/setup-python@/);
+  assert.match(jobs.sweqa, /needs: \[authorize, package-candidate\]/);
+  assert.match(jobs.sweqa, /ci-report\.mjs/);
+  assert.match(jobs.sweqa, /retrieval-zg-report/);
+  assert.match(jobs.sweqa, /\$GITHUB_STEP_SUMMARY/);
   for (const suite of ["beir", "quarry"]) {
     assert.match(jobs[suite], /needs: \[authorize, package-candidate\]/);
     assert.match(jobs[suite], new RegExp(`--suite ${suite}`));
@@ -127,8 +126,7 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
   for (const name of [
     "quality-contract",
     "package-candidate",
-    "retrieval",
-    "zg-report",
+    "sweqa",
     "beir",
     "quarry",
     "results",
@@ -161,16 +159,16 @@ test("the selected source is built from rust/ and exact-commit package caching b
     job,
     /node-version[^\n]*\$\{\{|NODE_VERSION|node.*cache.*key/i,
   );
-  assert.match(jobs.retrieval, /Verify the candidate package identity/);
+  assert.match(jobs.sweqa, /Verify the candidate package identity/);
   assert.match(
-    jobs.retrieval,
+    jobs.sweqa,
     /--commit "\$\{\{ needs\.package-candidate\.outputs\.candidate-commit \}\}"/,
   );
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {
-  assert.equal(Object.keys(jobs).length, 8);
-  assert.ok(jobs.results && jobs.retrieval && jobs.authorize);
+  assert.equal(Object.keys(jobs).length, 7);
+  assert.ok(jobs.results && jobs.sweqa && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
     const entries = steps(job);
     assert.match(entries[0], /uses: actions\/checkout@/, `${name}: checkout`);
@@ -214,8 +212,7 @@ test("one final page combines all suite reports after successful or failed jobs"
       "authorize",
       "quality-contract",
       "package-candidate",
-      "retrieval",
-      "zg-report",
+      "sweqa",
       "beir",
       "quarry",
     ],
@@ -252,15 +249,16 @@ test("one final page combines all suite reports after successful or failed jobs"
       .filter((entry) => entry.includes("$GITHUB_STEP_SUMMARY"))
       .map((entry) => ({ name, entry })),
   );
-  assert.equal(publishers.length, 3);
+  assert.equal(publishers.length, 4);
   assert.deepEqual(
     publishers.map((entry) => entry.name),
-    ["beir", "quarry", "results"],
+    ["sweqa", "beir", "quarry", "results"],
   );
   for (const publisher of publishers)
     assert.match(publisher.entry, /if:.*always\(\)/);
-  assert.match(publishers[2].entry, /summary\.md/);
-  assert.match(publishers[2].entry, /missing results are not zero scores/);
+  assert.match(publishers[0].entry, /summary\.md/);
+  assert.match(publishers[3].entry, /summary\.md/);
+  assert.match(publishers[3].entry, /missing results are not zero scores/);
 });
 
 const scriptStart = action.indexOf("        script: |\n");

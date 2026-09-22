@@ -4,6 +4,8 @@ import { loadPilot } from "../expansion/datasets.mjs";
 import { summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
 import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
 import { parseVisibleResponse } from "../engines/zg/parse.mjs";
+import { scoreFileRetrieval } from "../metrics/files.mjs";
+import { scoreNdcg } from "../metrics/ndcg.mjs";
 
 test("BEIR and Quarry locks contain ten distinct original-query identities and the requested models", async () => {
   const beir = await loadPilot("beir");
@@ -63,10 +65,13 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
     model: "local/test",
     suite: "quarry10",
     summary,
+    rows: [success, failed],
     failures: [{ task_id: "b", reason: "index failed" }],
   });
   assert.match(markdown, /1\/10/);
   assert.match(markdown, /index failed/);
+  assert.match(markdown, /Per-query results/);
+  assert.match(markdown, /\| a \| zg-hybrid \| ✅ Scored/);
   assert.match(markdown, /not the official Quarry function recall/);
 });
 
@@ -85,6 +90,59 @@ test("unified results page identifies missing pilot artifacts independently", as
   assert.match(markdown, /BEIR \/ SciFact/);
   assert.match(markdown, /Quarry \/ quic-go/);
   assert.match(markdown, /report artifact missing/);
+});
+
+test("a failed pilot query keeps partial aggregate and all per-query conclusions", async () => {
+  const pilot = await loadPilot("beir");
+  const rows = pilot.lock.tasks.flatMap((task) => {
+    const targets = task.qrels.map((item) => ({
+      path: `docs/${item.document_id}.md`,
+    }));
+    return pilot.modes.map((mode) => ({
+      task_id: task.id,
+      mode,
+      query: task.query,
+      targets,
+      calls: [],
+      status: "failed",
+      reason: "index failed",
+    }));
+  });
+  const scored = rows[0];
+  scored.status = "success";
+  delete scored.reason;
+  scored.calls = [1, 2, 3, 4, 5].map((repetition) => ({
+    repetition,
+    status: "success",
+    latency_ms: 10,
+  }));
+  scored.items = [];
+  scored.file = scoreFileRetrieval([], scored.targets);
+  scored.ndcg = scoreNdcg([], scored.targets);
+  scored.output_bytes = 0;
+  const report = {
+    schema_version: 1,
+    suite: pilot.lock.suite,
+    label: "BEIR / SciFact (test)",
+    model: pilot.lock.model,
+    candidate_commit: "a".repeat(40),
+    status: "failed",
+    rows,
+    failures: [{ task_id: rows[1].task_id, reason: "index failed" }],
+    summary: summarizePilotRows(rows),
+  };
+  const result = await buildCombined({
+    zg: null,
+    beir: report,
+    quarry: null,
+    candidateCommit: "a".repeat(40),
+  });
+  assert.equal(result.pilots.beir.status, "failed");
+  assert.equal(result.pilots.beir.report.summary[0].completed, 1);
+  const markdown = markdownCombined(result);
+  assert.match(markdown, /BEIR \/ SciFact \| ❌ Incomplete \| 1\/10/);
+  assert.match(markdown, /Per-query results \(all 10 queries × 3 modes\)/);
+  assert.match(markdown, /index failed/);
 });
 
 test("pilot parser accepts only one trailing empty Markdown line outside the public range", () => {

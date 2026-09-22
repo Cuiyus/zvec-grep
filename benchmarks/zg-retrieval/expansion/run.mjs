@@ -83,6 +83,42 @@ function formatNumber(value, places = 4) {
   return Number.isFinite(value) ? value.toFixed(places) : "—";
 }
 
+const tableCell = (value) =>
+  String(value).replaceAll("|", "\\|").replaceAll(/\r?\n/g, " ");
+
+function fillMissingRows(pilot, report) {
+  for (const task of pilot.lock.tasks) {
+    const targets =
+      pilot.name === "beir"
+        ? task.qrels.map((item) => ({ path: `docs/${item.document_id}.md` }))
+        : [...new Set(task.positive_units.map((unit) => unit.path))].map(
+            (path) => ({ path }),
+          );
+    for (const mode of pilot.modes) {
+      let row = report.rows.find(
+        (item) => item.task_id === task.id && item.mode === mode,
+      );
+      if (!row) {
+        row = {
+          task_id: task.id,
+          mode,
+          query: task.query,
+          targets,
+          calls: [],
+          status: "failed",
+        };
+        report.rows.push(row);
+      }
+      if (row.status === "pending") row.status = "failed";
+      if (row.status === "failed" && row.calls.length < REPETITIONS)
+        row.reason =
+          report.failures.find(
+            (item) => item.task_id === task.id || item.task_id === "suite",
+          )?.reason ?? "run stopped before this query";
+    }
+  }
+}
+
 export function markdownPilotReport(report) {
   const lines = [
     `## ${report.label} · ${report.status === "success" ? "✅ Complete" : "❌ Incomplete"}`,
@@ -111,6 +147,28 @@ export function markdownPilotReport(report) {
     "",
     "A score is shown only for completed queries. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth successful quality call; latency covers successful calls and excludes indexing.",
   );
+  lines.push(
+    "",
+    "<details>",
+    "<summary>Per-query results (all 10 queries × 3 modes)</summary>",
+    "",
+    "| Query | Mode | Status | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Latency P50 (ms) |",
+    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+  );
+  for (const row of [...report.rows].sort(
+    (a, b) =>
+      a.task_id.localeCompare(b.task_id) || a.mode.localeCompare(b.mode),
+  )) {
+    const latency = median(
+      row.calls
+        .filter((call) => call.status === "success")
+        .map((call) => call.latency_ms),
+    );
+    lines.push(
+      `| ${tableCell(row.task_id)} | zg-${row.mode} | ${row.status === "success" ? "✅ Scored" : `❌ ${tableCell(row.reason ?? row.calls.find((call) => call.error)?.error ?? "failed")}`} | ${row.file?.hit_at_1 ?? "—"} | ${row.file?.hit_at_5 ?? "—"} | ${row.file?.hit_at_10 ?? "—"} | ${formatNumber(row.file?.rr_at_10)} | ${formatNumber(row.ndcg?.ndcg_at_10)} | ${formatNumber(row.output_bytes == null ? null : row.output_bytes / 1024, 2)} | ${formatNumber(latency, 2)} |`,
+    );
+  }
+  lines.push("", "</details>");
   if (report.failures.length) {
     lines.push("", "### Failed tasks or calls", "");
     for (const failure of report.failures)
@@ -409,6 +467,7 @@ export async function main(args = process.argv.slice(2)) {
     report.failures.push({ task_id: "suite", reason: error.message });
     console.error(`${pilot.name}: ${error.stack}`);
   }
+  fillMissingRows(pilot, report);
   await writeReport(output, report);
   console.log(`Report: ${join(output, "report.md")}`);
   if (report.status !== "success") process.exitCode = 1;

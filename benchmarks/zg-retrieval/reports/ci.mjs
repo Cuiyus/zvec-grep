@@ -110,6 +110,7 @@ export async function buildCiSummary({
   const rows = [],
     errors = [];
   let failures = [];
+  let tasks = [];
   try {
     assert.ok(zg, "missing ZG report");
     const checked = validateZgReport(zg, "ZG", {
@@ -136,6 +137,41 @@ export async function buildCiSummary({
         ),
       );
     failures = failedTasks(checked);
+    tasks = [...checked.rows.values(), ...checked.invalidRows]
+      .map((row) => {
+        const measurements =
+          row.status === "harness_invalid"
+            ? null
+            : summarizeMeasurements(row.measurement_observations);
+        const productErrors = row.measurement_observations.filter(
+          (sample) => sample.execution_status === "product_error",
+        ).length;
+        return {
+          task_id: row.task_id,
+          repository: row.repository,
+          mode: row.mode,
+          status:
+            row.status === "harness_invalid"
+              ? "invalid_evidence"
+              : productErrors
+                ? "product_error"
+                : "scored",
+          reason:
+            row.status === "harness_invalid"
+              ? row.invalid_reason
+              : productErrors
+                ? `${productErrors}/5 MCP calls failed`
+                : null,
+          file: row.file_retrieval,
+          ndcg_at_10: row.ndcg?.ndcg_at_10 ?? null,
+          measurements,
+        };
+      })
+      .sort(
+        (a, b) =>
+          a.task_id.localeCompare(b.task_id) ||
+          ZG_MODES.indexOf(a.mode) - ZG_MODES.indexOf(b.mode),
+      );
     if (checked.invalidRows.length)
       errors.push(
         `ZG: ${checked.invalidRows.length} task/mode observations have invalid evidence; partial metrics exclude them`,
@@ -160,8 +196,7 @@ export async function buildCiSummary({
     "authorize",
     "quality-contract",
     "package-candidate",
-    "retrieval",
-    "zg-report",
+    "sweqa",
   ];
   if (Object.keys(jobResults).length)
     for (const job of requiredJobs)
@@ -179,6 +214,7 @@ export async function buildCiSummary({
       commit: candidateCommit,
     },
     rows,
+    tasks,
     failed_tasks: failures,
     errors,
   };
@@ -193,7 +229,7 @@ export function markdownCiSummary(result) {
   const status =
     result.status === "success" ? "✅ Complete" : "❌ Failed / incomplete";
   const lines = [
-    "# Retrieval-only results",
+    "# SWE-QA20 Retrieval-only results",
     "",
     `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
     "",
@@ -230,6 +266,28 @@ export function markdownCiSummary(result) {
           `- ${cell(row.label)}: ${row.measurements.output_sample_count} output samples; ${row.measurements.latency_sample_count} latency samples.`,
       ),
   );
+  if (result.tasks?.length) {
+    lines.push(
+      "",
+      "<details>",
+      `<summary>Per-question results (${result.tasks.length} question/mode rows)</summary>`,
+      "",
+      "| Question | Repository | Arm | Status | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Latency P50 (ms) |",
+      "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    );
+    for (const task of result.tasks) {
+      const status =
+        task.status === "scored"
+          ? "✅ Scored"
+          : task.status === "product_error"
+            ? `⚠️ ${cell(task.reason)}`
+            : `❌ ${cell(task.reason)}`;
+      lines.push(
+        `| ${cell(task.task_id)} | ${cell(task.repository)} | zg-${task.mode} | ${status} | ${task.file?.hit_at_1 ?? "—"} | ${task.file?.hit_at_5 ?? "—"} | ${task.file?.hit_at_10 ?? "—"} | ${number(task.file?.rr_at_10)} | ${number(task.ndcg_at_10)} | ${number(task.measurements?.output_bytes_mean == null ? null : task.measurements.output_bytes_mean / 1024, 2)} | ${number(task.measurements?.latency_ms_p50, 2)} |`,
+      );
+    }
+    lines.push("", "</details>");
+  }
   if (result.failed_tasks.length)
     lines.push(
       "",
@@ -261,7 +319,7 @@ export function markdownCiSummary(result) {
     );
   lines.push(
     "",
-    "Details: download the `retrieval-results` artifact for summary.md and summary.json. Per-question raw records are available in the repository evidence artifacts.",
+    "Details: download the `retrieval-zg-report` artifact for the suite conclusion and the `retrieval-zg-evidence` artifact for per-question public responses. The `retrieval-results` artifact contains the combined page.",
   );
   if (result.run_url)
     lines.push("", `[Open this run and its artifacts](${result.run_url})`);
