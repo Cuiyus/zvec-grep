@@ -3,6 +3,7 @@ import test from "node:test";
 import { loadPilot } from "../expansion/datasets.mjs";
 import { summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
 import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
+import { parseVisibleResponse } from "../engines/zg/parse.mjs";
 
 test("BEIR and Quarry locks contain ten distinct original-query identities and the requested models", async () => {
   const beir = await loadPilot("beir");
@@ -84,4 +85,30 @@ test("unified results page identifies missing pilot artifacts independently", as
   assert.match(markdown, /BEIR \/ SciFact/);
   assert.match(markdown, /Quarry \/ quic-go/);
   assert.match(markdown, /report artifact missing/);
+});
+
+test("pilot parser accepts only one trailing empty Markdown line outside the public range", () => {
+  const response = (last) => ({
+    content: [
+      {
+        type: "text",
+        text: `freshness: fresh\n#1 matchedBy=fts docs/1.md:1-3\nsource:\n1\tTitle\n2\t\n3\tBody\n4\t${last}\n`,
+      },
+    ],
+  });
+  assert.throws(
+    () => parseVisibleResponse(response("")),
+    /outside the item's public range/,
+  );
+  const parsed = parseVisibleResponse(response(""), {
+    allowTrailingBlankOutsideRange: true,
+  });
+  assert.equal(parsed.items[0].path, "docs/1.md");
+  assert.throws(
+    () =>
+      parseVisibleResponse(response("unexpected"), {
+        allowTrailingBlankOutsideRange: true,
+      }),
+    /outside the item's public range/,
+  );
 });

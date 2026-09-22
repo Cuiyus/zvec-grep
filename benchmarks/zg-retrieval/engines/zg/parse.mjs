@@ -59,7 +59,10 @@ function parseRange(text) {
 }
 
 /** Parse only the public, single-query MCP search text. Never consult hidden structuredContent. */
-export function parseVisibleResponse(response) {
+export function parseVisibleResponse(
+  response,
+  { allowTrailingBlankOutsideRange = false } = {},
+) {
   const text = visibleText(response);
   if (text.includes("\x1b") || text.includes("\r"))
     fail("Unexpected terminal escapes or line framing.");
@@ -157,7 +160,12 @@ export function parseVisibleResponse(response) {
         fail("Repeated or unordered visible source lines.");
       if (
         item.range.kind === "text" &&
-        (number < item.range.start_line || number > item.range.end_line)
+        (number < item.range.start_line || number > item.range.end_line) &&
+        !(
+          allowTrailingBlankOutsideRange &&
+          number === item.range.end_line + 1 &&
+          source[2] === ""
+        )
       )
         fail("Visible source falls outside the item's public range.");
       item.source_lines.push({ line: number, text: source[2] });

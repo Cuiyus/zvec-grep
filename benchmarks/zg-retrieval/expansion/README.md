@@ -26,6 +26,9 @@ include File Hit@1/5/10, File MRR@10, binary file nDCG@10, mean public output
 and median call latency. Native result ranks are retained and repeat chunks
 consume ranks. The ten-query sample is exploratory; do not compare absolute
 scores across suites as if they shared a corpus or relevance definition.
+The pilot response parser tolerates one empty trailing source line immediately
+after a Markdown result's public range; the frozen SWE-QA20 parser remains
+strict, and nonempty out-of-range source is still rejected.
 
 The CI jobs publish their own GitHub job summaries and artifacts. The final
 `Retrieval results` job publishes one page with all three suite sections.
