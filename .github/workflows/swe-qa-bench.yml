@@ -1,9 +1,14 @@
 name: SWE-QA Bench
-run-name: SWE-QA Bench / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.scope || 'repro-3' }}
+run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.scope || 'repro-3' }}
 
 on:
   workflow_dispatch:
     inputs:
+      candidate_ref:
+        description: Rust source branch, tag, or commit to benchmark
+        required: true
+        default: main
+        type: string
       scope:
         description: Run the low/medium/high variability trio, all 20 tasks, or smoke
         required: true
@@ -28,6 +33,7 @@ env:
   SWE_QA_TRIALS_PER_PROFILE: "5"
   SWE_QA_MAX_RETRIES: "2"
   SWE_QA_MODEL: ${{ inputs.model || 'glm-5.2' }}
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
 
 concurrency:
   group: swe-qa-bench-${{ github.run_id }}-${{ github.run_attempt }}
@@ -163,13 +169,95 @@ jobs:
           --n-attempts "$SWE_QA_TRIALS_PER_PROFILE"
           --max-retries "$SWE_QA_MAX_RETRIES"
           --embedding-model local/potion-code-16m-v2
-          --zvec-grep-package "$GITHUB_WORKSPACE"
+          --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz"
           --job-name preflight
           --dry-run
 
+  package-candidate:
+    name: Build selected Rust candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      candidate-commit: ${{ steps.source.outputs.commit }}
+    permissions:
+      contents: read
+    steps:
+      - *authorize-benchmark
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Check out the selected Rust source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Resolve the immutable Rust source commit
+        id: source
+        run: |
+          commit="$(git -C candidate rev-parse HEAD)"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Selected Rust ref did not resolve to a full commit SHA" >&2
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Restore the compiled Rust npm package
+        id: rust-package-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/rust-package-cache
+          key: swe-qa-rust-package-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.source.outputs.commit }}
+      - name: Restore Cargo build state after a package cache miss
+        if: steps.rust-package-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            candidate/rust/target/
+          key: swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-${{ steps.source.outputs.commit }}
+          restore-keys: |
+            swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}-
+            swe-qa-rust-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install the candidate's pinned Rust toolchain
+        if: steps.rust-package-cache.outputs.cache-hit != 'true'
+        working-directory: candidate/rust
+        run: rustup show active-toolchain
+      - name: Build and pack the selected Rust candidate
+        if: steps.rust-package-cache.outputs.cache-hit != 'true'
+        working-directory: candidate/rust
+        run: |
+          npm ci
+          npm run pack:local
+          mapfile -t packages < <(find dist/npm -maxdepth 1 -type f -name '*.tgz' -print)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "Expected one local Rust npm package, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          node ../../benchmarks/zg-retrieval/rust-package-cache.mjs create \
+            --source .. \
+            --package "${packages[0]}" \
+            --output "$RUNNER_TEMP/rust-package-cache"
+      - name: Verify the cached package belongs to the selected commit
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/rust-package-cache" \
+            --commit "${{ steps.source.outputs.commit }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: swe-qa-rust-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-package-cache/
+          if-no-files-found: error
+          retention-days: 7
+
   run-pair:
     name: Pair + judge / ${{ matrix.task }}
-    needs: validate
+    needs: [validate, package-candidate]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -190,18 +278,26 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: npm
+      - name: Download the selected Rust package
+        uses: actions/download-artifact@v8
+        with:
+          name: swe-qa-rust-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Restore this task's zvec index seed
         id: zvec-index-seed-restore
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/swe-qa-index-seed
-          key: swe-qa-zvec-index-seed-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task)) }}-npm-${{ hashFiles('package-lock.json') }}-zvec-${{ hashFiles('src/**', 'package.json', 'tsconfig.json', 'eslint.config.js', 'README.md', 'README_CN.md', 'LICENSE', 'docs/**', '.opencode/opencode.json', 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
+          key: swe-qa-zvec-index-seed-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
       - name: Install locked dependencies
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/swe-qa-bench --frozen
-          npm ci
       - name: Run baseline and zvec-grep on the same runner
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -224,7 +320,7 @@ jobs:
             --n-attempts "$SWE_QA_TRIALS_PER_PROFILE" \
             --max-retries "$SWE_QA_MAX_RETRIES" \
             --embedding-model local/potion-code-16m-v2 \
-            --zvec-grep-package "$GITHUB_WORKSPACE" \
+            --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
             --jobs-dir "$runs_dir" \
             --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa collect \
@@ -346,7 +442,7 @@ jobs:
 
   aggregate-report:
     name: Aggregate completed task reports
-    needs: [validate, run-pair]
+    needs: [validate, package-candidate, run-pair]
     if: >-
       always() &&
       needs.validate.result == 'success' &&
@@ -360,6 +456,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Record the selected Rust candidate
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
+        run: |
+          {
+            echo "## Rust candidate"
+            echo
+            echo "- Requested ref: \`$CANDIDATE_REF\`"
+            echo "- Resolved commit: \`$CANDIDATE_COMMIT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -443,6 +550,20 @@ jobs:
             --reports-root "$RUNNER_TEMP/task-reports" \
             --output-dir "$RUNNER_TEMP/swe-qa-aggregate-report" \
             --expected "${expected_tasks[@]}"
+      - name: Keep the Rust package manifest with the completed report
+        if: steps.report-set.outputs.complete == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: swe-qa-rust-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate-candidate
+      - name: Verify and archive the candidate identity
+        if: steps.report-set.outputs.complete == 'true'
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/aggregate-candidate" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+          cp "$RUNNER_TEMP/aggregate-candidate/manifest.json" \
+            "$RUNNER_TEMP/swe-qa-aggregate-report/candidate-manifest.json"
       - name: Upload aggregate report
         if: steps.report-set.outputs.complete == 'true'
         uses: actions/upload-artifact@v7

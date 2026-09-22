@@ -128,6 +128,9 @@ otherwise complete run with no tasks left after filtering may still succeed.
 
 ## GitHub Actions
 
+Developers can follow the [fork run guide](docs/run-in-fork.md) to configure
+their API key, Bailian endpoint, Rust candidate ref, and manual dispatch.
+
 The [SWE-QA Bench workflow](../../.github/workflows/swe-qa-bench.yml) runs only
 through manual `workflow_dispatch`; pushes and pull requests do not trigger it.
 Core maintainers are users with the repository's exact `admin` or `maintain`
@@ -139,7 +142,9 @@ may still see and use the dispatch/rerun controls, but the workflow rejects
 unauthorized benchmark execution.
 
 `workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
-`smoke` (5 tasks) remain available. Its `model` input defaults to
+`smoke` (5 tasks) remain available. `candidate_ref` defaults to `main` and
+selects the Rust source branch, tag, or commit to build as the candidate npm
+package; the harness checkout and candidate source are separate. Its `model` input defaults to
 `glm-5.2`; select `qwen3.8-max` to run the same protocol with Qwen. The selected
 model is used for both execution and judging.
 
@@ -302,6 +307,10 @@ Moving code between modules does not change task selection, trial counts,
 usage scope or Aggregate exclusion rules.
 
 ## Local setup
+
+The local Claude Code recipe below documents the historical published protocol.
+The current GitHub Actions comparison builds and tests only the selected Rust
+candidate described above.
 
 Harbor runs the pinned task environments in Docker. Use the same host platform,
 Claude Code version, and provider configuration for comparable results.

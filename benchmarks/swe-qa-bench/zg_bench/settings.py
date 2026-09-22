@@ -24,7 +24,7 @@ OPENCODE_ALIYUN_GLM_MODEL = "aliyun-glm-5.2"
 OPENCODE_ALIYUN_GLM_MODEL_ID = "glm-5.2"
 OPENCODE_CUSTOM_GLM_MODEL = "custom-openai/glm-5.2"
 OPENCODE_CUSTOM_GLM_MODEL_ID = "glm-5.2"
-OPENCODE_CUSTOM_GLM_BASE_URL = (
+OPENCODE_CUSTOM_GLM_BASE_URL = os.environ.get("SWE_QA_MODEL_BASE_URL") or (
     "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 )
 OPENCODE_CUSTOM_QWEN_MODEL = "custom-openai/qwen3.8-max"

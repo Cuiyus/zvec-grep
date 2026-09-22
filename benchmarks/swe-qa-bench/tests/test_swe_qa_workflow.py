@@ -84,6 +84,10 @@ class ManualBenchmarkAuthorizationTests(unittest.TestCase):
         model = self.workflow["on"]["workflow_dispatch"]["inputs"]["model"]
         self.assertEqual(model["default"], "glm-5.2")
         self.assertEqual(set(model["options"]), {"glm-5.2", "qwen3.8-max"})
+        self.assertEqual(
+            self.workflow["on"]["workflow_dispatch"]["inputs"]["candidate_ref"]["default"],
+            "main",
+        )
 
     def test_every_job_checks_current_permissions_before_checkout_or_model_secrets(self) -> None:
         self.assertEqual(self.guard["name"], "Authorize manual benchmark run")
