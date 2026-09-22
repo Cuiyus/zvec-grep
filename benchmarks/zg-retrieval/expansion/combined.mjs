@@ -8,7 +8,7 @@ import { buildCiSummary, markdownCiSummary } from "../reports/ci.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { loadPilot } from "./datasets.mjs";
-import { markdownPilotReport, summarizePilotRows } from "./run.mjs";
+import { markdownPilotReport, summarizePilotBreakdown, summarizePilotRows } from "./run.mjs";
 
 async function checkPilot(name, report, candidateCommit) {
   const pilot = await loadPilot(name);
@@ -78,13 +78,14 @@ async function checkPilot(name, report, candidateCommit) {
     }
     assert.deepEqual(
       report.summary,
-      summarizePilotRows(report.rows),
+      summarizePilotRows(report.rows, pilot.modes, pilot.lock.tasks.length),
       "cached pilot summary differs from rows",
     );
+    assert.deepEqual(report.breakdown, summarizePilotBreakdown(pilot, report.rows));
     assert.ok(["success", "failed"].includes(report.status));
     if (report.status === "success") {
       assert.equal(report.failures.length, 0);
-      assert.ok(report.summary.every((row) => row.completed === 10));
+      assert.ok(report.summary.every((row) => row.completed === pilot.lock.tasks.length));
     }
     return { status: report.status, report, error: null };
   } catch (error) {
@@ -143,9 +144,9 @@ export async function buildCombined({
 
 export function markdownCombined(result) {
   const labels = {
-    beir: "BEIR / SciFact",
+    beir: "BEIR / four datasets",
     duretrieval: "DuRetrieval / Chinese web search",
-    quarry: "Quarry / quic-go",
+    quarry: "Quarry / eight languages",
   };
   const sweqaCompleted = Math.min(
     ...result.sweqa.rows.map((row) => row.questions ?? 0),
@@ -162,8 +163,9 @@ export function markdownCombined(result) {
   for (const name of ["beir", "duretrieval", "quarry"]) {
     const pilot = result.pilots[name];
     const complete = pilot.report?.summary?.[0]?.completed ?? 0;
+    const planned = name === "duretrieval" ? 10 : 20;
     lines.push(
-      `| ${labels[name]} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/10 | \`${name === "quarry" ? "local/potion-code-16m-v2" : "local/potion-multilingual-128m"}\` |`,
+      `| ${labels[name]} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/${planned} | \`${name === "quarry" ? "local/potion-code-16m-v2" : "local/potion-multilingual-128m"}\` |`,
     );
   }
   lines.push(

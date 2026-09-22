@@ -1,6 +1,6 @@
 # ZG Retrieval-only benchmark
 
-The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent suites. The original SWE-QA20 suite uses 20 unchanged questions and 11 pinned repositories from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). Three exploratory pilots add ten original queries each from BEIR / SciFact, DuRetrieval / Chinese web search and Quarry / quic-go; see the [pilot design](expansion/README.md). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [SWE-QA20 design](../../docs/zg-retrieval-only-sweqa20-design.md) for its frozen protocol and scoring details.
+The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent suites. The original SWE-QA20 suite uses 20 unchanged questions and 11 pinned repositories from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). The exploratory suites contain 20 original BEIR queries across four datasets, ten DuRetrieval queries and 20 original Quarry queries across eight languages; see the [pilot design](expansion/README.md). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [SWE-QA20 design](../../docs/zg-retrieval-only-sweqa20-design.md) for its frozen protocol and scoring details.
 
 ## Run CI and read the result
 
@@ -49,7 +49,7 @@ Questions, labels and reports remain outside indexed source checkouts. Indexing 
 - `retrieval-results`: the unified `summary.md` and machine-readable `summary.json`.
 - `retrieval-zg-report`: the SWE-QA20 suite conclusion (`summary.json` and `summary.md`), validated `report.json`, `report.md` and per-call `scores.jsonl`.
 - `retrieval-zg-evidence`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for all 11 repositories.
-- `retrieval-beir-report`, `retrieval-duretrieval-report` and `retrieval-quarry-report`: independent ten-query pilot summaries.
+- `retrieval-beir-report`, `retrieval-duretrieval-report` and `retrieval-quarry-report`: independent pilot summaries with BEIR dataset and Quarry language coverage and scores.
 - `retrieval-beir-evidence`, `retrieval-duretrieval-evidence` and `retrieval-quarry-evidence`: pilot public requests/responses and index status.
 
 Evidence retention is 14 days. After a shared candidate build, SWE-QA20, BEIR, DuRetrieval and Quarry run as four independent suite jobs. Each suite publishes its own aggregate metrics and a per-question table even if an individual question fails. The final results job publishes the combined page. Missing artifacts and failed upstream jobs remain explicit in the overview.

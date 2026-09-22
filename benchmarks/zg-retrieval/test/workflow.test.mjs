@@ -115,7 +115,8 @@ test("the four suites run in independent jobs using one candidate package", asyn
     /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
   );
   assert.match(jobs.duretrieval, /pyarrow|requirements-duretrieval\.txt/);
-  assert.doesNotMatch(jobs.beir + jobs.quarry, /pip install|python -m venv|SDK parity/);
+  assert.match(jobs.beir, /requirements-beir\.txt/);
+  assert.doesNotMatch(jobs.quarry, /pip install|python -m venv|SDK parity/);
 });
 
 test("the selected workflow ref is frozen once for every downstream job", () => {

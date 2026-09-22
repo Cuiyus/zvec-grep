@@ -17,7 +17,7 @@ import { freePort, packageCandidate } from "../engines/zg/run.mjs";
 import { snapshotIndex } from "../engines/zg/snapshot.mjs";
 import {
   loadPilot,
-  prepareBeir,
+  prepareBeirDataset,
   prepareDuRetrieval,
   prepareQuarryTask,
   verifyQuarrySource,
@@ -46,7 +46,11 @@ function median(values) {
     : (sorted[center - 1] + sorted[center]) / 2;
 }
 
-export function summarizePilotRows(rows, modes = ["hybrid", "fts", "vector"]) {
+export function summarizePilotRows(
+  rows,
+  modes = ["hybrid", "fts", "vector"],
+  planned = 10,
+) {
   return modes.map((mode) => {
     const selected = rows.filter((row) => row.mode === mode);
     const valid = selected.filter((row) => row.status === "success");
@@ -62,7 +66,7 @@ export function summarizePilotRows(rows, modes = ["hybrid", "fts", "vector"]) {
     return {
       mode,
       completed: valid.length,
-      planned: 10,
+      planned,
       metrics: {
         file_hit_at_1: average((row) => row.file.hit_at_1),
         file_hit_at_5: average((row) => row.file.hit_at_5),
@@ -76,6 +80,24 @@ export function summarizePilotRows(rows, modes = ["hybrid", "fts", "vector"]) {
         latency_ms_p50: median(latencies),
         latency_sample_count: latencies.length,
       },
+    };
+  });
+}
+
+export function summarizePilotBreakdown(pilot, rows) {
+  if (pilot.name === "duretrieval") return [];
+  const field = pilot.name === "beir" ? "dataset" : "language";
+  const groups = [...new Set(pilot.lock.tasks.map((task) => task[field]))];
+  return groups.map((name) => {
+    const tasks = pilot.lock.tasks.filter((task) => task[field] === name);
+    const ids = new Set(tasks.map((task) => task.id));
+    return {
+      name,
+      summary: summarizePilotRows(
+        rows.filter((row) => ids.has(row.task_id)),
+        pilot.modes,
+        tasks.length,
+      ),
     };
   });
 }
@@ -121,10 +143,11 @@ function fillMissingRows(pilot, report) {
 }
 
 export function markdownPilotReport(report) {
+  const planned = report.summary[0]?.planned ?? 10;
   const lines = [
     `## ${report.label} · ${report.status === "success" ? "✅ Complete" : "❌ Incomplete"}`,
     "",
-    `10 original queries · model \`${report.model}\` · Rust MCP default presentation · five calls/query`,
+    `${planned} original queries · model \`${report.model}\` · Rust MCP default presentation · five calls/query`,
     "",
     "| Mode | Completed | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
     "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -140,20 +163,41 @@ export function markdownPilotReport(report) {
       `| zg-${row.mode} | ${row.completed}/${row.planned} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
     );
   }
+  if (report.breakdown?.length) {
+    lines.push(
+      "",
+      `### Scores by ${report.suite === "beir20" ? "dataset" : "language"}`,
+      "",
+      "| Group | Mode | Completed | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    );
+    for (const group of report.breakdown)
+      for (const row of group.summary) {
+        const hit = (cutoff) => {
+          const value = row.metrics[`file_hit_at_${cutoff}`];
+          return Number.isFinite(value)
+            ? `${(value * 100).toFixed(1)}% (${Math.round(value * row.completed)}/${row.completed})`
+            : "—";
+        };
+        lines.push(
+          `| ${tableCell(group.name)} | zg-${row.mode} | ${row.completed}/${row.planned} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
+        );
+      }
+  }
   lines.push(
     "",
-    report.suite === "quarry10"
+    report.suite === "quarry20"
       ? "Quarry's function-level positives are projected to unique files. These are pilot file metrics, not the official Quarry function recall."
       : report.suite === "duretrieval10"
         ? "DuRetrieval uses ten unchanged Chinese dev queries and qrels against the complete pinned C-MTEB corpus subset, one passage per Markdown file. These pilot scores are not official full-corpus DuReader scores."
-        : "SciFact uses the original BEIR test queries and qrels with the complete corpus; each document is one Markdown file.",
+        : "BEIR uses original test queries and qrels with each dataset's complete corpus. Each document is one Markdown file. ArguAna excludes the query's own corpus document before indexing. Original graded qrels are retained; current file metrics treat every positive grade as relevant.",
     "",
     "A score is shown only for completed queries. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth successful quality call; latency covers successful calls and excludes indexing.",
   );
   lines.push(
     "",
     "<details>",
-    "<summary>Per-query results (all 10 queries × 3 modes)</summary>",
+    `<summary>Per-query results (all ${planned} queries × 3 modes)</summary>`,
     "",
     "| Query | Mode | Status | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Latency P50 (ms) |",
     "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -182,10 +226,11 @@ export function markdownPilotReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-async function writeReport(output, report) {
-  report.summary = summarizePilotRows(report.rows);
+async function writeReport(output, report, pilot) {
+  report.summary = summarizePilotRows(report.rows, pilot.modes, pilot.lock.tasks.length);
+  report.breakdown = summarizePilotBreakdown(pilot, report.rows);
   report.status =
-    report.failures.length || report.summary.some((row) => row.completed !== 10)
+    report.failures.length || report.summary.some((row) => row.completed !== pilot.lock.tasks.length)
       ? "failed"
       : "success";
   report.finished_at = new Date().toISOString();
@@ -197,6 +242,12 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
   const evidence = join(options.output, "evidence", group.id);
   await mkdir(evidence, { recursive: true });
   const root = resolve(group.root);
+  const indexTimeoutMs =
+    pilot.name === "duretrieval"
+      ? 18_000_000
+      : pilot.name === "beir"
+        ? 10_800_000
+        : 2_400_000;
   const home = join(evidence, "runtime-home");
   const opencode = join(evidence, "opencode.json");
   await mkdir(home, { recursive: true });
@@ -258,7 +309,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
         {
           cwd: root,
           env,
-          timeout: pilot.name === "duretrieval" ? 18_000_000 : 2_400_000,
+          timeout: indexTimeoutMs,
         },
       );
       await writeJson(join(evidence, "index.json"), indexed);
@@ -422,10 +473,10 @@ export async function main(args = process.argv.slice(2)) {
     suite: pilot.lock.suite,
     label:
       pilot.name === "beir"
-        ? "BEIR / SciFact (test)"
+        ? "BEIR / four datasets (test)"
         : pilot.name === "duretrieval"
           ? "DuRetrieval (C-MTEB dev)"
-          : "Quarry / quic-go (preimage)",
+          : "Quarry / eight languages (preimage)",
     model: pilot.lock.model,
     candidate_commit: values["candidate-commit"],
     environment: {
@@ -455,12 +506,35 @@ export async function main(args = process.argv.slice(2)) {
         )
       ).StdioClientTransport,
     };
-    if (pilot.name !== "quarry") {
-      const groups =
-        pilot.name === "beir"
-          ? await prepareBeir(pilot, output)
-          : await prepareDuRetrieval(pilot, output);
-      await runGroup(pilot, groups[0], candidate, options, report, mcp);
+    if (pilot.name === "beir") {
+      for (const dataset of pilot.lock.datasets) {
+        let groups;
+        try {
+          groups = await prepareBeirDataset(dataset, output);
+        } catch (error) {
+          for (const task of dataset.tasks)
+            report.failures.push({ task_id: `${dataset.id}/${task.id}`, reason: error.message });
+          console.error(`${dataset.id}: ${error.message}`);
+          continue;
+        }
+        for (const group of groups)
+          try {
+            await runGroup(pilot, group, candidate, options, report, mcp);
+          } catch (error) {
+            for (const task of group.tasks)
+              report.failures.push({ task_id: task.id, reason: error.message });
+            console.error(`${group.id}: ${error.message}`);
+          }
+      }
+    } else if (pilot.name === "duretrieval") {
+      for (const group of await prepareDuRetrieval(pilot, output))
+        try {
+          await runGroup(pilot, group, candidate, options, report, mcp);
+        } catch (error) {
+          for (const task of group.tasks)
+            report.failures.push({ task_id: task.id, reason: error.message });
+          console.error(`${group.id}: ${error.message}`);
+        }
     } else {
       await verifyQuarrySource(pilot, output);
       for (const task of pilot.lock.tasks) {
@@ -478,7 +552,7 @@ export async function main(args = process.argv.slice(2)) {
     console.error(`${pilot.name}: ${error.stack}`);
   }
   fillMissingRows(pilot, report);
-  await writeReport(output, report);
+  await writeReport(output, report, pilot);
   console.log(`Report: ${join(output, "report.md")}`);
   if (report.status !== "success") process.exitCode = 1;
 }

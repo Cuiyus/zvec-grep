@@ -3,21 +3,22 @@
 These pilots reuse the Rust public MCP search route and the existing five
 file-level metrics. They run independently of the frozen SWE-QA20 suite.
 
-- **BEIR / SciFact test:** ten original test claims sampled at equal positions
-  in the sorted test-query IDs. The complete 5,183-document SciFact corpus is
-  indexed, one unchanged title/text document per Markdown file. The official
-  test qrels determine relevant document IDs. The original archive is pinned
-  by SHA-256. CI downloads its corpus and queries from a pinned Hugging Face
-  mirror, checks the full corpus content digest against the original archive,
-  and verifies the selected queries and the checked-in original test qrels.
-  This mirror is used because the original download host is not reachable from
-  GitHub runners.
-- **Quarry / quic-go preimage:** the first original query from each of the first
-  ten distinct quic-go tasks in the pinned release, using each task's exact
-  preimage revision. The full repository checkout is indexed separately for
-  each revision. The original `positive_units` remain in the lock; file metrics
-  project their unique paths. This is a file-level pilot, not Quarry's official
-  function-level recall score.
+- **BEIR test:** the original ten SciFact claims, plus four NFCorpus questions,
+  three ArguAna arguments and three FiQA questions. Each dataset uses its full
+  corpus and original test qrels. Source revisions, Parquet hashes, qrels hashes
+  and full-corpus content digests are pinned in `data/beir20.json`. SciFact
+  keeps its original ten-query selection and document format. The other ten
+  queries are recorded verbatim; positive NFCorpus grades remain in the lock,
+  while the existing binary file metrics treat any positive grade as relevant.
+  For ArguAna, each query's own document is removed before indexing, following
+  the source dataset's self-match exclusion rule.
+- **Quarry preimage:** the original ten quic-go queries plus one original query
+  from each of ten additional repositories: ipython, litestar, wasmer, boa,
+  webpack, Vue, Apache POI, StyleCopAnalyzers, s2n-tls and OPA. The twenty
+  tasks span Go, Python, Rust, JavaScript, TypeScript, Java, C# and C. Each
+  exact preimage revision is indexed separately. Original `positive_units`
+  remain in `data/quarry20.json`; file metrics project their unique paths.
+  This is a file-level pilot, not Quarry's official function-level recall.
 - **DuRetrieval / Chinese web search dev:** ten original Chinese queries sampled
   at equal positions in the sorted dev-query IDs. All 100,001 passages in the
   pinned [C-MTEB DuRetrieval](https://huggingface.co/datasets/C-MTEB/DuRetrieval)
@@ -33,8 +34,12 @@ same fixed mode order (hybrid, fts, vector), `limit: 10`, no agent, and five
 calls per query; the fifth result supplies quality and output size. Results
 include File Hit@1/5/10, File MRR@10, binary file nDCG@10, mean public output
 and median call latency. Native result ranks are retained and repeat chunks
-consume ranks. The ten-query sample is exploratory; do not compare absolute
-scores across suites as if they shared a corpus or relevance definition.
+consume ranks. BEIR and Quarry now have twenty queries each, with the original
+ten retained. The per-dataset and per-language rows show completed/planned
+coverage and the same metrics as the overall pilot row; they do not change the
+existing per-query average. SWE-QA20 uses a repository macro average for its
+overall nDCG, while these pilots use a query average. Absolute scores across
+suites do not share a corpus or relevance definition.
 All four suites use the same public response parser. It tolerates one empty
 trailing source line immediately after a result's public range, matching the
 Rust MCP presentation of files ending in a newline. Nonempty or further
@@ -47,8 +52,8 @@ in four parallel suite jobs. BEIR and DuRetrieval use
 per-question results, including failed questions. The final `Retrieval results`
 job publishes one page with all four suite sections, even if a suite fails.
 
-DuRetrieval's Parquet reader is pinned in `requirements-duretrieval.txt` and
-installed only in its CI job. A local run needs that dependency before invoking
-`expansion/run.mjs --suite duretrieval`. The downloaded Parquet files and
-materialized passage files are run-local inputs; only their locked hashes and
-the ten original query/qrel records are checked in.
+BEIR and DuRetrieval's Parquet readers are pinned in separate requirements
+files and installed only in their CI jobs. A local run needs the corresponding
+dependency before invoking `expansion/run.mjs`. Downloaded source data and
+materialized corpus files are run-local inputs; only hashes and selected
+original query/qrel records are checked in.

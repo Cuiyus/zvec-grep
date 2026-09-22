@@ -1,24 +1,44 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fileHash, inside, readJson, run, sha256 } from "../core/io.mjs";
+import { fileHash, inside, readJson, run } from "../core/io.mjs";
 import { prepareCorpus } from "../core/corpus.mjs";
 
 const data = join(dirname(fileURLToPath(import.meta.url)), "data");
 const MODES = ["hybrid", "fts", "vector"];
+const CODE_EXTENSIONS = {
+  Go: "go",
+  Python: "py",
+  Rust: "rs",
+  JavaScript: "js",
+  TypeScript: "ts",
+  Java: "java",
+  "C#": "cs",
+  C: "c",
+};
 
 export async function loadPilot(name) {
   const files = {
-    beir: "beir-scifact10.json",
-    quarry: "quarry10.json",
+    beir: "beir20.json",
+    quarry: "quarry20.json",
     duretrieval: "duretrieval10.json",
   };
   assert.ok(Object.hasOwn(files, name), `unknown pilot: ${name}`);
   const lock = await readJson(join(data, files[name]));
   assert.equal(lock.schema_version, 1);
-  assert.equal(lock.tasks.length, 10);
-  assert.equal(new Set(lock.tasks.map((task) => task.id)).size, 10);
+  if (name === "beir")
+    lock.tasks = lock.datasets.flatMap((dataset) =>
+      dataset.tasks.map((task) => ({
+        ...task,
+        id: `${dataset.id}/${task.id}`,
+        source_id: task.id,
+        dataset: dataset.id,
+      })),
+    );
+  const expected = name === "duretrieval" ? 10 : 20;
+  assert.equal(lock.tasks.length, expected);
+  assert.equal(new Set(lock.tasks.map((task) => task.id)).size, expected);
   assert.equal(
     lock.model,
     name === "quarry"
@@ -33,6 +53,16 @@ export async function loadPilot(name) {
     } else {
       assert.match(task.revision, /^[a-f0-9]{40}$/);
       assert.ok(task.positive_units.length > 0);
+      assert.ok(task.repository && task.language);
+      assert.ok(Object.hasOwn(CODE_EXTENSIONS, task.language));
+      assert.ok(
+        task.positive_units.every((unit) => unit.revision === task.revision),
+      );
+      assert.ok(
+        task.positive_units.every((unit) =>
+          unit.path.endsWith(`.${CODE_EXTENSIONS[task.language]}`),
+        ),
+      );
     }
   }
   return { name, lock, modes: MODES };
@@ -67,149 +97,37 @@ function jsonl(content) {
     .map((line) => JSON.parse(line));
 }
 
-function qrels(content) {
-  const rows = content.trimEnd().split(/\r?\n/);
-  assert.equal(rows.shift(), "query-id\tcorpus-id\tscore");
-  const byQuery = new Map();
-  for (const row of rows) {
-    const [query, document_id, grade] = row.split("\t");
-    assert.ok(query && document_id && /^\d+$/.test(grade));
-    const relevant = byQuery.get(query) ?? [];
-    relevant.push({ document_id, relevance: Number(grade) });
-    byQuery.set(query, relevant);
-  }
-  return byQuery;
-}
-
-async function mirrorRows(lock, config, split, count) {
-  const pages = Array.from({ length: Math.ceil(count / 100) }, (_, index) => ({
-    offset: index * 100,
-    length: Math.min(100, count - index * 100),
-  }));
-  const rows = [];
-  for (let index = 0; index < pages.length; index += 4) {
-    const batch = await Promise.all(
-      pages.slice(index, index + 4).map(async ({ offset, length }) => {
-        const url = new URL("https://datasets-server.huggingface.co/rows");
-        url.search = new URLSearchParams({
-          dataset: lock.mirror.dataset,
-          revision: lock.mirror.revision,
-          config,
-          split,
-          offset: String(offset),
-          length: String(length),
-        });
-        const response = await run("curl", [
-          "--fail",
-          "--location",
-          "--silent",
-          "--show-error",
-          "--retry",
-          "3",
-          "--retry-delay",
-          "1",
-          String(url),
-        ]);
-        const page = JSON.parse(response.stdout);
-        assert.equal(page.num_rows_total, count);
-        assert.equal(page.rows.length, length);
-        assert.equal(page.partial, false);
-        return page.rows.map((entry, position) => {
-          assert.equal(entry.row_idx, offset + position);
-          assert.deepEqual(entry.truncated_cells, []);
-          return entry.row;
-        });
-      }),
-    );
-    rows.push(...batch.flat());
-  }
-  return rows;
-}
-
-export async function prepareBeir(pilot, directory) {
-  const { lock } = pilot;
-  const documents = await mirrorRows(
-    lock,
-    "corpus",
-    "corpus",
-    lock.corpus_documents,
-  );
-  const corpusIdentity = sha256(
-    [...documents]
-      .sort((left, right) =>
-        left._id < right._id ? -1 : left._id > right._id ? 1 : 0,
-      )
-      .map(
-        (document) =>
-          `${document._id}\t${sha256(`${document.title}\0${document.text}`)}\n`,
-      )
-      .join(""),
-  );
-  assert.equal(
-    corpusIdentity,
-    lock.mirror.corpus_sha256,
-    "mirror corpus differs from the pinned BEIR archive",
-  );
-  const queries = new Map(
-    (await mirrorRows(lock, "queries", "queries", 1109)).map((query) => [
-      query._id,
-      query.text,
-    ]),
-  );
-  const qrelPath = join(data, "scifact-test.tsv");
-  assert.equal(await fileHash(qrelPath), lock.mirror.qrels_test_sha256);
-  const judgments = qrels(await readFile(qrelPath, "utf8"));
-  assert.equal(documents.length, lock.corpus_documents);
-  const ids = new Set();
-  const root = join(directory, "corpus", "scifact");
-  await mkdir(join(root, "docs"), { recursive: true });
-  for (const document of documents) {
-    assert.match(document._id, /^\d+$/);
-    assert.ok(
-      !ids.has(document._id),
-      `duplicate SciFact document ${document._id}`,
-    );
-    ids.add(document._id);
-    assert.equal(typeof document.title, "string");
-    assert.equal(typeof document.text, "string");
-    await writeFile(
-      join(root, "docs", `${document._id}.md`),
-      `${document.title}\n\n${document.text}\n`,
+export async function prepareBeirDataset(dataset, directory) {
+  const source = join(directory, "source", "beir");
+  for (const part of ["corpus", "queries"]) {
+    const filename = `${part}-00000-of-00001.parquet`;
+    await download(
+      `https://huggingface.co/datasets/${dataset.mirror.dataset}/resolve/${dataset.mirror.revision}/${part}/${filename}`,
+      join(source, dataset.id, filename),
+      dataset.mirror[`${part}_parquet_sha256`],
     );
   }
-  const tasks = lock.tasks.map((task) => {
-    assert.equal(
-      queries.get(task.id),
-      task.query,
-      `changed BEIR query ${task.id}`,
+  if (dataset.id !== "scifact")
+    await download(
+      `https://huggingface.co/datasets/${dataset.mirror.qrels_dataset}/resolve/${dataset.mirror.qrels_revision}/test.tsv`,
+      join(source, dataset.id, "test.tsv"),
+      dataset.mirror.qrels_test_sha256,
     );
-    assert.deepEqual(
-      judgments.get(task.id),
-      task.qrels,
-      `changed BEIR qrels ${task.id}`,
-    );
-    for (const row of task.qrels)
-      assert.ok(
-        ids.has(row.document_id),
-        `missing BEIR document ${row.document_id}`,
-      );
-    return {
-      id: task.id,
-      query: task.query,
-      targets: task.qrels.map((row) => ({
-        path: `docs/${row.document_id}.md`,
-      })),
-    };
-  });
-  return [
-    {
-      id: "scifact",
-      root,
-      tasks,
-      indexGlob: "*.md",
-      expectedIndexedFiles: documents.length,
-    },
-  ];
+  const output = join(directory, `beir-${dataset.id}-groups.json`);
+  await run(
+    "python3",
+    [
+      join(dirname(fileURLToPath(import.meta.url)), "prepare-beir.py"),
+      "--lock", join(data, "beir20.json"),
+      "--dataset", dataset.id,
+      "--source", source,
+      "--scifact-qrels", join(data, "scifact-test.tsv"),
+      "--corpus", join(directory, "corpus"),
+      "--output", output,
+    ],
+    { timeout: 900_000 },
+  );
+  return await readJson(output);
 }
 
 export async function prepareDuRetrieval(pilot, directory) {
@@ -276,6 +194,7 @@ export async function verifyQuarrySource(pilot, directory) {
     assert.equal(query?.query, task.query, `changed Quarry query ${task.id}`);
     assert.equal(query?.task_id, task.source_task_id);
     assert.equal(query?.revision, task.revision);
+    assert.equal(query?.repo, task.repository.replace("/", "__"));
     assert.equal(annotation?.image_stage, "preimage");
     assert.deepEqual(
       annotation?.positive_units,
@@ -289,8 +208,8 @@ export async function prepareQuarryTask(pilot, task, directory) {
   const index = pilot.lock.tasks.findIndex((row) => row.id === task.id);
   assert.ok(index >= 0);
   const repo = {
-    repository: `quic-go/task-${index + 1}`,
-    url: `https://github.com/${pilot.lock.repository}.git`,
+    repository: `${task.repository}/task-${index + 1}`,
+    url: `https://github.com/${task.repository}.git`,
     commit: task.revision,
   };
   const root = await prepareCorpus(repo, join(directory, "corpus"));
@@ -319,7 +238,13 @@ export async function prepareQuarryTask(pilot, task, directory) {
   return {
     id: `task-${index + 1}`,
     root,
-    tasks: [{ id: task.id, query: task.query, targets }],
-    indexGlob: "*.go",
+    tasks: [{
+      id: task.id,
+      query: task.query,
+      targets,
+      language: task.language,
+      repository: task.repository,
+    }],
+    indexGlob: `*.${CODE_EXTENSIONS[task.language]}`,
   };
 }

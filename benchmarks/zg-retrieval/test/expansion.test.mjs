@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadPilot } from "../expansion/datasets.mjs";
-import { summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
+import { summarizePilotBreakdown, summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
 import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
 import { parseVisibleResponse } from "../engines/zg/parse.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 
-test("pilot locks preserve ten original-query identities and the requested models", async () => {
+test("expanded locks preserve the original ten questions and cover new datasets and languages", async () => {
   const beir = await loadPilot("beir");
   const duretrieval = await loadPilot("duretrieval");
   const quarry = await loadPilot("quarry");
-  assert.equal(beir.lock.tasks.length, 10);
+  assert.equal(beir.lock.tasks.length, 20);
   assert.equal(duretrieval.lock.tasks.length, 10);
-  assert.equal(quarry.lock.tasks.length, 10);
+  assert.equal(quarry.lock.tasks.length, 20);
   assert.equal(beir.lock.model, "local/potion-multilingual-128m");
   assert.equal(duretrieval.lock.model, "local/potion-multilingual-128m");
   assert.equal(quarry.lock.model, "local/potion-code-16m-v2");
@@ -21,13 +22,10 @@ test("pilot locks preserve ten original-query identities and the requested model
   assert.equal(duretrieval.lock.source.query_count, 2000);
   assert.equal(duretrieval.lock.source.qrel_count, 9839);
   assert.ok(duretrieval.lock.tasks.every((task) => task.qrels.length > 0));
-  assert.equal(
-    new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size,
-    10,
-  );
+  assert.equal(new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size, 20);
   assert.equal(
     new Set(quarry.lock.tasks.map((task) => task.revision)).size,
-    10,
+    20,
   );
   assert.ok(
     quarry.lock.tasks.every((task) =>
@@ -39,6 +37,23 @@ test("pilot locks preserve ten original-query identities and the requested model
       task.qrels.every((row) => row.relevance > 0),
     ),
   );
+  assert.deepEqual(
+    Object.fromEntries(beir.lock.datasets.map((dataset) => [dataset.id, dataset.tasks.length])),
+    { scifact: 10, nfcorpus: 4, arguana: 3, fiqa: 3 },
+  );
+  assert.deepEqual(
+    Object.fromEntries([...new Set(quarry.lock.tasks.map((task) => task.language))].map((language) =>
+      [language, quarry.lock.tasks.filter((task) => task.language === language).length])),
+    { Go: 11, Python: 2, Rust: 2, JavaScript: 1, TypeScript: 1, Java: 1, "C#": 1, C: 1 },
+  );
+  const oldBeir = JSON.parse(await readFile(new URL("../expansion/data/beir-scifact10.json", import.meta.url)));
+  const oldQuarry = JSON.parse(await readFile(new URL("../expansion/data/quarry10.json", import.meta.url)));
+  assert.deepEqual(beir.lock.datasets[0].tasks, oldBeir.tasks);
+  for (let index = 0; index < 10; index++)
+    for (const key of ["id", "source_task_id", "query", "revision", "positive_units"])
+      assert.deepEqual(quarry.lock.tasks[index][key], oldQuarry.tasks[index][key]);
+  assert.ok(beir.lock.tasks.filter((task) => task.dataset === "arguana")
+    .every((task) => task.qrels.every((row) => row.document_id !== task.source_id)));
 });
 
 test("pilot report preserves completed scores and calls out missing tasks", () => {
@@ -60,7 +75,7 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
     status: "failed",
     calls: [{ status: "failed", latency_ms: 1 }],
   };
-  const summary = summarizePilotRows([success, failed]);
+  const summary = summarizePilotRows([success, failed], undefined, 20);
   assert.equal(summary[0].completed, 1);
   assert.equal(summary[0].metrics.file_hit_at_1, 1);
   assert.equal(summary[0].measurements.latency_sample_count, 5);
@@ -70,12 +85,12 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
     label: "Pilot",
     status: "failed",
     model: "local/test",
-    suite: "quarry10",
+    suite: "quarry20",
     summary,
     rows: [success, failed],
     failures: [{ task_id: "b", reason: "index failed" }],
   });
-  assert.match(markdown, /1\/10/);
+  assert.match(markdown, /1\/20/);
   assert.match(markdown, /index failed/);
   assert.match(markdown, /Per-query results/);
   assert.match(markdown, /\| a \| zg-hybrid \| ✅ Scored/);
@@ -96,9 +111,9 @@ test("unified results page identifies missing pilot artifacts independently", as
   assert.equal(result.pilots.quarry.status, "unavailable");
   const markdown = markdownCombined(result);
   assert.match(markdown, /SWE-QA20/);
-  assert.match(markdown, /BEIR \/ SciFact/);
+  assert.match(markdown, /BEIR \/ four datasets/);
   assert.match(markdown, /DuRetrieval \/ Chinese web search/);
-  assert.match(markdown, /Quarry \/ quic-go/);
+  assert.match(markdown, /Quarry \/ eight languages/);
   assert.match(markdown, /report artifact missing/);
 });
 
@@ -133,13 +148,14 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
   const report = {
     schema_version: 1,
     suite: pilot.lock.suite,
-    label: "BEIR / SciFact (test)",
+    label: "BEIR / four datasets (test)",
     model: pilot.lock.model,
     candidate_commit: "a".repeat(40),
     status: "failed",
     rows,
     failures: [{ task_id: rows[1].task_id, reason: "index failed" }],
-    summary: summarizePilotRows(rows),
+    summary: summarizePilotRows(rows, pilot.modes, pilot.lock.tasks.length),
+    breakdown: summarizePilotBreakdown(pilot, rows),
   };
   const result = await buildCombined({
     zg: null,
@@ -151,8 +167,10 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
   assert.equal(result.pilots.beir.status, "failed");
   assert.equal(result.pilots.beir.report.summary[0].completed, 1);
   const markdown = markdownCombined(result);
-  assert.match(markdown, /BEIR \/ SciFact \| ❌ Incomplete \| 1\/10/);
-  assert.match(markdown, /Per-query results \(all 10 queries × 3 modes\)/);
+  assert.match(markdown, /BEIR \/ four datasets \| ❌ Incomplete \| 1\/20/);
+  assert.match(markdown, /Per-query results \(all 20 queries × 3 modes\)/);
+  assert.match(markdown, /\| scifact \| zg-hybrid \| 1\/10 \|/);
+  assert.match(markdown, /\| nfcorpus \| zg-hybrid \| 0\/4 \|/);
   assert.match(markdown, /index failed/);
 });
 
