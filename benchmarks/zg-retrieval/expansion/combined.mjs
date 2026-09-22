@@ -136,6 +136,9 @@ export async function buildCombined({
 
 export function markdownCombined(result) {
   const labels = { beir: "BEIR / SciFact", quarry: "Quarry / quic-go" };
+  const sweqaCompleted = Math.min(
+    ...result.sweqa.rows.map((row) => row.questions ?? 0),
+  );
   const lines = [
     "# Retrieval-only results",
     "",
@@ -143,7 +146,7 @@ export function markdownCombined(result) {
     "",
     "| Suite | Status | Queries | Model |",
     "| --- | --- | ---: | --- |",
-    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | 20 | \`local/potion-code-16m-v2\` |`,
+    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`local/potion-code-16m-v2\` |`,
   ];
   for (const name of ["beir", "quarry"]) {
     const pilot = result.pilots[name];
@@ -171,7 +174,7 @@ export function markdownCombined(result) {
     lines.push(
       "## Incomplete jobs and reports",
       "",
-      ...result.errors.map((error) => `- ${error}`),
+      ...result.errors.map((error) => `- ${error.replaceAll(/\r?\n/g, " ")}`),
       "",
     );
   }
