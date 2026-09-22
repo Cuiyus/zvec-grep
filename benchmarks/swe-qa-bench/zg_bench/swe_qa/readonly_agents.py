@@ -232,6 +232,7 @@ def _qoder_identity(events: list[dict[str, Any]], spec: AgentSpec) -> dict[str, 
     sources: set[str] = set()
     synthetic_notifications: set[tuple[str, str]] = set()
     synthetic_summaries = 0
+    idle_lite_summaries = 0
     for event in events:
         if event.get("parent_tool_use_id"):
             continue
@@ -253,12 +254,22 @@ def _qoder_identity(events: list[dict[str, Any]], spec: AgentSpec) -> dict[str, 
                 if model == "<synthetic>" and _zero_synthetic_usage(usage, summary=True):
                     synthetic_summaries += 1
                     continue
+                # Qoder 1.1.45 can include an unused `lite` bucket in its
+                # aggregate modelUsage even when every assistant response used
+                # Qwen3.8-Max. Only disregard the exact zero-token bucket;
+                # assistant events or any nonzero lite usage still fail closed.
+                if (model == "lite" and _zero_synthetic_usage(usage, summary=True)
+                        and all(type(usage.get(key, 0)) in (int, float) and usage.get(key, 0) == 0
+                                for key in ("credits", "costUSD"))):
+                    idle_lite_summaries += 1
+                    continue
                 observed.add(_QODER_MODEL_ALIASES.get(model.lower(), model.lower()))
                 sources.add("result.modelUsage")
     return {"requested": spec.provider_model, "observed": sorted(observed),
             "sources": sorted(sources), "valid": observed == {spec.provider_model},
             "synthetic_notifications": len(synthetic_notifications),
-            "synthetic_model_usage_entries": synthetic_summaries}
+            "synthetic_model_usage_entries": synthetic_summaries,
+            "idle_lite_model_usage_entries": idle_lite_summaries}
 
 
 def _zero_synthetic_usage(usage: Any, *, summary: bool = False) -> bool:

@@ -219,6 +219,24 @@ class ReadonlyAgentTests(unittest.TestCase):
                 self.assertFalse(identity["valid"])
                 self.assertIn(model.lower(), identity["observed"])
 
+    def test_unused_lite_model_usage_bucket_does_not_override_actual_model(self):
+        spec = agent_spec("qodercli", "qwen3.8-max")
+        events = qoder_events()
+        zero = {key: 0 for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")}
+        events[-1]["modelUsage"]["lite"] = dict(zero, credits=0)
+        identity = _qoder_identity(events, spec)
+        self.assertTrue(identity["valid"])
+        self.assertEqual(identity["observed"], ["qwen3.8-max"])
+        self.assertEqual(identity["idle_lite_model_usage_entries"], 1)
+        events[-1]["modelUsage"]["lite"]["inputTokens"] = 1
+        self.assertFalse(_qoder_identity(events, spec)["valid"])
+        events[-1]["modelUsage"]["lite"]["inputTokens"] = 0
+        events[-1]["modelUsage"]["lite"]["credits"] = 1
+        self.assertFalse(_qoder_identity(events, spec)["valid"])
+        events[-1]["modelUsage"]["lite"]["credits"] = 0
+        events[1]["message"]["model"] = "lite"
+        self.assertFalse(_qoder_identity(events, spec)["valid"])
+
     def test_conflicting_executed_model_cannot_pass_via_alias_or_init(self):
         for kwargs in ({"model": "auto"}, {"result_model": "auto"}, {"model": "Qwen3.7-Max"}):
             with self.subTest(kwargs=kwargs):
