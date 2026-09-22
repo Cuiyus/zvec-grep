@@ -42,7 +42,7 @@ use crate::{
     file_selection::ScanPolicy,
     models::{EmbeddingConcurrencyDefaults, EmbeddingOptions, ModelError, ModelRuntimeLease},
     storage::types::IndexedFragment,
-    utils::{collapse_whitespace, decode_text, sha256_hex},
+    utils::{collapse_whitespace, decode_index_text, sha256_hex},
 };
 
 use super::{input_budget::index_chunk_options, model_progress, storage::IndexStorage};
@@ -873,9 +873,9 @@ async fn prepare_candidate(
             file.relative_path.display()
         )));
     }
-    let source_text = decode_text(&source.bytes, true).ok_or_else(|| {
+    let source_text = decode_index_text(formats, &source.bytes).ok_or_else(|| {
         EngineError::invalid_argument(format!(
-            "cannot extract text from {}: expected UTF-8 or BOM-marked UTF-16/32",
+            "cannot extract text from {}: binary content or malformed BOM-marked text",
             file.relative_path.display()
         ))
     })?;

@@ -119,6 +119,49 @@ async fn one_text_model_indexes_text_and_skips_images_without_embedding_them() -
 }
 
 #[tokio::test]
+async fn latin_one_python_and_invalid_utf_eight_css_are_indexed() -> TestResult {
+    use zg_engine::api::info::result::IndexStatus;
+
+    let temporary = tempdir()?;
+    let root = temporary.path();
+    let server = EmbeddingServer::start()?;
+    configure_remote_model(root, server.address)?;
+    fs::write(
+        root.join("latin.py"),
+        b"# coding: latin_1\nTOTO = ('Caf\xe9', 'Caf\xe9')\n",
+    )?;
+    fs::write(
+        root.join("legacy.css"),
+        b"/* \xe9viter \xe9crasement */\n.test { margin: 1rem; }\n",
+    )?;
+
+    let engine = ZvecGrep::new();
+    let indexed = engine.index(index_options(root)).await?;
+    assert_eq!(
+        (indexed.files_added, indexed.files_failed, indexed.files_pending),
+        (2, 0, 0)
+    );
+    let info = engine.info(info_options(root)).await?;
+    assert_eq!(info.index_status(), IndexStatus::Ready);
+    let entities = native_documents(&info.index_path.join("entities"))?;
+    assert!(entities.iter().any(|doc| {
+        doc.get_string("payload")
+            .ok()
+            .flatten()
+            .is_some_and(|value| value.contains("Café"))
+    }));
+    assert!(entities.iter().any(|doc| {
+        doc.get_string("payload")
+            .ok()
+            .flatten()
+            .is_some_and(|value| value.contains("�viter"))
+    }));
+    engine.drop_index(info_options(root)).await?;
+    engine.close();
+    Ok(())
+}
+
+#[tokio::test]
 async fn whitespace_only_ranges_do_not_fail_complete_file_indexing() -> TestResult {
     let temporary = tempdir()?;
     let root = temporary.path();

@@ -4,7 +4,7 @@ mod hash;
 mod text;
 
 // Text decoding and normalization.
-pub(crate) use encoding::decode_text;
+pub(crate) use encoding::{decode_index_text, decode_text};
 pub(crate) use text::collapse_whitespace;
 
 // Text positions and slicing.
