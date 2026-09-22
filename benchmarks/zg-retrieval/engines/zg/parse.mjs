@@ -59,10 +59,7 @@ function parseRange(text) {
 }
 
 /** Parse only the public, single-query MCP search text. Never consult hidden structuredContent. */
-export function parseVisibleResponse(
-  response,
-  { allowTrailingBlankOutsideRange = false } = {},
-) {
+export function parseVisibleResponse(response) {
   const text = visibleText(response);
   if (text.includes("\x1b") || text.includes("\r"))
     fail("Unexpected terminal escapes or line framing.");
@@ -158,14 +155,12 @@ export function parseVisibleResponse(
         number <= (item.source_lines.at(-1)?.line ?? 0)
       )
         fail("Repeated or unordered visible source lines.");
+      // The public Rust/Node presentation numbers a terminal newline as one
+      // empty line after the advertised content range.
       if (
         item.range.kind === "text" &&
         (number < item.range.start_line || number > item.range.end_line) &&
-        !(
-          allowTrailingBlankOutsideRange &&
-          number === item.range.end_line + 1 &&
-          source[2] === ""
-        )
+        !(number === item.range.end_line + 1 && source[2] === "")
       )
         fail("Visible source falls outside the item's public range.");
       item.source_lines.push({ line: number, text: source[2] });

@@ -313,9 +313,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
               { timeout: 120_000 },
             );
             assert.notEqual(response.isError, true, "MCP product error");
-            const parsed = parseVisibleResponse(response, {
-              allowTrailingBlankOutsideRange: true,
-            });
+            const parsed = parseVisibleResponse(response);
             validateSearchRoute(parsed.items, mode);
             if (repetition === REPETITIONS) {
               row.file = scoreFileRetrieval(parsed.items, task.targets);

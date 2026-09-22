@@ -145,7 +145,7 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
   assert.match(markdown, /index failed/);
 });
 
-test("pilot parser accepts only one trailing empty Markdown line outside the public range", () => {
+test("the shared parser accepts only one trailing empty Markdown line outside the public range", () => {
   const response = (last) => ({
     content: [
       {
@@ -154,19 +154,10 @@ test("pilot parser accepts only one trailing empty Markdown line outside the pub
       },
     ],
   });
-  assert.throws(
-    () => parseVisibleResponse(response("")),
-    /outside the item's public range/,
-  );
-  const parsed = parseVisibleResponse(response(""), {
-    allowTrailingBlankOutsideRange: true,
-  });
+  const parsed = parseVisibleResponse(response(""));
   assert.equal(parsed.items[0].path, "docs/1.md");
   assert.throws(
-    () =>
-      parseVisibleResponse(response("unexpected"), {
-        allowTrailingBlankOutsideRange: true,
-      }),
+    () => parseVisibleResponse(response("unexpected")),
     /outside the item's public range/,
   );
 });
