@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fileHash, run, writeJson } from "../core/io.mjs";
+import { embeddingRuntime } from "../core/embedding.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
@@ -245,6 +246,7 @@ async function writeReport(output, report, pilot) {
 }
 
 async function runGroup(pilot, group, candidate, options, report, mcp) {
+  const embedding = embeddingRuntime(pilot.lock.model);
   const evidence = join(options.output, "evidence", group.id);
   await mkdir(evidence, { recursive: true });
   const root = resolve(group.root);
@@ -301,6 +303,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           options.modelCache,
           "--device",
           "cpu",
+          ...embedding.indexArguments,
           "--max-filesize",
           "1000000",
           "--iglob",
@@ -323,6 +326,11 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     } finally {
       report.index_seconds[group.id] = (performance.now() - indexStart) / 1000;
     }
+    if (embedding.remote)
+      await run(candidate.cli, embedding.grantArguments(root), {
+        cwd: root,
+        env,
+      });
     const before = await snapshotIndex({
       cli: candidate.cli,
       root,

@@ -20,9 +20,9 @@ test("expanded locks preserve the original ten questions and cover new datasets 
   assert.equal(beir.lock.tasks.length, 20);
   assert.equal(duretrieval.lock.tasks.length, 10);
   assert.equal(quarry.lock.tasks.length, 20);
-  assert.equal(beir.lock.model, "local/potion-multilingual-128m");
-  assert.equal(duretrieval.lock.model, "local/potion-multilingual-128m");
-  assert.equal(quarry.lock.model, "local/potion-code-16m-v2");
+  assert.equal(beir.lock.model, "qwen/qwen3.7-text-embedding");
+  assert.equal(duretrieval.lock.model, "qwen/qwen3.7-text-embedding");
+  assert.equal(quarry.lock.model, "qwen/qwen3.7-text-embedding");
   assert.equal(duretrieval.lock.corpus_documents, 100001);
   assert.equal(duretrieval.lock.source.query_count, 2000);
   assert.equal(duretrieval.lock.source.qrel_count, 9839);

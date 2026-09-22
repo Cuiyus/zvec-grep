@@ -6,6 +6,8 @@ The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent su
 
 The [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml) runs **only through `workflow_dispatch`**. Select **Retrieval-only → Run workflow**. Use GitHub's workflow-ref selector to choose the benchmark harness (`main` for the latest merged harness), then set `candidate_ref` to the branch, tag or commit containing the `rust/` workspace to compile. It defaults to `main`. Every run includes all three modes; push and pull-request events do not trigger this benchmark.
 
+This branch runs a Qwen3.7 Text Embedding comparison across all four suites. Set `QWEN_EMBEDDING_API_KEY` as an Actions secret and `QWEN_EMBEDDING_ENDPOINT` as an Actions variable on the fork before dispatch. The endpoint must be the workspace-specific HTTPS `/embeddings` URL. Index and MCP queries use that same remote model; the workflow fails before building if either setting is absent. This run makes remote API requests and may incur provider charges.
+
 The workflow freezes the selected harness ref to a full commit, checks out the candidate separately, resolves it to another full commit SHA, and builds `candidate/rust/`. The packed native package cache is keyed by operating system, architecture and that exact candidate commit. A hit skips Rust compilation and packaging. On a miss, a second Cargo cache can reuse registry data and `rust/target` objects before `npm run pack:local` creates the candidate tarball. Node.js version is not part of candidate selection, package-cache identity or report identity.
 
 The original dispatch actor and current re-run actor must have the repository **maintain or admin** role. Every job checks both, including partial re-runs. This in-workflow check applies to the checked-in workflow. Contributors who can modify the workflow or its local authorization action on another branch can bypass that check; a permission boundary against those contributors requires repository- or organization-level Actions execution policies.
@@ -33,7 +35,7 @@ Every request also uses `limit: 10`, `autoUpdate: false`, `freshness: eventual` 
 
 Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. All five calls supply quality and stability observations; only the fifth supplies output size. A complete run contains **300 calls and 60 question/mode quality summaries**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
 
-Isolated public-response format failures still fail CI, but the overview displays diagnostic scores from validated questions with explicit question/repository coverage and a failed-task table. Invalid evidence is excluded, never counted as a miss or a zero. Protocol, identity, missing-call and other integrity errors still withhold all aggregates. Product failures with valid evidence retain zero quality credit and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
+Isolated public-response format failures still fail CI, but the overview displays diagnostic scores from validated questions with explicit question/repository coverage and a failed-task table. Invalid evidence is excluded, never counted as a miss or a zero. Protocol, identity, missing-call and other integrity errors still withhold all aggregates. Product failures with valid evidence retain zero quality credit and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order, shared runtime and remote network calls mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
 
 ## Dataset and scoring
 
@@ -43,7 +45,7 @@ All five quality metrics use the same file labels and normalized-path matching. 
 
 `metrics/ndcg.mjs` uses first-target rank, binary gain and target-count IDCG. It is checked against a byte-identical pinned Python scoring reference, with its MIT attribution preserved in [`test/fixtures/ndcg-reference/`](test/fixtures/ndcg-reference/). The reference is used only by unit tests. The benchmark runs only ZG.
 
-Questions, labels and reports remain outside indexed source checkouts. Indexing applies the frozen code-extension and size policy while retaining ZG's native ignore rules. Repository indexes are never cached; model downloads and compiled candidate packages may be cached. Corpus and model inventories plus the Rust CLI's public aggregate index status are checked before and after retrieval. Model identity includes artifact contents but excludes only the runtime-generated `.zvec-grep-artifacts-<24hex>.complete` cache marker, whose machine-specific timestamps do not identify model weights.
+Questions, labels and reports remain outside indexed source checkouts. Indexing applies the frozen code-extension and size policy while retaining ZG's native ignore rules. Repository indexes are never cached; compiled candidate packages may be cached. Corpus inventories and the Rust CLI's public aggregate index status are checked before and after retrieval. Remote embedding produces no local model artifacts; the selected model and endpoint are fixed in this branch and CI configuration.
 
 ## Reports and artifacts
 
@@ -57,7 +59,7 @@ Evidence retention is 14 days. After a shared candidate build, SWE-QA20, BEIR, D
 
 SWE-QA20 ZG reports use **schema 7**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain all five public result lists and measurement observations so validators can recompute the case mean, ranking stability, output size and latency. The representative fifth-call `file_retrieval` and `ndcg` fields remain for evidence; `quality_mean` supplies headline quality.
 
-The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v7`. The comparator accepts schema 7 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
+The protocol ID for this comparison is `sweqa20-zg-rust-three-modes-mcp-default-v7-qwen37`. The comparator accepts schema 7 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
 
 ## Code structure
 

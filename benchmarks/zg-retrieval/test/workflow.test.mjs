@@ -119,6 +119,20 @@ test("the four suites run in independent jobs using one candidate package", asyn
   assert.doesNotMatch(jobs.quarry, /pip install|python -m venv|SDK parity/);
 });
 
+test("Qwen credentials are checked before build and limited to suite execution", () => {
+  assert.match(jobs.authorize, /Check remote embedding configuration/);
+  assert.match(jobs.authorize, /secrets\.QWEN_EMBEDDING_API_KEY/);
+  assert.match(jobs.authorize, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  for (const suite of ["sweqa", "beir", "duretrieval", "quarry"]) {
+    const run = steps(jobs[suite]).find((entry) =>
+      /node benchmarks\/zg-retrieval\/(?:expansion\/)?run\.mjs/.test(entry),
+    );
+    assert.ok(run, suite);
+    assert.match(run, /secrets\.QWEN_EMBEDDING_API_KEY/);
+    assert.match(run, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  }
+});
+
 test("the selected workflow ref is frozen once for every downstream job", () => {
   const authorizeCheckout = steps(jobs.authorize)[0];
   assert.doesNotMatch(authorizeCheckout, /^ {10}ref:/m);

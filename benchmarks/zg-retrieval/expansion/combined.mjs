@@ -174,7 +174,7 @@ export function markdownCombined(result) {
     "",
     "| Suite | Status | Queries | Model |",
     "| --- | --- | ---: | --- |",
-    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`local/potion-code-16m-v2\` |`,
+    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`qwen/qwen3.7-text-embedding\` |`,
   ];
   for (const name of PILOT_NAMES) {
     const pilot = result.pilots[name];

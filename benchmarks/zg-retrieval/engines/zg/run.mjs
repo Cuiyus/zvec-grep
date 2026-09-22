@@ -27,6 +27,7 @@ import {
   repositorySlug,
   inside,
 } from "../../core/lib.mjs";
+import { embeddingRuntime } from "../../core/embedding.mjs";
 import { aggregate } from "./report.mjs";
 import { NativeIndexProductError, snapshotIndex } from "./snapshot.mjs";
 
@@ -233,6 +234,7 @@ export function isProductPreparationFailure(phase, error) {
 
 async function runRepository({ suite, repo, tasks, candidate, options }) {
   const { protocol, gold, identity } = suite;
+  const embedding = embeddingRuntime(protocol.model);
   const modes = protocol.modes;
   const output = join(options.output, repositorySlug(repo.repository));
   await mkdir(join(output, "raw"), { recursive: true });
@@ -354,6 +356,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
           options.modelCache,
           "--device",
           protocol.device,
+          ...embedding.indexArguments,
           ...indexSelectionArguments(protocol),
           "--debug",
         ],
@@ -371,6 +374,11 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       );
       throw error;
     }
+    if (embedding.remote)
+      await runCandidate(candidate, embedding.grantArguments(root), {
+        env,
+        cwd: root,
+      });
     phase = "snapshot";
     await snapshotIndex({
       cli: candidate.cli,
@@ -387,7 +395,8 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     };
     manifest.stage_availability = before.stages;
     modelBefore = await modelArtifactManifest(options.modelCache);
-    assert.ok(modelBefore.entries.length > 0, "no model artifacts recorded");
+    if (!embedding.remote)
+      assert.ok(modelBefore.entries.length > 0, "no model artifacts recorded");
     await writeJson(join(output, "model-files.json"), modelBefore);
     manifest.model_files_sha256 = modelBefore.sha256;
     manifest.index_content_sha256 = before.logical_content_sha256;

@@ -37,7 +37,7 @@ runner and combined report free of repeated suite-specific constants.
   queries, qrels and target IDs. This is a ten-query pilot on the C-MTEB corpus
   subset, not a score on DuReader's original full 8.09-million-passage corpus.
 
-Each suite uses its own specified embedding model. The MCP requests use the
+Each suite uses Qwen3.7 Text Embedding for this comparison run. The MCP requests use the
 same fixed mode order (hybrid, fts, vector), `limit: 10`, no agent, and five
 calls per query; all five results supply quality and stability, while the fifth
 supplies output size. Results
@@ -57,8 +57,12 @@ out-of-range source lines are still rejected.
 
 After one shared Rust package build, SWE-QA20, BEIR, DuRetrieval and Quarry run
 in four parallel suite jobs. BEIR and DuRetrieval use
-`local/potion-multilingual-128m`; the two code suites use
-`local/potion-code-16m-v2`. Each job publishes its own aggregate metrics and
+`qwen/qwen3.7-text-embedding`; the two code suites use the same model.
+Set the fork's `QWEN_EMBEDDING_API_KEY` Actions secret and
+`QWEN_EMBEDDING_ENDPOINT` Actions variable to the workspace-specific HTTPS
+embeddings endpoint before dispatching the workflow. The benchmark grants
+workspace consent after indexing so its MCP search calls can use the same
+remote endpoint. Each job publishes its own aggregate metrics and
 per-question results, including failed questions. The final `Retrieval results`
 job publishes one page with all four suite sections, even if a suite fails.
 
