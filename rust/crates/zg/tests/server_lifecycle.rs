@@ -1,0 +1,1282 @@
+use std::{
+    error::Error,
+    io::{BufRead, BufReader, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{self, Receiver},
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
+
+use serde_json::json;
+use tempfile::{NamedTempFile, TempDir};
+
+const SERVER_START_ATTEMPTS: usize = 5;
+
+struct ServerGuard {
+    binary: PathBuf,
+    home: PathBuf,
+    listen: String,
+    token_file: Option<PathBuf>,
+    active: bool,
+}
+
+impl ServerGuard {
+    fn stop(&mut self) -> Result<Output, std::io::Error> {
+        let mut command = Command::new(&self.binary);
+        command.args(["server", "off", "--home"]).arg(&self.home);
+        if let Some(token_file) = &self.token_file {
+            command.arg("--token-file").arg(token_file);
+        }
+        let output = command.output()?;
+        if output.status.success() {
+            self.active = false;
+        }
+        Ok(output)
+    }
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.stop();
+        }
+    }
+}
+
+// Each caller supplies its own TempDir, so cleanup can only stop that test's
+// daemon. Keep the guard alive even when bootstrap fails before reporting ready.
+fn start_on_available_port<T>(
+    binary: &Path,
+    home: &TempDir,
+    token_file: Option<&Path>,
+    mut start: impl FnMut(&str) -> Result<T, Box<dyn Error>>,
+) -> Result<(ServerGuard, T), Box<dyn Error>> {
+    for attempt in 1..=SERVER_START_ATTEMPTS {
+        let mut guard = ServerGuard {
+            binary: binary.to_owned(),
+            home: home.path().to_owned(),
+            listen: format!("127.0.0.1:{}", available_port()?),
+            token_file: token_file.map(Path::to_owned),
+            active: true,
+        };
+        let log_path = home.path().join("daemon/server.log");
+        let log_start = std::fs::metadata(&log_path).map_or(0, |metadata| metadata.len());
+        match start(&guard.listen) {
+            Ok(value) => return Ok((guard, value)),
+            Err(error) => {
+                let log = log_tail(&log_path, log_start);
+                let details = format!("{error}\ndaemon log ({}):\n{log}", log_path.display());
+                let already_ready = std::fs::read(home.path().join("daemon/instance.lock"))
+                    .is_ok_and(|bytes| {
+                        serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .is_ok_and(|record| record["ready"] == true)
+                    });
+                let address_in_use = error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+                    || is_address_in_use(&details);
+                if attempt == SERVER_START_ATTEMPTS || already_ready || !address_in_use {
+                    return Err(details.into());
+                }
+                // Only bind conflicts are retryable. A failed stop must never
+                // allow a later attempt to accidentally reuse a surviving daemon.
+                assert_command_success(&guard.stop()?);
+            }
+        }
+    }
+    unreachable!("server startup returns on the final attempt")
+}
+
+fn start_server(
+    binary: &Path,
+    home: &TempDir,
+    toolset: &str,
+    token_file: Option<&Path>,
+    configure: impl Fn(&mut Command),
+) -> Result<(ServerGuard, Output), Box<dyn Error>> {
+    start_on_available_port(binary, home, token_file, |listen| {
+        let mut command = Command::new(binary);
+        command
+            .args(["server", "on", "--home"])
+            .arg(home.path())
+            .args(["--listen", listen, "--mcp-toolset", toolset]);
+        if let Some(token_file) = token_file {
+            command.arg("--token-file").arg(token_file);
+        }
+        configure(&mut command);
+        server_start_output(&mut command)
+    })
+}
+
+fn server_start_output(command: &mut Command) -> Result<Output, Box<dyn Error>> {
+    let output = command.output()?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "server startup failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into())
+    }
+}
+
+fn is_address_in_use(details: &str) -> bool {
+    details.contains("is already in use")
+        || details.contains("Address already in use")
+        || details.contains("AddrInUse")
+        || details.contains("Only one usage of each socket address")
+}
+
+fn log_tail(path: &Path, start: u64) -> String {
+    use std::io::{Seek, SeekFrom};
+
+    let read = || -> std::io::Result<String> {
+        let mut file = std::fs::File::open(path)?;
+        let tail_start = file.metadata()?.len().saturating_sub(8192).max(start);
+        file.seek(SeekFrom::Start(tail_start))?;
+        let mut bytes = Vec::new();
+        file.take(8192).read_to_end(&mut bytes)?;
+        let mut lines = String::from_utf8_lossy(&bytes)
+            .lines()
+            .rev()
+            .take(20)
+            .map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if [
+                    "api_key",
+                    "apikey",
+                    "api key",
+                    "authorization",
+                    "bearer",
+                    "token",
+                    "credential",
+                ]
+                .iter()
+                .any(|sensitive| lower.contains(sensitive))
+                {
+                    "[redacted sensitive log line]".to_owned()
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>();
+        lines.reverse();
+        Ok(lines.join("\n"))
+    };
+    read().unwrap_or_else(|error| format!("<unavailable: {error}>"))
+}
+
+struct StdioBridge {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: Receiver<String>,
+    reader: Option<JoinHandle<()>>,
+    stderr: NamedTempFile,
+    home: PathBuf,
+    daemon_log_start: u64,
+}
+
+impl StdioBridge {
+    fn spawn(binary: &Path, home: &Path, listen: &str) -> Result<Self, Box<dyn Error>> {
+        let stderr = NamedTempFile::new()?;
+        let daemon_log_start =
+            std::fs::metadata(home.join("daemon/server.log")).map_or(0, |metadata| metadata.len());
+        let mut child = Command::new(binary)
+            .args([
+                "server",
+                "--stdio",
+                "--home",
+                path_text(home)?,
+                "--listen",
+                listen,
+                "--mcp-toolset",
+                "full",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(stderr.reopen()?)
+            .spawn()?;
+        let stdin = child.stdin.take().ok_or("stdio bridge has no stdin")?;
+        let stdout = child.stdout.take().ok_or("stdio bridge has no stdout")?;
+        let (sender, lines) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            stdin: Some(stdin),
+            lines,
+            reader: Some(reader),
+            stderr,
+            home: home.to_owned(),
+            daemon_log_start,
+        })
+    }
+
+    fn request(
+        &mut self,
+        request: &serde_json::Value,
+    ) -> Result<serde_json::Value, Box<dyn Error>> {
+        self.wait_for_response(request, None)
+            .map(|(response, _)| response)
+    }
+
+    fn notify(&mut self, notification: &serde_json::Value) -> Result<(), Box<dyn Error>> {
+        let stdin = self.stdin.as_mut().ok_or("stdio bridge is closed")?;
+        writeln!(stdin, "{notification}")?;
+        stdin.flush()?;
+        Ok(())
+    }
+
+    fn request_with_consent(
+        &mut self,
+        request: &serde_json::Value,
+        choice: &str,
+    ) -> Result<(serde_json::Value, usize), Box<dyn Error>> {
+        self.wait_for_response(request, Some(choice))
+    }
+
+    fn wait_for_response(
+        &mut self,
+        request: &serde_json::Value,
+        choice: Option<&str>,
+    ) -> Result<(serde_json::Value, usize), Box<dyn Error>> {
+        let id = request.get("id").ok_or("request has no id")?;
+        let started = Instant::now();
+        self.notify(request).map_err(|error| {
+            self.response_error(request, choice, 0, started, "none", &error.to_string())
+        })?;
+        // A blocking index request includes cold tokenizer/storage setup. Use
+        // the same 30-second budget as the HTTP indexing fixture, without
+        // resetting the deadline when consent or progress notifications arrive.
+        let timeout = if request["params"]["name"] == "zvec_grep_index" {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(20)
+        };
+        let deadline = started + timeout;
+        let mut prompts = 0;
+        let mut last_message = "none".to_owned();
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|error| {
+                    self.response_error(
+                        request,
+                        choice,
+                        prompts,
+                        started,
+                        &last_message,
+                        &error.to_string(),
+                    )
+                })?;
+            let response: serde_json::Value = serde_json::from_str(&line).map_err(|error| {
+                self.response_error(
+                    request,
+                    choice,
+                    prompts,
+                    started,
+                    &last_message,
+                    &format!("invalid JSON: {error}"),
+                )
+            })?;
+            // Record protocol metadata only: request arguments and response
+            // bodies may contain API keys or indexed source content.
+            last_message = json!({
+                "id": response.get("id"),
+                "method": response.get("method"),
+                "error_code": response.pointer("/error/code"),
+                "has_result": response.get("result").is_some()
+            })
+            .to_string();
+            if response["method"] == "elicitation/create" {
+                prompts += 1;
+                let choice = choice.ok_or("unexpected consent prompt")?;
+                self.notify(&json!({"jsonrpc": "2.0", "id": response["id"], "result": {
+                    "action": "accept", "content": {"choice": choice}
+                }}))?;
+            } else if response.get("id") == Some(id) {
+                return Ok((response, prompts));
+            }
+        }
+    }
+
+    fn response_error(
+        &mut self,
+        request: &serde_json::Value,
+        choice: Option<&str>,
+        prompts: usize,
+        started: Instant,
+        last_message: &str,
+        reason: &str,
+    ) -> Box<dyn Error> {
+        let child_status = match self.child.try_wait() {
+            Ok(Some(status)) => status.to_string(),
+            Ok(None) => "running".to_owned(),
+            Err(error) => format!("unavailable: {error}"),
+        };
+        let log_path = self.home.join("daemon/server.log");
+        format!(
+            "stdio response failed: {reason}; id={}, method={}, tool={}, choice={choice:?}, prompts={prompts}, elapsed={:?}, child={child_status}, last_message={last_message}\nbridge stderr:\n{}\ndaemon log ({}):\n{}",
+            request["id"], request["method"], request["params"]["name"], started.elapsed(),
+            log_tail(self.stderr.path(), 0), log_path.display(), log_tail(&log_path, self.daemon_log_start)
+        ).into()
+    }
+
+    fn close(mut self) -> Result<(), Box<dyn Error>> {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                if let Some(reader) = self.reader.take() {
+                    let _ = reader.join();
+                }
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!("stdio bridge exited with {status}").into());
+            }
+            if Instant::now() >= deadline {
+                self.child.kill()?;
+                let _ = self.child.wait();
+                return Err("stdio bridge did not exit after stdin closed".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for StdioBridge {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+#[test]
+fn server_start_retries_a_bind_race_without_stopping_the_port_owner() -> Result<(), Box<dyn Error>>
+{
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let mut attempts = 0;
+    let mut occupied = None;
+    let (mut guard, _) = start_on_available_port(&binary, &home, None, |listen| {
+        attempts += 1;
+        if occupied.is_none() {
+            // Claim the port after selection, immediately before daemon startup.
+            occupied = Some(TcpListener::bind(listen)?);
+        }
+        server_start_output(
+            Command::new(&binary)
+                .args(["server", "on", "--home"])
+                .arg(home.path())
+                .args(["--listen", listen, "--mcp-toolset", "full"]),
+        )
+    })?;
+    assert!(attempts >= 2, "the forced bind conflict must be retried");
+    let occupied = occupied.ok_or("bind-race listener was not created")?;
+    assert_ne!(guard.listen, occupied.local_addr()?.to_string());
+    assert_command_success(&guard.stop()?);
+    // Retry cleanup is scoped to the private home, never to the occupied port.
+    assert!(TcpStream::connect(occupied.local_addr()?).is_ok());
+    Ok(())
+}
+
+#[test]
+fn server_start_does_not_retry_unrelated_failures() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let mut attempts = 0;
+    let result = start_on_available_port::<()>(&binary, &home, None, |_| {
+        attempts += 1;
+        Err("fixture setup failed".into())
+    });
+    assert_eq!(attempts, 1);
+    let error = result.err().ok_or("unexpected startup success")?;
+    assert!(error.to_string().contains("fixture setup failed"));
+    Ok(())
+}
+
+#[test]
+fn server_on_exposes_only_agent_search_and_off_stops_it() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let (mut guard, output) = start_server(&binary, &home, "agent", None, |_| {})?;
+    let port = guard.listen.parse::<SocketAddr>()?.port();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Server: ready"));
+    assert!(stdout.contains("MCP toolset: agent"));
+
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "zg-test", "version": "1" }
+        }
+    });
+    let response = post_json(port, None, &initialize.to_string())?;
+    assert!(response.contains("\"name\":\"zvec-grep\""));
+    let session = response
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("mcp-session-id:")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .ok_or("initialize response did not contain mcp-session-id")?;
+
+    let initialized = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {}
+    });
+    let _ = post_json(port, Some(&session), &initialized.to_string())?;
+    let list = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    });
+    let response = post_json(port, Some(&session), &list.to_string())?;
+    assert!(response.contains("zvec_grep_search"));
+    assert!(!response.contains("zvec_grep_index"));
+    assert!(!response.contains("zvec_grep_rg"));
+    assert!(response.contains("\"maximum\":50"));
+
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_search",
+            "arguments": {
+                "root": home.path(),
+                "query": "daemon lifecycle"
+            }
+        }
+    });
+    let response = post_json(port, Some(&session), &call.to_string())?;
+    assert!(response.contains("error[ZG.ENGINE.NOT_FOUND]"));
+    assert!(response.contains("workspace index at"));
+    assert!(response.contains("no workspace manifest was found"));
+    assert!(response.contains("\"isError\":true"));
+
+    // CLI administration uses the typed daemon protocol rather than the
+    // public MCP toolset, so status remains available with the agent profile.
+    let cli_status = Command::new(&guard.binary)
+        .args(["status", "--mode", "server", "--home"])
+        .arg(&guard.home)
+        .arg(home.path())
+        .output()?;
+    assert_command_success(&cli_status);
+    let cli_stdout = String::from_utf8_lossy(&cli_status.stdout);
+    assert!(cli_stdout.contains("Workspace index: uninitialized"));
+    assert!(cli_stdout.contains(&format!("Root: {}", home.path().display())));
+
+    let output = guard.stop()?;
+    assert_command_success(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Server: stopped"));
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn full_toolset_exposes_lifecycle_tools_and_runs_managed_rg() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let embedding = EmbeddingServer::start()?;
+    std::fs::write(
+        workspace.path().join("sample.txt"),
+        "resident workspace manager\n",
+    )?;
+    // The mock provider requires the same explicit workspace consent as real providers.
+    let signing_key = home.path().join("authorization.key");
+    let consent = Command::new(&binary)
+        .env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key)
+        .args([
+            "auth",
+            "grant",
+            path_text(workspace.path())?,
+            "--capability",
+            "embedding",
+            "--scope",
+            "workspace",
+            "--embedding",
+            "qwen/text-embedding-v4",
+            "--endpoint",
+            &format!("http://{}/embeddings", embedding.address),
+        ])
+        .output()?;
+    assert_command_success(&consent);
+    let (mut guard, output) = start_server(&binary, &home, "full", None, |command| {
+        command
+            .env("ZVEC_GREP_API_KEY", "local-test-key")
+            .env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key);
+    })?;
+    let port = guard.listen.parse::<SocketAddr>()?.port();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("MCP toolset: full"));
+
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "zg-full-test", "version": "1" }
+        }
+    });
+    let response = post_json(port, None, &initialize.to_string())?;
+    let session = response
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("mcp-session-id:")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .ok_or("initialize response did not contain mcp-session-id")?;
+    let initialized = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {}
+    });
+    let _ = post_json(port, Some(&session), &initialized.to_string())?;
+
+    let list = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    });
+    let response = post_json(port, Some(&session), &list.to_string())?;
+    for name in [
+        "zvec_grep_search",
+        "zvec_grep_index",
+        "zvec_grep_index_drop",
+        "zvec_grep_rg",
+        "zvec_grep_index_status",
+        "zvec_grep_server_status",
+    ] {
+        assert!(response.contains(name), "full toolset is missing {name}");
+    }
+
+    let rg = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_rg",
+            "arguments": {
+                "root": workspace.path(),
+                "command": "rg -F resident sample.txt"
+            }
+        }
+    });
+    let response = post_json(port, Some(&session), &rg.to_string())?;
+    assert!(response.contains("matchedBy=lexical sample.txt:1"));
+    assert!(response.contains("resident workspace manager"));
+    assert!(response.contains("\"isError\":false"));
+
+    for (command, has_match) in [
+        ("rg -F ' resident ' sample.txt", false),
+        ("rg --iglob '*.RS' resident .", false),
+        ("rg -S Resident sample.txt", false),
+        ("rg -S RESIDENT -i sample.txt", true),
+        ("rg -e '' sample.txt", true),
+    ] {
+        let mut request = rg.clone();
+        request["params"]["arguments"]["command"] = json!(command);
+        let response = post_json(port, Some(&session), &request.to_string())?;
+        assert!(
+            response.contains("\"isError\":false"),
+            "{command}: {response}"
+        );
+        assert_eq!(
+            response.contains("matchedBy=lexical"),
+            has_match,
+            "{command}: {response}"
+        );
+    }
+
+    let index = json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_index",
+            "arguments": {
+                "root": workspace.path(),
+                "wait": false,
+                "embedding": "qwen/text-embedding-v4",
+                "endpoint": format!("http://{}/embeddings", embedding.address)
+            }
+        }
+    });
+    let response = post_json(port, Some(&session), &index.to_string())?;
+    assert!(response.contains("\"state\":\"queued\""));
+    assert!(response.contains("\"job_id\":"));
+    assert!(!response.contains("generation-"));
+    assert!(response.contains("\"isError\":false"));
+
+    let status = json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_server_status",
+            "arguments": {}
+        }
+    });
+    let response = post_json(port, Some(&session), &status.to_string())?;
+    assert!(response.contains("active_runtimes"));
+    assert!(response.contains("\"active_runtimes\":1"));
+    assert!(response.contains("structuredContent"));
+    assert!(response.contains("\"isError\":false"));
+
+    let index_status = json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_index_status",
+            "arguments": { "root": workspace.path() }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let response = loop {
+        let response = post_json(port, Some(&session), &index_status.to_string())?;
+        assert!(!response.contains("\"job_state\":\"failed\""), "{response}");
+        if response.contains("\"job_state\":\"succeeded\"") {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "index did not complete: {response}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(response.contains("\"indexed\":true"), "{response}");
+    assert!(response.contains("\"index_policy\":\"enabled\""));
+    assert!(response.contains("\"source\":\"index\""));
+    assert!(response.contains("\"runtime\":"));
+    assert!(response.contains("\"isError\":false"));
+    assert!(response.contains("\"indexed\":1"), "{response}");
+    assert!(response.contains("\"failed\":0"), "{response}");
+
+    let search = json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "zvec_grep_search",
+            "arguments": {
+                "root": workspace.path(),
+                "fts": "resident",
+                "autoUpdate": false
+            }
+        }
+    });
+    let response = post_json(port, Some(&session), &search.to_string())?;
+    assert!(response.contains("sample.txt"), "{response}");
+    assert!(
+        response.contains("resident workspace manager"),
+        "{response}"
+    );
+    assert!(response.contains("\"isError\":false"), "{response}");
+    assert!(response.contains("freshness: possibly_stale"), "{response}");
+    assert!(
+        response.contains("results: served_from_current_index"),
+        "{response}"
+    );
+    assert!(response.contains("background_refresh: off"), "{response}");
+
+    std::fs::write(
+        workspace.path().join("fresh.txt"),
+        "freshnessbarrier newly created content\n",
+    )?;
+    let wait_search = json!({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": { "name": "zvec_grep_search", "arguments": {
+            "root": workspace.path(), "fts": "freshnessbarrier",
+            "autoUpdate": false, "freshness": "wait_for_fresh"
+        } }
+    });
+    let response = post_json(port, Some(&session), &wait_search.to_string())?;
+    assert!(response.contains("fresh.txt"), "{response}");
+    assert!(response.contains("freshness: fresh"), "{response}");
+    assert!(!response.contains("background_refresh:"), "{response}");
+    assert!(
+        !response.contains("results: served_from_current_index"),
+        "{response}"
+    );
+    assert!(response.contains("\"isError\":false"), "{response}");
+
+    let background_search = json!({
+        "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": { "name": "zvec_grep_search", "arguments": {
+            "root": workspace.path(), "fts": "freshnessbarrier"
+        } }
+    });
+    let response = post_json(port, Some(&session), &background_search.to_string())?;
+    assert!(response.contains("fresh.txt"), "{response}");
+    assert!(response.contains("freshness: possibly_stale"), "{response}");
+    assert!(
+        response.contains("results: served_from_current_index"),
+        "{response}"
+    );
+    assert!(
+        !response.contains("freshness: served_from_current_index"),
+        "{response}"
+    );
+    assert!(
+        response.contains("background_refresh: scheduled"),
+        "{response}"
+    );
+    assert!(response.contains("\"isError\":false"), "{response}");
+
+    let output = guard.stop()?;
+    assert_command_success(&output);
+    Ok(())
+}
+
+#[test]
+fn concurrent_stdio_bootstraps_share_one_resident_daemon() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let (mut guard, mut bridges) = start_on_available_port(&binary, &home, None, |listen| {
+        let mut bridges = (0..4)
+            .map(|_| StdioBridge::spawn(&binary, home.path(), listen))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (index, bridge) in bridges.iter_mut().enumerate() {
+            let initialize = json!({
+                "jsonrpc": "2.0",
+                "id": index + 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": { "name": "zg-stdio-test", "version": "1" }
+                }
+            });
+            let response = bridge.request(&initialize)?;
+            assert_eq!(response["result"]["serverInfo"]["name"], "zvec-grep");
+            bridge.notify(&json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            }))?;
+        }
+        Ok(bridges)
+    })?;
+
+    let list = bridges[0].request(&json!({
+        "jsonrpc": "2.0",
+        "id": 100,
+        "method": "tools/list",
+        "params": {}
+    }))?;
+    let tools = list["result"]["tools"]
+        .as_array()
+        .ok_or("tools/list did not return an array")?;
+    assert_eq!(tools.len(), 6);
+
+    for bridge in bridges {
+        bridge.close()?;
+    }
+
+    let status = Command::new(&binary)
+        .args(["server", "status", "--home"])
+        .arg(home.path())
+        .output()?;
+    assert_command_success(&status);
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("Server: ready"));
+    assert!(stdout.contains("MCP toolset: full"));
+
+    let output = guard.stop()?;
+    assert_command_success(&output);
+    Ok(())
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Exercise update, rebuild and drop in one resident daemon lifecycle"
+)]
+fn direct_writes_retire_daemon_read_sessions() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let embedding = EmbeddingServer::start()?;
+    let endpoint = format!("http://{}/embeddings", embedding.address);
+    let direct = |extra: &[&str]| {
+        let mut command = Command::new(&binary);
+        command
+            .current_dir(workspace.path())
+            .env("ZVEC_GREP_HOME", home.path())
+            .env(
+                "ZVEC_GREP_WORKSPACE_REGISTRY",
+                home.path().join("workspaces.json"),
+            )
+            .env("ZVEC_GREP_API_KEY", "local-test-key")
+            .args(["index", "--mode", "direct"])
+            .args(extra);
+        if !extra.contains(&"--drop") {
+            command.arg("--allow-remote");
+        }
+        command.output()
+    };
+    std::fs::write(workspace.path().join("source.txt"), "orchard documentation")?;
+    assert_command_success(&direct(&[
+        "--embedding",
+        "qwen/text-embedding-v4",
+        "--endpoint",
+        &endpoint,
+    ])?);
+    // CLI writers are separate processes, not children of the native cache owner.
+    // This also avoids inheriting the native library's open lock descriptors.
+    let (mut guard, _) = start_server(&binary, &home, "full", None, |command| {
+        command.env(
+            "ZVEC_GREP_WORKSPACE_REGISTRY",
+            home.path().join("workspaces.json"),
+        );
+    })?;
+    let port = guard.listen.parse::<SocketAddr>()?.port();
+    let initialize = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": { "name": "read-cache-test", "version": "1" } }
+    });
+    let response = post_json(port, None, &initialize.to_string())?;
+    let session = response
+        .lines()
+        .find_map(|line| line.strip_prefix("mcp-session-id:").map(str::trim))
+        .ok_or("missing MCP session")?;
+    post_json(
+        port,
+        Some(session),
+        &json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        })
+        .to_string(),
+    )?;
+    let search = |query: &str| {
+        post_json(
+            port,
+            Some(session),
+            &json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "zvec_grep_search", "arguments": {
+                    "root": workspace.path(), "fts": query, "autoUpdate": false
+                } }
+            })
+            .to_string(),
+        )
+    };
+    for _ in 0..2 {
+        let response = search("orchard")?;
+        assert!(
+            response.contains("source.txt") && response.contains("\"isError\":false"),
+            "{response}"
+        );
+    }
+    std::fs::write(
+        workspace.path().join("source.txt"),
+        "vineyard documentation",
+    )?;
+    assert_command_success(&direct(&[])?);
+    let response = search("vineyard")?;
+    assert!(
+        response.contains("source.txt") && response.contains("\"isError\":false"),
+        "{response}"
+    );
+    let response = search("orchard")?;
+    assert!(
+        !response.contains("source.txt"),
+        "old index contents remained cached: {response}"
+    );
+
+    let manifest_path = workspace.path().join(".zvec-grep/manifest.json");
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    assert_command_success(&direct(&["--rebuild"])?);
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    assert_ne!(before["storageGeneration"], after["storageGeneration"]);
+    let response = search("vineyard")?;
+    assert!(
+        response.contains("source.txt") && response.contains("\"isError\":false"),
+        "{response}"
+    );
+    assert_command_success(&direct(&["--drop", "--yes"])?);
+    let response = search("vineyard")?;
+    assert!(
+        response.contains("\"isError\":true"),
+        "dropped index remained cached: {response}"
+    );
+    assert_command_success(&guard.stop()?);
+    Ok(())
+}
+
+#[test]
+fn indexed_fragment_coordinates_survive_direct_server_and_mcp() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let embedding = EmbeddingServer::start()?;
+    // Exceed the configured model's input budget while keeping only two source lines.
+    let source = format!("# Heading\n{} linenumberprobe\n", "x".repeat(20_000));
+    std::fs::write(workspace.path().join("sample.md"), source)?;
+    let registry = home.path().join("workspaces.json");
+    let index = Command::new(&binary)
+        .current_dir(workspace.path())
+        .env("ZVEC_GREP_HOME", home.path())
+        .env("ZVEC_GREP_WORKSPACE_REGISTRY", &registry)
+        .env("ZVEC_GREP_API_KEY", "local-test-key")
+        .args([
+            "index",
+            "--mode",
+            "direct",
+            "--allow-remote",
+            "--embedding",
+            "qwen/text-embedding-v4",
+            "--endpoint",
+        ])
+        .arg(format!("http://{}/embeddings", embedding.address))
+        .output()?;
+    assert_command_success(&index);
+    let (mut guard, _) = start_server(&binary, &home, "full", None, |command| {
+        command.env("ZVEC_GREP_WORKSPACE_REGISTRY", &registry);
+    })?;
+    let mut bridge = StdioBridge::spawn(&binary, home.path(), &guard.listen)?;
+    bridge.request(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": { "name": "source-coordinate-test", "version": "1" } }
+    }))?;
+    bridge.notify(
+        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
+    )?;
+    for preview in ["short", "full"] {
+        let mut outputs = Vec::new();
+        for mode in ["direct", "server"] {
+            let reply = Command::new(&binary)
+                .current_dir(workspace.path())
+                .env("ZVEC_GREP_HOME", home.path())
+                .env("ZVEC_GREP_WORKSPACE_REGISTRY", &registry)
+                .args([
+                    "query",
+                    "--mode",
+                    mode,
+                    "--fts",
+                    "linenumberprobe",
+                    "--refresh",
+                    "off",
+                    "--preview",
+                    preview,
+                ])
+                .output()?;
+            assert_command_success(&reply);
+            let text = String::from_utf8(reply.stdout)?;
+            assert!(text.contains("\n  2: xxx"), "{mode} {preview}: {text}");
+            assert!(!text.contains("\n  1: xxx"), "{mode} {preview}: {text}");
+            outputs.push(text);
+        }
+        assert_eq!(outputs[0], outputs[1], "direct/server {preview}");
+        let reply = bridge.request(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "zvec_grep_search", "arguments": {
+                "root": workspace.path(), "fts": "linenumberprobe", "autoUpdate": false, "preview": preview
+            } }
+        }))?;
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        let text = reply["result"]["content"][0]["text"]
+            .as_str()
+            .ok_or("missing source preview")?;
+        assert!(
+            text.contains("matched: 2\nsource:\n2\txxx"),
+            "{preview}: {text}"
+        );
+        assert!(text.ends_with("\n3\t"), "{preview}: {text}");
+    }
+    bridge.close()?;
+    assert_command_success(&guard.stop()?);
+    Ok(())
+}
+
+#[test]
+fn stdio_remote_consent_controls_transmission_and_persistence() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let embedding = EmbeddingServer::start()?;
+    std::fs::write(
+        workspace.path().join("sample.md"),
+        "# Consent\nremote consent fixture\n",
+    )?;
+    let signing_key = home.path().join("authorization.key");
+    let (mut guard, _) = start_server(&binary, &home, "full", None, |command| {
+        command.env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key);
+    })?;
+    let mut bridge = StdioBridge::spawn(&binary, home.path(), &guard.listen)?;
+    bridge.request(
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {"elicitation": {"form": {}}},
+            "clientInfo": {"name": "consent-test", "version": "1"}
+        }}),
+    )?;
+    bridge.notify(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
+    let index = |id| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+            "name": "zvec_grep_index", "arguments": {
+                "root": workspace.path(), "embedding": "qwen/text-embedding-v4",
+                "endpoint": format!("http://{}/embeddings", embedding.address), "apiKey": "test-key",
+                "wait": true, "debug": true
+            }
+        }})
+    };
+    let (declined, prompts) = bridge.request_with_consent(&index(2), "cancel")?;
+    assert_eq!(prompts, 1);
+    assert_eq!(declined["result"]["isError"], true);
+    assert_eq!(embedding.requests.load(Ordering::SeqCst), 0);
+    assert!(!signing_key.exists());
+    let (indexed, prompts) = bridge.request_with_consent(&index(3), "once")?;
+    assert_eq!(prompts, 1);
+    assert_eq!(indexed["result"]["isError"], false, "{indexed}");
+    assert_eq!(
+        indexed["result"]["structuredContent"]["state"], "succeeded",
+        "{indexed}"
+    );
+    assert!(indexed["result"]["structuredContent"]["debug"]["timings"].is_array());
+    let indexed_requests = embedding.requests.load(Ordering::SeqCst);
+    assert!(indexed_requests > 0);
+    assert!(
+        !signing_key.exists(),
+        "one-operation consent must not create a signing key"
+    );
+    let search = |id| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+            "name": "zvec_grep_search", "arguments": {"root": workspace.path(), "query": "consent", "autoUpdate": false, "apiKey": "test-key"}
+        }})
+    };
+    let (fts, prompts) = bridge.request_with_consent(&search(4), "fts_only")?;
+    assert_eq!(prompts, 1);
+    assert_eq!(fts["result"]["isError"], false, "{fts}");
+    assert_eq!(embedding.requests.load(Ordering::SeqCst), indexed_requests);
+    let (persisted, prompts) = bridge.request_with_consent(&index(5), "workspace")?;
+    assert_eq!(prompts, 1);
+    assert_eq!(persisted["result"]["isError"], false, "{persisted}");
+    assert!(signing_key.exists());
+    let (queried, prompts) = bridge.request_with_consent(&search(6), "cancel")?;
+    assert_eq!(prompts, 0, "valid workspace grants must skip elicitation");
+    assert_eq!(queried["result"]["isError"], false, "{queried}");
+    assert!(embedding.requests.load(Ordering::SeqCst) > indexed_requests);
+    bridge.close()?;
+    assert_command_success(&guard.stop()?);
+    Ok(())
+}
+
+struct EmbeddingServer {
+    address: SocketAddr,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+    requests: Arc<AtomicUsize>,
+}
+
+impl EmbeddingServer {
+    fn start() -> std::io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let worker = std::thread::spawn({
+            let stop = Arc::clone(&stop);
+            let requests = Arc::clone(&requests);
+            move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    respond_embedding(stream.expect("mock embedding connection"))
+                        .expect("mock embedding response");
+                }
+            }
+        });
+        Ok(Self {
+            address,
+            stop,
+            worker: Some(worker),
+            requests,
+        })
+    }
+}
+
+impl Drop for EmbeddingServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = TcpStream::connect(self.address);
+        if let Some(worker) = self.worker.take() {
+            let result = worker.join();
+            if !std::thread::panicking() {
+                assert!(result.is_ok(), "mock embedding server failed");
+            }
+        }
+    }
+}
+
+fn respond_embedding(mut stream: TcpStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut content_length = None;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if line == "\r\n" {
+            break;
+        }
+        if let Some(length) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = Some(length.trim().parse::<usize>().expect("content length"));
+        }
+    }
+    let mut body = vec![0; content_length.expect("request body length")];
+    reader.read_exact(&mut body)?;
+    let request: serde_json::Value = serde_json::from_slice(&body)?;
+    let dimension = usize::try_from(request["dimensions"].as_u64().expect("dimension"))
+        .expect("usize dimension");
+    let mut vector = vec![0.0_f32; dimension];
+    vector[0] = 1.0;
+    let data = request["input"]
+        .as_array()
+        .expect("text inputs")
+        .iter()
+        .enumerate()
+        .map(|(index, _)| json!({ "index": index, "embedding": vector }))
+        .collect::<Vec<_>>();
+    let response = serde_json::to_vec(&json!({ "data": data }))?;
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response.len()
+    )?;
+    stream.write_all(&response)
+}
+
+fn available_port() -> Result<u16, std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
+fn post_json(port: u16, session: Option<&str>, body: &str) -> Result<String, Box<dyn Error>> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    // A wait_for_fresh request includes indexing work, which can exceed five
+    // seconds on slower CI runners even with a local embedding provider.
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let session_header = session.map_or_else(String::new, |value| {
+        format!("Mcp-Session-Id: {value}\r\nMCP-Protocol-Version: 2025-11-25\r\n")
+    });
+    write!(
+        stream,
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\n{session_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    stream.flush()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
+fn path_text(path: &Path) -> Result<&str, Box<dyn Error>> {
+    path.to_str()
+        .ok_or_else(|| "temporary path is not valid UTF-8".into())
+}
+
+fn assert_command_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn token_file_protects_daemon_requests_and_is_forwarded_to_child() -> Result<(), Box<dyn Error>> {
+    let home = TempDir::new()?;
+    let token_file = home.path().join("token.txt");
+    std::fs::write(&token_file, "test-token-012345678901234567890123456789\n")?;
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let (mut guard, _) = start_server(&binary, &home, "agent", Some(&token_file), |command| {
+        command
+            .env_remove("ZVEC_GREP_SERVER_TOKEN")
+            .env_remove("ZVEC_GREP_SERVER_TOKEN_FILE");
+    })?;
+    let listen = &guard.listen;
+    let mut connection = TcpStream::connect(listen)?;
+    connection.set_read_timeout(Some(Duration::from_secs(5)))?;
+    write!(
+        connection,
+        "POST /admin/execute HTTP/1.1\r\nHost: {listen}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    connection.read_to_string(&mut response)?;
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+    let workspace = TempDir::new()?;
+    let status = Command::new(&binary)
+        .current_dir(workspace.path())
+        .args(["status", "--mode", "server", "--home"])
+        .arg(home.path())
+        .env_remove("ZVEC_GREP_SERVER_TOKEN")
+        .env("ZVEC_GREP_SERVER_TOKEN_FILE", &token_file)
+        .output()?;
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let stopped = Command::new(&binary)
+        .args(["server", "off", "--home"])
+        .arg(home.path())
+        .arg("--token-file")
+        .arg(&token_file)
+        .env_remove("ZVEC_GREP_SERVER_TOKEN")
+        .output()?;
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    guard.active = false;
+    Ok(())
+}

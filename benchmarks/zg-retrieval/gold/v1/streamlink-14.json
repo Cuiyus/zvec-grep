@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "streamlink:14",
+  "question_sha256": "bc48cab74d625cd7abfab73dbd9290eca9490c4f251c73e414e5428cf204b220",
+  "repository": "streamlink/streamlink",
+  "repository_commit": "ab1f36560005253ca6a290a614730bf18a29a7f9",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "cmmedia-stream-validation",
+      "path": "src/streamlink/plugins/cmmedia.py",
+      "symbol": "CMMedia._get_streams",
+      "relevance_reason": "The exact multi-stage retrieval method extracts author and iframe URL via HTML schemas, parses embedded Kaltura JSON, then checks success/error response shapes.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "0376e828dd4441a2b8e0b74e0f32f9bc0fca143d77276d9d97581db9f904ae45",
+      "anchors": [
+        {
+          "start_line": 38,
+          "end_line": 38,
+          "text": "    def _get_streams(self):",
+          "sha256": "dff868baf15a4907d06dda81fb48fba9ab561f8aa0479d81209ac5077177dde7"
+        },
+        {
+          "start_line": 38,
+          "end_line": 53,
+          "text": "    def _get_streams(self):\n        self.author, iframe_url = self.session.http.get(\n            self.url,\n            schema=validate.Schema(\n                validate.parse_html(),\n                validate.union((\n                    validate.xml_xpath_string(\".//h1[contains(@class, 'btn-title')]/text()\"),\n                    validate.all(\n                        validate.xml_xpath_string(\".//script[contains(text(), '/embedIframeJs/')]/text()\"),\n                        validate.none_or_all(\n                            re.compile(r\"\"\"{getKs\\((?P<q>\")(?P<url>.+?)(?P=q)\"\"\"),\n                            validate.none_or_all(validate.get(\"url\"), validate.url()),\n                        ),\n                    ),\n                )),\n            ),",
+          "sha256": "12bef432175a11d0965ec68c030593cae54ab4e5f14289c2b31528ce62e6c149"
+        },
+        {
+          "start_line": 66,
+          "end_line": 75,
+          "text": "        json = self.session.http.get(\n            iframe_url,\n            schema=validate.Schema(\n                re.compile(r\"twindow\\.kalturaIframePackageData\\s*=\\s*({.*});[\\\\nt]*var isIE8\"),\n                validate.none_or_all(\n                    validate.get(1),\n                    validate.transform(lambda text: re.sub(r'\\\\\"', r'\"', text)),\n                    validate.parse_json(),\n                    validate.any(\n                        {",
+          "sha256": "f14201297776e07b466e1be0ee32741777b065873bd7d9e1326ef27eac75e166"
+        },
+        {
+          "start_line": 95,
+          "end_line": 107,
+          "text": "                        },\n                        {\"error\": str},\n                    ),\n                ),\n            ),\n        )\n\n        if not json:\n            return\n\n        if \"error\" in json:\n            log.error(f\"API error: {json['error']}\")\n            return",
+          "sha256": "6b85bc39211bf1f4ce30332b0f600d85f71c9e09e5cbd038f57068d11645b53c"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Disabled: one verified direct stream-retrieval method.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Reference has no path; source search located CMMedia._get_streams and confirmed author/iframe_url, nested validate.Schema and Kaltura metadata. Generic schema utilities are not promoted to accepted entries. Independent audit_token source review: Read CMMedia._get_streams HTML union schema, iframe extraction, JSON conversion, nested shape validation and error exits. The specific method is directly relevant; no generic validation helper receives primary credit. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

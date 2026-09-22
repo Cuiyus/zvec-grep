@@ -1,4 +1,7 @@
-import { createZvecGrep } from "../engine/service/index.js";
+import {
+  createZvecGrep,
+  resolveIndexEmbeddingConcurrency,
+} from "../engine/service/index.js";
 import type {
   CreateZvecGrepOptions,
   ZvecGrepInfoResult,
@@ -444,7 +447,9 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
       const currentModelLoadRequest = runtime.currentModelLoadRequest();
       const defaultModelLoadRequest = searchInfo.indexed
         ? this.searchModelLoadRequest(searchInfo, {})
-        : currentModelLoadRequest;
+        : currentModelLoadRequest
+          ? this.overrideActiveModelLoadRequest(currentModelLoadRequest, {})
+          : undefined;
       if (!defaultModelLoadRequest) {
         throw new DaemonError(
           "INDEX_MISSING",
@@ -497,7 +502,6 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
               maxDepth: input.maxDepth,
               maxFileSizeBytes: input.maxFileSizeBytes,
               follow: input.follow,
-              embeddingConcurrency: input.embeddingConcurrency,
               modifiedAfter: input.modifiedAfter,
               modifiedBefore: input.modifiedBefore,
               autoUpdate: false,
@@ -542,6 +546,7 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
               root: runtime.canonicalRoot,
               apiKey: input.apiKey,
               device: input.device,
+              embeddingConcurrency: input.embeddingConcurrency,
               runtimeOverridesAreEphemeral: true,
             },
             "background_reconcile",
@@ -786,6 +791,15 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
     }
     let service: Awaited<ReturnType<typeof createZvecGrep>> | undefined;
     let scanDiagnostics: FileScanDiagnostics | undefined;
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = (): Promise<void> =>
+      (cleanupPromise ??= (async () => {
+        try {
+          await service?.close();
+        } finally {
+          lease.release();
+        }
+      })());
     try {
       service = await (this.options.createService ?? createZvecGrep)({
         ...this.options.serviceOptions,
@@ -800,42 +814,49 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
           ? undefined
           : input.endpoint,
         device: input.runtimeOverridesAreEphemeral ? undefined : input.device,
+        embeddingConcurrency: modelLoadRequest.embeddingConcurrency,
         daemonInstanceToken: this.runtimeManager.instanceToken,
       });
-      const result = await runtime.withWrite(() =>
-        withRemoteEmbeddingOperationPermit(authorization, () =>
-          service!.index({
-            root: runtime.canonicalRoot,
-            rebuild: input.rebuild,
-            resetPaths: input.resetPaths,
-            globs: normalizePlainStringList(input.globs),
-            insensitiveGlobs: normalizePlainStringList(input.insensitiveGlobs),
-            fileTypes: normalizePlainStringList(input.fileTypes),
-            excludedFileTypes: normalizePlainStringList(
-              input.excludedFileTypes,
-            ),
-            hidden: input.hidden,
-            noIgnore: input.noIgnore,
-            ignoreFiles: normalizePlainStringList(input.ignoreFiles),
-            maxDepth: input.maxDepth,
-            maxFileSizeBytes: input.maxFileSizeBytes,
-            follow: input.follow,
-            embeddingConcurrency: input.embeddingConcurrency,
-            changedPaths: input.changedPaths,
-            signal,
-            onProgress: report,
-            onWriterContext: (context) =>
-              runtime.setWriterContext(context, lease.key),
-          }),
-        ),
-      );
+      const result = await runtime.withWrite(async () => {
+        try {
+          // The closed read generation has now released its lease. Recheck
+          // capacity before lazy inference loads a different native model.
+          await this.modelPool.trimIdleEntries(lease.key);
+          return await withRemoteEmbeddingOperationPermit(authorization, () =>
+            service!.index({
+              root: runtime.canonicalRoot,
+              rebuild: input.rebuild,
+              resetPaths: input.resetPaths,
+              globs: normalizePlainStringList(input.globs),
+              insensitiveGlobs: normalizePlainStringList(
+                input.insensitiveGlobs,
+              ),
+              fileTypes: normalizePlainStringList(input.fileTypes),
+              excludedFileTypes: normalizePlainStringList(
+                input.excludedFileTypes,
+              ),
+              hidden: input.hidden,
+              noIgnore: input.noIgnore,
+              ignoreFiles: normalizePlainStringList(input.ignoreFiles),
+              maxDepth: input.maxDepth,
+              maxFileSizeBytes: input.maxFileSizeBytes,
+              follow: input.follow,
+              embeddingConcurrency: modelLoadRequest.embeddingConcurrency,
+              changedPaths: input.changedPaths,
+              signal,
+              onProgress: report,
+              onWriterContext: (context) =>
+                runtime.setWriterContext(context, lease.key),
+            }),
+          );
+        } finally {
+          // Release the writer model before queued query models can acquire.
+          await cleanup();
+        }
+      });
       scanDiagnostics = result.scanDiagnostics;
     } finally {
-      try {
-        await service?.close();
-      } finally {
-        lease.release();
-      }
+      await cleanup();
     }
 
     if (includeFinalStatus) {
@@ -1062,7 +1083,10 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
   private async waitForFresh(
     runtime: RootRuntime,
     authorization?: RemoteEmbeddingOperationPermit,
-    runtimeOverrides: Pick<NormalizedSearchInput, "apiKey" | "device"> = {},
+    runtimeOverrides: Pick<
+      NormalizedSearchInput,
+      "apiKey" | "device" | "embeddingConcurrency"
+    > = {},
   ): Promise<IndexJobSnapshot | undefined> {
     let updateJob: IndexJobSnapshot | undefined;
     while (true) {
@@ -1098,6 +1122,7 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
           root: runtime.canonicalRoot,
           apiKey: runtimeOverrides.apiKey,
           device: runtimeOverrides.device,
+          embeddingConcurrency: runtimeOverrides.embeddingConcurrency,
           runtimeOverridesAreEphemeral: true,
         },
         "fresh_query",
@@ -1199,6 +1224,7 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
       | "endpoint"
       | "device"
       | "rebuild"
+      | "embeddingConcurrency"
     >,
   ): EmbeddingModelLoadRequest {
     const model = this.indexModel(info, input);
@@ -1217,7 +1243,16 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
         "The requested embedding endpoint differs from the workspace snapshot; use rebuild to change endpoints.",
       );
     }
-    return { model, runtime };
+    const embeddingConcurrency = resolveIndexEmbeddingConcurrency(
+      model,
+      input.embeddingConcurrency ??
+        this.options.serviceOptions?.embeddingConcurrency,
+    );
+    return {
+      model,
+      runtime,
+      ...(embeddingConcurrency !== undefined ? { embeddingConcurrency } : {}),
+    };
   }
 
   private searchModelLoadRequest(
@@ -1276,7 +1311,10 @@ export class DaemonBackend implements ZvecGrepDaemonBackend {
       request.runtime ?? {},
       readGlobalConfig(),
     );
-    return { model: request.model, runtime };
+    return {
+      model: request.model,
+      runtime,
+    };
   }
 
   private readWorkspaceEmbeddingRuntime(

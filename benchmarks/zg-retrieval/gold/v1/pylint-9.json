@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "pylint:9",
+  "question_sha256": "d7f01e5805c13c712a3896d0afd076f57679b9b74ef84a7110db30addc41c37c",
+  "repository": "pylint-dev/pylint",
+  "repository_commit": "44740e5e5cdd2b80321a4f0ed4254213d058b9f6",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "namedtuple-return-annotation-regression",
+      "path": "tests/functional/u/used/used_before_assignment_type_annotations.py",
+      "kind": "symbol",
+      "source_sha256": "44c582efcb966e74758fe4dfb97cbd23310268fc704147272fefde8c7f4d4e3e",
+      "anchors": [
+        {
+          "start_line": 77,
+          "end_line": 77,
+          "text": "def nested_class_as_return_annotation():",
+          "sha256": "ae50ef64ad7dc5c98d4489811a928c7e112057d2638a22db94eea243c6d6d41f"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "nested_class_as_return_annotation (77–90) is the exact regression fixture: a nested MyObject defines Coords=namedtuple(...) before my_method(self)->Coords. This source directly identifies the namedtuple-as-class-attribute scenario in the question.",
+      "symbol": "nested_class_as_return_annotation"
+    },
+    {
+      "id": "annotation-class-scope-resolution",
+      "path": "pylint/checkers/variables.py",
+      "kind": "symbol",
+      "source_sha256": "3bdf852a07dc41b721568c4cfcd7e139c6250697f09633d37242a6b18ed1fa93",
+      "anchors": [
+        {
+          "start_line": 2560,
+          "end_line": 2560,
+          "text": "    def _ignore_class_scope(self, node: nodes.NodeNG) -> bool:",
+          "sha256": "8f1336722c3f9c204c568e01bd6880c1042f2b6a51fae10eba967e38c5bbeacb"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "VariablesChecker._ignore_class_scope (2560–2598) detects function-definition annotations/defaults/decorators, then consults frame.parent.scope().locals instead of the function locals and retains accessible class names. It is a direct entry into the special class-scope handling relevant to Coords.",
+      "symbol": "VariablesChecker._ignore_class_scope"
+    },
+    {
+      "id": "class-return-annotation-definition-order",
+      "path": "pylint/checkers/variables.py",
+      "kind": "code_span",
+      "source_sha256": "3bdf852a07dc41b721568c4cfcd7e139c6250697f09633d37242a6b18ed1fa93",
+      "anchors": [
+        {
+          "start_line": 2303,
+          "end_line": 2314,
+          "text": "            # Special rules for function return annotations.\n            if node is frame.returns:\n                # Using a name defined earlier in the class containing the function.\n                if defframe.parent_of(frame.returns):\n                    annotation_return = True\n                    if frame.returns.name in defframe.locals:\n                        definition = defframe.locals[node.name][0]\n                        # no warning raised if a name was defined earlier in the class\n                        maybe_before_assign = (\n                            definition.lineno is not None\n                            and definition.lineno >= frame.lineno\n                        )",
+          "sha256": "ca4b3bf8155de3ee5b25dc3606962718314dacdb62795484e25901db547be238"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Inside _is_variable_violation, the exact return-annotation branch checks that the class contains frame.returns, finds the name in class locals, and compares its definition line with the function line before deciding maybe_before_assign. This directly guards the earlier Coords declaration from a false used-before-assignment report."
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "The groups name complementary source responsibilities; alternatives within a group receive no additional coverage credit.",
+    "groups": [
+      {
+        "id": "exact-regression-scenario",
+        "target_ids": ["namedtuple-return-annotation-regression"]
+      },
+      {
+        "id": "class-scope-access",
+        "target_ids": ["annotation-class-scope-resolution"]
+      },
+      {
+        "id": "definition-order-check",
+        "target_ids": ["class-return-annotation-definition-order"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "The reference generalizes a simple method→class→function→module chain and consequences in importing modules. The fixed fixture and checker branches substantiate the specific annotation lookup exception and ordering check; they do not establish the entire generalized chain or every importer behavior. This boundary is retained rather than treating the reference prose as Gold. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}

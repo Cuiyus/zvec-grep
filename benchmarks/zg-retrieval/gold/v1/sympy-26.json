@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "sympy:26",
+  "question_sha256": "870efd43a5420d66048b4d53ee1928bd30607d9ed9ed4c98d05f182b5dba502a",
+  "repository": "sympy/sympy",
+  "repository_commit": "3c817ed8ab551d71e36907ce869afe5e4ca789ff",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "array-default-constructor",
+      "path": "sympy/tensor/array/ndim_array.py",
+      "symbol": "NDimArray.__new__",
+      "relevance_reason": "Direct default constructor delegates object creation to ImmutableDenseNDimArray.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "6d9bc0db57d24cc736b102c9378028bd0b2975dce69c83415853ebf937869a6d",
+      "anchors": [
+        {
+          "start_line": 142,
+          "end_line": 142,
+          "text": "    def __new__(cls, iterable, shape=None, **kwargs):",
+          "sha256": "3cf7b838c9dfea075637d58966af45e7e095d709baf7d4d83a9200bc07aeb95c"
+        },
+        {
+          "start_line": 142,
+          "end_line": 144,
+          "text": "    def __new__(cls, iterable, shape=None, **kwargs):\n        from sympy.tensor.array import ImmutableDenseNDimArray\n        return ImmutableDenseNDimArray(iterable, shape, **kwargs)",
+          "sha256": "f593bb321150dc680f6ebba266a6a997de0c6f0050a4408f8805e5677536cee9"
+        }
+      ]
+    },
+    {
+      "id": "immutable-dense-constructor",
+      "path": "sympy/tensor/array/dense_ndim_array.py",
+      "symbol": "ImmutableDenseNDimArray._new",
+      "relevance_reason": "Concrete delegated creation normalizes shape and values, creates a Basic object, and stores dense array representation.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "21ef2a54c272a764ecabb6958666693d7f17f8a4e517db9ac6441f4f3099f73f",
+      "anchors": [
+        {
+          "start_line": 137,
+          "end_line": 137,
+          "text": "    def _new(cls, iterable, shape, **kwargs):",
+          "sha256": "1cba22e6cf2ff8c95a35d72f2a1cd4f078165a19d6c144de1fdd87a42f94c134"
+        },
+        {
+          "start_line": 136,
+          "end_line": 148,
+          "text": "    @classmethod\n    def _new(cls, iterable, shape, **kwargs):\n        shape, flat_list = cls._handle_ndarray_creation_inputs(iterable, shape, **kwargs)\n        shape = Tuple(*map(_sympify, shape))\n        cls._check_special_bounds(flat_list, shape)\n        flat_list = flatten(flat_list)\n        flat_list = Tuple(*flat_list)\n        self = Basic.__new__(cls, flat_list, shape, **kwargs)\n        self._shape = shape\n        self._array = list(flat_list)\n        self._rank = len(shape)\n        self._loop_size = functools.reduce(lambda x,y: x*y, shape, 1)\n        return self",
+          "sha256": "4a850b4e94f8181f4aec667328b99eef0c330abd81d5fcbf4c0d5cdf61052b56"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "Disabled: primary labeling is alternative constructor-entry localization, not an exhaustive set of architectural relevance groups.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Source confirms default factory delegation, not impossibility of calling NDimArray: calling it succeeds by returning the concrete default. Claims that dense storage is universally faster or architecturally mandatory are not established by these sources. Independent audit_token source review: Read NDimArray.__new__ and ImmutableDenseNDimArray.__new__/_new; verified default delegation and concrete allocation. No unsupported necessity or performance rationale is accepted. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

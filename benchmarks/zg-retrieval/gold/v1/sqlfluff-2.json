@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "sqlfluff:2",
+  "question_sha256": "4db621649f73d0f58b0fc4c18536bc2185b725fd933a76d5ed603babd41edb9d",
+  "repository": "sqlfluff/sqlfluff",
+  "repository_commit": "db9801b7eb7fd014e765117f63ee1b0675fa9f87",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "context-segment-adapter",
+      "path": "src/sqlfluff/utils/functional/context.py",
+      "kind": "symbol",
+      "source_sha256": "9a596f9c7a3adcbedeef46fa9dc30b403ca85e26655abbae61a07096d63a2173",
+      "anchors": [
+        {
+          "start_line": 14,
+          "end_line": 14,
+          "text": "    def segment(self) -> \"Segments\":",
+          "sha256": "008159b84d69fbcaeb53a8bcbad034465143115224033b302c15e4042fe655f9"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "FunctionalContext.segment (14–18) converts context.segment into Segments while carrying templated_file, directly implementing the context-to-functional-wrapper boundary in the question.",
+      "symbol": "FunctionalContext.segment"
+    },
+    {
+      "id": "collection-children-query",
+      "path": "src/sqlfluff/utils/functional/segments.py",
+      "kind": "symbol",
+      "source_sha256": "5939117b288958ad8010c4b9c5806cd3b026c617bdd1840030d43e09a5ffdc95",
+      "anchors": [
+        {
+          "start_line": 120,
+          "end_line": 123,
+          "text": "    def children(\n        self,\n        predicate: Optional[PredicateType] = None,\n    ) -> \"Segments\":",
+          "sha256": "ec4f62e8749b9ce38e2d70a7850a779088a0d12b44ff1f11f4163b40cc5a8a79"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Segments.children (120–130) hides traversal of each BaseSegment.segments, applies an optional predicate, and returns another Segments collection; callers can chain this query API.",
+      "symbol": "Segments.children"
+    },
+    {
+      "id": "collection-select-query",
+      "path": "src/sqlfluff/utils/functional/segments.py",
+      "kind": "symbol",
+      "source_sha256": "5939117b288958ad8010c4b9c5806cd3b026c617bdd1840030d43e09a5ffdc95",
+      "anchors": [
+        {
+          "start_line": 192,
+          "end_line": 198,
+          "text": "    def select(\n        self,\n        select_if: Optional[PredicateType] = None,\n        loop_while: Optional[PredicateType] = None,\n        start_seg: Optional[BaseSegment] = None,\n        stop_seg: Optional[BaseSegment] = None,\n    ) -> \"Segments\":",
+          "sha256": "f99f555dd1feac342c44e76c44df02801712d4c00785fc183bbf7429c01464ca"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Segments.select (192–212) performs range, predicate and loop-while selection and returns Segments. It is an alternative entry to the collection-query abstraction, not an extra independent evidence group.",
+      "symbol": "Segments.select"
+    },
+    {
+      "id": "layout-rule-consumer",
+      "path": "src/sqlfluff/rules/layout/LT09.py",
+      "kind": "symbol",
+      "source_sha256": "fc3e0b4561730dc15931c727adc34a083e4c78d11248aa7ce9d47c87097691fc",
+      "anchors": [
+        {
+          "start_line": 109,
+          "end_line": 109,
+          "text": "    def _get_indexes(context: RuleContext) -> SelectTargetsInfo:",
+          "sha256": "65d195260674a34ec50914830c894d00f1c28d67ef507e01e93dc637f48bd583"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Rule_LT09._get_indexes (109–157) gets FunctionalContext(context).segment.children(), selects select_clause_element/newline/keyword subsets, and queries wrapped siblings. This demonstrates the abstraction at the exact select-target layout rule.",
+      "symbol": "Rule_LT09._get_indexes"
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "The groups name complementary source responsibilities; alternatives within a group receive no additional coverage credit.",
+    "groups": [
+      {
+        "id": "context-adaptation",
+        "target_ids": ["context-segment-adapter"]
+      },
+      {
+        "id": "collection-query-api",
+        "target_ids": ["collection-children-query", "collection-select-query"]
+      },
+      {
+        "id": "layout-rule-use",
+        "target_ids": ["layout-rule-consumer"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "audit_token",
+    "reviewer": "local_context",
+    "source_checks": [
+      "Fetched the repository at the exact source.lock.json commit; git rev-parse HEAD equals repository_commit.",
+      "Read the original question and fixed source; reference_answer was used only as a locator, never as the relevance oracle.",
+      "Verified each accepted entry against implementation or regression-test behavior described in relevance_reason.",
+      "Full-file SHA256 uses original UTF-8 file bytes; anchors use decoded splitlines joined with LF and no trailing newline.",
+      "Symbol anchors were checked against Python AST qualified definitions; code_span anchors use the explicitly reviewed source lines.",
+      "No zg search output or benchmark ranking was used to select these targets.",
+      "Independent local_context review read the target implementations/regression fixtures and checked entry relevance, complementary nDCG groups, exact anchors, file hashes, qualified AST symbols, question hash and repository SHA."
+    ],
+    "notes": "The wrapper abstraction is source-verified, but is not claimed to eliminate all direct parse-tree access: LT09 still passes context.segment in _eval. Class declarations alone were not chosen because precise adapter/query/consumer methods provide more discriminating entries. Independent source review completed; the reference-answer corrections and partial-positive entry-label scope were confirmed."
+  }
+}

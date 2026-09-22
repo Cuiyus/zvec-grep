@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "matplotlib:37",
+  "question_sha256": "97feca511d28845f5d32adda672a5f4b448a8f7ad81ad8bbec6035b97dabadab",
+  "repository": "matplotlib/matplotlib",
+  "repository_commit": "a5e1f6086e92d5cc0a23f85685d03d85b89a8395",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "fontinfo-construction",
+      "path": "lib/matplotlib/_mathtext.py",
+      "symbol": "TruetypeFonts._get_info",
+      "relevance_reason": "Creates FontInfo containing the FT2Font object, postscript_name, metrics and glyph; direct carrier construction.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "1dc1b0fdd2cb6b803bdac1d033133c26a76a1db5fdcc01a505d9e306c5398d18",
+      "anchors": [
+        {
+          "start_line": 373,
+          "end_line": 374,
+          "text": "    def _get_info(self, fontname: str, font_class: str, sym: str, fontsize: float,\n                  dpi: float) -> FontInfo:",
+          "sha256": "54ac41d644a11c885befa489f5581cb1cedc739cc45f13b22f62c42c9de111d7"
+        },
+        {
+          "start_line": 373,
+          "end_line": 377,
+          "text": "    def _get_info(self, fontname: str, font_class: str, sym: str, fontsize: float,\n                  dpi: float) -> FontInfo:\n        font, num, slanted = self._get_glyph(fontname, font_class, sym)\n        font.set_size(fontsize, dpi)\n        glyph = font.load_char(num, flags=self.load_glyph_flags)",
+          "sha256": "545b4b6aa0ac8dd91a76dfc4e28a1b49d8795368ca789936c04a21616752f164"
+        },
+        {
+          "start_line": 394,
+          "end_line": 402,
+          "text": "        return FontInfo(\n            font=font,\n            fontsize=fontsize,\n            postscript_name=font.postscript_name,\n            metrics=metrics,\n            num=num,\n            glyph=glyph,\n            offset=offset\n        )",
+          "sha256": "9c23b6a11ef9ae5cf09df91d82137070e2a22542761acfa775c5ecc4bf02f865"
+        }
+      ]
+    },
+    {
+      "id": "fontinfo-propagation",
+      "path": "lib/matplotlib/_mathtext.py",
+      "symbol": "Fonts.render_glyph",
+      "relevance_reason": "Appends the retrieved FontInfo to Output.glyphs for later vector or raster rendering.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "1dc1b0fdd2cb6b803bdac1d033133c26a76a1db5fdcc01a505d9e306c5398d18",
+      "anchors": [
+        {
+          "start_line": 289,
+          "end_line": 290,
+          "text": "    def render_glyph(self, output: Output, ox: float, oy: float, font: str,\n                     font_class: str, sym: str, fontsize: float, dpi: float) -> None:",
+          "sha256": "292d51bb1519a050b0bdc7115b60772788a164a80d262a89e88a6cf914361e64"
+        },
+        {
+          "start_line": 289,
+          "end_line": 296,
+          "text": "    def render_glyph(self, output: Output, ox: float, oy: float, font: str,\n                     font_class: str, sym: str, fontsize: float, dpi: float) -> None:\n        \"\"\"\n        At position (*ox*, *oy*), draw the glyph specified by the remaining\n        parameters (see `get_metrics` for their detailed description).\n        \"\"\"\n        info = self._get_info(font, font_class, sym, fontsize, dpi)\n        output.glyphs.append((ox, oy, info))",
+          "sha256": "9150439802cc5182d1b82a6cec7717fd52781a55dc9413ac097b0b97abbf894a"
+        }
+      ]
+    },
+    {
+      "id": "vector-output",
+      "path": "lib/matplotlib/_mathtext.py",
+      "symbol": "Output.to_vector",
+      "relevance_reason": "Emits FT2Font objects via info.font into the vector glyph tuples consumed by backends.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "1dc1b0fdd2cb6b803bdac1d033133c26a76a1db5fdcc01a505d9e306c5398d18",
+      "anchors": [
+        {
+          "start_line": 131,
+          "end_line": 131,
+          "text": "    def to_vector(self) -> VectorParse:",
+          "sha256": "f13652f4ea0d773adf4a12fe57216f502c1f1f23006ff2155ec7f43e85cf4997"
+        },
+        {
+          "start_line": 131,
+          "end_line": 138,
+          "text": "    def to_vector(self) -> VectorParse:\n        w, h, d = map(\n            np.ceil, [self.box.width, self.box.height, self.box.depth])\n        gs = [(info.font, info.fontsize, info.num, ox, h - oy + info.offset)\n              for ox, oy, info in self.glyphs]\n        rs = [(x1, h - y2, x2 - x1, y2 - y1)\n              for x1, y1, x2, y2 in self.rects]\n        return VectorParse(w, h + d, d, gs, rs)",
+          "sha256": "1ef556ab0c89c60efd711e24364ab3f273fa1518e91804946f5dcc887a43017d"
+        }
+      ]
+    },
+    {
+      "id": "raster-output",
+      "path": "lib/matplotlib/_mathtext.py",
+      "symbol": "Output.to_raster",
+      "relevance_reason": "Raster branch uses the FontInfo FT2Font object to draw glyphs into the bitmap.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "1dc1b0fdd2cb6b803bdac1d033133c26a76a1db5fdcc01a505d9e306c5398d18",
+      "anchors": [
+        {
+          "start_line": 140,
+          "end_line": 140,
+          "text": "    def to_raster(self, *, antialiased: bool) -> RasterParse:",
+          "sha256": "9cfad9ac529906b0890a07c260912c356e1cc66af5a9f8414fc5f247e5cc0ada"
+        },
+        {
+          "start_line": 140,
+          "end_line": 145,
+          "text": "    def to_raster(self, *, antialiased: bool) -> RasterParse:\n        # Metrics y's and mathtext y's are oriented in opposite directions,\n        # hence the switch between ymin and ymax.\n        xmin = min([*[ox + info.metrics.xmin for ox, oy, info in self.glyphs],\n                    *[x1 for x1, y1, x2, y2 in self.rects], 0]) - 1\n        ymin = min([*[oy - info.metrics.ymax for ox, oy, info in self.glyphs],",
+          "sha256": "984481156291c4da81927d609152d13dd97700900d2c012254e2e03138c91e11"
+        },
+        {
+          "start_line": 160,
+          "end_line": 165,
+          "text": "        shifted = ship(self.box, (-xmin, -ymin))\n\n        for ox, oy, info in shifted.glyphs:\n            info.font.draw_glyph_to_bitmap(\n                image, int(ox), int(oy - info.metrics.iceberg), info.glyph,\n                antialiased=antialiased)",
+          "sha256": "422c8804a7afc8e48b269d924d5b3a0f09b4eba34351ab07bd1c13bd90ee0295"
+        }
+      ]
+    },
+    {
+      "id": "postscript-rendering",
+      "path": "lib/matplotlib/backends/backend_ps.py",
+      "symbol": "RendererPS.draw_mathtext",
+      "relevance_reason": "PostScript backend consumes vector tuples and uses font.postscript_name for selectfont while using the font object for glyph lookup.",
+      "role": "accepted",
+      "kind": "symbol",
+      "source_sha256": "5a436d1ed793ca19006807d5390e9739e111b0b44cf46d7b3a585776a72cadfc",
+      "anchors": [
+        {
+          "start_line": 821,
+          "end_line": 821,
+          "text": "    def draw_mathtext(self, gc, x, y, s, prop, angle):",
+          "sha256": "9938d69197c05b5b6cbfb681ce77a32cf950e290b3a07ad2edb8e32e7fb16178"
+        },
+        {
+          "start_line": 821,
+          "end_line": 824,
+          "text": "    def draw_mathtext(self, gc, x, y, s, prop, angle):\n        \"\"\"Draw the math text using matplotlib.mathtext.\"\"\"\n        width, height, descent, glyphs, rects = \\\n            self._text2path.mathtext_parser.parse(s, 72, prop)",
+          "sha256": "49b4f4b89d2d96c9064c0f21f720c8603018d45e1e59da2ef8c69b9d4e7537f6"
+        },
+        {
+          "start_line": 831,
+          "end_line": 840,
+          "text": "        for font, fontsize, num, ox, oy in glyphs:\n            self._character_tracker.track_glyph(font, num)\n            if (font.postscript_name, fontsize) != lastfont:\n                lastfont = font.postscript_name, fontsize\n                self._pswriter.write(\n                    f\"/{font.postscript_name} {fontsize} selectfont\\n\")\n            glyph_name = font.get_glyph_name(font.get_char_index(num))\n            self._pswriter.write(\n                f\"{ox:g} {oy:g} moveto\\n\"\n                f\"/{glyph_name} glyphshow\\n\")",
+          "sha256": "b574b55195b576b72819dfbf3245e1429551e150372f255f0ca24dce9e8f83e7"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Verified complementary construction, storage, rendering-output and PostScript-consumer aspects; vector/raster are alternative members of one output group.",
+    "groups": [
+      {
+        "id": "fontinfo-build",
+        "target_ids": ["fontinfo-construction"]
+      },
+      {
+        "id": "glyph-storage",
+        "target_ids": ["fontinfo-propagation"]
+      },
+      {
+        "id": "font-object-output",
+        "target_ids": ["vector-output", "raster-output"]
+      },
+      {
+        "id": "postscript-consumer",
+        "target_ids": ["postscript-rendering"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "local_context",
+    "reviewer": "audit_token",
+    "source_checks": [
+      "Exact repository commit checked with git rev-parse HEAD.",
+      "Source files read independently of any zg retrieval output.",
+      "All Python qualified symbol names checked against AST definitions.",
+      "Full source-file SHA256 and exact line-anchor SHA256 computed from pinned UTF-8 source.",
+      "Question SHA256 copied from the locked original-query manifest.",
+      "Independent audit_token review: rechecked pinned git HEAD, original-question hash, every original-byte full-file SHA256, every exact source anchor and anchor hash, AST-qualified Python symbols, declaration-only first anchors, and disjoint supplemental evidence groups."
+    ],
+    "notes": "Does not accept the entire Fonts or Output class. Source distinguishes FontInfo.postscript_name storage from the PostScript backend reading font.postscript_name from the FT2Font object. Independent audit_token source review: Read FontInfo construction, render_glyph storage, Output vector/raster conversion and RendererPS.draw_mathtext; verified FT2Font propagation and font.postscript_name use. Vector/raster alternatives correctly share one group. Requested declaration-only first anchors to avoid making symbol entry hits depend on long displayed bodies; verified the revision. All labeled targets and supplemental groups approved."
+  }
+}

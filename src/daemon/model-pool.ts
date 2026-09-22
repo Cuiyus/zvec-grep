@@ -12,6 +12,8 @@ import type { DaemonLogger } from "./logger.js";
 export type EmbeddingModelLoadRequest = {
   model: EmbeddingModelIdentity;
   runtime?: EmbeddingRuntimeConfig;
+  /** Resolved indexing override; omit for query embedding models. */
+  embeddingConcurrency?: number;
 };
 
 export type ModelLease = {
@@ -70,6 +72,7 @@ export class EmbeddingModelPool {
         createEmbeddingModelForIdentity(request.model, {
           ...options.serviceOptions,
           ...request.runtime,
+          embeddingConcurrency: request.embeddingConcurrency,
         }));
     this.keyForRequest =
       options.keyForRequest ??
@@ -77,6 +80,7 @@ export class EmbeddingModelPool {
         embeddingModelPoolKeyForIdentity(request.model, {
           ...options.serviceOptions,
           ...request.runtime,
+          embeddingConcurrency: request.embeddingConcurrency,
         }));
     this.logger = options.logger;
   }
@@ -220,7 +224,8 @@ export class EmbeddingModelPool {
     entry.idleTimer.unref?.();
   }
 
-  private async trimIdleEntries(exceptKey: string): Promise<void> {
+  /** Recheck capacity after a cached read generation releases its lease. */
+  async trimIdleEntries(exceptKey: string): Promise<void> {
     const loaded = [...this.entries.values()].filter((entry) => entry.model);
     if (loaded.length <= this.maxLoadedModels) {
       return;
