@@ -300,7 +300,9 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
         embedding: protocol.model,
         modelCacheDir: options.modelCache,
       },
-      models: { [protocol.model]: { device: protocol.device } },
+      models: embedding.remote
+        ? {}
+        : { [protocol.model]: { device: protocol.device } },
     });
     env = {
       ...process.env,
@@ -309,7 +311,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       OPENCODE_CONFIG: opencode,
       ZVEC_GREP_HOME: join(home, ".zvec-grep"),
       ZVEC_GREP_MODEL_CACHE: options.modelCache,
-      ZVEC_GREP_DEVICE: protocol.device,
+      ...(!embedding.remote ? { ZVEC_GREP_DEVICE: protocol.device } : {}),
       NO_COLOR: "1",
       FORCE_COLOR: "0",
       PATH: `${join(candidate.consumer, "node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}`,
@@ -354,8 +356,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
           protocol.model,
           "--model-cache",
           options.modelCache,
-          "--device",
-          protocol.device,
+          ...(!embedding.remote ? ["--device", protocol.device] : []),
           ...embedding.indexArguments,
           ...indexSelectionArguments(protocol),
           "--debug",

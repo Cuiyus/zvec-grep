@@ -261,7 +261,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
       embedding: pilot.lock.model,
       modelCacheDir: options.modelCache,
     },
-    models: { [pilot.lock.model]: { device: "cpu" } },
+    models: embedding.remote ? {} : { [pilot.lock.model]: { device: "cpu" } },
   });
   const env = {
     ...process.env,
@@ -270,7 +270,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     OPENCODE_CONFIG: opencode,
     ZVEC_GREP_HOME: join(home, ".zvec-grep"),
     ZVEC_GREP_MODEL_CACHE: options.modelCache,
-    ZVEC_GREP_DEVICE: "cpu",
+    ...(!embedding.remote ? { ZVEC_GREP_DEVICE: "cpu" } : {}),
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     PATH: `${join(candidate.consumer, "node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}`,
@@ -301,8 +301,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           pilot.lock.model,
           "--model-cache",
           options.modelCache,
-          "--device",
-          "cpu",
+          ...(!embedding.remote ? ["--device", "cpu"] : []),
           ...embedding.indexArguments,
           "--max-filesize",
           "1000000",
