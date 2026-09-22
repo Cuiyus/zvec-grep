@@ -453,7 +453,7 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.product_error_calls, 15);
   assert.deepEqual(report.integrity_errors, []);
   assert.equal(report.tasks.length, 3);
-  assert.equal(report.schema_version, 6);
+  assert.equal(report.schema_version, 7);
   assert.equal(report.preview, "mcp-default");
   assert.deepEqual(Object.keys(report.modes), ["hybrid", "fts", "vector"]);
   assert.equal(Object.hasOwn(report, "previews"), false);

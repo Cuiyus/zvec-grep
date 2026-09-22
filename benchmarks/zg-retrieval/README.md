@@ -22,15 +22,16 @@ Every request also uses `limit: 10`, `autoUpdate: false`, `freshness: eventual` 
 
 | Column | Meaning / aggregation |
 | --- | --- |
-| File Hit@1 | Fraction of the 20 original questions with a labeled file at native rank 1 |
-| File Hit@5 | Fraction with a labeled file within native Top 5 |
-| File Hit@10 | Fraction with a labeled file within native Top 10 |
-| File MRR@10 | Mean of `1 / first matching native rank`; Top-10 misses are zero, all 20 questions have equal weight |
-| nDCG@10 | Binary discounted gain with target-count ideal gain; repository macro average across 11 repositories |
+| File Hit@1 | Mean of each question/mode's five binary rank-1 observations |
+| File Hit@5 | Mean of each question/mode's five binary Top-5 observations |
+| File Hit@10 | Mean of each question/mode's five binary Top-10 observations |
+| File MRR@10 | Mean of five `1 / first matching native rank` observations per question/mode; Top-10 misses are zero |
+| nDCG@10 | Mean of five binary discounted-gain observations per question/mode, then repository macro average across 11 repositories |
+| Stable Top 10 | Count of question/mode cases whose five ordered public result locations match exactly |
 | Mean output (KiB) | Mean public MCP text UTF-8 bytes / 1024, using successful fifth calls only; not model tokens |
-| Latency P50 (ms) | Median of all successful MCP search calls, including five repetitions; excludes indexing |
+| Avg RT / P50 RT (ms) | Mean and median of all successful MCP search calls, including five repetitions; excludes indexing |
 
-Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. Only the fifth result supplies quality and output-size observations. A complete run contains **300 calls and 60 quality observations**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
+Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. All five calls supply quality and stability observations; only the fifth supplies output size. A complete run contains **300 calls and 60 question/mode quality summaries**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
 
 Isolated public-response format failures still fail CI, but the overview displays diagnostic scores from validated questions with explicit question/repository coverage and a failed-task table. Invalid evidence is excluded, never counted as a miss or a zero. Protocol, identity, missing-call and other integrity errors still withhold all aggregates. Product failures with valid evidence retain zero quality credit and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
 
@@ -54,9 +55,9 @@ Questions, labels and reports remain outside indexed source checkouts. Indexing 
 
 Evidence retention is 14 days. After a shared candidate build, SWE-QA20, BEIR, DuRetrieval and Quarry run as four independent suite jobs. Each suite publishes its own aggregate metrics and a per-question table even if an individual question fails. The final results job publishes the combined page. Missing artifacts and failed upstream jobs remain explicit in the overview.
 
-SWE-QA20 ZG reports use **schema 6**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain five `measurement_observations` so validators can recompute measurements. The `file_retrieval` field holds Hit/MRR, `ndcg` holds nDCG and its target evidence, and `measurements` holds output size, latency and sample counts.
+SWE-QA20 ZG reports use **schema 7**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain all five public result lists and measurement observations so validators can recompute the case mean, ranking stability, output size and latency. The representative fifth-call `file_retrieval` and `ndcg` fields remain for evidence; `quality_mean` supplies headline quality.
 
-The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v6`. The comparator accepts schema 6 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
+The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v7`. The comparator accepts schema 7 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
 
 ## Code structure
 

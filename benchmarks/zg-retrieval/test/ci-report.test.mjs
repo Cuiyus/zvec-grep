@@ -19,6 +19,7 @@ import { loadSuite } from "../core/lib.mjs";
 import { summarizeMeasurements } from "../metrics/measurements.mjs";
 import { summarizeNdcg } from "../metrics/summary.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
+import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 import { validateZgReport, ZG_MODES } from "../reports/validation.mjs";
 
 const suite = await loadSuite();
@@ -61,6 +62,15 @@ function qualityRow(task, mode, { failed = false, firstRank = 3 } = {}) {
     latency_ms: row.latency_ms,
     visible_output_bytes: row.visible_output_bytes,
   }));
+  row.quality_observations = Array.from({ length: 5 }, (_, index) => ({
+    repetition: index + 1,
+    items: clone(items),
+  }));
+  row.quality_mean = summarizeRepeatedQuality(
+    row.quality_observations,
+    targets,
+  );
+  row.ranking_repeatable = failed ? null : true;
   return row;
 }
 function modeReport(rows) {
@@ -82,10 +92,11 @@ function zgReport({ failedModes = [], rankForTask = () => 3 } = {}) {
     ),
   );
   return {
-    schema_version: 6,
+    schema_version: 7,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "mcp-default",
     quality_repetition: 5,
+    quality_aggregation: "mean_of_five",
     quality_score_valid: true,
     integrity_passed: failedModes.length === 0,
     integrity_errors: [],
@@ -383,7 +394,7 @@ test("product failures retain quality zeros only in the affected arm and exclude
   assertUnavailable(await buildCiSummary({ zg: report }));
 });
 
-test("an earlier repetition failure does not replace the successful fifth-call quality score", async () => {
+test("an earlier repetition failure contributes zero without hiding the successful fifth call", async () => {
   const report = zgReport(),
     first = report.tasks[0].measurement_observations[0];
   Object.assign(first, {
@@ -392,12 +403,18 @@ test("an earlier repetition failure does not replace the successful fifth-call q
     latency_ms: null,
     visible_output_bytes: 50,
   });
+  report.tasks[0].quality_observations[0].items = [];
+  report.tasks[0].quality_mean = summarizeRepeatedQuality(
+    report.tasks[0].quality_observations,
+    report.tasks[0].ndcg.targets,
+  );
+  report.tasks[0].ranking_repeatable = null;
   report.product_error_calls = 1;
   report.integrity_passed = false;
   const result = await buildCiSummary({ zg: report });
   assert.equal(result.status, "failed");
   assert.equal(result.rows[0].status, "product_error");
-  assert.equal(result.rows[0].metrics.file_hit_at_5, 1);
+  assert.equal(result.rows[0].metrics.file_hit_at_5, 0.99);
   assert.equal(result.rows[0].measurements.output_sample_count, 20);
   assert.equal(result.rows[0].measurements.latency_sample_count, 99);
 });
@@ -442,7 +459,27 @@ test("fractional results are stable across task ordering and do not mutate evide
   assert.deepEqual(report, snapshot);
 });
 
-test("Markdown exposes exactly three arms, five quality metrics and two measurements", async () => {
+test("a changing Top 10 is reported separately from its five-call mean", async () => {
+  const report = zgReport();
+  const row = report.tasks[0];
+  row.quality_observations[0].items = [];
+  row.quality_mean = summarizeRepeatedQuality(
+    row.quality_observations,
+    row.ndcg.targets,
+  );
+  row.ranking_repeatable = false;
+  const result = await buildCiSummary({ zg: report });
+  assert.equal(result.status, "success");
+  assert.equal(result.rows[0].metrics.file_hit_at_5, 0.99);
+  assert.equal(result.rows[0].ranking_repeatable_cases, 19);
+  const task = result.tasks.find(
+    (item) => item.task_id === row.task_id && item.mode === row.mode,
+  );
+  assert.equal(task.hit_at_10_calls, 4);
+  assert.equal(task.ranking_repeatable, false);
+});
+
+test("Markdown exposes three arms, five quality metrics, stability and latency", async () => {
   const result = await buildCiSummary({
     zg: zgReport(),
     harnessCommit: "a".repeat(40),
@@ -451,9 +488,12 @@ test("Markdown exposes exactly three arms, five quality metrics and two measurem
   });
   const text = markdownCiSummary(result);
   assert.match(text, /Rust public MCP default presentation/);
-  assert.match(text, /20 fifth-call quality observations/);
-  assert.match(text, /Hit\/MRR average over the valid questions/);
-  assert.match(text, /nDCG@10 is a macro average/);
+  assert.match(
+    text,
+    /Each question\/mode averages its five call-level quality scores/,
+  );
+  assert.match(text, /Stable Top 10/);
+  assert.match(text, /nDCG@10 averages repositories/);
   assert.match(text, /1 KiB = 1024 bytes/);
   assert.match(text, /20 output samples; 100 latency samples/);
   assert.match(text, /feature\/rust-search/);
@@ -463,10 +503,10 @@ test("Markdown exposes exactly three arms, five quality metrics and two measurem
     assert.match(
       text,
       new RegExp(
-        `\\| ${label} \\| ✅ Valid \\| 20/20 questions; 11/11 repositories \\| 0.0% \\(0/20\\) \\| 100.0% \\(20/20\\) \\| 100.0% \\(20/20\\) \\| 0.3333`,
+        `\\| ${label} \\| ✅ Valid \\| 20/20 questions; 11/11 repositories \\| 20/20 \\| 0.0% \\| 100.0% \\| 100.0% \\| 0.3333`,
       ),
     );
-  assert.match(text, /\| 3\.50 \| 12\.35 \|/);
+  assert.match(text, /\| 3\.50 \| 12\.35 \| 12\.35 \|/);
   assert.equal(
     text.split("\n").filter((line) => line.startsWith("| zg-")).length,
     3,

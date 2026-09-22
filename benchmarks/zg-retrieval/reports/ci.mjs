@@ -43,6 +43,9 @@ function resultRow(label, rows, expectedQuestions, expectedRepositories) {
           ndcg_at_10: ndcg.repository_macro.ndcg_at_10,
         }
       : null,
+    ranking_repeatable_cases: rows.filter(
+      (row) => row.ranking_repeatable === true,
+    ).length,
     measurements: rows.length
       ? summarizeMeasurements(
           rows.flatMap((row) => row.measurement_observations),
@@ -64,6 +67,7 @@ const unavailableRow = (
   repositories: 0,
   expected_repositories: expectedRepositories,
   metrics: null,
+  ranking_repeatable_cases: 0,
   measurements: null,
 });
 
@@ -162,8 +166,10 @@ export async function buildCiSummary({
               : productErrors
                 ? `${productErrors}/5 MCP calls failed`
                 : null,
-          file: row.file_retrieval,
-          ndcg_at_10: row.ndcg?.ndcg_at_10 ?? null,
+          file: row.quality_mean?.file ?? null,
+          ndcg_at_10: row.quality_mean?.ndcg_at_10 ?? null,
+          ranking_repeatable: row.ranking_repeatable,
+          hit_at_10_calls: row.quality_mean?.hit_at_10_calls ?? null,
           measurements,
         };
       })
@@ -233,8 +239,8 @@ export function markdownCiSummary(result) {
     "",
     `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
     "",
-    "| Arm | Status | Coverage | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
-    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Arm | Status | Coverage | Stable Top 10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Avg RT (ms) | P50 RT (ms) |",
+    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
   for (const row of result.rows) {
     const state = {
@@ -245,19 +251,17 @@ export function markdownCiSummary(result) {
     }[row.status];
     const hits = [1, 5, 10].map((cutoff) => {
       const value = row.metrics?.[`file_hit_at_${cutoff}`];
-      return Number.isFinite(value)
-        ? `${(value * 100).toFixed(1)}% (${Math.round(value * row.questions)}/${row.questions})`
-        : "—";
+      return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
     });
     lines.push(
-      `| ${cell(row.label)} | ${state} | ${row.questions}/${row.expected_questions} questions; ${row.repositories}/${row.expected_repositories} repositories | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
+      `| ${cell(row.label)} | ${state} | ${row.questions}/${row.expected_questions} questions; ${row.repositories}/${row.expected_repositories} repositories | ${row.ranking_repeatable_cases}/${row.questions} | ${hits.join(" | ")} | ${number(row.metrics?.file_mrr_at_10)} | ${number(row.metrics?.ndcg_at_10)} | ${number(row.measurements?.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${number(row.measurements?.latency_ms_mean, 2)} | ${number(row.measurements?.latency_ms_p50, 2)} |`,
     );
   }
   lines.push(
     "",
-    "All three arms use the Rust public MCP default presentation and five calls per question. No preview override is sent. Each arm targets 20 fifth-call quality observations. Hit/MRR average over the valid questions shown in Coverage; nDCG@10 is a macro average over the represented repositories. Invalid evidence is excluded, never converted to a zero. Product errors with valid evidence retain zero quality credit. Partial scores are diagnostic and are not directly comparable with complete 20-question scores. Finding a file does not establish sufficient answer evidence.",
+    "All three arms use the Rust public MCP default presentation and five calls per question. No preview override is sent. Each question/mode averages its five call-level quality scores; Hit/MRR then average questions and nDCG@10 averages repositories. Stable Top 10 means the five ordered public result locations match. Invalid evidence is excluded, never converted to a zero. Product errors with valid evidence retain zero quality credit. Partial scores are diagnostic and are not directly comparable with complete 20-question scores. Finding a file does not establish sufficient answer evidence.",
     "",
-    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Latency is the P50 of successful valid MCP search calls, excluding indexing. Failed and invalid calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
+    "Output is the mean UTF-8 byte count of successful fifth-call responses (1 KiB = 1024 bytes, not model tokens). Avg RT and P50 RT use successful valid MCP search calls, excluding indexing. Failed and invalid calls are excluded from these measurements. A complete successful arm has 20 output samples and 100 latency samples. Index loading and fixed mode order affect latency; these are observations of this run, not a controlled speed comparison.",
     "",
     ...result.rows
       .filter((row) => row.measurements)
@@ -272,8 +276,8 @@ export function markdownCiSummary(result) {
       "<details>",
       `<summary>Per-question results (${result.tasks.length} question/mode rows)</summary>`,
       "",
-      "| Question | Repository | Arm | Status | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Latency P50 (ms) |",
-      "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+      "| Question | Repository | Arm | Status | Stable Top 10 | Hit@10 calls | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Avg RT (ms) | P50 RT (ms) |",
+      "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     );
     for (const task of result.tasks) {
       const status =
@@ -283,7 +287,7 @@ export function markdownCiSummary(result) {
             ? `⚠️ ${cell(task.reason)}`
             : `❌ ${cell(task.reason)}`;
       lines.push(
-        `| ${cell(task.task_id)} | ${cell(task.repository)} | zg-${task.mode} | ${status} | ${task.file?.hit_at_1 ?? "—"} | ${task.file?.hit_at_5 ?? "—"} | ${task.file?.hit_at_10 ?? "—"} | ${number(task.file?.rr_at_10)} | ${number(task.ndcg_at_10)} | ${number(task.measurements?.output_bytes_mean == null ? null : task.measurements.output_bytes_mean / 1024, 2)} | ${number(task.measurements?.latency_ms_p50, 2)} |`,
+        `| ${cell(task.task_id)} | ${cell(task.repository)} | zg-${task.mode} | ${status} | ${task.ranking_repeatable == null ? "—" : task.ranking_repeatable ? "Yes" : "No"} | ${task.hit_at_10_calls == null ? "—" : `${task.hit_at_10_calls}/5`} | ${number(task.file?.hit_at_1)} | ${number(task.file?.hit_at_5)} | ${number(task.file?.hit_at_10)} | ${number(task.file?.rr_at_10)} | ${number(task.ndcg_at_10)} | ${number(task.measurements?.output_bytes_mean == null ? null : task.measurements.output_bytes_mean / 1024, 2)} | ${number(task.measurements?.latency_ms_mean, 2)} | ${number(task.measurements?.latency_ms_p50, 2)} |`,
       );
     }
     lines.push("", "</details>");

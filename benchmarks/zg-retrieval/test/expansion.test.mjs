@@ -11,6 +11,7 @@ import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
 import { parseVisibleResponse } from "../engines/zg/parse.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
+import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 
 test("expanded locks preserve the original ten questions and cover new datasets and languages", async () => {
   const beir = await loadPilot("beir");
@@ -105,14 +106,22 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
     task_id: "a",
     mode: "hybrid",
     status: "success",
+    targets: [{ path: "target.md" }],
+    items: [{ rank: 1, path: "target.md", matched_by: "fts+vector" }],
     file: { hit_at_1: 1, hit_at_5: 1, hit_at_10: 1, rr_at_10: 1 },
     ndcg: { ndcg_at_10: 1 },
     output_bytes: 1024,
-    calls: [100, 110, 120, 130, 140].map((latency_ms) => ({
+    calls: [100, 110, 120, 130, 140].map((latency_ms, index) => ({
+      repetition: index + 1,
       status: "success",
       latency_ms,
+      items: [{ rank: 1, path: "target.md", matched_by: "fts+vector" }],
     })),
   };
+  success.quality_mean = summarizeRepeatedQuality(
+    success.calls,
+    success.targets,
+  );
   const failed = {
     task_id: "b",
     mode: "hybrid",
@@ -124,13 +133,23 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
   assert.equal(summary[0].metrics.file_hit_at_1, 1);
   assert.equal(summary[0].measurements.latency_sample_count, 5);
   assert.equal(summary[0].measurements.latency_ms_p50, 120);
+  assert.equal(summary[0].measurements.latency_ms_mean, 120);
   assert.equal(summary[1].metrics.ndcg_at_10, null);
+  success.calls[0].items = [];
+  success.quality_mean = summarizeRepeatedQuality(
+    success.calls,
+    success.targets,
+  );
+  const unstable = summarizePilotRows([success, failed], undefined, 20);
+  assert.equal(unstable[0].metrics.file_hit_at_1, 0.8);
+  assert.equal(unstable[0].ranking_repeatable_cases, 0);
+  assert.equal(unstable[0].measurements.latency_ms_mean, 120);
   const markdown = markdownPilotReport({
     label: "Pilot",
     status: "failed",
     model: "local/test",
     suite: "quarry20",
-    summary,
+    summary: unstable,
     rows: [success, failed],
     failures: [{ task_id: "b", reason: "index failed" }],
   });
@@ -184,13 +203,16 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
     repetition,
     status: "success",
     latency_ms: 10,
+    items: [],
   }));
   scored.items = [];
   scored.file = scoreFileRetrieval([], scored.targets);
   scored.ndcg = scoreNdcg([], scored.targets);
+  scored.quality_mean = summarizeRepeatedQuality(scored.calls, scored.targets);
   scored.output_bytes = 0;
   const report = {
-    schema_version: 1,
+    schema_version: 2,
+    quality_aggregation: "mean_of_five",
     suite: pilot.lock.suite,
     label: "BEIR / four datasets (test)",
     model: pilot.lock.model,

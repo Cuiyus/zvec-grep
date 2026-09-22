@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { fileHash, run, writeJson } from "../core/io.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
+import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 import {
   parseVisibleResponse,
   validateSearchRoute,
@@ -70,15 +71,21 @@ export function summarizePilotRows(
       completed: valid.length,
       planned,
       metrics: {
-        file_hit_at_1: average((row) => row.file.hit_at_1),
-        file_hit_at_5: average((row) => row.file.hit_at_5),
-        file_hit_at_10: average((row) => row.file.hit_at_10),
-        file_mrr_at_10: average((row) => row.file.rr_at_10),
-        ndcg_at_10: average((row) => row.ndcg.ndcg_at_10),
+        file_hit_at_1: average((row) => row.quality_mean.file.hit_at_1),
+        file_hit_at_5: average((row) => row.quality_mean.file.hit_at_5),
+        file_hit_at_10: average((row) => row.quality_mean.file.hit_at_10),
+        file_mrr_at_10: average((row) => row.quality_mean.file.rr_at_10),
+        ndcg_at_10: average((row) => row.quality_mean.ndcg_at_10),
       },
+      ranking_repeatable_cases: valid.filter(
+        (row) => row.quality_mean.ranking_repeatable,
+      ).length,
       measurements: {
         output_bytes_mean: average((row) => row.output_bytes),
         output_sample_count: valid.length,
+        latency_ms_mean: latencies.length
+          ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length
+          : null,
         latency_ms_p50: median(latencies),
         latency_sample_count: latencies.length,
       },
@@ -148,18 +155,16 @@ export function markdownPilotReport(report) {
     "",
     `${planned} original queries · model \`${report.model}\` · Rust MCP default presentation · five calls/query`,
     "",
-    "| Mode | Completed | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Mode | Completed | Stable Top 10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Avg RT (ms) | P50 RT (ms) |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
   for (const row of report.summary) {
     const hit = (cutoff) => {
       const value = row.metrics[`file_hit_at_${cutoff}`];
-      return Number.isFinite(value)
-        ? `${(value * 100).toFixed(1)}% (${Math.round(value * row.completed)}/${row.completed})`
-        : "—";
+      return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
     };
     lines.push(
-      `| zg-${row.mode} | ${row.completed}/${row.planned} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
+      `| zg-${row.mode} | ${row.completed}/${row.planned} | ${row.ranking_repeatable_cases}/${row.completed} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_mean, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
     );
   }
   if (report.breakdown?.length) {
@@ -167,19 +172,17 @@ export function markdownPilotReport(report) {
       "",
       `### Scores by ${config.breakdownBy}`,
       "",
-      "| Group | Mode | Completed | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
-      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+      "| Group | Mode | Completed | Stable Top 10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Avg RT (ms) | P50 RT (ms) |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     );
     for (const group of report.breakdown)
       for (const row of group.summary) {
         const hit = (cutoff) => {
           const value = row.metrics[`file_hit_at_${cutoff}`];
-          return Number.isFinite(value)
-            ? `${(value * 100).toFixed(1)}% (${Math.round(value * row.completed)}/${row.completed})`
-            : "—";
+          return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
         };
         lines.push(
-          `| ${tableCell(group.name)} | zg-${row.mode} | ${row.completed}/${row.planned} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
+          `| ${tableCell(group.name)} | zg-${row.mode} | ${row.completed}/${row.planned} | ${row.ranking_repeatable_cases}/${row.completed} | ${hit(1)} | ${hit(5)} | ${hit(10)} | ${formatNumber(row.metrics.file_mrr_at_10)} | ${formatNumber(row.metrics.ndcg_at_10)} | ${formatNumber(row.measurements.output_bytes_mean == null ? null : row.measurements.output_bytes_mean / 1024, 2)} | ${formatNumber(row.measurements.latency_ms_mean, 2)} | ${formatNumber(row.measurements.latency_ms_p50, 2)} |`,
         );
       }
   }
@@ -187,27 +190,30 @@ export function markdownPilotReport(report) {
     "",
     config.report.note,
     "",
-    "A score is shown only for completed queries. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth successful quality call; latency covers successful calls and excludes indexing.",
+    "Each completed query/mode averages five call-level quality scores. Stable Top 10 means all five ordered public result locations match exactly. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth call; Avg RT and P50 RT cover successful calls and exclude indexing.",
   );
   lines.push(
     "",
     "<details>",
     `<summary>Per-query results (all ${planned} queries × 3 modes)</summary>`,
     "",
-    "| Query | Mode | Status | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Latency P50 (ms) |",
-    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Query | Mode | Status | Stable Top 10 | Hit@10 calls | Hit@1 | Hit@5 | Hit@10 | RR@10 | nDCG@10 | Output (KiB) | Avg RT (ms) | P50 RT (ms) |",
+    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   );
   for (const row of [...report.rows].sort(
     (a, b) =>
       a.task_id.localeCompare(b.task_id) || a.mode.localeCompare(b.mode),
   )) {
-    const latency = median(
-      row.calls
-        .filter((call) => call.status === "success")
-        .map((call) => call.latency_ms),
-    );
+    const callLatencies = row.calls
+      .filter((call) => call.status === "success")
+      .map((call) => call.latency_ms);
+    const latency = median(callLatencies);
+    const latencyMean = callLatencies.length
+      ? callLatencies.reduce((sum, value) => sum + value, 0) /
+        callLatencies.length
+      : null;
     lines.push(
-      `| ${tableCell(row.task_id)} | zg-${row.mode} | ${row.status === "success" ? "✅ Scored" : `❌ ${tableCell(row.reason ?? row.calls.find((call) => call.error)?.error ?? "failed")}`} | ${row.file?.hit_at_1 ?? "—"} | ${row.file?.hit_at_5 ?? "—"} | ${row.file?.hit_at_10 ?? "—"} | ${formatNumber(row.file?.rr_at_10)} | ${formatNumber(row.ndcg?.ndcg_at_10)} | ${formatNumber(row.output_bytes == null ? null : row.output_bytes / 1024, 2)} | ${formatNumber(latency, 2)} |`,
+      `| ${tableCell(row.task_id)} | zg-${row.mode} | ${row.status === "success" ? "✅ Scored" : `❌ ${tableCell(row.reason ?? row.calls.find((call) => call.error)?.error ?? "failed")}`} | ${row.quality_mean ? (row.quality_mean.ranking_repeatable ? "Yes" : "No") : "—"} | ${row.quality_mean ? `${row.quality_mean.hit_at_10_calls}/5` : "—"} | ${formatNumber(row.quality_mean?.file.hit_at_1)} | ${formatNumber(row.quality_mean?.file.hit_at_5)} | ${formatNumber(row.quality_mean?.file.hit_at_10)} | ${formatNumber(row.quality_mean?.file.rr_at_10)} | ${formatNumber(row.quality_mean?.ndcg_at_10)} | ${formatNumber(row.output_bytes == null ? null : row.output_bytes / 1024, 2)} | ${formatNumber(latencyMean, 2)} | ${formatNumber(latency, 2)} |`,
     );
   }
   lines.push("", "</details>");
@@ -359,6 +365,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           const started = performance.now();
           let response;
           let error = null;
+          let parsedItems = null;
           try {
             response = await client.callTool(
               { name: "zvec_grep_search", arguments: args },
@@ -368,18 +375,19 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
             assert.notEqual(response.isError, true, "MCP product error");
             const parsed = parseVisibleResponse(response);
             validateSearchRoute(parsed.items, mode);
+            parsedItems = parsed.items.map(
+              ({ rank, path, range, matched_by }) => ({
+                rank,
+                path,
+                range,
+                matched_by,
+              }),
+            );
             if (repetition === REPETITIONS) {
               row.file = scoreFileRetrieval(parsed.items, task.targets);
               row.ndcg = scoreNdcg(parsed.items, task.targets);
               row.output_bytes = Buffer.byteLength(parsed.text, "utf8");
-              row.items = parsed.items.map(
-                ({ rank, path, range, matched_by }) => ({
-                  rank,
-                  path,
-                  range,
-                  matched_by,
-                }),
-              );
+              row.items = parsedItems;
             }
           } catch (failure) {
             error = failure.message;
@@ -402,6 +410,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
             repetition,
             status: error ? "failed" : "success",
             latency_ms: latency,
+            items: parsedItems,
             raw_sha256: await fileHash(raw),
             error,
           });
@@ -414,11 +423,14 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
             });
         }
         row.status =
-          row.calls[REPETITIONS - 1].status === "success" &&
+          row.calls.length === REPETITIONS &&
+          row.calls.every((call) => call.status === "success") &&
           row.file &&
           row.ndcg
             ? "success"
             : "failed";
+        if (row.status === "success")
+          row.quality_mean = summarizeRepeatedQuality(row.calls, task.targets);
       }
     }
     const after = await snapshotIndex({
@@ -464,7 +476,8 @@ export async function main(args = process.argv.slice(2)) {
   };
   await mkdir(options.modelCache, { recursive: true });
   const report = {
-    schema_version: 1,
+    schema_version: 2,
+    quality_aggregation: "mean_of_five",
     suite: pilot.lock.suite,
     label: pilot.config.report.title,
     model: pilot.lock.model,

@@ -37,7 +37,11 @@ export function summarizeNdcg(rows) {
         {
           language: languages[0],
           query_count: selected.length,
-          ...mean(selected.map((row) => row.ndcg)),
+          ...mean(
+            selected.map((row) => ({
+              ndcg_at_10: row.quality_mean?.ndcg_at_10 ?? row.ndcg.ndcg_at_10,
+            })),
+          ),
         },
       ];
     }),
@@ -61,7 +65,11 @@ export function summarizeNdcg(rows) {
     query_count: rows.length,
     repository_count: Object.keys(byRepository).length,
     language_count: Object.keys(byLanguage).length,
-    query_mean: mean(rows.map((row) => row.ndcg)),
+    query_mean: mean(
+      rows.map((row) => ({
+        ndcg_at_10: row.quality_mean?.ndcg_at_10 ?? row.ndcg.ndcg_at_10,
+      })),
+    ),
     repository_macro: mean(Object.values(byRepository)),
     language_macro: mean(Object.values(byLanguage)),
     by_repository: byRepository,

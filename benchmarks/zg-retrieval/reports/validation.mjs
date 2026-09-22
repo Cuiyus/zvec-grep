@@ -6,6 +6,10 @@ import {
   fileRetrievalForRow,
 } from "../metrics/files.mjs";
 import { validateCallLatency } from "../metrics/measurements.mjs";
+import {
+  rankingSignature,
+  summarizeRepeatedQuality,
+} from "../metrics/repetitions.mjs";
 
 export const ZG_MODES = Object.freeze(["hybrid", "fts", "vector"]);
 const FILE_METRICS = ["hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"];
@@ -192,6 +196,46 @@ function validateQualityRow(row, label) {
     `${label}: file retrieval score differs from public items or frozen projection`,
   );
   validateMeasurements(row, label);
+  assert.ok(
+    Array.isArray(row.quality_observations) &&
+      row.quality_observations.length === 5,
+    `${label}: incomplete quality repetition coverage`,
+  );
+  for (const [index, observation] of row.quality_observations.entries()) {
+    assert.equal(observation.repetition, index + 1);
+    assert.ok(Array.isArray(observation.items));
+    const measurement = row.measurement_observations[index];
+    if (measurement.execution_status === "product_error")
+      assert.deepEqual(
+        observation.items,
+        [],
+        `${label}: failed call earned credit`,
+      );
+    else validateSearchRoute(observation.items, row.mode);
+  }
+  assert.equal(
+    rankingSignature(row.quality_observations[4].items),
+    rankingSignature(row.items),
+    `${label}: fifth quality evidence differs from representative row`,
+  );
+  const repeated =
+    row.gold_status === "reviewed"
+      ? summarizeRepeatedQuality(row.quality_observations, targets)
+      : null;
+  assert.deepEqual(
+    row.quality_mean,
+    repeated,
+    `${label}: five-call quality mean or stability differs from public items`,
+  );
+  assert.equal(
+    row.ranking_repeatable,
+    row.measurement_observations.every(
+      (sample) => sample.execution_status === "success",
+    )
+      ? (repeated?.ranking_repeatable ?? null)
+      : null,
+    `${label}: ranking stability differs from public items`,
+  );
   return { ...normalized, file_retrieval: file };
 }
 
@@ -203,8 +247,8 @@ export function validateZgReport(
 ) {
   assert.equal(
     report.schema_version,
-    6,
-    `${label}: unsupported report schema; schema 6 required`,
+    7,
+    `${label}: unsupported report schema; schema 7 required`,
   );
   assert.equal(
     report.preview,
@@ -230,6 +274,11 @@ export function validateZgReport(
     report.quality_repetition,
     5,
     `${label}: quality repetition 5 required`,
+  );
+  assert.equal(
+    report.quality_aggregation,
+    "mean_of_five",
+    `${label}: five-call quality aggregation required`,
   );
   const partial = allowPartial && report.quality_score_valid === false;
   if (partial) {

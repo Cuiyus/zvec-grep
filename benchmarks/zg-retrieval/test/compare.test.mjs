@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
+import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 import {
   FILE_RETRIEVAL_CONTRACT,
   fileRetrievalForRow,
@@ -52,6 +53,18 @@ function row(task_id, rank = null, options = {}) {
     latency_ms: value.latency_ms,
     visible_output_bytes: value.visible_output_bytes,
   }));
+  value.quality_observations = Array.from({ length: 5 }, (_, index) => ({
+    repetition: index + 1,
+    items: clone(items),
+  }));
+  value.quality_mean =
+    value.gold_status === "reviewed"
+      ? summarizeRepeatedQuality(value.quality_observations, targets)
+      : null;
+  value.ranking_repeatable =
+    value.execution_status === "success" && value.gold_status === "reviewed"
+      ? true
+      : null;
   return value;
 }
 function report(prototypes = [row("example:1", 1), row("example:2", 10)]) {
@@ -63,16 +76,24 @@ function report(prototypes = [row("example:1", 1), row("example:2", 10)]) {
         ...clone(item),
         matched_by: mode === "hybrid" ? "fts+vector" : mode,
       })),
+      quality_observations: source.quality_observations.map((observation) => ({
+        repetition: observation.repetition,
+        items: observation.items.map((item) => ({
+          ...clone(item),
+          matched_by: mode === "hybrid" ? "fts+vector" : mode,
+        })),
+      })),
     })),
   );
   const ids = [...new Set(rows.map((item) => item.task_id))];
   const productErrors =
     rows.filter((item) => item.execution_status === "product_error").length * 5;
   return {
-    schema_version: 6,
+    schema_version: 7,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "mcp-default",
     quality_repetition: 5,
+    quality_aggregation: "mean_of_five",
     observed_calls: ids.length * 3 * 5,
     quality_score_valid: true,
     integrity_passed: productErrors === 0,
@@ -111,6 +132,7 @@ test("comparison recomputes only the five quality metrics and both operational m
   assert.equal(result.tasks[1].candidate.file_retrieval.first_hit_rank, 10);
   assert.equal(result.tasks[1].file_retrieval_delta.rr_at_10, 0.1);
   assert.deepEqual(result.modes.hybrid.measurements.candidate, {
+    latency_ms_mean: 50,
     latency_ms_p50: 50,
     latency_sample_count: 10,
     output_bytes_mean: 1024,
@@ -383,7 +405,7 @@ test("measurement evidence cannot selectively omit repeats or successful calls",
     mutate(after);
     assert.throws(
       () => compareReports(before, after),
-      /measurement|successful-call/,
+      /measurement|successful-call|failed call earned credit/,
     );
   }
 });
@@ -542,7 +564,7 @@ test("standalone validation covers all modes and total failure counts without mu
   );
 });
 
-test("schema 6 rejects legacy reports, preview matrices, and non-default result rows", () => {
+test("schema 7 rejects legacy reports, preview matrices, and non-default result rows", () => {
   for (const mutate of [
     ...[1, 2, 3, 4, 5].map((schema) => (r) => {
       r.schema_version = schema;

@@ -39,9 +39,11 @@ runner and combined report free of repeated suite-specific constants.
 
 Each suite uses its own specified embedding model. The MCP requests use the
 same fixed mode order (hybrid, fts, vector), `limit: 10`, no agent, and five
-calls per query; the fifth result supplies quality and output size. Results
-include File Hit@1/5/10, File MRR@10, binary file nDCG@10, mean public output
-and median call latency. Native result ranks are retained and repeat chunks
+calls per query; all five results supply quality and stability, while the fifth
+supplies output size. Results
+include File Hit@1/5/10, File MRR@10, binary file nDCG@10, ordered Top-10
+stability, mean public output, and mean and median call latency. Each query/mode
+first averages its five call-level quality scores. Native result ranks are retained and repeat chunks
 consume ranks. BEIR and Quarry now have twenty queries each, with the original
 ten retained. The per-dataset and per-language rows show completed/planned
 coverage and the same metrics as the overall pilot row; they do not change the

@@ -7,6 +7,8 @@ import { readJson, writeJson } from "../core/io.mjs";
 import { buildCiSummary, markdownCiSummary } from "../reports/ci.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
+import { validateSearchRoute } from "../engines/zg/parse.mjs";
+import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 import { PILOT_NAMES, PILOT_SUITES } from "./config.mjs";
 import { loadPilot, targetsForTask } from "./datasets.mjs";
 import {
@@ -24,7 +26,8 @@ async function checkPilot(name, report, candidateCommit) {
       error: "report artifact missing",
     };
   try {
-    assert.equal(report.schema_version, 1);
+    assert.equal(report.schema_version, 2);
+    assert.equal(report.quality_aggregation, "mean_of_five");
     assert.equal(report.suite, pilot.lock.suite);
     assert.equal(report.model, pilot.lock.model);
     assert.equal(report.candidate_commit, candidateCommit);
@@ -65,12 +68,21 @@ async function checkPilot(name, report, candidateCommit) {
       }
       if (row.status === "success") {
         assert.equal(row.calls.length, 5);
-        assert.equal(row.calls[4].status, "success");
+        assert.ok(row.calls.every((call) => call.status === "success"));
+        for (const call of row.calls) {
+          assert.ok(Array.isArray(call.items));
+          validateSearchRoute(call.items, row.mode);
+        }
         assert.ok(
           Number.isSafeInteger(row.output_bytes) && row.output_bytes >= 0,
         );
+        assert.deepEqual(row.items, row.calls[4].items);
         assert.deepEqual(row.file, scoreFileRetrieval(row.items, row.targets));
         assert.deepEqual(row.ndcg, scoreNdcg(row.items, row.targets));
+        assert.deepEqual(
+          row.quality_mean,
+          summarizeRepeatedQuality(row.calls, row.targets),
+        );
       } else {
         assert.equal(row.status, "failed");
         if (row.calls.length < 5)

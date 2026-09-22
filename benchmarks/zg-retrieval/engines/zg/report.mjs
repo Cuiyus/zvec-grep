@@ -23,6 +23,10 @@ import {
 } from "../../metrics/measurements.mjs";
 
 import { summarizeNdcg } from "../../metrics/summary.mjs";
+import {
+  rankedLocations,
+  summarizeRepeatedQuality,
+} from "../../metrics/repetitions.mjs";
 import { markdownReport } from "../../reports/zg.mjs";
 
 async function findRuns(directory) {
@@ -54,6 +58,7 @@ function invalidate(score, reason) {
     invalid_reason: reason,
     file_retrieval: null,
     ndcg: null,
+    quality_mean: null,
   };
 }
 
@@ -411,7 +416,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
         (item) => item.status === "harness_invalid",
       );
       // A bad repetition invalidates the task/mode experiment, even when its
-      // fifth (quality) call happened to be parseable.
+      // representative fifth call happened to be parseable.
       const qualityRow =
         invalidRepeat && row.status !== "harness_invalid"
           ? invalidate(
@@ -419,16 +424,30 @@ export async function aggregate(directory, { expectedTasks } = {}) {
               `repetition ${invalidRepeat.repetition}: ${invalidRepeat.invalid_reason}`,
             )
           : row;
+      const qualityMean =
+        invalidRepeat ||
+        repeats.length !== suite.protocol.repetitions ||
+        row.gold_status !== "reviewed"
+          ? null
+          : summarizeRepeatedQuality(
+              repeats,
+              suite.file_gold[row.task_id].targets,
+            );
       return {
         ...qualityRow,
+        quality_mean: qualityMean,
         ranking_repeatable: valid
-          ? new Set(repeats.map((item) => item.ranking_sha256)).size === 1
+          ? (qualityMean?.ranking_repeatable ?? null)
           : null,
         output_repeatable: valid
           ? new Set(repeats.map((item) => item.visible_output_sha256)).size ===
             1
           : null,
         freshness_values: repeats.map((item) => item.freshness ?? null),
+        quality_observations: repeats.map((item) => ({
+          repetition: item.repetition,
+          items: rankedLocations(item.items ?? []),
+        })),
         measurement_observations: repeats.map((item) => ({
           repetition: item.repetition,
           status: item.status,
@@ -491,10 +510,11 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     }),
   );
   const report = {
-    schema_version: 6,
+    schema_version: 7,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: suite.protocol.preview,
     quality_repetition: suite.protocol.quality_repetition,
+    quality_aggregation: "mean_of_five",
     generated_at: new Date().toISOString(),
     suite: suite.identity,
     scope:
@@ -507,7 +527,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     product_error_calls: productErrors,
     quality_gate: "report-only; no arbitrary quality threshold",
     aggregation:
-      "quality repetition 5 separately for each retrieval mode; file Hit@1/5/10 and MRR@10 weight original questions equally; nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use the frozen accepted-file targets and native ranks",
+      "each query/mode averages all five repetition scores; file Hit@1/5/10 and MRR@10 weight original questions equally; nDCG@10 weights repositories equally after averaging questions within each repository; all five metrics use frozen accepted-file targets and native ranks",
     modes: modeReports,
     repositories: manifests,
     tasks: quality,
