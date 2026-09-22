@@ -177,8 +177,10 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
         raise RuntimeError("Prepared source must contain an empty index mount directory")
     before = r.directory_identity(source, skip_git=True)
     official_writable = os.environ.get("WORKSPACE_QA_EXECUTION_MODE") == "official-writable"
-    limits = {"model_requests": 120 if official_writable else 60,
-              "tool_calls": 240 if official_writable else 120,
+    model_request_limit = getattr(args, "model_request_limit", None)
+    tool_call_limit = getattr(args, "tool_call_limit", None)
+    limits = {"model_requests": model_request_limit if model_request_limit is not None else (120 if official_writable else 60),
+              "tool_calls": tool_call_limit if tool_call_limit is not None else (240 if official_writable else 120),
               "input_tokens": getattr(args, "input_token_limit", 600000), "wall_seconds": args.timeout}
     delivery_policy = getattr(args, "delivery_policy", "original")
     if official_writable and args.task_id not in {"334", "363"}:

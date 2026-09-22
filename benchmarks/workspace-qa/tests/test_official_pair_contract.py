@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import native_session
 import runner
+import run_task
 from zg_bench.swe_qa.readonly_agents import qoder_contract
 
 
@@ -50,6 +51,13 @@ class OfficialPairContractTests(unittest.TestCase):
         self.assertEqual(lock["experiment"]["integration"]["command"],
                          ["zg", "install", "--target", "qoder", "--yes"])
         self.assertEqual(lock["experiment"]["protocol"], runner.PROTOCOL)
+        by_id = {task["task_id"]: task for task in lock["tasks"]}
+        self.assertEqual(run_task.task_qa_limits(lock, by_id["334"]),
+                         {"input_tokens": 6000000, "wall_seconds": 1800,
+                          "model_requests": 120, "tool_calls": 240})
+        self.assertEqual(run_task.task_qa_limits(lock, by_id["363"]),
+                         {"input_tokens": 12000000, "wall_seconds": 3600,
+                          "model_requests": 180, "tool_calls": 360})
 
     def test_writable_contract_accepts_default_tools_in_both_arms(self):
         builtins = ["Read", "Grep", "Glob", "Bash", "Write", "TaskCreate"]

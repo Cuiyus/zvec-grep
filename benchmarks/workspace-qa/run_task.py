@@ -19,6 +19,23 @@ PROTOCOL = "workspace-qa-qoder-native-install-v3"
 ZG_SEARCH_TOOL = "mcp__zvec_grep__zvec_grep_search"
 
 
+def task_qa_limits(lock: dict, task: dict) -> dict[str, int]:
+    experiment = lock.get("experiment", {})
+    overrides = task.get("qa_limits", {})
+    if not isinstance(overrides, dict) or set(overrides) - {"input_tokens", "wall_seconds", "model_requests", "tool_calls"}:
+        raise ValueError("Task QA limits contain unsupported overrides")
+    official = experiment.get("execution_mode") == "official-writable"
+    limits = {
+        "input_tokens": overrides.get("input_tokens", experiment.get("qa_input_token_limit", 600000)),
+        "wall_seconds": overrides.get("wall_seconds", experiment.get("qa_wall_seconds", 900)),
+        "model_requests": overrides.get("model_requests", experiment.get("qa_model_request_limit", 120 if official else 60)),
+        "tool_calls": overrides.get("tool_calls", experiment.get("qa_tool_call_limit", 240 if official else 120)),
+    }
+    if any(type(value) is not int or value <= 0 for value in limits.values()):
+        raise ValueError("Locked QA limits must be positive integers")
+    return limits
+
+
 def _mcp_evidence(agent: Path) -> dict:
     from qoder_probe import native_mcp_evidence
     return native_mcp_evidence(agent)
@@ -241,6 +258,7 @@ def main(argv=None):
     if args.shared_preflight and not continuing:
         raise ValueError("Shared source-run preflight is only valid for an audited continuation")
     lock = json.loads((HERE / "data/lock.json").read_text())
+    task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     variant = lock.get("experiment", {}).get("preprocessing", "original")
     if variant != "original":
         if ((variant, args.task_id) not in {("office-markdown-v1", "328"),
@@ -248,13 +266,9 @@ def main(argv=None):
                 or args.phase != "smoke" or args.repetitions != 1 or continuing):
             raise ValueError("Conversion pilot requires the matching reviewed task, smoke, exactly one fresh pair")
     os.environ["WORKSPACE_QA_CORPUS_VARIANT"] = variant
-    input_limit = lock.get("experiment", {}).get("qa_input_token_limit", 600000)
-    if type(input_limit) is not int or input_limit <= 0:
-        raise ValueError("Locked QA input-token limit must be a positive integer")
-    wall_limit = lock.get("experiment", {}).get("qa_wall_seconds", 900)
+    limits = task_qa_limits(lock, task)
+    input_limit, wall_limit = limits["input_tokens"], limits["wall_seconds"]
     retries = lock.get("experiment", {}).get("qa_model_request_retries", 0)
-    if type(wall_limit) is not int or wall_limit <= 0:
-        raise ValueError("Locked QA wall limit must be a positive integer")
     if type(retries) is not int or not 0 <= retries <= 3:
         raise ValueError("Locked request retries must be an integer from 0 to 3")
     output_limit = lock.get("experiment", {}).get("qa_max_output_tokens")
@@ -268,7 +282,6 @@ def main(argv=None):
         raise ValueError("Locked report delivery policy text hash differs")
     if lock["experiment"]["requested_model"] != runner.MODEL:
         raise ValueError("Task lock model differs from the requested Qoder model; start a separate experiment")
-    task = next(t for t in lock["tasks"] if t["task_id"] == args.task_id)
     if args.task_id in {"334", "363"}:
         if (lock["experiment"].get("execution_mode") != "official-writable"
                 or lock["experiment"].get("reasoning_effort") != "high"
@@ -343,6 +356,8 @@ def main(argv=None):
                                  "--answer-filename", task["answer_filename"], "--output", str(runs),
                                  "--repetitions", str(args.repetitions), "--timeout", str(wall_limit),
                                  "--input-token-limit", str(input_limit), "--model-request-retries", str(retries),
+                                 "--model-request-limit", str(limits["model_requests"]),
+                                 "--tool-call-limit", str(limits["tool_calls"]),
                                  "--delivery-policy", delivery_policy]
         if output_limit is not None:
             runner_command += ["--max-output-tokens", str(output_limit)]
