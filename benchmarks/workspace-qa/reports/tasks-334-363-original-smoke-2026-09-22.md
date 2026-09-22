@@ -9,7 +9,9 @@
 
 Task 363 的 with-zg 安装清单有效，Qoder 启动与 MCP 连接检查通过；独立预检成功执行了原生向量检索。该预检不属于正式任务调用或 token 指标。Task 334 与 Task 363 的正式任务均未调用 zg。
 
-Task 363 的 baseline 在限额前写入 PDF，随后继续检查并修复目录超链接，最终因墙钟限额退出。当前 harness 要求 Qoder 会话成功结束才将样本记为 `completed`，因此没有对这份 PDF 打分。[上游固定版本的 runner](https://github.com/OpenDataBox/Workspace-Bench/blob/3fbd0f1a136720fece86786545983e26642c3db2/evaluation/src/agent_runner.py#L1223-L1276) 则会收集超时后仍存在的输出文件，并在找到输出路径时把任务执行状态记为 `passed`，同时保留 `runnerStatus: timeout` 和 `partialOutputCollected: true`。这说明我们的完成判定比上游更严格；**不能因此把本次未评分的 baseline 写成 0 分，也不能把超时伪装成正常会话完成**。若要按上游语义补齐 Task 363，应单独审计并评判已保留的输出文件，同时保留超时和 token 下界标签，无需重新生成该 PDF。
+Task 363 的 baseline 在限额前写入 PDF，随后继续检查并修复目录超链接，最终因墙钟限额退出。当前 harness 要求 Qoder 会话成功结束才将样本记为 `completed`，因此原始 CI 没有对这份 PDF 打分。[上游固定版本的 runner](https://github.com/OpenDataBox/Workspace-Bench/blob/3fbd0f1a136720fece86786545983e26642c3db2/evaluation/src/agent_runner.py#L1223-L1276) 则会收集超时后仍存在的输出文件，并在找到输出路径时把任务执行状态记为 `passed`，同时保留 `runnerStatus: timeout` 和 `partialOutputCollected: true`。这说明我们的完成判定比上游更严格；**不能因此把原始 baseline 的 rubric 分数写成 0，也不能把超时伪装成正常会话完成**。
+
+为核查截止时的实际交付质量，[独立诊断 CI](https://github.com/Cuiyus/zvec-grep/actions/runs/35749201988) 只重评了已保留的 baseline PDF，没有重新运行 Qoder。它从固定数据集 revision 下载原始四篇 PDF 和 metadata 并核验 SHA；以相同的 PDF 提取引擎重建了原 judge 来源文本，复现了 with-zg 原评分的完整 prompt SHA-256，然后对 baseline 文件应用相同的自定义 GLM-5.2 原始 rubric 评分。结果为 **22/22**；with-zg 原评分也是 **22/22**。诊断产物明确保留 `trial_completed: false`、`baseline_execution_status: budget_exhausted`、3600 秒墙钟上限以及 **8,127,741 个输入 token 的观察下界**。这是文件在截止时的诊断分数，并非原 CI 的正常完成配对、官方 ClaudeCode judge 或正式的 token 节省率。两份 PDF 内容差异较大，但此自定义 rubric 已满分，无法以本次评分分辨质量收益。
 
 前一次 [Task 363 run](https://github.com/Cuiyus/zvec-grep/actions/runs/35723608351) 的 baseline 曾在 1891 秒完成并生成 21 页 PDF，却因 Qoder `modelUsage` 中零 token、零费用的 `lite` 空桶被旧 parser 误判为模型回退；该误判已在 `e5b7ecd` 修复。它与本次 with-zg 样本来自不同 CI run，不能直接拼成原定的同批配对结果。
 
