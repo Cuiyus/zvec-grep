@@ -64,12 +64,14 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
     "package-candidate",
     "retrieval",
     "zg-report",
+    "beir",
+    "quarry",
     "results",
   ]);
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
 });
 
-test("every repository runs the fixed three ZG modes through Rust MCP, yielding 16 jobs", async () => {
+test("the three suites run in independent jobs with 18 total jobs", async () => {
   const protocol = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
@@ -89,7 +91,7 @@ test("every repository runs the fixed three ZG modes through Rust MCP, yielding 
     new Set(lock.repositories.map((repo) => repo.repository)).size,
     11,
   );
-  assert.equal(Object.keys(jobs).length - 1 + lock.repositories.length, 16);
+  assert.equal(Object.keys(jobs).length - 1 + lock.repositories.length, 18);
   assert.match(jobs["package-candidate"], /lock\.repositories\.map/);
   assert.match(
     jobs.retrieval,
@@ -102,6 +104,12 @@ test("every repository runs the fixed three ZG modes through Rust MCP, yielding 
   assert.doesNotMatch(runner, /--(?:modes|preview)\b|RETRIEVAL_MODES|inputs\./);
   assert.match(runner, /--repository "\$RETRIEVAL_REPOSITORY"/);
   assert.match(jobs["quality-contract"], /uses: actions\/setup-python@/);
+  for (const suite of ["beir", "quarry"]) {
+    assert.match(jobs[suite], /needs: \[authorize, package-candidate\]/);
+    assert.match(jobs[suite], new RegExp(`--suite ${suite}`));
+    assert.match(jobs[suite], new RegExp(`retrieval-${suite}-report`));
+    assert.match(jobs[suite], /\$GITHUB_STEP_SUMMARY/);
+  }
   assert.match(
     jobs["quality-contract"],
     /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
@@ -121,6 +129,8 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
     "package-candidate",
     "retrieval",
     "zg-report",
+    "beir",
+    "quarry",
     "results",
   ])
     assert.match(
@@ -159,7 +169,7 @@ test("the selected source is built from rust/ and exact-commit package caching b
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {
-  assert.equal(Object.keys(jobs).length, 6);
+  assert.equal(Object.keys(jobs).length, 8);
   assert.ok(jobs.results && jobs.retrieval && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
     const entries = steps(job);
@@ -191,7 +201,7 @@ test("every independently rerunnable job checks both actors before doing benchma
   assert.match(action, /RERUN_ACTOR: \$\{\{ github\.triggering_actor \}\}/);
 });
 
-test("one final ZG summary runs after successful or failed upstream jobs without optional arms", () => {
+test("one final page combines all suite reports after successful or failed jobs", () => {
   assert.match(jobs.results, /^ {4}if:.*always\(\)/m);
   const dependencies = /needs:\s*\[([\s\S]*?)\]/.exec(jobs.results);
   assert.ok(dependencies);
@@ -206,22 +216,28 @@ test("one final ZG summary runs after successful or failed upstream jobs without
       "package-candidate",
       "retrieval",
       "zg-report",
+      "beir",
+      "quarry",
     ],
   );
   const finalSteps = steps(jobs.results);
   const downloads = finalSteps.filter((entry) =>
     entry.includes("uses: actions/download-artifact@"),
   );
-  assert.equal(downloads.length, 1);
+  assert.equal(downloads.length, 3);
   assert.match(downloads[0], /name: retrieval-zg-report/);
   assert.match(downloads[0], /continue-on-error: true/);
-  const builder = finalSteps.find((entry) => entry.includes("ci-report.mjs"));
+  assert.match(downloads[1], /name: retrieval-beir-report/);
+  assert.match(downloads[2], /name: retrieval-quarry-report/);
+  const builder = finalSteps.find((entry) =>
+    entry.includes("expansion/combined.mjs"),
+  );
   assert.ok(builder);
   assert.match(builder, /if:.*always\(\)/);
   assert.match(builder, /RETRIEVAL_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
   assert.deepEqual(
     [...builder.matchAll(/^\s+--([\w-]+)/gm)].map((match) => match[1]),
-    ["zg", "output"],
+    ["zg", "beir", "quarry", "output"],
   );
   assert.doesNotMatch(builder, /comparison|baseline|preview|modes/);
   const overviewArtifact = finalSteps.find((entry) =>
@@ -236,11 +252,15 @@ test("one final ZG summary runs after successful or failed upstream jobs without
       .filter((entry) => entry.includes("$GITHUB_STEP_SUMMARY"))
       .map((entry) => ({ name, entry })),
   );
-  assert.equal(publishers.length, 1);
-  assert.equal(publishers[0].name, "results");
-  assert.match(publishers[0].entry, /if:.*always\(\)/);
-  assert.match(publishers[0].entry, /summary\.md/);
-  assert.match(publishers[0].entry, /missing results are not zero scores/);
+  assert.equal(publishers.length, 3);
+  assert.deepEqual(
+    publishers.map((entry) => entry.name),
+    ["beir", "quarry", "results"],
+  );
+  for (const publisher of publishers)
+    assert.match(publisher.entry, /if:.*always\(\)/);
+  assert.match(publishers[2].entry, /summary\.md/);
+  assert.match(publishers[2].entry, /missing results are not zero scores/);
 });
 
 const scriptStart = action.indexOf("        script: |\n");

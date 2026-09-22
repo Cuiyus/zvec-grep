@@ -245,11 +245,145 @@ jobs:
           overwrite: true
           retention-days: 14
 
+  beir:
+    name: BEIR / SciFact (10 queries)
+    needs: [authorize, package-candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.harness-commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Cache the multilingual model
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/beir-model-cache
+          key: retrieval-beir-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run BEIR / SciFact pilot
+        run: |
+          node benchmarks/zg-retrieval/expansion/run.mjs \
+            --suite beir \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --output "$RUNNER_TEMP/beir" \
+            --model-cache "$RUNNER_TEMP/beir-model-cache" \
+            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Publish BEIR results for this job
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/beir/report.md" ]; then
+            cat "$RUNNER_TEMP/beir/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## BEIR / SciFact: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve BEIR report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-beir-report
+          path: |
+            ${{ runner.temp }}/beir/report.json
+            ${{ runner.temp }}/beir/report.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve BEIR public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-beir-evidence
+          path: |
+            ${{ runner.temp }}/beir/evidence/
+            !${{ runner.temp }}/beir/evidence/**/runtime-home/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  quarry:
+    name: Quarry / quic-go (10 queries)
+    needs: [authorize, package-candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.harness-commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Cache the code model
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/quarry-model-cache
+          key: retrieval-quarry-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run Quarry / quic-go pilot
+        run: |
+          node benchmarks/zg-retrieval/expansion/run.mjs \
+            --suite quarry \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --output "$RUNNER_TEMP/quarry" \
+            --model-cache "$RUNNER_TEMP/quarry-model-cache" \
+            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Publish Quarry results for this job
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/quarry/report.md" ]; then
+            cat "$RUNNER_TEMP/quarry/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## Quarry / quic-go: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve Quarry report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-quarry-report
+          path: |
+            ${{ runner.temp }}/quarry/report.json
+            ${{ runner.temp }}/quarry/report.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve Quarry public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-quarry-evidence
+          path: |
+            ${{ runner.temp }}/quarry/evidence/
+            !${{ runner.temp }}/quarry/evidence/**/runtime-home/**
+          if-no-files-found: warn
+          retention-days: 14
+
   results:
     name: Retrieval results
     if: ${{ always() && needs.authorize.result == 'success' }}
     needs:
-      [authorize, quality-contract, package-candidate, retrieval, zg-report]
+      [
+        authorize,
+        quality-contract,
+        package-candidate,
+        retrieval,
+        zg-report,
+        beir,
+        quarry,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -266,7 +400,21 @@ jobs:
         with:
           name: retrieval-zg-report
           path: ${{ runner.temp }}/results-input/zg
-      - name: Build the single results table
+      - name: Download BEIR report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-beir-report
+          path: ${{ runner.temp }}/results-input/beir
+      - name: Download Quarry report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-quarry-report
+          path: ${{ runner.temp }}/results-input/quarry
+      - name: Build the unified results page
         if: ${{ always() && steps.access.outcome == 'success' }}
         env:
           RETRIEVAL_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -274,10 +422,12 @@ jobs:
           RETRIEVAL_CANDIDATE_REF: ${{ inputs.candidate_ref }}
           RETRIEVAL_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
         run: |
-          node benchmarks/zg-retrieval/ci-report.mjs \
+          node benchmarks/zg-retrieval/expansion/combined.mjs \
             --zg "$RUNNER_TEMP/results-input/zg/report.json" \
+            --beir "$RUNNER_TEMP/results-input/beir/report.json" \
+            --quarry "$RUNNER_TEMP/results-input/quarry/report.json" \
             --output "$RUNNER_TEMP/retrieval-results"
-      - name: Publish the results table
+      - name: Publish the unified results page
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
           if [ -f "$RUNNER_TEMP/retrieval-results/summary.md" ]; then

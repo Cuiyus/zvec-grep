@@ -105,7 +105,7 @@ export function auditIndexSelection(files, protocol) {
   };
 }
 
-async function freePort() {
+export async function freePort() {
   const server = createServer();
   await new Promise((res, rej) => {
     server.once("error", rej);
@@ -138,7 +138,7 @@ export function nativeCandidate(packageRoot, consumer, metadata) {
   return { consumer, packageRoot, cli, runtime: "rust-native" };
 }
 
-async function packageCandidate(packagePath, output) {
+export async function packageCandidate(packagePath, output) {
   let tarball = resolve(packagePath);
   if ((await lstat(tarball)).isDirectory()) {
     const names = (await readdir(tarball)).filter((name) =>

@@ -1,0 +1,87 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { loadPilot } from "../expansion/datasets.mjs";
+import { summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
+import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
+
+test("BEIR and Quarry locks contain ten distinct original-query identities and the requested models", async () => {
+  const beir = await loadPilot("beir");
+  const quarry = await loadPilot("quarry");
+  assert.equal(beir.lock.tasks.length, 10);
+  assert.equal(quarry.lock.tasks.length, 10);
+  assert.equal(beir.lock.model, "local/potion-multilingual-128m");
+  assert.equal(quarry.lock.model, "local/potion-code-16m-v2");
+  assert.equal(
+    new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size,
+    10,
+  );
+  assert.equal(
+    new Set(quarry.lock.tasks.map((task) => task.revision)).size,
+    10,
+  );
+  assert.ok(
+    quarry.lock.tasks.every((task) =>
+      task.positive_units.every((unit) => unit.revision === task.revision),
+    ),
+  );
+  assert.ok(
+    beir.lock.tasks.every((task) =>
+      task.qrels.every((row) => row.relevance > 0),
+    ),
+  );
+});
+
+test("pilot report preserves completed scores and calls out missing tasks", () => {
+  const success = {
+    task_id: "a",
+    mode: "hybrid",
+    status: "success",
+    file: { hit_at_1: 1, hit_at_5: 1, hit_at_10: 1, rr_at_10: 1 },
+    ndcg: { ndcg_at_10: 1 },
+    output_bytes: 1024,
+    calls: [100, 110, 120, 130, 140].map((latency_ms) => ({
+      status: "success",
+      latency_ms,
+    })),
+  };
+  const failed = {
+    task_id: "b",
+    mode: "hybrid",
+    status: "failed",
+    calls: [{ status: "failed", latency_ms: 1 }],
+  };
+  const summary = summarizePilotRows([success, failed]);
+  assert.equal(summary[0].completed, 1);
+  assert.equal(summary[0].metrics.file_hit_at_1, 1);
+  assert.equal(summary[0].measurements.latency_sample_count, 5);
+  assert.equal(summary[0].measurements.latency_ms_p50, 120);
+  assert.equal(summary[1].metrics.ndcg_at_10, null);
+  const markdown = markdownPilotReport({
+    label: "Pilot",
+    status: "failed",
+    model: "local/test",
+    suite: "quarry10",
+    summary,
+    failures: [{ task_id: "b", reason: "index failed" }],
+  });
+  assert.match(markdown, /1\/10/);
+  assert.match(markdown, /index failed/);
+  assert.match(markdown, /not the official Quarry function recall/);
+});
+
+test("unified results page identifies missing pilot artifacts independently", async () => {
+  const result = await buildCombined({
+    zg: null,
+    beir: null,
+    quarry: null,
+    candidateCommit: "a".repeat(40),
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.pilots.beir.status, "unavailable");
+  assert.equal(result.pilots.quarry.status, "unavailable");
+  const markdown = markdownCombined(result);
+  assert.match(markdown, /SWE-QA20/);
+  assert.match(markdown, /BEIR \/ SciFact/);
+  assert.match(markdown, /Quarry \/ quic-go/);
+  assert.match(markdown, /report artifact missing/);
+});
