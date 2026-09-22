@@ -7,7 +7,11 @@ file-level metrics. They run independently of the frozen SWE-QA20 suite.
   in the sorted test-query IDs. The complete 5,183-document SciFact corpus is
   indexed, one unchanged title/text document per Markdown file. The official
   test qrels determine relevant document IDs. The original archive is pinned
-  by SHA-256, and preparation checks every selected query and qrel against it.
+  by SHA-256. CI downloads its corpus and queries from a pinned Hugging Face
+  mirror, checks the full corpus content digest against the original archive,
+  and verifies the selected queries and the checked-in original test qrels.
+  This mirror is used because the original download host is not reachable from
+  GitHub runners.
 - **Quarry / quic-go preimage:** the first original query from each of the first
   ten distinct quic-go tasks in the pinned release, using each task's exact
   preimage revision. The full repository checkout is indexed separately for

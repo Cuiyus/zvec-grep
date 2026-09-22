@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fileHash, inside, readJson, run } from "../core/io.mjs";
+import { fileHash, inside, readJson, run, sha256 } from "../core/io.mjs";
 import { prepareCorpus } from "../core/corpus.mjs";
 
 const data = join(dirname(fileURLToPath(import.meta.url)), "data");
@@ -74,23 +74,84 @@ function qrels(content) {
   return byQuery;
 }
 
+async function mirrorRows(lock, config, split, count) {
+  const pages = Array.from({ length: Math.ceil(count / 100) }, (_, index) => ({
+    offset: index * 100,
+    length: Math.min(100, count - index * 100),
+  }));
+  const rows = [];
+  for (let index = 0; index < pages.length; index += 4) {
+    const batch = await Promise.all(
+      pages.slice(index, index + 4).map(async ({ offset, length }) => {
+        const url = new URL("https://datasets-server.huggingface.co/rows");
+        url.search = new URLSearchParams({
+          dataset: lock.mirror.dataset,
+          revision: lock.mirror.revision,
+          config,
+          split,
+          offset: String(offset),
+          length: String(length),
+        });
+        const response = await run("curl", [
+          "--fail",
+          "--location",
+          "--silent",
+          "--show-error",
+          "--retry",
+          "3",
+          "--retry-delay",
+          "1",
+          String(url),
+        ]);
+        const page = JSON.parse(response.stdout);
+        assert.equal(page.num_rows_total, count);
+        assert.equal(page.rows.length, length);
+        assert.equal(page.partial, false);
+        return page.rows.map((entry, position) => {
+          assert.equal(entry.row_idx, offset + position);
+          assert.deepEqual(entry.truncated_cells, []);
+          return entry.row;
+        });
+      }),
+    );
+    rows.push(...batch.flat());
+  }
+  return rows;
+}
+
 export async function prepareBeir(pilot, directory) {
   const { lock } = pilot;
-  const archive = join(directory, "source", "scifact.zip");
-  await download(lock.source_url, archive, lock.archive_sha256);
-  const extracted = join(directory, "source", "extracted");
-  await mkdir(extracted, { recursive: true });
-  await run("unzip", ["-q", archive, "-d", extracted]);
-  const source = join(extracted, "scifact");
-  const documents = jsonl(await readFile(join(source, "corpus.jsonl"), "utf8"));
+  const documents = await mirrorRows(
+    lock,
+    "corpus",
+    "corpus",
+    lock.corpus_documents,
+  );
+  const corpusIdentity = sha256(
+    [...documents]
+      .sort((left, right) =>
+        left._id < right._id ? -1 : left._id > right._id ? 1 : 0,
+      )
+      .map(
+        (document) =>
+          `${document._id}\t${sha256(`${document.title}\0${document.text}`)}\n`,
+      )
+      .join(""),
+  );
+  assert.equal(
+    corpusIdentity,
+    lock.mirror.corpus_sha256,
+    "mirror corpus differs from the pinned BEIR archive",
+  );
   const queries = new Map(
-    jsonl(await readFile(join(source, "queries.jsonl"), "utf8")).map(
-      (query) => [query._id, query.text],
-    ),
+    (await mirrorRows(lock, "queries", "queries", 1109)).map((query) => [
+      query._id,
+      query.text,
+    ]),
   );
-  const judgments = qrels(
-    await readFile(join(source, "qrels", "test.tsv"), "utf8"),
-  );
+  const qrelPath = join(data, "scifact-test.tsv");
+  assert.equal(await fileHash(qrelPath), lock.mirror.qrels_test_sha256);
+  const judgments = qrels(await readFile(qrelPath, "utf8"));
   assert.equal(documents.length, lock.corpus_documents);
   const ids = new Set();
   const root = join(directory, "corpus", "scifact");
