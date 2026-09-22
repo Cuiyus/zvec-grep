@@ -1,0 +1,65 @@
+name: Workspace Lite CN · Task 363 cutoff-output diagnostic judge
+run-name: "Task 363 · existing baseline PDF at cutoff · custom rubric judge"
+
+on:
+  push:
+    branches: [dev/benchmark-qoder-qwen38-qa]
+    paths:
+      - '.github/workflows/workspace-qa-363-cutoff-judge.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  judge-cutoff-output:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[workspace-qa-363-cutoff]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the original PDF extraction engines
+        run: python -m pip install -r benchmarks/workspace-qa/pdf-requirements.txt
+      - name: Download the immutable Task 363 source-run artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 35731286815 --repo Cuiyus/zvec-grep \
+            --name workspace-lite-cn-official-363-long-smoke-363-35731286815-1 \
+            --dir "$RUNNER_TEMP/task-363-artifact"
+      - name: Verify original judge context and score baseline PDF at cutoff
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          python benchmarks/workspace-qa/judge_cutoff.py \
+            --artifact "$RUNNER_TEMP/task-363-artifact" \
+            --source "$RUNNER_TEMP/task-363-source" \
+            --output "$RUNNER_TEMP/task-363-cutoff-judge.json"
+      - name: Publish diagnostic result and interpretation
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/task-363-cutoff-judge.json" ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'task-363-cutoff-judge.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Task 363 baseline PDF at cutoff: custom rubric '
+                        f"{sum(x['score'] for x in result['criteria'])}/{len(result['criteria'])}. "
+                        'Agent session exhausted its wall-clock budget; this is a diagnostic artifact score, '
+                        'not a completed paired trial or the official ClaudeCode judge. '
+                        'The with-zg trial made zero formal zg calls.\n')
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-lite-cn-363-cutoff-judge-${{ github.run_id }}
+          path: ${{ runner.temp }}/task-363-cutoff-judge.json
+          if-no-files-found: warn
