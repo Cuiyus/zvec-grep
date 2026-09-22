@@ -10,6 +10,22 @@ function required(pattern, text, label) {
   return match;
 }
 
+export class NativeIndexProductError extends Error {}
+
+function requireSearchable(condition, message) {
+  if (!condition) throw new NativeIndexProductError(message);
+}
+
+async function writeStatusEvidence(output, result) {
+  await writeFile(join(output, "status.txt"), result.stdout);
+  await writeFile(join(output, "status.stderr.txt"), result.stderr);
+  await writeJson(join(output, "status-exit.json"), {
+    code: result.code,
+    signal: result.signal,
+    timed_out: result.timed_out,
+  });
+}
+
 export function parseNativeStatus(stdout) {
   const state = required(
     /^Workspace index: (ready|missing)$/m,
@@ -45,21 +61,46 @@ export function parseNativeStatus(stdout) {
   for (const [name, value] of Object.entries(status))
     if (typeof value === "number")
       assert.ok(Number.isSafeInteger(value) && value >= 0, `invalid ${name}`);
-  assert.equal(status.state, "ready", "native index is not ready");
-  assert.equal(status.files_pending, 0, "native index still has pending files");
-  assert.equal(status.files_failed, 0, "native index contains failed files");
-  assert.ok(status.files_indexed > 0, "native index contains no indexed files");
-  assert.ok(status.entities_indexed > 0, "native index contains no entities");
+  requireSearchable(status.state === "ready", "native index is not ready");
+  requireSearchable(
+    status.files_pending === 0,
+    "native index still has pending files",
+  );
+  requireSearchable(
+    status.files_failed === 0,
+    "native index contains failed files",
+  );
+  requireSearchable(
+    status.files_indexed > 0,
+    "native index contains no indexed files",
+  );
+  requireSearchable(
+    status.entities_indexed > 0,
+    "native index contains no entities",
+  );
   return status;
 }
 
-export async function snapshotIndex({ cli, root, output, env }) {
+export async function snapshotIndex({
+  cli,
+  root,
+  output,
+  env,
+  runStatus = run,
+}) {
   await mkdir(output, { recursive: true });
-  const result = await run(
-    cli,
-    ["status", root, "--mode", "direct", "--check-ready", "--debug"],
-    { env, cwd: root },
-  );
+  let result;
+  try {
+    result = await runStatus(
+      cli,
+      ["status", root, "--mode", "direct", "--check-ready", "--debug"],
+      { env, cwd: root },
+    );
+  } catch (error) {
+    if (error.result) await writeStatusEvidence(output, error.result);
+    throw error;
+  }
+  await writeStatusEvidence(output, result);
   const status = parseNativeStatus(result.stdout);
   assert.equal(
     status.root,
@@ -75,7 +116,6 @@ export async function snapshotIndex({ cli, root, output, env }) {
     entities_indexed: status.entities_indexed,
     indexed_source_bytes: status.indexed_source_bytes,
   };
-  await writeFile(join(output, "status.txt"), result.stdout);
   await writeJson(join(output, "status.json"), status);
   const summary = {
     schema_version: 2,

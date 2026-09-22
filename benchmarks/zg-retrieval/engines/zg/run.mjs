@@ -28,7 +28,7 @@ import {
   inside,
 } from "../../core/lib.mjs";
 import { aggregate } from "./report.mjs";
-import { snapshotIndex } from "./snapshot.mjs";
+import { NativeIndexProductError, snapshotIndex } from "./snapshot.mjs";
 
 const MCP_CLIENT_PACKAGE = "@modelcontextprotocol/client@2.0.0";
 
@@ -226,7 +226,8 @@ export function schemaAllowsType(schema, type) {
 export function isProductPreparationFailure(phase, error) {
   return (
     ["installation", "index", "mcp"].includes(phase) ||
-    (phase === "snapshot" && Boolean(error?.result))
+    (phase === "snapshot" &&
+      (Boolean(error?.result) || error instanceof NativeIndexProductError))
   );
 }
 
