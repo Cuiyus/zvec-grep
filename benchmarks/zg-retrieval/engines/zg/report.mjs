@@ -407,8 +407,20 @@ export async function aggregate(directory, { expectedTasks } = {}) {
             item.execution_status === "success" &&
             item.status !== "harness_invalid",
         );
+      const invalidRepeat = repeats.find(
+        (item) => item.status === "harness_invalid",
+      );
+      // A bad repetition invalidates the task/mode experiment, even when its
+      // fifth (quality) call happened to be parseable.
+      const qualityRow =
+        invalidRepeat && row.status !== "harness_invalid"
+          ? invalidate(
+              row,
+              `repetition ${invalidRepeat.repetition}: ${invalidRepeat.invalid_reason}`,
+            )
+          : row;
       return {
-        ...row,
+        ...qualityRow,
         ranking_repeatable: valid
           ? new Set(repeats.map((item) => item.ranking_sha256)).size === 1
           : null,
@@ -430,19 +442,44 @@ export async function aggregate(directory, { expectedTasks } = {}) {
     (row) => row.execution_status === "product_error",
   ).length;
   const complete = errors.length === 0;
+  const invalidObservations = observations.filter(
+    (row) => row.status === "harness_invalid",
+  );
+  const partialScoreable =
+    errors.every(
+      (reason) =>
+        reason === "one or more observations are experimentally invalid",
+    ) &&
+    invalidObservations.every((row) =>
+      row.invalid_reason?.startsWith("format_unknown: "),
+    );
+  const validQuality = quality.filter(
+    (row) => row.status !== "harness_invalid",
+  );
+  const validKeys = new Set(
+    validQuality.map((row) => `${row.task_id}/${row.mode}`),
+  );
   const modeReports = Object.fromEntries(
     suite.protocol.modes.map((mode) => {
-      const rows = quality.filter((row) => row.mode === mode);
+      const rows = validQuality.filter((row) => row.mode === mode);
       return [
         mode,
         {
-          measurements: complete
-            ? summarizeMeasurements(
-                observations.filter((row) => row.mode === mode),
-              )
-            : null,
-          file_retrieval: complete ? summarizeFileRetrieval(rows) : null,
-          ndcg: complete ? summarizeNdcg(rows) : null,
+          measurements:
+            partialScoreable && rows.length
+              ? summarizeMeasurements(
+                  observations.filter(
+                    (row) =>
+                      row.mode === mode &&
+                      validKeys.has(`${row.task_id}/${row.mode}`),
+                  ),
+                )
+              : null,
+          file_retrieval:
+            partialScoreable && rows.length
+              ? summarizeFileRetrieval(rows)
+              : null,
+          ndcg: partialScoreable && rows.length ? summarizeNdcg(rows) : null,
           ranking_repeatable_tasks: rows.filter(
             (row) => row.ranking_repeatable === true,
           ).length,

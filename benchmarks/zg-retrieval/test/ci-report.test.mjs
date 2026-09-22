@@ -114,15 +114,16 @@ function assertUnavailable(result) {
   );
   for (const row of result.rows) {
     assert.equal(row.status, "invalid");
-    assert.equal(row.questions, null);
+    assert.equal(row.questions, 0);
+    assert.equal(row.expected_questions, 20);
     assert.equal(row.metrics, null);
     assert.equal(row.measurements, null);
   }
 }
 
-test("summary schema 4 has exactly the fixed three Rust MCP ZG arms", async () => {
+test("summary schema 5 has exactly the fixed three Rust MCP ZG arms", async () => {
   const result = await buildCiSummary({ zg: zgReport() });
-  assert.equal(result.schema_version, 4);
+  assert.equal(result.schema_version, 5);
   assert.equal(result.status, "success");
   assert.equal(result.preview, "mcp-default");
   assert.deepEqual(result.quality_metrics, [
@@ -138,6 +139,7 @@ test("summary schema 4 has exactly the fixed three Rust MCP ZG arms", async () =
   );
   for (const row of result.rows) {
     assert.equal(row.questions, 20);
+    assert.equal(row.repositories, 11);
     assert.ok(Math.abs(row.metrics.file_mrr_at_10 - 1 / 3) < 1e-14);
     assert.equal(row.measurements.output_sample_count, 20);
     assert.equal(row.measurements.latency_sample_count, 100);
@@ -147,6 +149,64 @@ test("summary schema 4 has exactly the fixed three Rust MCP ZG arms", async () =
     JSON.stringify(result),
     /comparison|previews|primary_preview/,
   );
+});
+
+test("isolated invalid question is excluded from partial scores and named in the failed-task table", async () => {
+  const report = zgReport();
+  const taskId = suite.lock.tasks.find(
+    (task) => task.repository === "pylint-dev/pylint",
+  ).task_id;
+  for (const row of report.tasks.filter((row) => row.task_id === taskId)) {
+    row.status = "harness_invalid";
+    row.execution_status = "harness_invalid";
+    row.invalid_reason = "format_unknown: public source range mismatch";
+    row.ndcg = null;
+    row.file_retrieval = null;
+    row.items = [];
+    row.measurement_observations = row.measurement_observations.map(
+      (sample) => ({
+        ...sample,
+        status: "harness_invalid",
+        execution_status: "harness_invalid",
+      }),
+    );
+  }
+  report.quality_score_valid = false;
+  report.integrity_passed = false;
+  report.integrity_errors = [
+    "one or more observations are experimentally invalid",
+  ];
+  const result = await buildCiSummary({ zg: report });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(
+    result.rows.map((row) => row.status),
+    ["partial", "partial", "partial"],
+  );
+  assert.ok(result.rows.every((row) => row.questions === 19));
+  assert.ok(result.rows.every((row) => row.metrics.file_hit_at_5 === 1));
+  assert.deepEqual(result.failed_tasks, [
+    {
+      task_id: taskId,
+      repository: "pylint-dev/pylint",
+      modes: ["hybrid", "fts", "vector"],
+      kind: "invalid_evidence",
+      reason: "format_unknown: public source range mismatch",
+    },
+  ]);
+  const markdown = markdownCiSummary(result);
+  assert.match(markdown, /19\/20 questions; 11\/11 repositories/);
+  assert.match(markdown, /pylint-dev\/pylint/);
+  assert.match(markdown, /public source range mismatch/);
+  assert.match(markdown, /Partial scores are diagnostic/);
+  assert.doesNotMatch(markdown, /0\/20 questions; 0\/11 repositories/);
+
+  report.integrity_errors.unshift("mixed candidate tarball_sha256");
+  assertUnavailable(await buildCiSummary({ zg: report }));
+  report.integrity_errors.shift();
+  report.tasks.find((row) => row.task_id === taskId).file_retrieval = {
+    hit_at_1: 1,
+  };
+  assertUnavailable(await buildCiSummary({ zg: report }));
 });
 
 test("missing and invalid reports withhold all three arms instead of fabricating zeros", async () => {
@@ -303,6 +363,8 @@ test("product failures retain quality zeros only in the affected arm and exclude
   assert.equal(result.rows[2].questions, 20);
   for (const metric of QUALITY_METRICS)
     assert.equal(result.rows[2].metrics[metric], 0);
+  assert.equal(result.failed_tasks.length, 20);
+  assert.ok(result.failed_tasks.every((task) => task.modes[0] === "vector"));
   assert.equal(result.rows[2].measurements.output_bytes_mean, null);
   assert.equal(result.rows[2].measurements.output_sample_count, 0);
   assert.equal(result.rows[2].measurements.latency_sample_count, 0);
@@ -382,9 +444,9 @@ test("Markdown exposes exactly three arms, five quality metrics and two measurem
   });
   const text = markdownCiSummary(result);
   assert.match(text, /Rust public MCP default presentation/);
-  assert.match(text, /20 quality observations/);
-  assert.match(text, /Hit\/MRR weight all 20 questions equally/);
-  assert.match(text, /nDCG@10 uses a repository macro average/);
+  assert.match(text, /20 fifth-call quality observations/);
+  assert.match(text, /Hit\/MRR average over the valid questions/);
+  assert.match(text, /nDCG@10 is a macro average/);
   assert.match(text, /1 KiB = 1024 bytes/);
   assert.match(text, /20 output samples; 100 latency samples/);
   assert.match(text, /feature\/rust-search/);
@@ -394,7 +456,7 @@ test("Markdown exposes exactly three arms, five quality metrics and two measurem
     assert.match(
       text,
       new RegExp(
-        `\\| ${label} \\| ✅ Valid \\| 0.0% \\(0/20\\) \\| 100.0% \\(20/20\\) \\| 100.0% \\(20/20\\) \\| 0.3333`,
+        `\\| ${label} \\| ✅ Valid \\| 20/20 questions; 11/11 repositories \\| 0.0% \\(0/20\\) \\| 100.0% \\(20/20\\) \\| 100.0% \\(20/20\\) \\| 0.3333`,
       ),
     );
   assert.match(text, /\| 3\.50 \| 12\.35 \|/);
@@ -429,7 +491,7 @@ test("CLI accepts only --zg and --output and writes only the two overview artifa
   assert.equal(
     JSON.parse(await readFile(join(output, "summary.json"), "utf8"))
       .schema_version,
-    4,
+    5,
   );
   for (const unsupported of ["--engine", "--modes"])
     assert.notEqual(

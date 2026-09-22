@@ -45,12 +45,12 @@ test("report has one three-arm table with Rust MCP output, fixed averages and pe
   for (const mode of ["hybrid", "fts", "vector"])
     assert.ok(
       text.includes(
-        `| zg-${mode} | 7/20 | 12/20 | 15/20 | 0.4056 | 0.2925 | 1.5000 | 12.3457 |`,
+        `| zg-${mode} | 20/20 questions; 11/11 repositories | 7/20 | 12/20 | 15/20 | 0.4056 | 0.2925 | 1.5000 | 12.3457 |`,
       ),
     );
   assert.match(text, /20 original questions \/ 11 repositories/);
   assert.match(text, /fifth call per question and mode; Rust MCP default/);
-  assert.match(text, /weights repositories equally/);
+  assert.match(text, /weights those repositories equally/);
   assert.match(text, /does not send a preview override/);
   assert.match(text, /<details>/);
   assert.match(text, /100\*\* successful valid calls/);
