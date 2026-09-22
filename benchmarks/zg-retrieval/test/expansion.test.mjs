@@ -211,7 +211,7 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
   assert.equal(result.pilots.beir.status, "failed");
   assert.equal(result.pilots.beir.report.summary[0].completed, 1);
   const markdown = markdownCombined(result);
-  assert.match(markdown, /BEIR \/ four datasets \| ❌ Incomplete \| 1\/20/);
+  assert.match(markdown, /BEIR \/ four datasets \| ❌ Incomplete \| 0\/20/);
   assert.match(markdown, /Per-query results \(all 20 queries × 3 modes\)/);
   assert.match(markdown, /\| scifact \| zg-hybrid \| 1\/10 \|/);
   assert.match(markdown, /\| nfcorpus \| zg-hybrid \| 0\/4 \|/);

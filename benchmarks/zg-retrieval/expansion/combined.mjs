@@ -7,7 +7,8 @@ import { readJson, writeJson } from "../core/io.mjs";
 import { buildCiSummary, markdownCiSummary } from "../reports/ci.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
-import { loadPilot } from "./datasets.mjs";
+import { PILOT_NAMES, PILOT_SUITES } from "./config.mjs";
+import { loadPilot, targetsForTask } from "./datasets.mjs";
 import {
   markdownPilotReport,
   summarizePilotBreakdown,
@@ -48,13 +49,9 @@ async function checkPilot(name, report, candidateCommit) {
     for (const row of report.rows) {
       const task = pilot.lock.tasks.find((item) => item.id === row.task_id);
       assert.equal(row.query, task.query, `rewritten query ${row.task_id}`);
-      const paths =
-        name !== "quarry"
-          ? task.qrels.map((item) => `docs/${item.document_id}.md`)
-          : [...new Set(task.positive_units.map((unit) => unit.path))];
       assert.deepEqual(
         row.targets,
-        paths.map((path) => ({ path })),
+        targetsForTask(pilot, task),
         `changed gold ${row.task_id}`,
       );
       assert.ok(row.calls.length <= 5);
@@ -106,14 +103,12 @@ async function checkPilot(name, report, candidateCommit) {
 
 export async function buildCombined({
   zg,
-  beir,
-  duretrieval,
-  quarry,
   jobResults = {},
   candidateCommit = null,
   candidateRef = null,
   harnessCommit = null,
   runUrl = null,
+  ...pilotReports
 }) {
   const sweqa = await buildCiSummary({
     zg,
@@ -123,13 +118,16 @@ export async function buildCombined({
     harnessCommit,
     runUrl,
   });
-  const pilots = {
-    beir: await checkPilot("beir", beir, candidateCommit),
-    duretrieval: await checkPilot("duretrieval", duretrieval, candidateCommit),
-    quarry: await checkPilot("quarry", quarry, candidateCommit),
-  };
+  const pilots = Object.fromEntries(
+    await Promise.all(
+      PILOT_NAMES.map(async (name) => [
+        name,
+        await checkPilot(name, pilotReports[name], candidateCommit),
+      ]),
+    ),
+  );
   const errors = [...sweqa.errors];
-  for (const name of ["beir", "duretrieval", "quarry"]) {
+  for (const name of PILOT_NAMES) {
     const result = pilots[name];
     if (result.status !== "success")
       errors.push(
@@ -154,11 +152,6 @@ export async function buildCombined({
 }
 
 export function markdownCombined(result) {
-  const labels = {
-    beir: "BEIR / four datasets",
-    duretrieval: "DuRetrieval / Chinese web search",
-    quarry: "Quarry / eight languages",
-  };
   const sweqaCompleted = Math.min(
     ...result.sweqa.rows.map((row) => row.questions ?? 0),
   );
@@ -171,12 +164,14 @@ export function markdownCombined(result) {
     "| --- | --- | ---: | --- |",
     `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`local/potion-code-16m-v2\` |`,
   ];
-  for (const name of ["beir", "duretrieval", "quarry"]) {
+  for (const name of PILOT_NAMES) {
     const pilot = result.pilots[name];
-    const complete = pilot.report?.summary?.[0]?.completed ?? 0;
-    const planned = name === "duretrieval" ? 10 : 20;
+    const config = PILOT_SUITES[name];
+    const complete = pilot.report?.summary?.length
+      ? Math.min(...pilot.report.summary.map((row) => row.completed))
+      : 0;
     lines.push(
-      `| ${labels[name]} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/${planned} | \`${name === "quarry" ? "local/potion-code-16m-v2" : "local/potion-multilingual-128m"}\` |`,
+      `| ${config.report.overview} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/${config.taskCount} | \`${config.model}\` |`,
     );
   }
   lines.push(
@@ -186,12 +181,12 @@ export function markdownCombined(result) {
       "## SWE-QA20",
     ),
   );
-  for (const name of ["beir", "duretrieval", "quarry"]) {
+  for (const name of PILOT_NAMES) {
     const pilot = result.pilots[name];
     lines.push(
       pilot.report
         ? markdownPilotReport(pilot.report)
-        : `## ${labels[name]} · ❌ ${pilot.status}\n\n${pilot.error}.\n`,
+        : `## ${PILOT_SUITES[name].report.overview} · ❌ ${pilot.status}\n\n${pilot.error}.\n`,
     );
   }
   if (result.errors.length) {
@@ -210,21 +205,14 @@ export function markdownCombined(result) {
 export async function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({
     args,
-    options: {
-      zg: { type: "string" },
-      beir: { type: "string" },
-      duretrieval: { type: "string" },
-      quarry: { type: "string" },
-      output: { type: "string" },
-    },
+    options: Object.fromEntries(
+      ["zg", ...PILOT_NAMES, "output"].map((name) => [
+        name,
+        { type: "string" },
+      ]),
+    ),
   });
-  assert.ok(
-    values.zg &&
-      values.beir &&
-      values.duretrieval &&
-      values.quarry &&
-      values.output,
-  );
+  assert.ok(["zg", ...PILOT_NAMES, "output"].every((name) => values[name]));
   const maybeRead = async (path) => {
     try {
       return await readJson(path);
@@ -234,9 +222,11 @@ export async function main(args = process.argv.slice(2)) {
   };
   const result = await buildCombined({
     zg: await maybeRead(values.zg),
-    beir: await maybeRead(values.beir),
-    duretrieval: await maybeRead(values.duretrieval),
-    quarry: await maybeRead(values.quarry),
+    ...Object.fromEntries(
+      await Promise.all(
+        PILOT_NAMES.map(async (name) => [name, await maybeRead(values[name])]),
+      ),
+    ),
     jobResults: JSON.parse(process.env.RETRIEVAL_JOB_RESULTS ?? "{}"),
     candidateCommit: process.env.RETRIEVAL_CANDIDATE_COMMIT ?? null,
     candidateRef: process.env.RETRIEVAL_CANDIDATE_REF ?? null,

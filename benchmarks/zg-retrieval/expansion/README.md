@@ -3,6 +3,14 @@
 These pilots reuse the Rust public MCP search route and the existing five
 file-level metrics. They run independently of the frozen SWE-QA20 suite.
 
+`config.mjs` is the editable registry for pilot suite metadata: lock filename,
+expected query count, embedding model, gold projection, report labels, optional
+breakdown, and index timeout. Quarry's indexed language extensions live there
+too. Original queries, relevance labels, corpus revisions, and source hashes
+remain in the pinned `data/*.json` files. Adding a pilot still requires a
+corpus preparation adapter and its own CI job; the registry keeps the shared
+runner and combined report free of repeated suite-specific constants.
+
 - **BEIR test:** the original ten SciFact claims, plus four NFCorpus questions,
   three ArguAna arguments and three FiQA questions. Each dataset uses its full
   corpus and original test qrels. Source revisions, Parquet hashes, qrels hashes

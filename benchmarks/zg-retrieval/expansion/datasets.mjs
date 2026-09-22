@@ -4,29 +4,17 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileHash, inside, readJson, run } from "../core/io.mjs";
 import { prepareCorpus } from "../core/corpus.mjs";
+import { PILOT_SUITES } from "./config.mjs";
 
 const data = join(dirname(fileURLToPath(import.meta.url)), "data");
 const MODES = ["hybrid", "fts", "vector"];
-const CODE_EXTENSIONS = {
-  Go: "go",
-  Python: "py",
-  Rust: "rs",
-  JavaScript: "js",
-  TypeScript: "ts",
-  Java: "java",
-  "C#": "cs",
-  C: "c",
-};
 
 export async function loadPilot(name) {
-  const files = {
-    beir: "beir20.json",
-    quarry: "quarry20.json",
-    duretrieval: "duretrieval10.json",
-  };
-  assert.ok(Object.hasOwn(files, name), `unknown pilot: ${name}`);
-  const lock = await readJson(join(data, files[name]));
+  assert.ok(Object.hasOwn(PILOT_SUITES, name), `unknown pilot: ${name}`);
+  const config = PILOT_SUITES[name];
+  const lock = await readJson(join(data, config.lockFile));
   assert.equal(lock.schema_version, 1);
+  assert.equal(lock.suite, config.suite);
   if (name === "beir")
     lock.tasks = lock.datasets.flatMap((dataset) =>
       dataset.tasks.map((task) => ({
@@ -36,36 +24,44 @@ export async function loadPilot(name) {
         dataset: dataset.id,
       })),
     );
-  const expected = name === "duretrieval" ? 10 : 20;
-  assert.equal(lock.tasks.length, expected);
-  assert.equal(new Set(lock.tasks.map((task) => task.id)).size, expected);
+  assert.equal(lock.tasks.length, config.taskCount);
   assert.equal(
-    lock.model,
-    name === "quarry"
-      ? "local/potion-code-16m-v2"
-      : "local/potion-multilingual-128m",
+    new Set(lock.tasks.map((task) => task.id)).size,
+    config.taskCount,
   );
+  assert.equal(lock.model, config.model);
   for (const task of lock.tasks) {
     assert.ok(typeof task.query === "string" && task.query.trim());
-    if (name !== "quarry") {
+    if (config.targetKind === "qrels") {
       assert.ok(task.qrels.length > 0);
       assert.ok(task.qrels.every((row) => row.relevance > 0));
     } else {
+      assert.equal(config.targetKind, "positive_units");
       assert.match(task.revision, /^[a-f0-9]{40}$/);
       assert.ok(task.positive_units.length > 0);
       assert.ok(task.repository && task.language);
-      assert.ok(Object.hasOwn(CODE_EXTENSIONS, task.language));
+      assert.ok(Object.hasOwn(config.fileExtensions, task.language));
       assert.ok(
         task.positive_units.every((unit) => unit.revision === task.revision),
       );
       assert.ok(
         task.positive_units.every((unit) =>
-          unit.path.endsWith(`.${CODE_EXTENSIONS[task.language]}`),
+          unit.path.endsWith(`.${config.fileExtensions[task.language]}`),
         ),
       );
     }
   }
-  return { name, lock, modes: MODES };
+  return { name, config, lock, modes: MODES };
+}
+
+export function targetsForTask(pilot, task) {
+  if (pilot.config.targetKind === "qrels")
+    return task.qrels.map((row) => ({ path: `docs/${row.document_id}.md` }));
+  if (pilot.config.targetKind === "positive_units")
+    return [...new Set(task.positive_units.map((unit) => unit.path))].map(
+      (path) => ({ path }),
+    );
+  assert.fail(`unknown target kind: ${pilot.config.targetKind}`);
 }
 
 async function download(url, destination, expectedHash) {
@@ -119,7 +115,7 @@ export async function prepareBeirDataset(dataset, directory) {
     [
       join(dirname(fileURLToPath(import.meta.url)), "prepare-beir.py"),
       "--lock",
-      join(data, "beir20.json"),
+      join(data, PILOT_SUITES.beir.lockFile),
       "--dataset",
       dataset.id,
       "--source",
@@ -152,7 +148,7 @@ export async function prepareDuRetrieval(pilot, directory) {
     [
       join(dirname(fileURLToPath(import.meta.url)), "prepare-duretrieval.py"),
       "--lock",
-      join(data, "duretrieval10.json"),
+      join(data, pilot.config.lockFile),
       "--source",
       source,
       "--root",
@@ -167,9 +163,7 @@ export async function prepareDuRetrieval(pilot, directory) {
       tasks: lock.tasks.map((task) => ({
         id: task.id,
         query: task.query,
-        targets: task.qrels.map((row) => ({
-          path: `docs/${row.document_id}.md`,
-        })),
+        targets: targetsForTask(pilot, task),
       })),
       indexGlob: "*.md",
       expectedIndexedFiles: lock.corpus_documents,
@@ -253,6 +247,6 @@ export async function prepareQuarryTask(pilot, task, directory) {
         repository: task.repository,
       },
     ],
-    indexGlob: `*.${CODE_EXTENSIONS[task.language]}`,
+    indexGlob: `*.${pilot.config.fileExtensions[task.language]}`,
   };
 }

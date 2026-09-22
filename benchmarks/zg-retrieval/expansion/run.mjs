@@ -15,11 +15,13 @@ import {
 } from "../engines/zg/parse.mjs";
 import { freePort, packageCandidate } from "../engines/zg/run.mjs";
 import { snapshotIndex } from "../engines/zg/snapshot.mjs";
+import { PILOT_SUITES_BY_ID } from "./config.mjs";
 import {
   loadPilot,
   prepareBeirDataset,
   prepareDuRetrieval,
   prepareQuarryTask,
+  targetsForTask,
   verifyQuarrySource,
 } from "./datasets.mjs";
 
@@ -85,8 +87,8 @@ export function summarizePilotRows(
 }
 
 export function summarizePilotBreakdown(pilot, rows) {
-  if (pilot.name === "duretrieval") return [];
-  const field = pilot.name === "beir" ? "dataset" : "language";
+  const field = pilot.config.breakdownBy;
+  if (!field) return [];
   const groups = [...new Set(pilot.lock.tasks.map((task) => task[field]))];
   return groups.map((name) => {
     const tasks = pilot.lock.tasks.filter((task) => task[field] === name);
@@ -111,12 +113,7 @@ const tableCell = (value) =>
 
 function fillMissingRows(pilot, report) {
   for (const task of pilot.lock.tasks) {
-    const targets =
-      pilot.name !== "quarry"
-        ? task.qrels.map((item) => ({ path: `docs/${item.document_id}.md` }))
-        : [...new Set(task.positive_units.map((unit) => unit.path))].map(
-            (path) => ({ path }),
-          );
+    const targets = targetsForTask(pilot, task);
     for (const mode of pilot.modes) {
       let row = report.rows.find(
         (item) => item.task_id === task.id && item.mode === mode,
@@ -143,7 +140,9 @@ function fillMissingRows(pilot, report) {
 }
 
 export function markdownPilotReport(report) {
-  const planned = report.summary[0]?.planned ?? 10;
+  const config = PILOT_SUITES_BY_ID[report.suite];
+  assert.ok(config, `unknown pilot suite: ${report.suite}`);
+  const planned = report.summary[0].planned;
   const lines = [
     `## ${report.label} · ${report.status === "success" ? "✅ Complete" : "❌ Incomplete"}`,
     "",
@@ -166,7 +165,7 @@ export function markdownPilotReport(report) {
   if (report.breakdown?.length) {
     lines.push(
       "",
-      `### Scores by ${report.suite === "beir20" ? "dataset" : "language"}`,
+      `### Scores by ${config.breakdownBy}`,
       "",
       "| Group | Mode | Completed | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Latency P50 (ms) |",
       "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -186,11 +185,7 @@ export function markdownPilotReport(report) {
   }
   lines.push(
     "",
-    report.suite === "quarry20"
-      ? "Quarry's function-level positives are projected to unique files. These are pilot file metrics, not the official Quarry function recall."
-      : report.suite === "duretrieval10"
-        ? "DuRetrieval uses ten unchanged Chinese dev queries and qrels against the complete pinned C-MTEB corpus subset, one passage per Markdown file. These pilot scores are not official full-corpus DuReader scores."
-        : "BEIR uses original test queries and qrels with each dataset's complete corpus. Each document is one Markdown file. ArguAna excludes the query's own corpus document before indexing. Original graded qrels are retained; current file metrics treat every positive grade as relevant.",
+    config.report.note,
     "",
     "A score is shown only for completed queries. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth successful quality call; latency covers successful calls and excludes indexing.",
   );
@@ -247,12 +242,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
   const evidence = join(options.output, "evidence", group.id);
   await mkdir(evidence, { recursive: true });
   const root = resolve(group.root);
-  const indexTimeoutMs =
-    pilot.name === "duretrieval"
-      ? 18_000_000
-      : pilot.name === "beir"
-        ? 10_800_000
-        : 2_400_000;
+  const indexTimeoutMs = pilot.config.indexTimeoutMinutes * 60_000;
   const home = join(evidence, "runtime-home");
   const opencode = join(evidence, "opencode.json");
   await mkdir(home, { recursive: true });
@@ -476,12 +466,7 @@ export async function main(args = process.argv.slice(2)) {
   const report = {
     schema_version: 1,
     suite: pilot.lock.suite,
-    label:
-      pilot.name === "beir"
-        ? "BEIR / four datasets (test)"
-        : pilot.name === "duretrieval"
-          ? "DuRetrieval (C-MTEB dev)"
-          : "Quarry / eight languages (preimage)",
+    label: pilot.config.report.title,
     model: pilot.lock.model,
     candidate_commit: values["candidate-commit"],
     environment: {
