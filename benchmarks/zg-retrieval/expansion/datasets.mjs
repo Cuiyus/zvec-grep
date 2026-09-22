@@ -9,22 +9,25 @@ const data = join(dirname(fileURLToPath(import.meta.url)), "data");
 const MODES = ["hybrid", "fts", "vector"];
 
 export async function loadPilot(name) {
-  assert.ok(["beir", "quarry"].includes(name), `unknown pilot: ${name}`);
-  const lock = await readJson(
-    join(data, name === "beir" ? "beir-scifact10.json" : "quarry10.json"),
-  );
+  const files = {
+    beir: "beir-scifact10.json",
+    quarry: "quarry10.json",
+    duretrieval: "duretrieval10.json",
+  };
+  assert.ok(Object.hasOwn(files, name), `unknown pilot: ${name}`);
+  const lock = await readJson(join(data, files[name]));
   assert.equal(lock.schema_version, 1);
   assert.equal(lock.tasks.length, 10);
   assert.equal(new Set(lock.tasks.map((task) => task.id)).size, 10);
   assert.equal(
     lock.model,
-    name === "beir"
-      ? "local/potion-multilingual-128m"
-      : "local/potion-code-16m-v2",
+    name === "quarry"
+      ? "local/potion-code-16m-v2"
+      : "local/potion-multilingual-128m",
   );
   for (const task of lock.tasks) {
     assert.ok(typeof task.query === "string" && task.query.trim());
-    if (name === "beir") {
+    if (name !== "quarry") {
       assert.ok(task.qrels.length > 0);
       assert.ok(task.qrels.every((row) => row.relevance > 0));
     } else {
@@ -42,6 +45,10 @@ async function download(url, destination, expectedHash) {
     "--location",
     "--silent",
     "--show-error",
+    "--retry",
+    "3",
+    "--retry-delay",
+    "1",
     url,
     "--output",
     destination,
@@ -201,6 +208,47 @@ export async function prepareBeir(pilot, directory) {
       tasks,
       indexGlob: "*.md",
       expectedIndexedFiles: documents.length,
+    },
+  ];
+}
+
+export async function prepareDuRetrieval(pilot, directory) {
+  const { lock } = pilot;
+  const source = join(directory, "source", "duretrieval");
+  for (const [name, file] of Object.entries(lock.source.files)) {
+    await download(
+      `https://huggingface.co/datasets/${file.dataset}/resolve/${file.revision}/${file.path}`,
+      join(source, `${name}.parquet`),
+      file.sha256,
+    );
+  }
+  const root = join(directory, "corpus", "duretrieval");
+  await run(
+    "python3",
+    [
+      join(dirname(fileURLToPath(import.meta.url)), "prepare-duretrieval.py"),
+      "--lock",
+      join(data, "duretrieval10.json"),
+      "--source",
+      source,
+      "--root",
+      root,
+    ],
+    { timeout: 900_000 },
+  );
+  return [
+    {
+      id: "duretrieval",
+      root,
+      tasks: lock.tasks.map((task) => ({
+        id: task.id,
+        query: task.query,
+        targets: task.qrels.map((row) => ({
+          path: `docs/${row.document_id}.md`,
+        })),
+      })),
+      indexGlob: "*.md",
+      expectedIndexedFiles: lock.corpus_documents,
     },
   ];
 }

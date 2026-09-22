@@ -64,13 +64,14 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
     "package-candidate",
     "sweqa",
     "beir",
+    "duretrieval",
     "quarry",
     "results",
   ]);
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
 });
 
-test("the three suites run in independent jobs using one candidate package", async () => {
+test("the four suites run in independent jobs using one candidate package", async () => {
   const protocol = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
@@ -90,7 +91,7 @@ test("the three suites run in independent jobs using one candidate package", asy
     new Set(lock.repositories.map((repo) => repo.repository)).size,
     11,
   );
-  assert.equal(Object.keys(jobs).length, 7);
+  assert.equal(Object.keys(jobs).length, 8);
   assert.doesNotMatch(workflow, /strategy:|fromJSON\(/);
   const runner = steps(jobs.sweqa).find((entry) =>
     entry.includes("node benchmarks/zg-retrieval/run.mjs"),
@@ -103,7 +104,7 @@ test("the three suites run in independent jobs using one candidate package", asy
   assert.match(jobs.sweqa, /ci-report\.mjs/);
   assert.match(jobs.sweqa, /retrieval-zg-report/);
   assert.match(jobs.sweqa, /\$GITHUB_STEP_SUMMARY/);
-  for (const suite of ["beir", "quarry"]) {
+  for (const suite of ["beir", "duretrieval", "quarry"]) {
     assert.match(jobs[suite], /needs: \[authorize, package-candidate\]/);
     assert.match(jobs[suite], new RegExp(`--suite ${suite}`));
     assert.match(jobs[suite], new RegExp(`retrieval-${suite}-report`));
@@ -113,7 +114,8 @@ test("the three suites run in independent jobs using one candidate package", asy
     jobs["quality-contract"],
     /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
   );
-  assert.doesNotMatch(workflow, /pip install|python -m venv|SDK parity/);
+  assert.match(jobs.duretrieval, /pyarrow|requirements-duretrieval\.txt/);
+  assert.doesNotMatch(jobs.beir + jobs.quarry, /pip install|python -m venv|SDK parity/);
 });
 
 test("the selected workflow ref is frozen once for every downstream job", () => {
@@ -128,6 +130,7 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
     "package-candidate",
     "sweqa",
     "beir",
+    "duretrieval",
     "quarry",
     "results",
   ])
@@ -167,7 +170,7 @@ test("the selected source is built from rust/ and exact-commit package caching b
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {
-  assert.equal(Object.keys(jobs).length, 7);
+  assert.equal(Object.keys(jobs).length, 8);
   assert.ok(jobs.results && jobs.sweqa && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
     const entries = steps(job);
@@ -214,6 +217,7 @@ test("one final page combines all suite reports after successful or failed jobs"
       "package-candidate",
       "sweqa",
       "beir",
+      "duretrieval",
       "quarry",
     ],
   );
@@ -221,11 +225,12 @@ test("one final page combines all suite reports after successful or failed jobs"
   const downloads = finalSteps.filter((entry) =>
     entry.includes("uses: actions/download-artifact@"),
   );
-  assert.equal(downloads.length, 3);
+  assert.equal(downloads.length, 4);
   assert.match(downloads[0], /name: retrieval-zg-report/);
   assert.match(downloads[0], /continue-on-error: true/);
   assert.match(downloads[1], /name: retrieval-beir-report/);
-  assert.match(downloads[2], /name: retrieval-quarry-report/);
+  assert.match(downloads[2], /name: retrieval-duretrieval-report/);
+  assert.match(downloads[3], /name: retrieval-quarry-report/);
   const builder = finalSteps.find((entry) =>
     entry.includes("expansion/combined.mjs"),
   );
@@ -234,7 +239,7 @@ test("one final page combines all suite reports after successful or failed jobs"
   assert.match(builder, /RETRIEVAL_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
   assert.deepEqual(
     [...builder.matchAll(/^\s+--([\w-]+)/gm)].map((match) => match[1]),
-    ["zg", "beir", "quarry", "output"],
+    ["zg", "beir", "duretrieval", "quarry", "output"],
   );
   assert.doesNotMatch(builder, /comparison|baseline|preview|modes/);
   const overviewArtifact = finalSteps.find((entry) =>
@@ -249,16 +254,16 @@ test("one final page combines all suite reports after successful or failed jobs"
       .filter((entry) => entry.includes("$GITHUB_STEP_SUMMARY"))
       .map((entry) => ({ name, entry })),
   );
-  assert.equal(publishers.length, 4);
+  assert.equal(publishers.length, 5);
   assert.deepEqual(
     publishers.map((entry) => entry.name),
-    ["sweqa", "beir", "quarry", "results"],
+    ["sweqa", "beir", "duretrieval", "quarry", "results"],
   );
   for (const publisher of publishers)
     assert.match(publisher.entry, /if:.*always\(\)/);
   assert.match(publishers[0].entry, /summary\.md/);
-  assert.match(publishers[3].entry, /summary\.md/);
-  assert.match(publishers[3].entry, /missing results are not zero scores/);
+  assert.match(publishers[4].entry, /summary\.md/);
+  assert.match(publishers[4].entry, /missing results are not zero scores/);
 });
 
 const scriptStart = action.indexOf("        script: |\n");

@@ -45,7 +45,7 @@ async function checkPilot(name, report, candidateCommit) {
       const task = pilot.lock.tasks.find((item) => item.id === row.task_id);
       assert.equal(row.query, task.query, `rewritten query ${row.task_id}`);
       const paths =
-        name === "beir"
+        name !== "quarry"
           ? task.qrels.map((item) => `docs/${item.document_id}.md`)
           : [...new Set(task.positive_units.map((unit) => unit.path))];
       assert.deepEqual(
@@ -95,6 +95,7 @@ async function checkPilot(name, report, candidateCommit) {
 export async function buildCombined({
   zg,
   beir,
+  duretrieval,
   quarry,
   jobResults = {},
   candidateCommit = null,
@@ -112,10 +113,11 @@ export async function buildCombined({
   });
   const pilots = {
     beir: await checkPilot("beir", beir, candidateCommit),
+    duretrieval: await checkPilot("duretrieval", duretrieval, candidateCommit),
     quarry: await checkPilot("quarry", quarry, candidateCommit),
   };
   const errors = [...sweqa.errors];
-  for (const name of ["beir", "quarry"]) {
+  for (const name of ["beir", "duretrieval", "quarry"]) {
     const result = pilots[name];
     if (result.status !== "success")
       errors.push(
@@ -140,7 +142,11 @@ export async function buildCombined({
 }
 
 export function markdownCombined(result) {
-  const labels = { beir: "BEIR / SciFact", quarry: "Quarry / quic-go" };
+  const labels = {
+    beir: "BEIR / SciFact",
+    duretrieval: "DuRetrieval / Chinese web search",
+    quarry: "Quarry / quic-go",
+  };
   const sweqaCompleted = Math.min(
     ...result.sweqa.rows.map((row) => row.questions ?? 0),
   );
@@ -153,11 +159,11 @@ export function markdownCombined(result) {
     "| --- | --- | ---: | --- |",
     `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`local/potion-code-16m-v2\` |`,
   ];
-  for (const name of ["beir", "quarry"]) {
+  for (const name of ["beir", "duretrieval", "quarry"]) {
     const pilot = result.pilots[name];
     const complete = pilot.report?.summary?.[0]?.completed ?? 0;
     lines.push(
-      `| ${labels[name]} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/10 | \`${name === "beir" ? "local/potion-multilingual-128m" : "local/potion-code-16m-v2"}\` |`,
+      `| ${labels[name]} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/10 | \`${name === "quarry" ? "local/potion-code-16m-v2" : "local/potion-multilingual-128m"}\` |`,
     );
   }
   lines.push(
@@ -167,7 +173,7 @@ export function markdownCombined(result) {
       "## SWE-QA20",
     ),
   );
-  for (const name of ["beir", "quarry"]) {
+  for (const name of ["beir", "duretrieval", "quarry"]) {
     const pilot = result.pilots[name];
     lines.push(
       pilot.report
@@ -194,11 +200,18 @@ export async function main(args = process.argv.slice(2)) {
     options: {
       zg: { type: "string" },
       beir: { type: "string" },
+      duretrieval: { type: "string" },
       quarry: { type: "string" },
       output: { type: "string" },
     },
   });
-  assert.ok(values.zg && values.beir && values.quarry && values.output);
+  assert.ok(
+    values.zg &&
+      values.beir &&
+      values.duretrieval &&
+      values.quarry &&
+      values.output,
+  );
   const maybeRead = async (path) => {
     try {
       return await readJson(path);
@@ -209,6 +222,7 @@ export async function main(args = process.argv.slice(2)) {
   const result = await buildCombined({
     zg: await maybeRead(values.zg),
     beir: await maybeRead(values.beir),
+    duretrieval: await maybeRead(values.duretrieval),
     quarry: await maybeRead(values.quarry),
     jobResults: JSON.parse(process.env.RETRIEVAL_JOB_RESULTS ?? "{}"),
     candidateCommit: process.env.RETRIEVAL_CANDIDATE_COMMIT ?? null,

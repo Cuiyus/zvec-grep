@@ -18,6 +18,7 @@ import { snapshotIndex } from "../engines/zg/snapshot.mjs";
 import {
   loadPilot,
   prepareBeir,
+  prepareDuRetrieval,
   prepareQuarryTask,
   verifyQuarrySource,
 } from "./datasets.mjs";
@@ -89,7 +90,7 @@ const tableCell = (value) =>
 function fillMissingRows(pilot, report) {
   for (const task of pilot.lock.tasks) {
     const targets =
-      pilot.name === "beir"
+      pilot.name !== "quarry"
         ? task.qrels.map((item) => ({ path: `docs/${item.document_id}.md` }))
         : [...new Set(task.positive_units.map((unit) => unit.path))].map(
             (path) => ({ path }),
@@ -143,7 +144,9 @@ export function markdownPilotReport(report) {
     "",
     report.suite === "quarry10"
       ? "Quarry's function-level positives are projected to unique files. These are pilot file metrics, not the official Quarry function recall."
-      : "SciFact uses the original BEIR test queries and qrels with the complete corpus; each document is one Markdown file.",
+      : report.suite === "duretrieval10"
+        ? "DuRetrieval uses ten unchanged Chinese dev queries and qrels against the complete pinned C-MTEB corpus subset, one passage per Markdown file. These pilot scores are not official full-corpus DuReader scores."
+        : "SciFact uses the original BEIR test queries and qrels with the complete corpus; each document is one Markdown file.",
     "",
     "A score is shown only for completed queries. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth successful quality call; latency covers successful calls and excludes indexing.",
   );
@@ -252,7 +255,11 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           group.indexGlob,
           "--debug",
         ],
-        { cwd: root, env, timeout: 2_400_000 },
+        {
+          cwd: root,
+          env,
+          timeout: pilot.name === "duretrieval" ? 18_000_000 : 2_400_000,
+        },
       );
       await writeJson(join(evidence, "index.json"), indexed);
     } catch (error) {
@@ -276,7 +283,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
       assert.equal(
         before.files,
         group.expectedIndexedFiles,
-        "BEIR corpus was not fully indexed",
+        `${pilot.name} corpus was not fully indexed`,
       );
     const transport = new mcp.StdioClientTransport({
       command: command[0],
@@ -416,7 +423,9 @@ export async function main(args = process.argv.slice(2)) {
     label:
       pilot.name === "beir"
         ? "BEIR / SciFact (test)"
-        : "Quarry / quic-go (preimage)",
+        : pilot.name === "duretrieval"
+          ? "DuRetrieval (C-MTEB dev)"
+          : "Quarry / quic-go (preimage)",
     model: pilot.lock.model,
     candidate_commit: values["candidate-commit"],
     environment: {
@@ -446,8 +455,11 @@ export async function main(args = process.argv.slice(2)) {
         )
       ).StdioClientTransport,
     };
-    if (pilot.name === "beir") {
-      const groups = await prepareBeir(pilot, output);
+    if (pilot.name !== "quarry") {
+      const groups =
+        pilot.name === "beir"
+          ? await prepareBeir(pilot, output)
+          : await prepareDuRetrieval(pilot, output);
       await runGroup(pilot, groups[0], candidate, options, report, mcp);
     } else {
       await verifyQuarrySource(pilot, output);

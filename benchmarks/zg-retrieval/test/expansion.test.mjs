@@ -7,13 +7,20 @@ import { parseVisibleResponse } from "../engines/zg/parse.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 
-test("BEIR and Quarry locks contain ten distinct original-query identities and the requested models", async () => {
+test("pilot locks preserve ten original-query identities and the requested models", async () => {
   const beir = await loadPilot("beir");
+  const duretrieval = await loadPilot("duretrieval");
   const quarry = await loadPilot("quarry");
   assert.equal(beir.lock.tasks.length, 10);
+  assert.equal(duretrieval.lock.tasks.length, 10);
   assert.equal(quarry.lock.tasks.length, 10);
   assert.equal(beir.lock.model, "local/potion-multilingual-128m");
+  assert.equal(duretrieval.lock.model, "local/potion-multilingual-128m");
   assert.equal(quarry.lock.model, "local/potion-code-16m-v2");
+  assert.equal(duretrieval.lock.corpus_documents, 100001);
+  assert.equal(duretrieval.lock.source.query_count, 2000);
+  assert.equal(duretrieval.lock.source.qrel_count, 9839);
+  assert.ok(duretrieval.lock.tasks.every((task) => task.qrels.length > 0));
   assert.equal(
     new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size,
     10,
@@ -79,15 +86,18 @@ test("unified results page identifies missing pilot artifacts independently", as
   const result = await buildCombined({
     zg: null,
     beir: null,
+    duretrieval: null,
     quarry: null,
     candidateCommit: "a".repeat(40),
   });
   assert.equal(result.status, "failed");
   assert.equal(result.pilots.beir.status, "unavailable");
+  assert.equal(result.pilots.duretrieval.status, "unavailable");
   assert.equal(result.pilots.quarry.status, "unavailable");
   const markdown = markdownCombined(result);
   assert.match(markdown, /SWE-QA20/);
   assert.match(markdown, /BEIR \/ SciFact/);
+  assert.match(markdown, /DuRetrieval \/ Chinese web search/);
   assert.match(markdown, /Quarry \/ quic-go/);
   assert.match(markdown, /report artifact missing/);
 });
@@ -134,6 +144,7 @@ test("a failed pilot query keeps partial aggregate and all per-query conclusions
   const result = await buildCombined({
     zg: null,
     beir: report,
+    duretrieval: null,
     quarry: null,
     candidateCommit: "a".repeat(40),
   });
