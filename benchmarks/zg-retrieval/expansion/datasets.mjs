@@ -118,12 +118,18 @@ export async function prepareBeirDataset(dataset, directory) {
     "python3",
     [
       join(dirname(fileURLToPath(import.meta.url)), "prepare-beir.py"),
-      "--lock", join(data, "beir20.json"),
-      "--dataset", dataset.id,
-      "--source", source,
-      "--scifact-qrels", join(data, "scifact-test.tsv"),
-      "--corpus", join(directory, "corpus"),
-      "--output", output,
+      "--lock",
+      join(data, "beir20.json"),
+      "--dataset",
+      dataset.id,
+      "--source",
+      source,
+      "--scifact-qrels",
+      join(data, "scifact-test.tsv"),
+      "--corpus",
+      join(directory, "corpus"),
+      "--output",
+      output,
     ],
     { timeout: 900_000 },
   );
@@ -238,13 +244,15 @@ export async function prepareQuarryTask(pilot, task, directory) {
   return {
     id: `task-${index + 1}`,
     root,
-    tasks: [{
-      id: task.id,
-      query: task.query,
-      targets,
-      language: task.language,
-      repository: task.repository,
-    }],
+    tasks: [
+      {
+        id: task.id,
+        query: task.query,
+        targets,
+        language: task.language,
+        repository: task.repository,
+      },
+    ],
     indexGlob: `*.${CODE_EXTENSIONS[task.language]}`,
   };
 }

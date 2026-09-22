@@ -227,10 +227,15 @@ export function markdownPilotReport(report) {
 }
 
 async function writeReport(output, report, pilot) {
-  report.summary = summarizePilotRows(report.rows, pilot.modes, pilot.lock.tasks.length);
+  report.summary = summarizePilotRows(
+    report.rows,
+    pilot.modes,
+    pilot.lock.tasks.length,
+  );
   report.breakdown = summarizePilotBreakdown(pilot, report.rows);
   report.status =
-    report.failures.length || report.summary.some((row) => row.completed !== pilot.lock.tasks.length)
+    report.failures.length ||
+    report.summary.some((row) => row.completed !== pilot.lock.tasks.length)
       ? "failed"
       : "success";
   report.finished_at = new Date().toISOString();
@@ -513,7 +518,10 @@ export async function main(args = process.argv.slice(2)) {
           groups = await prepareBeirDataset(dataset, output);
         } catch (error) {
           for (const task of dataset.tasks)
-            report.failures.push({ task_id: `${dataset.id}/${task.id}`, reason: error.message });
+            report.failures.push({
+              task_id: `${dataset.id}/${task.id}`,
+              reason: error.message,
+            });
           console.error(`${dataset.id}: ${error.message}`);
           continue;
         }

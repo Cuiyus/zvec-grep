@@ -8,7 +8,11 @@ import { buildCiSummary, markdownCiSummary } from "../reports/ci.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { loadPilot } from "./datasets.mjs";
-import { markdownPilotReport, summarizePilotBreakdown, summarizePilotRows } from "./run.mjs";
+import {
+  markdownPilotReport,
+  summarizePilotBreakdown,
+  summarizePilotRows,
+} from "./run.mjs";
 
 async function checkPilot(name, report, candidateCommit) {
   const pilot = await loadPilot(name);
@@ -81,11 +85,18 @@ async function checkPilot(name, report, candidateCommit) {
       summarizePilotRows(report.rows, pilot.modes, pilot.lock.tasks.length),
       "cached pilot summary differs from rows",
     );
-    assert.deepEqual(report.breakdown, summarizePilotBreakdown(pilot, report.rows));
+    assert.deepEqual(
+      report.breakdown,
+      summarizePilotBreakdown(pilot, report.rows),
+    );
     assert.ok(["success", "failed"].includes(report.status));
     if (report.status === "success") {
       assert.equal(report.failures.length, 0);
-      assert.ok(report.summary.every((row) => row.completed === pilot.lock.tasks.length));
+      assert.ok(
+        report.summary.every(
+          (row) => row.completed === pilot.lock.tasks.length,
+        ),
+      );
     }
     return { status: report.status, report, error: null };
   } catch (error) {

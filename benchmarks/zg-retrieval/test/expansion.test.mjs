@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadPilot } from "../expansion/datasets.mjs";
-import { summarizePilotBreakdown, summarizePilotRows, markdownPilotReport } from "../expansion/run.mjs";
+import {
+  summarizePilotBreakdown,
+  summarizePilotRows,
+  markdownPilotReport,
+} from "../expansion/run.mjs";
 import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
 import { parseVisibleResponse } from "../engines/zg/parse.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
@@ -22,7 +26,10 @@ test("expanded locks preserve the original ten questions and cover new datasets 
   assert.equal(duretrieval.lock.source.query_count, 2000);
   assert.equal(duretrieval.lock.source.qrel_count, 9839);
   assert.ok(duretrieval.lock.tasks.every((task) => task.qrels.length > 0));
-  assert.equal(new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size, 20);
+  assert.equal(
+    new Set(quarry.lock.tasks.map((task) => task.source_task_id)).size,
+    20,
+  );
   assert.equal(
     new Set(quarry.lock.tasks.map((task) => task.revision)).size,
     20,
@@ -38,22 +45,59 @@ test("expanded locks preserve the original ten questions and cover new datasets 
     ),
   );
   assert.deepEqual(
-    Object.fromEntries(beir.lock.datasets.map((dataset) => [dataset.id, dataset.tasks.length])),
+    Object.fromEntries(
+      beir.lock.datasets.map((dataset) => [dataset.id, dataset.tasks.length]),
+    ),
     { scifact: 10, nfcorpus: 4, arguana: 3, fiqa: 3 },
   );
   assert.deepEqual(
-    Object.fromEntries([...new Set(quarry.lock.tasks.map((task) => task.language))].map((language) =>
-      [language, quarry.lock.tasks.filter((task) => task.language === language).length])),
-    { Go: 11, Python: 2, Rust: 2, JavaScript: 1, TypeScript: 1, Java: 1, "C#": 1, C: 1 },
+    Object.fromEntries(
+      [...new Set(quarry.lock.tasks.map((task) => task.language))].map(
+        (language) => [
+          language,
+          quarry.lock.tasks.filter((task) => task.language === language).length,
+        ],
+      ),
+    ),
+    {
+      Go: 11,
+      Python: 2,
+      Rust: 2,
+      JavaScript: 1,
+      TypeScript: 1,
+      Java: 1,
+      "C#": 1,
+      C: 1,
+    },
   );
-  const oldBeir = JSON.parse(await readFile(new URL("../expansion/data/beir-scifact10.json", import.meta.url)));
-  const oldQuarry = JSON.parse(await readFile(new URL("../expansion/data/quarry10.json", import.meta.url)));
+  const oldBeir = JSON.parse(
+    await readFile(
+      new URL("../expansion/data/beir-scifact10.json", import.meta.url),
+    ),
+  );
+  const oldQuarry = JSON.parse(
+    await readFile(new URL("../expansion/data/quarry10.json", import.meta.url)),
+  );
   assert.deepEqual(beir.lock.datasets[0].tasks, oldBeir.tasks);
   for (let index = 0; index < 10; index++)
-    for (const key of ["id", "source_task_id", "query", "revision", "positive_units"])
-      assert.deepEqual(quarry.lock.tasks[index][key], oldQuarry.tasks[index][key]);
-  assert.ok(beir.lock.tasks.filter((task) => task.dataset === "arguana")
-    .every((task) => task.qrels.every((row) => row.document_id !== task.source_id)));
+    for (const key of [
+      "id",
+      "source_task_id",
+      "query",
+      "revision",
+      "positive_units",
+    ])
+      assert.deepEqual(
+        quarry.lock.tasks[index][key],
+        oldQuarry.tasks[index][key],
+      );
+  assert.ok(
+    beir.lock.tasks
+      .filter((task) => task.dataset === "arguana")
+      .every((task) =>
+        task.qrels.every((row) => row.document_id !== task.source_id),
+      ),
+  );
 });
 
 test("pilot report preserves completed scores and calls out missing tasks", () => {
