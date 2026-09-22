@@ -45,20 +45,32 @@ def main(argv=None) -> int:
         if not os.environ.get("QWEN_API_KEY"):
             raise RuntimeError("QWEN_API_KEY is required")
         for i, command in enumerate(commands(str(args.root), args.check_only)):
-            print(json.dumps({"phase": "native_index_command", "command": command}), flush=True)
-            execution_started = time.monotonic()
-            process = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     timeout=1750 if command[1] == "index" else 120)
-            stdout, stderr = redact(process.stdout), redact(process.stderr)
-            stem = args.output.parent / f"native-index-{i + 1}-{command[1]}"
-            stem.with_suffix(".stdout.txt").write_text(stdout)
-            stem.with_suffix(".stderr.txt").write_text(stderr)
-            report["commands"].append({"argv": command, "returncode": process.returncode,
-                "wall_seconds": round(time.monotonic() - execution_started, 3)})
-            print(stdout[-4000:], flush=True)
-            if process.returncode:
+            for attempt in range(1, 4 if command[1] == "index" else 2):
+                print(json.dumps({"phase": "native_index_command", "command": command,
+                                  "attempt": attempt}), flush=True)
+                execution_started = time.monotonic()
+                process = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         timeout=1750 if command[1] == "index" else 120)
+                stdout, stderr = redact(process.stdout), redact(process.stderr)
+                suffix = "" if attempt == 1 else f"-attempt{attempt}"
+                stem = args.output.parent / f"native-index-{i + 1}-{command[1]}{suffix}"
+                stem.with_suffix(".stdout.txt").write_text(stdout)
+                stem.with_suffix(".stderr.txt").write_text(stderr)
+                report["commands"].append({"argv": command, "attempt": attempt,
+                    "returncode": process.returncode,
+                    "wall_seconds": round(time.monotonic() - execution_started, 3)})
+                print(stdout[-4000:], flush=True)
+                if not process.returncode:
+                    break
                 print(stderr[-8000:], flush=True)
-                raise RuntimeError(f"Native zg {command[1]} exited {process.returncode}")
+                transient_embedding_timeout = (command[1] == "index"
+                    and "QWEN37_TEXT_EMBEDDING_REQUEST_FAILED" in stderr
+                    and "operation was aborted due to timeout" in stderr.lower())
+                if not transient_embedding_timeout or attempt == 3:
+                    raise RuntimeError(f"Native zg {command[1]} exited {process.returncode}")
+                print(json.dumps({"phase": "native_index_retry", "reason": "remote_embedding_timeout",
+                                  "next_attempt": attempt + 1}), flush=True)
+                time.sleep(5 * attempt)
         manifest = args.root / ".zvec-grep/manifest.json"
         value = json.loads(manifest.read_text())
         report["index_manifest"] = value

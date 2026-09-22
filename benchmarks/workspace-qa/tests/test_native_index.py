@@ -86,6 +86,29 @@ class NativeIndexTests(unittest.TestCase):
             self.assertEqual((output.parent / "native-index-2-index.stderr.txt").read_text(), "error [REDACTED]")
             self.assertEqual(record["status"], "failed")
 
+    def test_remote_embedding_timeout_retries_same_released_index_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, output = self.fixture(Path(tmp))
+            attempts = 0
+
+            def transient(command, **kwargs):
+                nonlocal attempts
+                if command[1] == "index":
+                    attempts += 1
+                    if attempts == 1:
+                        return subprocess.CompletedProcess(command, 1, "partial",
+                            "QWEN37_TEXT_EMBEDDING_REQUEST_FAILED: The operation was aborted due to timeout")
+                return subprocess.CompletedProcess(command, 0, "ready", "")
+
+            with patch.object(native_index.time, "sleep") as pause:
+                status, record, commands = self.run_index(source, output, side_effect=transient)
+            self.assertEqual(status, 0)
+            self.assertEqual([cmd[1] for cmd, _ in commands], ["auth", "index", "index", "status"])
+            self.assertEqual(commands[1][0], commands[2][0])
+            self.assertEqual([row["attempt"] for row in record["commands"]], [1, 1, 2, 1])
+            self.assertTrue((output.parent / "native-index-2-index-attempt2.stdout.txt").is_file())
+            pause.assert_called_once_with(5)
+
     def test_readiness_failure_is_not_reported_as_a_completed_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, output = self.fixture(Path(tmp))
