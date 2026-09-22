@@ -285,10 +285,13 @@ def qoder_contract(events: list[dict[str, Any]], *, zg: bool,
         # --tools default exposes Qoder's complete built-in catalog in both
         # arms. It is not the three-tool readonly catalog checked below.
         required = {*QODER_READ_TOOLS, "Bash", "Write"}
-        added = {QODER_SEARCH_TOOL, "mcp__zvec_grep__zvec_grep_rg"}
+        # zg 0.2.2's Qoder agent toolset advertises search here. The install
+        # settings also allow zg rg, but that tool is not in Qoder's init list.
+        added = {QODER_SEARCH_TOOL}
         valid = bool(starts) and required <= observed and called <= observed
         valid = valid and bool(modes) and set(modes) <= {"bypassPermissions", "bypass_permissions"}
-        valid = valid and ((added <= observed and connected) if zg else not (observed & added) and not connected)
+        valid = valid and ((added <= observed and connected) if zg
+                           else not any(name.startswith("mcp__zvec_grep__") for name in observed) and not connected)
         allowed = observed
     else:
         valid = bool(starts) and observed == allowed

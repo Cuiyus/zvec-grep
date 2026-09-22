@@ -45,6 +45,8 @@ class OfficialPairContractTests(unittest.TestCase):
         self.assertEqual(lock["repetitions"], 1)
         self.assertEqual(lock["experiment"]["zg_version"], "0.2.2")
         self.assertEqual(lock["experiment"]["embedding"]["model"], "qwen/qwen3.7-text-embedding")
+        self.assertEqual(lock["experiment"]["qa_model_request_limit"], 120)
+        self.assertEqual(lock["experiment"]["qa_tool_call_limit"], 240)
         self.assertEqual(lock["experiment"]["integration"]["command"],
                          ["zg", "install", "--target", "qoder", "--yes"])
         self.assertEqual(lock["experiment"]["protocol"], runner.PROTOCOL)
@@ -52,8 +54,7 @@ class OfficialPairContractTests(unittest.TestCase):
     def test_writable_contract_accepts_default_tools_in_both_arms(self):
         builtins = ["Read", "Grep", "Glob", "Bash", "Write", "TaskCreate"]
         for zg in (False, True):
-            tools = builtins + (["mcp__zvec_grep__zvec_grep_search",
-                                 "mcp__zvec_grep__zvec_grep_rg"] if zg else [])
+            tools = builtins + (["mcp__zvec_grep__zvec_grep_search"] if zg else [])
             events = [{"type": "system", "subtype": "init", "tools": tools,
                        "permissionMode": "bypassPermissions",
                        "mcp_servers": [{"name": "zvec_grep", "status": "connected"}] if zg else []},

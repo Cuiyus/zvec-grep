@@ -176,10 +176,11 @@ def execute_native(args: argparse.Namespace, plan: dict, source: Path, output: P
     if not (source / ".zvec-grep").is_dir() or any((source / ".zvec-grep").iterdir()):
         raise RuntimeError("Prepared source must contain an empty index mount directory")
     before = r.directory_identity(source, skip_git=True)
-    limits = {"model_requests": 60, "tool_calls": 120,
+    official_writable = os.environ.get("WORKSPACE_QA_EXECUTION_MODE") == "official-writable"
+    limits = {"model_requests": 120 if official_writable else 60,
+              "tool_calls": 240 if official_writable else 120,
               "input_tokens": getattr(args, "input_token_limit", 600000), "wall_seconds": args.timeout}
     delivery_policy = getattr(args, "delivery_policy", "original")
-    official_writable = os.environ.get("WORKSPACE_QA_EXECUTION_MODE") == "official-writable"
     if official_writable and args.task_id not in {"334", "363"}:
         raise ValueError("official writable protocol is locked to Tasks 334 and 363")
     output_limit = getattr(args, "max_output_tokens", None)
