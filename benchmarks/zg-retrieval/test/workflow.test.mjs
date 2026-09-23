@@ -41,7 +41,7 @@ function steps(job) {
   );
 }
 
-test("Retrieval-only is one manual workflow with one candidate source input", async () => {
+test("Retrieval-only is one manual workflow with candidate and embedding inputs", async () => {
   assert.deepEqual(
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
@@ -52,7 +52,12 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
   assert.match(dispatch, /^ {4}inputs:$/m);
   assert.match(dispatch, /^ {6}candidate_ref:$/m);
   assert.match(dispatch, /^ {8}default: main$/m);
-  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 1);
+  assert.match(dispatch, /^ {6}embedding:$/m);
+  assert.match(dispatch, /^ {8}default: local$/m);
+  assert.match(dispatch, /^ {8}type: choice$/m);
+  assert.match(dispatch, /^ {10}- local$/m);
+  assert.match(dispatch, /^ {10}- remote$/m);
+  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 2);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),
@@ -69,6 +74,35 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
     "results",
   ]);
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
+});
+
+test("local embedding is the default and remote Qwen credentials stay scoped to execution", () => {
+  assert.match(jobs.authorize, /Check remote embedding configuration/);
+  assert.match(jobs.authorize, /if: inputs\.embedding == 'remote'/);
+  assert.match(jobs.authorize, /secrets\.QWEN_EMBEDDING_API_KEY/);
+  assert.match(jobs.authorize, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  for (const suite of ["sweqa", "beir", "duretrieval", "quarry"]) {
+    assert.match(
+      jobs[suite],
+      /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
+    );
+    assert.match(
+      jobs[suite],
+      /if: inputs\.embedding == 'local'[\s\S]*uses: actions\/cache@/,
+      `${suite}: local model cache`,
+    );
+    const run = steps(jobs[suite]).find((entry) =>
+      /node benchmarks\/zg-retrieval\/(?:expansion\/)?run\.mjs/.test(entry),
+    );
+    assert.ok(run, suite);
+    assert.match(run, /secrets\.QWEN_EMBEDDING_API_KEY/);
+    assert.match(run, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  }
+  assert.match(
+    jobs.results,
+    /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
+  );
+  assert.doesNotMatch(jobs["quality-contract"], /RETRIEVAL_EMBEDDING/);
 });
 
 test("the four suites run in independent jobs using one candidate package", async () => {

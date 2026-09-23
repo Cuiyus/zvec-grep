@@ -6,6 +6,7 @@ import {
   summarizePilotBreakdown,
   summarizePilotRows,
   markdownPilotReport,
+  invalidateGroupRows,
 } from "../expansion/run.mjs";
 import { buildCombined, markdownCombined } from "../expansion/combined.mjs";
 import { parseVisibleResponse } from "../engines/zg/parse.mjs";
@@ -23,6 +24,13 @@ test("expanded locks preserve the original ten questions and cover new datasets 
   assert.equal(beir.lock.model, "local/potion-multilingual-128m");
   assert.equal(duretrieval.lock.model, "local/potion-multilingual-128m");
   assert.equal(quarry.lock.model, "local/potion-code-16m-v2");
+  assert.equal(beir.model, beir.lock.model);
+  assert.equal(duretrieval.model, duretrieval.lock.model);
+  assert.equal(quarry.model, quarry.lock.model);
+  assert.equal(
+    (await loadPilot("beir", { embedding: "remote" })).model,
+    "qwen/qwen3.7-text-embedding",
+  );
   assert.equal(duretrieval.lock.corpus_documents, 100001);
   assert.equal(duretrieval.lock.source.query_count, 2000);
   assert.equal(duretrieval.lock.source.qrel_count, 9839);
@@ -158,6 +166,32 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
   assert.match(markdown, /Per-query results/);
   assert.match(markdown, /\| a \| zg-hybrid \| ✅ Scored/);
   assert.match(markdown, /not the official Quarry function recall/);
+});
+
+test("a failed group audit removes every score produced by that group", () => {
+  const rows = [
+    {
+      task_id: "a",
+      mode: "fts",
+      status: "success",
+      reason: null,
+      calls: [{ status: "success", items: [] }],
+      file: { hit_at_10: 1 },
+      ndcg: { ndcg_at_10: 1 },
+      quality_mean: { ndcg_at_10: 1 },
+      output_bytes: 100,
+      items: [],
+    },
+  ];
+  invalidateGroupRows(rows, "group integrity was not verified: index changed");
+  assert.equal(rows[0].status, "failed");
+  assert.match(rows[0].reason, /index changed/);
+  assert.ok(!Object.hasOwn(rows[0], "file"));
+  assert.ok(!Object.hasOwn(rows[0], "ndcg"));
+  assert.ok(!Object.hasOwn(rows[0], "quality_mean"));
+  assert.ok(!Object.hasOwn(rows[0], "output_bytes"));
+  assert.ok(!Object.hasOwn(rows[0], "items"));
+  assert.equal(rows[0].calls.length, 1, "raw call evidence remains available");
 });
 
 test("unified results page identifies missing pilot artifacts independently", async () => {

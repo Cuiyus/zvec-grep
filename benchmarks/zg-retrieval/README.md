@@ -4,7 +4,7 @@ The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent su
 
 ## Run CI and read the result
 
-The [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml) runs **only through `workflow_dispatch`**. Select **Retrieval-only → Run workflow**. Use GitHub's workflow-ref selector to choose the benchmark harness (`main` for the latest merged harness), then set `candidate_ref` to the branch, tag or commit containing the `rust/` workspace to compile. It defaults to `main`. Every run includes all three modes; push and pull-request events do not trigger this benchmark.
+The [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml) runs **only through `workflow_dispatch`**. Select **Retrieval-only → Run workflow**. Use GitHub's workflow-ref selector to choose the benchmark harness (`main` for the latest merged harness), then set `candidate_ref` to the branch, tag or commit containing the `rust/` workspace to compile. It defaults to `main`. The `embedding` choice defaults to `local`, which preserves each suite's configured local model. Select `remote` to run every suite with `qwen/qwen3.7-text-embedding`; this requires the repository secret `QWEN_EMBEDDING_API_KEY` and variable `QWEN_EMBEDDING_ENDPOINT`. Every run includes all three modes; push and pull-request events do not trigger this benchmark.
 
 The workflow freezes the selected harness ref to a full commit, checks out the candidate separately, resolves it to another full commit SHA, and builds `candidate/rust/`. The packed native package cache is keyed by operating system, architecture and that exact candidate commit. A hit skips Rust compilation and packaging. On a miss, a second Cargo cache can reuse registry data and `rust/target` objects before `npm run pack:local` creates the candidate tarball. Node.js version is not part of candidate selection, package-cache identity or report identity.
 
@@ -96,6 +96,11 @@ node benchmarks/zg-retrieval/run.mjs \
 
 node benchmarks/zg-retrieval/report.mjs "$retrieval_work/results"
 ```
+
+Local commands use the configured local models by default. To reproduce the
+remote workflow choice, set `RETRIEVAL_EMBEDDING=remote` together with
+`ZVEC_GREP_API_KEY` and an HTTPS `ZVEC_GREP_ENDPOINT` before running the suite
+and report commands.
 
 `--package` accepts a tarball or a directory containing exactly one `.tgz`. The runner installs it in an isolated consumer. Use a new `--output` directory and fresh corpus checkout: output is never overwritten and an existing index is rejected. An external model-download cache may be reused.
 

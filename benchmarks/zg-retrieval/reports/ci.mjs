@@ -211,6 +211,7 @@ export async function buildCiSummary({
   return {
     schema_version: 5,
     status: errors.length ? "failed" : "success",
+    model: suite.protocol.model,
     preview: "mcp-default",
     quality_metrics: QUALITY_METRICS,
     run_url: runUrl,

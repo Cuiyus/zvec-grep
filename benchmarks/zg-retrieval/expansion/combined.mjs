@@ -23,13 +23,14 @@ async function checkPilot(name, report, candidateCommit) {
     return {
       status: "unavailable",
       report: null,
+      model: pilot.model,
       error: "report artifact missing",
     };
   try {
     assert.equal(report.schema_version, 2);
     assert.equal(report.quality_aggregation, "mean_of_five");
     assert.equal(report.suite, pilot.lock.suite);
-    assert.equal(report.model, pilot.lock.model);
+    assert.equal(report.model, pilot.model);
     assert.equal(report.candidate_commit, candidateCommit);
     assert.ok(Array.isArray(report.rows) && Array.isArray(report.failures));
     assert.ok(Array.isArray(report.summary) && report.summary.length === 3);
@@ -107,9 +108,14 @@ async function checkPilot(name, report, candidateCommit) {
         ),
       );
     }
-    return { status: report.status, report, error: null };
+    return { status: report.status, report, model: pilot.model, error: null };
   } catch (error) {
-    return { status: "invalid", report: null, error: error.message };
+    return {
+      status: "invalid",
+      report: null,
+      model: pilot.model,
+      error: error.message,
+    };
   }
 }
 
@@ -174,7 +180,7 @@ export function markdownCombined(result) {
     "",
     "| Suite | Status | Queries | Model |",
     "| --- | --- | ---: | --- |",
-    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`local/potion-code-16m-v2\` |`,
+    `| SWE-QA20 | ${result.sweqa.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${sweqaCompleted}/20 | \`${result.sweqa.model}\` |`,
   ];
   for (const name of PILOT_NAMES) {
     const pilot = result.pilots[name];
@@ -183,7 +189,7 @@ export function markdownCombined(result) {
       ? Math.min(...pilot.report.summary.map((row) => row.completed))
       : 0;
     lines.push(
-      `| ${config.report.overview} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/${config.taskCount} | \`${config.model}\` |`,
+      `| ${config.report.overview} | ${pilot.status === "success" ? "✅ Complete" : "❌ Incomplete"} | ${complete}/${config.taskCount} | \`${pilot.model}\` |`,
     );
   }
   lines.push(

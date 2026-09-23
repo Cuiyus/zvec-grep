@@ -3,13 +3,17 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileHash, inside, readJson, run } from "../core/io.mjs";
+import { embeddingModel } from "../core/embedding.mjs";
 import { prepareCorpus } from "../core/corpus.mjs";
 import { PILOT_SUITES } from "./config.mjs";
 
 const data = join(dirname(fileURLToPath(import.meta.url)), "data");
 const MODES = ["hybrid", "fts", "vector"];
 
-export async function loadPilot(name) {
+export async function loadPilot(
+  name,
+  { embedding = process.env.RETRIEVAL_EMBEDDING ?? "local" } = {},
+) {
   assert.ok(Object.hasOwn(PILOT_SUITES, name), `unknown pilot: ${name}`);
   const config = PILOT_SUITES[name];
   const lock = await readJson(join(data, config.lockFile));
@@ -51,7 +55,13 @@ export async function loadPilot(name) {
       );
     }
   }
-  return { name, config, lock, modes: MODES };
+  return {
+    name,
+    config,
+    lock,
+    model: embeddingModel(lock.model, embedding),
+    modes: MODES,
+  };
 }
 
 export function targetsForTask(pilot, task) {

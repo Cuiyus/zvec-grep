@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fileHash, run, writeJson } from "../core/io.mjs";
+import { embeddingRuntime } from "../core/embedding.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
@@ -146,6 +147,18 @@ function fillMissingRows(pilot, report) {
   }
 }
 
+export function invalidateGroupRows(rows, reason) {
+  for (const row of rows) {
+    row.status = "failed";
+    row.reason = reason;
+    delete row.file;
+    delete row.ndcg;
+    delete row.output_bytes;
+    delete row.items;
+    delete row.quality_mean;
+  }
+}
+
 export function markdownPilotReport(report) {
   const config = PILOT_SUITES_BY_ID[report.suite];
   assert.ok(config, `unknown pilot suite: ${report.suite}`);
@@ -245,6 +258,8 @@ async function writeReport(output, report, pilot) {
 }
 
 async function runGroup(pilot, group, candidate, options, report, mcp) {
+  const embedding = embeddingRuntime(pilot.model);
+  const groupRows = [];
   const evidence = join(options.output, "evidence", group.id);
   await mkdir(evidence, { recursive: true });
   const root = resolve(group.root);
@@ -256,10 +271,10 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     version: 1,
     server: { host: "127.0.0.1", port: await freePort() },
     defaults: {
-      embedding: pilot.lock.model,
+      embedding: pilot.model,
       modelCacheDir: options.modelCache,
     },
-    models: { [pilot.lock.model]: { device: "cpu" } },
+    models: embedding.remote ? {} : { [pilot.model]: { device: "cpu" } },
   });
   const env = {
     ...process.env,
@@ -268,7 +283,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     OPENCODE_CONFIG: opencode,
     ZVEC_GREP_HOME: join(home, ".zvec-grep"),
     ZVEC_GREP_MODEL_CACHE: options.modelCache,
-    ZVEC_GREP_DEVICE: "cpu",
+    ...(!embedding.remote ? { ZVEC_GREP_DEVICE: "cpu" } : {}),
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     PATH: `${join(candidate.consumer, "node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}`,
@@ -296,11 +311,11 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           "--mode",
           "direct",
           "--embedding",
-          pilot.lock.model,
+          pilot.model,
           "--model-cache",
           options.modelCache,
-          "--device",
-          "cpu",
+          ...(!embedding.remote ? ["--device", "cpu"] : []),
+          ...embedding.indexArguments,
           "--max-filesize",
           "1000000",
           "--iglob",
@@ -323,6 +338,11 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     } finally {
       report.index_seconds[group.id] = (performance.now() - indexStart) / 1000;
     }
+    if (embedding.remote)
+      await run(candidate.cli, embedding.grantArguments(root), {
+        cwd: root,
+        env,
+      });
     const before = await snapshotIndex({
       cli: candidate.cli,
       root,
@@ -360,6 +380,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           calls: [],
         };
         report.rows.push(row);
+        groupRows.push(row);
         for (let repetition = 1; repetition <= REPETITIONS; repetition++) {
           const args = searchArguments(task, root, mode);
           const started = performance.now();
@@ -444,6 +465,12 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
       before.logical_content_sha256,
       "index changed during retrieval",
     );
+  } catch (error) {
+    invalidateGroupRows(
+      groupRows,
+      `group integrity was not verified: ${error.message}`,
+    );
+    throw error;
   } finally {
     if (client) await client.close().catch(() => undefined);
     await run(candidate.cli, ["server", "off"], { cwd: root, env }).catch(
@@ -480,7 +507,7 @@ export async function main(args = process.argv.slice(2)) {
     quality_aggregation: "mean_of_five",
     suite: pilot.lock.suite,
     label: pilot.config.report.title,
-    model: pilot.lock.model,
+    model: pilot.model,
     candidate_commit: values["candidate-commit"],
     environment: {
       platform: platform(),
