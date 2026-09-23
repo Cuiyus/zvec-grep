@@ -39,18 +39,18 @@ fn codex_install_and_uninstall_preserve_user_files() {
     fs::write(home.join("AGENTS.md"), "# Existing instructions\n").expect("guidance");
 
     let stdout = run_ok(
-        zg().args(["install", "--target", "codex", "--yes"])
+        zg().args(["--install", "--target", "codex", "--yes"])
             .env("CODEX_HOME", &home),
     );
     assert!(stdout.contains("Installing integrations"));
     let installed = fs::read_to_string(home.join("config.toml")).expect("installed");
     assert!(installed.contains("[mcp_servers.other]"));
     assert!(installed.contains("command = \"zg\""));
-    assert!(installed.contains("args = [\"server\", \"--stdio\"]"));
+    assert!(installed.contains("args = [\"--server\", \"--stdio\"]"));
     assert_eq!(installed.matches("# ZVEC_GREP_START").count(), 1);
 
     run_ok(
-        zg().args(["uninstall", "--target", "codex", "--yes"])
+        zg().args(["--uninstall", "--target", "codex", "--yes"])
             .env("CODEX_HOME", &home),
     );
     let config = fs::read_to_string(home.join("config.toml")).expect("uninstalled");
@@ -75,7 +75,7 @@ fn qwen_jsonc_install_is_comment_preserving_and_idempotent() {
 
     run_ok(
         zg().args([
-            "install",
+            "--install",
             "--target",
             "qwen",
             "--mcp-toolset",
@@ -89,11 +89,11 @@ fn qwen_jsonc_install_is_comment_preserving_and_idempotent() {
     assert!(first.contains("/* Keep server. */"));
     assert_eq!(
         jsonc(&first)["mcpServers"]["zvec_grep"]["args"],
-        serde_json::json!(["server", "--stdio", "--mcp-toolset", "full"])
+        serde_json::json!(["--server", "--stdio", "--mcp-toolset", "full"])
     );
     run_ok(
         zg().args([
-            "install",
+            "--install",
             "--target",
             "qwen",
             "--mcp-toolset",
@@ -105,7 +105,7 @@ fn qwen_jsonc_install_is_comment_preserving_and_idempotent() {
     assert_eq!(fs::read_to_string(&path).expect("second install"), first);
 
     run_ok(
-        zg().args(["uninstall", "--target", "qwen", "--yes"])
+        zg().args(["--uninstall", "--target", "qwen", "--yes"])
             .env("QWEN_HOME", &home),
     );
     let removed = fs::read_to_string(&path).expect("removed");
@@ -127,7 +127,7 @@ fn qoder_manages_owned_permissions_and_both_clients() {
     .expect("settings");
 
     run_ok(
-        zg().args(["install", "--target", "qoder", "--yes"])
+        zg().args(["--install", "--target", "qoder", "--yes"])
             .env("QODER_CONFIG_DIR", &home)
             .env("QODER_IDE_MCP_PATH", &ide),
     );
@@ -149,7 +149,7 @@ fn qoder_manages_owned_permissions_and_both_clients() {
     );
 
     run_ok(
-        zg().args(["uninstall", "--target", "qoder", "--yes"])
+        zg().args(["--uninstall", "--target", "qoder", "--yes"])
             .env("QODER_CONFIG_DIR", &home)
             .env("QODER_IDE_MCP_PATH", &ide),
     );
@@ -166,7 +166,7 @@ fn qoder_manages_owned_permissions_and_both_clients() {
 fn http_token_requires_an_explicit_http_transport() {
     let output = zg()
         .args([
-            "install",
+            "--install",
             "--target",
             "codex",
             "--mcp-token-env",
@@ -203,12 +203,12 @@ fn claude_opencode_and_cursor_match_the_typescript_shapes() {
     .expect("opencode config");
 
     run_ok(
-        zg().args(["install", "--target", "claude", "--yes"])
+        zg().args(["--install", "--target", "claude", "--yes"])
             .env("CLAUDE_CONFIG_DIR", &claude),
     );
     run_ok(
         zg().args([
-            "install",
+            "--install",
             "--target",
             "opencode",
             "--mcp-transport",
@@ -221,7 +221,7 @@ fn claude_opencode_and_cursor_match_the_typescript_shapes() {
     );
     run_ok(
         zg().args([
-            "install",
+            "--install",
             "--target",
             "cursor",
             "--mcp-transport",
@@ -258,15 +258,15 @@ fn claude_opencode_and_cursor_match_the_typescript_shapes() {
     );
 
     run_ok(
-        zg().args(["uninstall", "--target", "claude", "--yes"])
+        zg().args(["--uninstall", "--target", "claude", "--yes"])
             .env("CLAUDE_CONFIG_DIR", &claude),
     );
     run_ok(
-        zg().args(["uninstall", "--target", "opencode", "--yes"])
+        zg().args(["--uninstall", "--target", "opencode", "--yes"])
             .env("OPENCODE_CONFIG", &opencode),
     );
     run_ok(
-        zg().args(["uninstall", "--target", "cursor", "--yes"])
+        zg().args(["--uninstall", "--target", "cursor", "--yes"])
             .env("CURSOR_CONFIG_DIR", &cursor),
     );
     assert!(
@@ -296,7 +296,7 @@ fn install_starts_the_configured_server_with_the_selected_toolset() {
 
     let output = run_ok(
         zg().args([
-            "install",
+            "--install",
             "--target",
             "codex",
             "--mcp-toolset",
@@ -312,15 +312,15 @@ fn install_starts_the_configured_server_with_the_selected_toolset() {
     assert!(output.contains(&format!("ready at http://127.0.0.1:{port}/mcp")));
     let status = run_ok(
         Command::new(env!("CARGO_BIN_EXE_zg"))
-            .args(["server", "status", "--check-ready", "--home"])
+            .args(["--server", "status", "--check-ready", "--home"])
             .arg(&runtime_home),
     );
     assert!(status.contains("MCP toolset: full"));
     let config = fs::read_to_string(codex.join("config.toml")).expect("codex config");
-    assert!(config.contains("args = [\"server\", \"--stdio\", \"--mcp-toolset\", \"full\"]"));
+    assert!(config.contains("args = [\"--server\", \"--stdio\", \"--mcp-toolset\", \"full\"]"));
     let second_codex = temporary.path().join("second-codex");
     run_ok(
-        zg().args(["install", "--target", "codex", "--yes"])
+        zg().args(["--install", "--target", "codex", "--yes"])
             .env_remove("ZVEC_GREP_INSTALL_SKIP_SERVER")
             .env("HOME", &home)
             .env("USERPROFILE", &home)
@@ -329,13 +329,13 @@ fn install_starts_the_configured_server_with_the_selected_toolset() {
     );
     let still_full = run_ok(
         Command::new(env!("CARGO_BIN_EXE_zg"))
-            .args(["server", "status", "--check-ready", "--home"])
+            .args(["--server", "status", "--check-ready", "--home"])
             .arg(&runtime_home),
     );
     assert!(still_full.contains("MCP toolset: full"));
     run_ok(
         Command::new(env!("CARGO_BIN_EXE_zg"))
-            .args(["server", "off", "--home"])
+            .args(["--server", "off", "--home"])
             .arg(&runtime_home),
     );
 }
@@ -411,7 +411,7 @@ fn opencode_jsonc_preserves_comments_trailing_commas_and_other_settings() {
     let path = directory.join("opencode.jsonc");
     let source = "{\n  // Keep model.\n  \"model\": \"custom/model\",\n  \"array\": [\"literal ,} and ,]\",],\n  \"mcp\": {\n    /* Keep other server. */\n    \"other\": {\"type\": \"remote\", \"url\": \"https://example.test/mcp\",},\n  },\n}\n";
     fs::write(&path, source).expect("write");
-    let stdout = run_ok(&mut opencode_command("install", root));
+    let stdout = run_ok(&mut opencode_command("--install", root));
     assert!(
         stdout.contains(&format!("Config    {}", path.display())),
         "expected configuration path {}, stdout:\n{stdout}",
@@ -420,9 +420,9 @@ fn opencode_jsonc_preserves_comments_trailing_commas_and_other_settings() {
     assert!(!directory.join("opencode.json").exists());
     let installed = fs::read_to_string(&path).expect("read");
     assert!(installed.contains("\"zvec_grep\""));
-    run_ok(&mut opencode_command("install", root));
+    run_ok(&mut opencode_command("--install", root));
     assert_eq!(fs::read_to_string(&path).expect("read"), installed);
-    run_ok(&mut opencode_command("uninstall", root));
+    run_ok(&mut opencode_command("--uninstall", root));
     let removed = fs::read_to_string(&path).expect("read");
     assert!(!removed.contains("\"zvec_grep\""));
     for line in source.lines().filter(|line| {
@@ -434,7 +434,7 @@ fn opencode_jsonc_preserves_comments_trailing_commas_and_other_settings() {
         assert!(installed.contains(line));
         assert!(removed.contains(line));
     }
-    run_ok(&mut opencode_command("install", root));
+    run_ok(&mut opencode_command("--install", root));
 }
 
 #[test]
@@ -452,12 +452,12 @@ fn opencode_selects_jsonc_and_cleans_both_global_files() {
         "{\n  // Active config\n  \"model\": \"jsonc/model\"\n}\n",
     )
     .expect("write");
-    let stdout = run_ok(&mut opencode_command("install", root));
+    let stdout = run_ok(&mut opencode_command("--install", root));
     assert!(
         stdout.contains("both opencode.jsonc and opencode.json exist; selected opencode.jsonc")
     );
     assert_eq!(fs::read_to_string(&json_path).expect("read"), legacy);
-    run_ok(&mut opencode_command("uninstall", root));
+    run_ok(&mut opencode_command("--uninstall", root));
     assert!(json(&json_path)["mcp"].get("zvec_grep").is_none());
     assert_eq!(
         json(&json_path)["mcp"]["other"]["url"],
@@ -472,12 +472,12 @@ fn opencode_selects_jsonc_and_cleans_both_global_files() {
 fn opencode_explicit_override_is_trimmed_and_scopes_uninstall() {
     let temporary = TempDir::new().expect("tempdir");
     let root = temporary.path();
-    run_ok(&mut opencode_command("install", root));
+    run_ok(&mut opencode_command("--install", root));
     let global = root.join("config/opencode/opencode.json");
     let original = fs::read_to_string(&global).expect("read");
     let custom = root.join("custom.jsonc");
     fs::write(&custom, "{\n // Keep custom\n}\n").expect("write");
-    for action in ["install", "uninstall"] {
+    for action in ["--install", "--uninstall"] {
         run_ok(
             opencode_command(action, root)
                 .env("OPENCODE_CONFIG", "  custom.jsonc  ")
@@ -492,7 +492,7 @@ fn opencode_explicit_override_is_trimmed_and_scopes_uninstall() {
     );
     // Blank overrides fall back to the home configuration directory.
     run_ok(
-        opencode_command("install", root)
+        opencode_command("--install", root)
             .env("OPENCODE_CONFIG", " ")
             .env("XDG_CONFIG_HOME", " "),
     );
@@ -506,17 +506,17 @@ fn opencode_jsonc_conflicts_and_invalid_containers_do_not_modify_files() {
     let path = root.join("custom.jsonc");
     let unmanaged = "{\n // Keep unmanaged\n \"mcp\": {\"zvec_grep\": {\"url\": \"https://example.test/unmanaged\"},},\n}\n";
     fs::write(&path, unmanaged).expect("write");
-    let output = opencode_command("install", root)
+    let output = opencode_command("--install", root)
         .env("OPENCODE_CONFIG", &path)
         .output()
         .expect("run");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--force"));
     assert_eq!(fs::read_to_string(&path).expect("read"), unmanaged);
-    run_ok(opencode_command("uninstall", root).env("OPENCODE_CONFIG", &path));
+    run_ok(opencode_command("--uninstall", root).env("OPENCODE_CONFIG", &path));
     assert_eq!(fs::read_to_string(&path).expect("read"), unmanaged);
     run_ok(
-        opencode_command("install", root)
+        opencode_command("--install", root)
             .env("OPENCODE_CONFIG", &path)
             .arg("--force"),
     );
@@ -527,7 +527,7 @@ fn opencode_jsonc_conflicts_and_invalid_containers_do_not_modify_files() {
     );
     for source in ["{\"mcp\":null}", "{\"mcp\":[]}", "{,}", "{\"mcp\": {,,}}"] {
         fs::write(&path, source).expect("write");
-        for action in ["install", "uninstall"] {
+        for action in ["--install", "--uninstall"] {
             let output = opencode_command(action, root)
                 .env("OPENCODE_CONFIG", &path)
                 .output()

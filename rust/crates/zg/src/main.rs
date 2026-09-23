@@ -35,21 +35,36 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    // Clap handles --help/--version before any async runtime or native adapter is built.
-    let cli = Cli::parse();
-    let plan = cli.into_plan(std::env::current_dir()?)?;
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    let warning = zg_cli::compatibility_warning_for_args(&arguments[1..]);
+    let warn = || {
+        if let Some(warning) = &warning {
+            eprintln!("{warning}");
+        }
+    };
+    let cli = Cli::try_parse_from(arguments).unwrap_or_else(|error| {
+        warn();
+        error.exit();
+    });
+    let plan = cli
+        .into_plan(std::env::current_dir()?)
+        .inspect_err(|_| warn())?;
     match &plan {
         CliPlan::Help(topic) => {
+            warn();
             zg_cli::print_help(topic.as_deref())?;
             return Ok(());
         }
         CliPlan::Version => {
+            warn();
             println!("{}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         _ => {}
     }
     install_darwin_metal_residency_mitigation()?;
+    // Emit after a possible re-exec so macOS prints each warning only once.
+    warn();
     let debug = match &plan {
         CliPlan::Query { output, .. }
         | CliPlan::Index { output, .. }
@@ -188,11 +203,11 @@ async fn execute_install_plan(args: &zg_cli::InstallArgs) -> Result<(), Box<dyn 
             );
         } else {
             println!("  ○ Server");
-            println!("    not started; run `zg server on`");
+            println!("    not started; run `zg --server on`");
         }
     } else {
         println!("  ○ Server");
-        println!("    not started; run `zg server on`");
+        println!("    not started; run `zg --server on`");
     }
     if outcome.transport == McpInstallTransport::Stdio {
         println!("  ✓ Connection");
@@ -242,6 +257,38 @@ async fn execute_request(
     let server = use_server(mode, home).await?;
     zg_cli::finalize_refresh(&mut request, server);
     authorize_query(&mut request, server, home).await?;
+    match execute_context(request.clone(), server, home, output).await {
+        Err(error) if is_not_found(error.as_ref()) => {
+            // Probing first would block searches that can borrow an active writer.
+            if !ensure_query_index(&request, server, home, output).await? {
+                return Err(error);
+            }
+            authorize_query(&mut request, server, home).await?;
+            execute_context(request, server, home, output).await
+        }
+        result => result,
+    }
+}
+
+fn is_not_found(error: &(dyn Error + 'static)) -> bool {
+    if let Some(error) = error.downcast_ref::<EngineError>() {
+        return error.code() == EngineError::NOT_FOUND;
+    }
+    match error.downcast_ref::<zg_daemon::DaemonError>() {
+        Some(zg_daemon::DaemonError::Remote { report, .. }) => {
+            report.code == EngineError::NOT_FOUND
+        }
+        Some(zg_daemon::DaemonError::Engine(error)) => error.code() == EngineError::NOT_FOUND,
+        _ => false,
+    }
+}
+
+async fn execute_context(
+    request: ContextOptions,
+    server: bool,
+    home: Option<&Path>,
+    output: zg_cli::OutputOptions,
+) -> Result<(), Box<dyn Error>> {
     if server {
         let home = zg_daemon::resolve_home(home.map(Path::to_owned))?;
         let reply = zg_daemon::execute_command(&home, DaemonCommand::Context(request)).await?;
@@ -263,6 +310,79 @@ async fn execute_request(
         return Ok(());
     }
     execute_direct_context(request, output).await
+}
+
+async fn ensure_query_index(
+    request: &ContextOptions,
+    server: bool,
+    home: Option<&Path>,
+    output: zg_cli::OutputOptions,
+) -> Result<bool, Box<dyn Error>> {
+    use zg_engine::api::{
+        index::{IndexOptions, options::EmbeddingModelSpec},
+        info::{InfoOptions, result::WorkspaceIndexPolicy},
+    };
+
+    let server_home = if server {
+        Some(zg_daemon::resolve_home(home.map(Path::to_owned))?)
+    } else {
+        None
+    };
+    let info_request = InfoOptions {
+        root: request.root.clone(),
+        ..InfoOptions::default()
+    };
+    let info = if let Some(home) = &server_home {
+        let reply = zg_daemon::execute_command(home, DaemonCommand::Info(info_request)).await?;
+        let DaemonReply::Info(info) = reply else {
+            return Err(protocol_mismatch("info"));
+        };
+        *info
+    } else {
+        let engine = ZvecGrep::new();
+        let info = engine.info(info_request).await;
+        engine.close();
+        info?
+    };
+    if info.indexed || info.index_policy == WorkspaceIndexPolicy::Disabled {
+        return Ok(false);
+    }
+
+    let embedding = zg_engine::config::implicit_embedding_reference()?;
+    eprintln!("No index found; creating one with {embedding}.");
+    // Implicit builds must not inherit remote credentials or authorization.
+    let mut index_request = IndexOptions {
+        root: Some(info.root),
+        embedding: Some(EmbeddingModelSpec {
+            reference: embedding,
+            revision: None,
+            cache_dir: None,
+            endpoint: None,
+            device: zg_engine::api::index::options::Device::Auto,
+        }),
+        device: request.device,
+        model_cache: request.model_cache.clone(),
+        embedding_concurrency: request.embedding_concurrency,
+        lock_timeout_ms: request.lock_timeout_ms,
+        ..IndexOptions::default()
+    };
+    let progress =
+        zg_cli::IndexProgressDisplay::new(io::stderr(), io::stderr().is_terminal(), output.color);
+    let reporter = progress.reporter();
+    let result: Result<_, Box<dyn Error>> = if let Some(home) = &server_home {
+        zg_daemon::index_with_progress(home, index_request, &reporter)
+            .await
+            .map_err(Into::into)
+    } else {
+        let engine = ZvecGrep::new();
+        index_request.on_progress = Some(reporter.prioritize_model_progress());
+        let result = engine.index(index_request).await;
+        engine.close();
+        result.map_err(Into::into)
+    };
+    progress.finish();
+    result?;
+    Ok(true)
 }
 
 async fn authorize_query(
