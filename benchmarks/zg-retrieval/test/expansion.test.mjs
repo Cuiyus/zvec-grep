@@ -168,14 +168,14 @@ test("pilot report preserves completed scores and calls out missing tasks", () =
   assert.match(markdown, /not the official Quarry function recall/);
 });
 
-test("a failed group audit removes every score produced by that group", () => {
+test("a failed group audit removes every score and measurement produced by that group", () => {
   const rows = [
     {
       task_id: "a",
       mode: "fts",
       status: "success",
       reason: null,
-      calls: [{ status: "success", items: [] }],
+      calls: [{ status: "success", latency_ms: 25, items: [] }],
       file: { hit_at_10: 1 },
       ndcg: { ndcg_at_10: 1 },
       quality_mean: { ndcg_at_10: 1 },
@@ -185,6 +185,7 @@ test("a failed group audit removes every score produced by that group", () => {
   ];
   invalidateGroupRows(rows, "group integrity was not verified: index changed");
   assert.equal(rows[0].status, "failed");
+  assert.equal(rows[0].group_integrity, "failed");
   assert.match(rows[0].reason, /index changed/);
   assert.ok(!Object.hasOwn(rows[0], "file"));
   assert.ok(!Object.hasOwn(rows[0], "ndcg"));
@@ -192,6 +193,20 @@ test("a failed group audit removes every score produced by that group", () => {
   assert.ok(!Object.hasOwn(rows[0], "output_bytes"));
   assert.ok(!Object.hasOwn(rows[0], "items"));
   assert.equal(rows[0].calls.length, 1, "raw call evidence remains available");
+  const summary = summarizePilotRows(rows, ["fts"], 1);
+  assert.equal(summary[0].measurements.latency_sample_count, 0);
+  assert.equal(summary[0].measurements.latency_ms_mean, null);
+  assert.equal(summary[0].measurements.latency_ms_p50, null);
+  const markdown = markdownPilotReport({
+    label: "Pilot",
+    status: "failed",
+    model: "local/test",
+    suite: "quarry20",
+    summary,
+    rows,
+    failures: [{ task_id: "a", reason: rows[0].reason }],
+  });
+  assert.match(markdown, /\| a \| zg-fts \|.*\| — \| — \|$/m);
 });
 
 test("unified results page identifies missing pilot artifacts independently", async () => {

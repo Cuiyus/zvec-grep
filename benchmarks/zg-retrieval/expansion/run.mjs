@@ -50,6 +50,13 @@ function median(values) {
     : (sorted[center - 1] + sorted[center]) / 2;
 }
 
+function measuredCallLatencies(row) {
+  if (row.group_integrity === "failed") return [];
+  return row.calls
+    .filter((call) => call.status === "success")
+    .map((call) => call.latency_ms);
+}
+
 export function summarizePilotRows(
   rows,
   modes = ["hybrid", "fts", "vector"],
@@ -62,11 +69,7 @@ export function summarizePilotRows(
       valid.length
         ? valid.reduce((sum, row) => sum + select(row), 0) / valid.length
         : null;
-    const latencies = selected.flatMap((row) =>
-      row.calls
-        .filter((call) => call.status === "success")
-        .map((call) => call.latency_ms),
-    );
+    const latencies = selected.flatMap(measuredCallLatencies);
     return {
       mode,
       completed: valid.length,
@@ -150,6 +153,7 @@ function fillMissingRows(pilot, report) {
 export function invalidateGroupRows(rows, reason) {
   for (const row of rows) {
     row.status = "failed";
+    row.group_integrity = "failed";
     row.reason = reason;
     delete row.file;
     delete row.ndcg;
@@ -203,7 +207,7 @@ export function markdownPilotReport(report) {
     "",
     config.report.note,
     "",
-    "Each completed query/mode averages five call-level quality scores. Stable Top 10 means all five ordered public result locations match exactly. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth call; Avg RT and P50 RT cover successful calls and exclude indexing.",
+    "Each completed query/mode averages five call-level quality scores. Stable Top 10 means all five ordered public result locations match exactly. Incomplete queries are listed below and are never silently scored as zero. Output is public MCP text bytes from the fifth call; Avg RT and P50 RT cover successful calls from integrity-verified groups and exclude indexing.",
   );
   lines.push(
     "",
@@ -217,9 +221,7 @@ export function markdownPilotReport(report) {
     (a, b) =>
       a.task_id.localeCompare(b.task_id) || a.mode.localeCompare(b.mode),
   )) {
-    const callLatencies = row.calls
-      .filter((call) => call.status === "success")
-      .map((call) => call.latency_ms);
+    const callLatencies = measuredCallLatencies(row);
     const latency = median(callLatencies);
     const latencyMean = callLatencies.length
       ? callLatencies.reduce((sum, value) => sum + value, 0) /
@@ -465,6 +467,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
       before.logical_content_sha256,
       "index changed during retrieval",
     );
+    for (const row of groupRows) row.group_integrity = "verified";
   } catch (error) {
     invalidateGroupRows(
       groupRows,
