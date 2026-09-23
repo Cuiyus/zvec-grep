@@ -453,7 +453,7 @@ test("complete product-error observations retain a zero score and denominator bu
   assert.equal(report.product_error_calls, 15);
   assert.deepEqual(report.integrity_errors, []);
   assert.equal(report.tasks.length, 3);
-  assert.equal(report.schema_version, 6);
+  assert.equal(report.schema_version, 7);
   assert.equal(report.preview, "mcp-default");
   assert.deepEqual(Object.keys(report.modes), ["hybrid", "fts", "vector"]);
   assert.equal(Object.hasOwn(report, "previews"), false);
@@ -473,6 +473,31 @@ test("complete product-error observations retain a zero score and denominator bu
     await readFile(join(fixture.directory, "report.md"), "utf8"),
     /fail operational integrity/,
   );
+});
+
+test("isolated public-format failures preserve other arms' diagnostic scores", async (t) => {
+  const fixture = await reportFixture(t);
+  for (const call of fixture.calls.filter((call) => call.mode === "hybrid")) {
+    await writeJson(join(fixture.shard, call.raw_path), {
+      isError: false,
+      content: [{ type: "text", text: "malformed public search output" }],
+    });
+    call.raw_sha256 = await fileHash(join(fixture.shard, call.raw_path));
+  }
+  await fixture.save();
+  const report = await fixture.score();
+  assert.equal(report.integrity_passed, false);
+  assert.equal(report.quality_score_valid, false);
+  assert.deepEqual(report.integrity_errors, [
+    "one or more observations are experimentally invalid",
+  ]);
+  assert.equal(report.modes.hybrid.file_retrieval, null);
+  assert.equal(report.modes.fts.file_retrieval.scored_tasks, 1);
+  assert.equal(report.modes.vector.file_retrieval.scored_tasks, 1);
+  assert.match(report.tasks[0].invalid_reason, /^format_unknown: /);
+  const markdown = await readFile(join(fixture.directory, "report.md"), "utf8");
+  assert.match(markdown, /Invalid task\/mode observations/);
+  assert.match(markdown, /zg-fts \| 1\/1 questions/);
 });
 
 test("a missing call cannot be dropped from the planned denominator or produce aggregate quality", async (t) => {

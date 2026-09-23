@@ -41,7 +41,7 @@ function steps(job) {
   );
 }
 
-test("Retrieval-only is one manual workflow with one candidate source input", async () => {
+test("Retrieval-only is one manual workflow with candidate and embedding inputs", async () => {
   assert.deepEqual(
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
@@ -52,7 +52,12 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
   assert.match(dispatch, /^ {4}inputs:$/m);
   assert.match(dispatch, /^ {6}candidate_ref:$/m);
   assert.match(dispatch, /^ {8}default: main$/m);
-  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 1);
+  assert.match(dispatch, /^ {6}embedding:$/m);
+  assert.match(dispatch, /^ {8}default: local$/m);
+  assert.match(dispatch, /^ {8}type: choice$/m);
+  assert.match(dispatch, /^ {10}- local$/m);
+  assert.match(dispatch, /^ {10}- remote$/m);
+  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 2);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),
@@ -62,14 +67,45 @@ test("Retrieval-only is one manual workflow with one candidate source input", as
     "authorize",
     "quality-contract",
     "package-candidate",
-    "retrieval",
-    "zg-report",
+    "sweqa",
+    "beir",
+    "duretrieval",
+    "quarry",
     "results",
   ]);
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
 });
 
-test("every repository runs the fixed three ZG modes through Rust MCP, yielding 16 jobs", async () => {
+test("local embedding is the default and remote Qwen credentials stay scoped to execution", () => {
+  assert.match(jobs.authorize, /Check remote embedding configuration/);
+  assert.match(jobs.authorize, /if: inputs\.embedding == 'remote'/);
+  assert.match(jobs.authorize, /secrets\.QWEN_EMBEDDING_API_KEY/);
+  assert.match(jobs.authorize, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  for (const suite of ["sweqa", "beir", "duretrieval", "quarry"]) {
+    assert.match(
+      jobs[suite],
+      /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
+    );
+    assert.match(
+      jobs[suite],
+      /if: inputs\.embedding == 'local'[\s\S]*uses: actions\/cache@/,
+      `${suite}: local model cache`,
+    );
+    const run = steps(jobs[suite]).find((entry) =>
+      /node benchmarks\/zg-retrieval\/(?:expansion\/)?run\.mjs/.test(entry),
+    );
+    assert.ok(run, suite);
+    assert.match(run, /secrets\.QWEN_EMBEDDING_API_KEY/);
+    assert.match(run, /vars\.QWEN_EMBEDDING_ENDPOINT/);
+  }
+  assert.match(
+    jobs.results,
+    /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
+  );
+  assert.doesNotMatch(jobs["quality-contract"], /RETRIEVAL_EMBEDDING/);
+});
+
+test("the four suites run in independent jobs using one candidate package", async () => {
   const protocol = JSON.parse(
     await readFile(
       new URL("benchmarks/zg-retrieval/configs/protocol.json", repository),
@@ -89,24 +125,32 @@ test("every repository runs the fixed three ZG modes through Rust MCP, yielding 
     new Set(lock.repositories.map((repo) => repo.repository)).size,
     11,
   );
-  assert.equal(Object.keys(jobs).length - 1 + lock.repositories.length, 16);
-  assert.match(jobs["package-candidate"], /lock\.repositories\.map/);
-  assert.match(
-    jobs.retrieval,
-    /matrix: \$\{\{ fromJSON\(needs\.package-candidate\.outputs\.matrix\) \}\}/,
-  );
-  const runner = steps(jobs.retrieval).find((entry) =>
+  assert.equal(Object.keys(jobs).length, 8);
+  assert.doesNotMatch(workflow, /strategy:|fromJSON\(/);
+  const runner = steps(jobs.sweqa).find((entry) =>
     entry.includes("node benchmarks/zg-retrieval/run.mjs"),
   );
   assert.ok(runner);
   assert.doesNotMatch(runner, /--(?:modes|preview)\b|RETRIEVAL_MODES|inputs\./);
-  assert.match(runner, /--repository "\$RETRIEVAL_REPOSITORY"/);
+  assert.doesNotMatch(runner, /--repository\b/);
   assert.match(jobs["quality-contract"], /uses: actions\/setup-python@/);
+  assert.match(jobs.sweqa, /needs: \[authorize, package-candidate\]/);
+  assert.match(jobs.sweqa, /ci-report\.mjs/);
+  assert.match(jobs.sweqa, /retrieval-zg-report/);
+  assert.match(jobs.sweqa, /\$GITHUB_STEP_SUMMARY/);
+  for (const suite of ["beir", "duretrieval", "quarry"]) {
+    assert.match(jobs[suite], /needs: \[authorize, package-candidate\]/);
+    assert.match(jobs[suite], new RegExp(`--suite ${suite}`));
+    assert.match(jobs[suite], new RegExp(`retrieval-${suite}-report`));
+    assert.match(jobs[suite], /\$GITHUB_STEP_SUMMARY/);
+  }
   assert.match(
     jobs["quality-contract"],
     /node --test benchmarks\/zg-retrieval\/test\/\*\.test\.mjs/,
   );
-  assert.doesNotMatch(workflow, /pip install|python -m venv|SDK parity/);
+  assert.match(jobs.duretrieval, /pyarrow|requirements-duretrieval\.txt/);
+  assert.match(jobs.beir, /requirements-beir\.txt/);
+  assert.doesNotMatch(jobs.quarry, /pip install|python -m venv|SDK parity/);
 });
 
 test("the selected workflow ref is frozen once for every downstream job", () => {
@@ -119,8 +163,10 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
   for (const name of [
     "quality-contract",
     "package-candidate",
-    "retrieval",
-    "zg-report",
+    "sweqa",
+    "beir",
+    "duretrieval",
+    "quarry",
     "results",
   ])
     assert.match(
@@ -132,6 +178,10 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
 
 test("the selected source is built from rust/ and exact-commit package caching bypasses recompilation", () => {
   const job = jobs["package-candidate"];
+  assert.match(
+    job,
+    /repository: \$\{\{ inputs\.candidate_ref == 'main' && 'zvec-ai\/zvec-grep' \|\| github\.repository \}\}/,
+  );
   assert.match(job, /ref: \$\{\{ inputs\.candidate_ref \}\}/);
   assert.match(job, /path: candidate/);
   assert.match(job, /working-directory: candidate\/rust/);
@@ -151,16 +201,16 @@ test("the selected source is built from rust/ and exact-commit package caching b
     job,
     /node-version[^\n]*\$\{\{|NODE_VERSION|node.*cache.*key/i,
   );
-  assert.match(jobs.retrieval, /Verify the candidate package identity/);
+  assert.match(jobs.sweqa, /Verify the candidate package identity/);
   assert.match(
-    jobs.retrieval,
+    jobs.sweqa,
     /--commit "\$\{\{ needs\.package-candidate\.outputs\.candidate-commit \}\}"/,
   );
 });
 
 test("every independently rerunnable job checks both actors before doing benchmark work", () => {
-  assert.equal(Object.keys(jobs).length, 6);
-  assert.ok(jobs.results && jobs.retrieval && jobs.authorize);
+  assert.equal(Object.keys(jobs).length, 8);
+  assert.ok(jobs.results && jobs.sweqa && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
     const entries = steps(job);
     assert.match(entries[0], /uses: actions\/checkout@/, `${name}: checkout`);
@@ -191,7 +241,7 @@ test("every independently rerunnable job checks both actors before doing benchma
   assert.match(action, /RERUN_ACTOR: \$\{\{ github\.triggering_actor \}\}/);
 });
 
-test("one final ZG summary runs after successful or failed upstream jobs without optional arms", () => {
+test("one final page combines all suite reports after successful or failed jobs", () => {
   assert.match(jobs.results, /^ {4}if:.*always\(\)/m);
   const dependencies = /needs:\s*\[([\s\S]*?)\]/.exec(jobs.results);
   assert.ok(dependencies);
@@ -204,24 +254,31 @@ test("one final ZG summary runs after successful or failed upstream jobs without
       "authorize",
       "quality-contract",
       "package-candidate",
-      "retrieval",
-      "zg-report",
+      "sweqa",
+      "beir",
+      "duretrieval",
+      "quarry",
     ],
   );
   const finalSteps = steps(jobs.results);
   const downloads = finalSteps.filter((entry) =>
     entry.includes("uses: actions/download-artifact@"),
   );
-  assert.equal(downloads.length, 1);
+  assert.equal(downloads.length, 4);
   assert.match(downloads[0], /name: retrieval-zg-report/);
   assert.match(downloads[0], /continue-on-error: true/);
-  const builder = finalSteps.find((entry) => entry.includes("ci-report.mjs"));
+  assert.match(downloads[1], /name: retrieval-beir-report/);
+  assert.match(downloads[2], /name: retrieval-duretrieval-report/);
+  assert.match(downloads[3], /name: retrieval-quarry-report/);
+  const builder = finalSteps.find((entry) =>
+    entry.includes("expansion/combined.mjs"),
+  );
   assert.ok(builder);
   assert.match(builder, /if:.*always\(\)/);
   assert.match(builder, /RETRIEVAL_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
   assert.deepEqual(
     [...builder.matchAll(/^\s+--([\w-]+)/gm)].map((match) => match[1]),
-    ["zg", "output"],
+    ["zg", "beir", "duretrieval", "quarry", "output"],
   );
   assert.doesNotMatch(builder, /comparison|baseline|preview|modes/);
   const overviewArtifact = finalSteps.find((entry) =>
@@ -236,11 +293,16 @@ test("one final ZG summary runs after successful or failed upstream jobs without
       .filter((entry) => entry.includes("$GITHUB_STEP_SUMMARY"))
       .map((entry) => ({ name, entry })),
   );
-  assert.equal(publishers.length, 1);
-  assert.equal(publishers[0].name, "results");
-  assert.match(publishers[0].entry, /if:.*always\(\)/);
+  assert.equal(publishers.length, 5);
+  assert.deepEqual(
+    publishers.map((entry) => entry.name),
+    ["sweqa", "beir", "duretrieval", "quarry", "results"],
+  );
+  for (const publisher of publishers)
+    assert.match(publisher.entry, /if:.*always\(\)/);
   assert.match(publishers[0].entry, /summary\.md/);
-  assert.match(publishers[0].entry, /missing results are not zero scores/);
+  assert.match(publishers[4].entry, /summary\.md/);
+  assert.match(publishers[4].entry, /missing results are not zero scores/);
 });
 
 const scriptStart = action.indexOf("        script: |\n");

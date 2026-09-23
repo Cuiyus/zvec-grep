@@ -1,16 +1,16 @@
 # ZG Retrieval-only benchmark
 
-Measure **zg-hybrid, zg-fts and zg-vector** on the same 20 unchanged SWE-QA questions and 11 pinned repositories from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [test design](../../docs/zg-retrieval-only-sweqa20-design.md) for protocol and scoring details.
+The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent suites. The original SWE-QA20 suite uses 20 unchanged questions and 11 pinned repositories from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). The exploratory suites contain 20 original BEIR queries across four datasets, ten DuRetrieval queries and 20 original Quarry queries across eight languages; see the [pilot design](expansion/README.md). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [SWE-QA20 design](../../docs/zg-retrieval-only-sweqa20-design.md) for its frozen protocol and scoring details.
 
 ## Run CI and read the result
 
-The [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml) runs **only through `workflow_dispatch`**. Select **Retrieval-only → Run workflow**. Use GitHub's workflow-ref selector to choose the benchmark harness (`main` for the latest merged harness), then set `candidate_ref` to the branch, tag or commit containing the `rust/` workspace to compile. It defaults to `main`. Every run includes all three modes; push and pull-request events do not trigger this benchmark.
+The [Retrieval-only workflow](../../.github/workflows/retrieval-only.yml) runs **only through `workflow_dispatch`**. Select **Retrieval-only → Run workflow**. Use GitHub's workflow-ref selector to choose the benchmark harness (`main` for the latest merged harness), then set `candidate_ref` to the branch, tag or commit containing the `rust/` workspace to compile. It defaults to `main`. The `embedding` choice defaults to `local`, which preserves each suite's configured local model. Select `remote` to run every suite with `qwen/qwen3.7-text-embedding`; this requires the repository secret `QWEN_EMBEDDING_API_KEY` and variable `QWEN_EMBEDDING_ENDPOINT`. Every run includes all three modes; push and pull-request events do not trigger this benchmark.
 
 The workflow freezes the selected harness ref to a full commit, checks out the candidate separately, resolves it to another full commit SHA, and builds `candidate/rust/`. The packed native package cache is keyed by operating system, architecture and that exact candidate commit. A hit skips Rust compilation and packaging. On a miss, a second Cargo cache can reuse registry data and `rust/target` objects before `npm run pack:local` creates the candidate tarball. Node.js version is not part of candidate selection, package-cache identity or report identity.
 
 The original dispatch actor and current re-run actor must have the repository **maintain or admin** role. Every job checks both, including partial re-runs. This in-workflow check applies to the checked-in workflow. Contributors who can modify the workflow or its local authorization action on another branch can bypass that check; a permission boundary against those contributors requires repository- or organization-level Actions execution policies.
 
-The **Retrieval results** job publishes one overview table with exactly three rows:
+The **Retrieval results** job publishes one page with a suite overview and a separate three-mode table for SWE-QA20, BEIR, DuRetrieval and Quarry. All four suite jobs also publish their own aggregate and per-question tables as soon as each job finishes. In the SWE-QA20 section, the three rows are:
 
 | Arm | Public MCP search input | Presentation |
 | --- | --- | --- |
@@ -22,17 +22,18 @@ Every request also uses `limit: 10`, `autoUpdate: false`, `freshness: eventual` 
 
 | Column | Meaning / aggregation |
 | --- | --- |
-| File Hit@1 | Fraction of the 20 original questions with a labeled file at native rank 1 |
-| File Hit@5 | Fraction with a labeled file within native Top 5 |
-| File Hit@10 | Fraction with a labeled file within native Top 10 |
-| File MRR@10 | Mean of `1 / first matching native rank`; Top-10 misses are zero, all 20 questions have equal weight |
-| nDCG@10 | Binary discounted gain with target-count ideal gain; repository macro average across 11 repositories |
+| File Hit@1 | Mean of each question/mode's five binary rank-1 observations |
+| File Hit@5 | Mean of each question/mode's five binary Top-5 observations |
+| File Hit@10 | Mean of each question/mode's five binary Top-10 observations |
+| File MRR@10 | Mean of five `1 / first matching native rank` observations per question/mode; Top-10 misses are zero |
+| nDCG@10 | Mean of five binary discounted-gain observations per question/mode, then repository macro average across 11 repositories |
+| Stable Top 10 | Count of question/mode cases whose five ordered public result locations match exactly |
 | Mean output (KiB) | Mean public MCP text UTF-8 bytes / 1024, using successful fifth calls only; not model tokens |
-| Latency P50 (ms) | Median of all successful MCP search calls, including five repetitions; excludes indexing |
+| Avg RT / P50 RT (ms) | Mean and median of all successful MCP search calls, including five repetitions; excludes indexing |
 
-Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. Only the fifth result supplies quality and output-size observations. A complete run contains **300 calls and 60 quality observations**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
+Each repository uses one fresh index and one MCP session. Modes run in the fixed order **hybrid → fts → vector**; each original question is called five consecutive times within each mode. All five calls supply quality and stability observations; only the fifth supplies output size. A complete run contains **300 calls and 60 question/mode quality summaries**, with **20 questions, 20 output samples and 100 latency samples per mode** when all calls succeed. Repetitions are not independent questions.
 
-Missing or invalid evidence withholds aggregate results and fails CI. Product failures retain zero quality observations and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
+Isolated public-response format failures still fail CI, but the overview displays diagnostic scores from validated questions with explicit question/repository coverage and a failed-task table. Invalid evidence is excluded, never counted as a miss or a zero. Protocol, identity, missing-call and other integrity errors still withhold all aggregates. Product failures with valid evidence retain zero quality credit and fail operational integrity; failed calls are excluded from output and latency measurements. Quality scores have no arbitrary pass threshold. Fixed mode order and shared runtime/model caches mean latency is an observation under this protocol, not a controlled comparison of cold-start or mode execution speed.
 
 ## Dataset and scoring
 
@@ -46,15 +47,17 @@ Questions, labels and reports remain outside indexed source checkouts. Indexing 
 
 ## Reports and artifacts
 
-- `retrieval-results`: the single `summary.md` and machine-readable `summary.json`.
-- `retrieval-zg-report`: `report.json`, `report.md` and per-call `scores.jsonl`.
-- `retrieval-data-<owner>__<repo>`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for each repository.
+- `retrieval-results`: the unified `summary.md` and machine-readable `summary.json`.
+- `retrieval-zg-report`: the SWE-QA20 suite conclusion (`summary.json` and `summary.md`), validated `report.json`, `report.md` and per-call `scores.jsonl`.
+- `retrieval-zg-evidence`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for all 11 repositories.
+- `retrieval-beir-report`, `retrieval-duretrieval-report` and `retrieval-quarry-report`: independent pilot summaries with BEIR dataset and Quarry language coverage and scores.
+- `retrieval-beir-evidence`, `retrieval-duretrieval-evidence` and `retrieval-quarry-evidence`: pilot public requests/responses and index status.
 
-Evidence retention is 14 days. Only the final results job publishes the main CI table; shards upload evidence. Missing artifacts and failed upstream jobs remain explicit in the overview.
+Evidence retention is 14 days. After a shared candidate build, SWE-QA20, BEIR, DuRetrieval and Quarry run as four independent suite jobs. Each suite publishes its own aggregate metrics and a per-question table even if an individual question fails. The final results job publishes the combined page. Missing artifacts and failed upstream jobs remain explicit in the overview.
 
-ZG reports use **schema 6**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. The overview uses **schema 4** and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows. It records both the frozen harness commit and selected candidate ref/commit. Quality rows retain five `measurement_observations` so validators can recompute measurements. The `file_retrieval` field holds Hit/MRR, `ndcg` holds nDCG and its target evidence, and `measurements` holds output size, latency and sample counts.
+SWE-QA20 ZG reports use **schema 7**, with `preview: "mcp-default"`, three `modes`, and one quality row per question/mode. Its section uses the **schema 5** overview with fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows; the combined page uses schema 1. The SWE-QA20 overview records coverage, failed task IDs/modes/reasons, the frozen harness commit and selected candidate ref/commit. Quality rows retain all five public result lists and measurement observations so validators can recompute the case mean, ranking stability, output size and latency. The representative fifth-call `file_retrieval` and `ndcg` fields remain for evidence; `quality_mean` supplies headline quality.
 
-The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v6`. The comparator accepts schema 6 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
+The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v7`. The comparator accepts schema 7 reports with matching protocol and frozen inputs, Rust MCP default presentation and all three modes. Reports from other protocol versions require their matching scorer checkout. Replaying saved evidence is not a new retrieval run.
 
 ## Code structure
 
@@ -94,13 +97,18 @@ node benchmarks/zg-retrieval/run.mjs \
 node benchmarks/zg-retrieval/report.mjs "$retrieval_work/results"
 ```
 
+Local commands use the configured local models by default. To reproduce the
+remote workflow choice, set `RETRIEVAL_EMBEDDING=remote` together with
+`ZVEC_GREP_API_KEY` and an HTTPS `ZVEC_GREP_ENDPOINT` before running the suite
+and report commands.
+
 `--package` accepts a tarball or a directory containing exactly one `.tgz`. The runner installs it in an isolated consumer. Use a new `--output` directory and fresh corpus checkout: output is never overwritten and an existing index is rejected. An external model-download cache may be reused.
 
 Add `--repository reflex-dev/reflex` or `--tasks reflex:6` for an explicitly labeled subset smoke run; all three modes still execute. Standalone `report.mjs` requires all 20 questions, and CI rejects subset reports. Modes and MCP presentation are fixed by the protocol, without selection flags.
 
 ## Offline replay and comparisons
 
-Download all `retrieval-data-*` artifacts into separate artifact-named subdirectories beneath one directory, then recompute:
+Download `retrieval-zg-evidence` into one directory, then recompute:
 
 ```sh
 node benchmarks/zg-retrieval/report.mjs /absolute/path/to/downloaded-shards
@@ -110,7 +118,7 @@ node benchmarks/zg-retrieval/ci-report.mjs \
   --output /absolute/path/to/overview
 ```
 
-A partial or incompatible experiment cannot produce a valid overview. Candidate source selection happens through `candidate_ref`; the harness comes from the workflow ref selected for that manual run. Do not add automatic triggers to test it.
+An isolated task/mode failure can produce a diagnostic partial overview while the command and CI still fail. Incompatible or globally invalid evidence produces no scores. Candidate source selection happens through `candidate_ref`; the harness comes from the workflow ref selected for that manual run. Do not add automatic triggers to test it.
 
 ## Limits
 

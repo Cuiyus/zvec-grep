@@ -27,6 +27,7 @@ import {
   repositorySlug,
   inside,
 } from "../../core/lib.mjs";
+import { embeddingRuntime } from "../../core/embedding.mjs";
 import { aggregate } from "./report.mjs";
 import { NativeIndexProductError, snapshotIndex } from "./snapshot.mjs";
 
@@ -105,7 +106,7 @@ export function auditIndexSelection(files, protocol) {
   };
 }
 
-async function freePort() {
+export async function freePort() {
   const server = createServer();
   await new Promise((res, rej) => {
     server.once("error", rej);
@@ -138,7 +139,7 @@ export function nativeCandidate(packageRoot, consumer, metadata) {
   return { consumer, packageRoot, cli, runtime: "rust-native" };
 }
 
-async function packageCandidate(packagePath, output) {
+export async function packageCandidate(packagePath, output) {
   let tarball = resolve(packagePath);
   if ((await lstat(tarball)).isDirectory()) {
     const names = (await readdir(tarball)).filter((name) =>
@@ -233,6 +234,7 @@ export function isProductPreparationFailure(phase, error) {
 
 async function runRepository({ suite, repo, tasks, candidate, options }) {
   const { protocol, gold, identity } = suite;
+  const embedding = embeddingRuntime(protocol.model);
   const modes = protocol.modes;
   const output = join(options.output, repositorySlug(repo.repository));
   await mkdir(join(output, "raw"), { recursive: true });
@@ -298,7 +300,9 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
         embedding: protocol.model,
         modelCacheDir: options.modelCache,
       },
-      models: { [protocol.model]: { device: protocol.device } },
+      models: embedding.remote
+        ? {}
+        : { [protocol.model]: { device: protocol.device } },
     });
     env = {
       ...process.env,
@@ -307,7 +311,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       OPENCODE_CONFIG: opencode,
       ZVEC_GREP_HOME: join(home, ".zvec-grep"),
       ZVEC_GREP_MODEL_CACHE: options.modelCache,
-      ZVEC_GREP_DEVICE: protocol.device,
+      ...(!embedding.remote ? { ZVEC_GREP_DEVICE: protocol.device } : {}),
       NO_COLOR: "1",
       FORCE_COLOR: "0",
       PATH: `${join(candidate.consumer, "node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}`,
@@ -359,8 +363,8 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
           protocol.model,
           "--model-cache",
           options.modelCache,
-          "--device",
-          protocol.device,
+          ...(!embedding.remote ? ["--device", protocol.device] : []),
+          ...embedding.indexArguments,
           ...indexSelectionArguments(protocol),
           "--debug",
         ],
@@ -378,6 +382,11 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       );
       throw error;
     }
+    if (embedding.remote)
+      await runCandidate(candidate, embedding.grantArguments(root), {
+        env,
+        cwd: root,
+      });
     phase = "snapshot";
     await snapshotIndex({
       cli: candidate.cli,
@@ -394,7 +403,8 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     };
     manifest.stage_availability = before.stages;
     modelBefore = await modelArtifactManifest(options.modelCache);
-    assert.ok(modelBefore.entries.length > 0, "no model artifacts recorded");
+    if (!embedding.remote)
+      assert.ok(modelBefore.entries.length > 0, "no model artifacts recorded");
     await writeJson(join(output, "model-files.json"), modelBefore);
     manifest.model_files_sha256 = modelBefore.sha256;
     manifest.index_content_sha256 = before.logical_content_sha256;

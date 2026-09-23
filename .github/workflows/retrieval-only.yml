@@ -1,21 +1,29 @@
 name: Retrieval-only
 
-run-name: Retrieval-only · harness ${{ github.ref_name }} · candidate ${{ inputs.candidate_ref }}
+run-name: Retrieval-only · ${{ inputs.embedding }} embedding · harness ${{ github.ref_name }} · candidate ${{ inputs.candidate_ref }}
 
 on:
   workflow_dispatch:
     inputs:
       candidate_ref:
-        description: Candidate branch, tag, or commit containing the rust/ workspace
+        description: Candidate ref (main resolves from zvec-ai/zvec-grep; other refs resolve from this fork)
         required: true
         default: main
         type: string
+      embedding:
+        description: Embedding runtime (local uses each suite's configured model; remote uses Qwen3.7 Text Embedding)
+        required: true
+        default: local
+        type: choice
+        options:
+          - local
+          - remote
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.candidate_ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.candidate_ref }}-${{ inputs.embedding }}
   cancel-in-progress: true
 
 jobs:
@@ -31,6 +39,14 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
+      - name: Check remote embedding configuration
+        if: inputs.embedding == 'remote'
+        env:
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          test -n "$ZVEC_GREP_API_KEY" || { echo 'QWEN_EMBEDDING_API_KEY secret is missing'; exit 1; }
+          test -n "$ZVEC_GREP_ENDPOINT" || { echo 'QWEN_EMBEDDING_ENDPOINT variable is missing'; exit 1; }
       - name: Freeze the selected benchmark harness
         id: harness
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -59,7 +75,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
       candidate-commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@v6
@@ -68,27 +83,10 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
-      - name: Read all repositories from the frozen suite
-        id: matrix
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync, appendFileSync } from 'node:fs';
-          const lock = JSON.parse(readFileSync('benchmarks/zg-retrieval/data/source.lock.json', 'utf8'));
-          assert.equal(lock.repositories.length, 11);
-          assert.equal(lock.tasks.length, 20);
-          const include = lock.repositories.map(({ repository }) => {
-            assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
-            return { repository, slug: repository.replace('/', '__') };
-          });
-          assert.equal(new Set(include.map(({ repository }) => repository)).size, 11);
-          assert.equal(new Set(include.map(({ slug }) => slug)).size, 11);
-          assert.ok(lock.tasks.every(task => include.some(row => row.repository === task.repository)));
-          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
-          NODE
       - name: Check out the selected candidate source
         uses: actions/checkout@v6
         with:
+          repository: ${{ inputs.candidate_ref == 'main' && 'zvec-ai/zvec-grep' || github.repository }}
           ref: ${{ inputs.candidate_ref }}
           path: candidate
           fetch-depth: 1
@@ -153,15 +151,13 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  retrieval:
-    name: retrieval (${{ matrix.repository }})
+  sweqa:
+    name: SWE-QA20 (20 questions)
+    env:
+      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
     needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 80
-    strategy:
-      max-parallel: 4
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.package-candidate.outputs.matrix) }}
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
         with:
@@ -178,41 +174,69 @@ jobs:
           node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Cache model artifacts only
+      - name: Cache the code model
+        if: inputs.embedding == 'local'
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/model-cache
-          key: retrieval-rust-model-v1-${{ runner.os }}-${{ runner.arch }}-${{ needs.package-candidate.outputs.candidate-commit }}
-      - name: Run zg-hybrid, zg-fts and zg-vector through the Rust MCP server
+          key: retrieval-sweqa-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run all SWE-QA20 repositories through the Rust MCP server
         env:
-          RETRIEVAL_REPOSITORY: ${{ matrix.repository }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
           node benchmarks/zg-retrieval/run.mjs \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
-            --output "$RUNNER_TEMP/retrieval" \
+            --output "$RUNNER_TEMP/sweqa" \
             --corpus "$RUNNER_TEMP/corpus" \
-            --repository "$RETRIEVAL_REPOSITORY" \
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Preserve repository evidence, including failures
+      - name: Build the SWE-QA20 conclusion report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          node benchmarks/zg-retrieval/ci-report.mjs \
+            --zg "$RUNNER_TEMP/sweqa/report.json" \
+            --output "$RUNNER_TEMP/sweqa"
+      - name: Publish SWE-QA20 results for this job
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/sweqa/summary.md" ]; then
+            cat "$RUNNER_TEMP/sweqa/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## SWE-QA20: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve SWE-QA20 conclusion report
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrieval-data-${{ matrix.slug }}
+          name: retrieval-zg-report
           path: |
-            ${{ runner.temp }}/retrieval/
-            !${{ runner.temp }}/retrieval/consumer/**
-            !${{ runner.temp }}/retrieval/**/runtime-home/**
-          if-no-files-found: error
-          overwrite: true
+            ${{ runner.temp }}/sweqa/report.json
+            ${{ runner.temp }}/sweqa/report.md
+            ${{ runner.temp }}/sweqa/summary.json
+            ${{ runner.temp }}/sweqa/summary.md
+            ${{ runner.temp }}/sweqa/scores.jsonl
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve SWE-QA20 public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-zg-evidence
+          path: |
+            ${{ runner.temp }}/sweqa/
+            !${{ runner.temp }}/sweqa/consumer/**
+            !${{ runner.temp }}/sweqa/**/runtime-home/**
+          if-no-files-found: warn
           retention-days: 14
 
-  zg-report:
-    name: Validate complete ZG results
-    if: ${{ always() && needs.authorize.result == 'success' }}
-    needs: [authorize, retrieval]
+  beir:
+    name: BEIR / four datasets (20 queries)
+    env:
+      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
+    needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v6
         with:
@@ -220,36 +244,228 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
-      - name: Prepare aggregate directory
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        run: mkdir -p "$RUNNER_TEMP/retrieval-combined"
-      - name: Download repository evidence without merging shard roots
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
-          pattern: retrieval-data-*
-          path: ${{ runner.temp }}/retrieval-combined
-          merge-multiple: false
-      - name: Require all 20 questions in all three modes with valid evidence
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: benchmarks/zg-retrieval/expansion/requirements-beir.txt
+      - name: Install the pinned BEIR Parquet reader
+        run: python -m pip install --requirement benchmarks/zg-retrieval/expansion/requirements-beir.txt
+      - name: Cache the multilingual model
+        if: inputs.embedding == 'local'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/beir-model-cache
+          key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run BEIR retrieval suite
+        env:
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          node benchmarks/zg-retrieval/expansion/run.mjs \
+            --suite beir \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --output "$RUNNER_TEMP/beir" \
+            --model-cache "$RUNNER_TEMP/beir-model-cache" \
+            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Publish BEIR results for this job
         if: ${{ always() && steps.access.outcome == 'success' }}
-        run: node benchmarks/zg-retrieval/report.mjs "$RUNNER_TEMP/retrieval-combined"
-      - name: Preserve combined summary
+        run: |
+          if [ -f "$RUNNER_TEMP/beir/report.md" ]; then
+            cat "$RUNNER_TEMP/beir/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## BEIR: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve BEIR report
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrieval-zg-report
+          name: retrieval-beir-report
           path: |
-            ${{ runner.temp }}/retrieval-combined/report.md
-            ${{ runner.temp }}/retrieval-combined/report.json
-            ${{ runner.temp }}/retrieval-combined/scores.jsonl
-          if-no-files-found: error
-          overwrite: true
+            ${{ runner.temp }}/beir/report.json
+            ${{ runner.temp }}/beir/report.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve BEIR public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-beir-evidence
+          path: |
+            ${{ runner.temp }}/beir/evidence/
+            !${{ runner.temp }}/beir/evidence/**/runtime-home/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  duretrieval:
+    name: DuRetrieval / Chinese web search (10 queries)
+    env:
+      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
+    needs: [authorize, package-candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.harness-commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: benchmarks/zg-retrieval/expansion/requirements-duretrieval.txt
+      - name: Install the pinned Parquet reader
+        run: python -m pip install --requirement benchmarks/zg-retrieval/expansion/requirements-duretrieval.txt
+      - name: Cache the multilingual model
+        if: inputs.embedding == 'local'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/duretrieval-model-cache
+          key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run DuRetrieval pilot
+        env:
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          node benchmarks/zg-retrieval/expansion/run.mjs \
+            --suite duretrieval \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --output "$RUNNER_TEMP/duretrieval" \
+            --model-cache "$RUNNER_TEMP/duretrieval-model-cache" \
+            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Publish DuRetrieval results for this job
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/duretrieval/report.md" ]; then
+            cat "$RUNNER_TEMP/duretrieval/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## DuRetrieval: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve DuRetrieval report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-duretrieval-report
+          path: |
+            ${{ runner.temp }}/duretrieval/report.json
+            ${{ runner.temp }}/duretrieval/report.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve DuRetrieval public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-duretrieval-evidence
+          path: |
+            ${{ runner.temp }}/duretrieval/evidence/
+            !${{ runner.temp }}/duretrieval/evidence/**/runtime-home/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  quarry:
+    name: Quarry / eight languages (20 queries)
+    env:
+      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
+    needs: [authorize, package-candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.harness-commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/retrieval-authorize
+        id: access
+      - uses: actions/download-artifact@v8
+        with:
+          name: package-retrieval-candidate
+          path: ${{ runner.temp }}/package
+      - name: Verify the candidate package identity
+        run: |
+          node benchmarks/zg-retrieval/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/package" \
+            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Cache the code model
+        if: inputs.embedding == 'local'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/quarry-model-cache
+          key: retrieval-quarry-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run Quarry retrieval suite
+        env:
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          node benchmarks/zg-retrieval/expansion/run.mjs \
+            --suite quarry \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --output "$RUNNER_TEMP/quarry" \
+            --model-cache "$RUNNER_TEMP/quarry-model-cache" \
+            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Publish Quarry results for this job
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        run: |
+          if [ -f "$RUNNER_TEMP/quarry/report.md" ]; then
+            cat "$RUNNER_TEMP/quarry/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## Quarry: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve Quarry report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-quarry-report
+          path: |
+            ${{ runner.temp }}/quarry/report.json
+            ${{ runner.temp }}/quarry/report.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve Quarry public evidence
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-quarry-evidence
+          path: |
+            ${{ runner.temp }}/quarry/evidence/
+            !${{ runner.temp }}/quarry/evidence/**/runtime-home/**
+          if-no-files-found: warn
           retention-days: 14
 
   results:
     name: Retrieval results
+    env:
+      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
     if: ${{ always() && needs.authorize.result == 'success' }}
     needs:
-      [authorize, quality-contract, package-candidate, retrieval, zg-report]
+      [
+        authorize,
+        quality-contract,
+        package-candidate,
+        sweqa,
+        beir,
+        duretrieval,
+        quarry,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -266,7 +482,28 @@ jobs:
         with:
           name: retrieval-zg-report
           path: ${{ runner.temp }}/results-input/zg
-      - name: Build the single results table
+      - name: Download BEIR report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-beir-report
+          path: ${{ runner.temp }}/results-input/beir
+      - name: Download DuRetrieval report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-duretrieval-report
+          path: ${{ runner.temp }}/results-input/duretrieval
+      - name: Download Quarry report
+        if: ${{ always() && steps.access.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: retrieval-quarry-report
+          path: ${{ runner.temp }}/results-input/quarry
+      - name: Build the unified results page
         if: ${{ always() && steps.access.outcome == 'success' }}
         env:
           RETRIEVAL_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -274,10 +511,13 @@ jobs:
           RETRIEVAL_CANDIDATE_REF: ${{ inputs.candidate_ref }}
           RETRIEVAL_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
         run: |
-          node benchmarks/zg-retrieval/ci-report.mjs \
+          node benchmarks/zg-retrieval/expansion/combined.mjs \
             --zg "$RUNNER_TEMP/results-input/zg/report.json" \
+            --beir "$RUNNER_TEMP/results-input/beir/report.json" \
+            --duretrieval "$RUNNER_TEMP/results-input/duretrieval/report.json" \
+            --quarry "$RUNNER_TEMP/results-input/quarry/report.json" \
             --output "$RUNNER_TEMP/retrieval-results"
-      - name: Publish the results table
+      - name: Publish the unified results page
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
           if [ -f "$RUNNER_TEMP/retrieval-results/summary.md" ]; then

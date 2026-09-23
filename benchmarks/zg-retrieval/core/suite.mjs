@@ -3,13 +3,16 @@ import { readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson, sha256, objectHash, inside, fileHash } from "./io.mjs";
+import { embeddingModel } from "./embedding.mjs";
 
 export const suiteDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 
-export async function loadSuite() {
+export async function loadSuite({
+  embedding = process.env.RETRIEVAL_EMBEDDING ?? "local",
+} = {}) {
   const lock = await readJson(join(suiteDirectory, "data/source.lock.json"));
   const protocol = await readJson(
     join(suiteDirectory, "configs/protocol.json"),
@@ -21,6 +24,7 @@ export async function loadSuite() {
   assert.equal(protocol.quality_repetition, 5);
   assert.equal(protocol.limit, 10);
   assert.equal(protocol.call_order, "mode-task-repetition");
+  protocol.model = embeddingModel(protocol.model, embedding);
   assert.equal(
     lock.tasks.length,
     20,

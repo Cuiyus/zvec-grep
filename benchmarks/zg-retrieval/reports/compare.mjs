@@ -36,6 +36,7 @@ function scoreView(row) {
     ),
     file_retrieval: file,
     ndcg: file === null ? null : { targets, ...scoreNdcg(row.items, targets) },
+    quality_mean: row.quality_mean,
   };
 }
 
@@ -133,8 +134,14 @@ function compareValidatedReports(baseline, candidate, before, after) {
         newRow.ndcg.targets,
         `${task_id}/${mode}: incompatible file-target projection`,
       );
-      const oldFile = fileRetrievalForRow(oldRow);
-      const newFile = fileRetrievalForRow(newRow);
+      const oldFile =
+        fileRetrievalForRow(oldRow) === null
+          ? null
+          : (oldRow.quality_mean?.file ?? null);
+      const newFile =
+        fileRetrievalForRow(newRow) === null
+          ? null
+          : (newRow.quality_mean?.file ?? null);
       assert.equal(
         oldFile === null,
         newFile === null,
@@ -157,7 +164,9 @@ function compareValidatedReports(baseline, candidate, before, after) {
         ndcg_delta: Object.fromEntries(
           ["ndcg_at_10"].map((metric) => [
             metric,
-            oldFile === null ? null : newRow.ndcg[metric] - oldRow.ndcg[metric],
+            oldFile === null
+              ? null
+              : newRow.quality_mean[metric] - oldRow.quality_mean[metric],
           ]),
         ),
         rank_change:
@@ -173,10 +182,11 @@ function compareValidatedReports(baseline, candidate, before, after) {
       });
     }
   return {
-    schema_version: 4,
+    schema_version: 5,
     file_retrieval_contract: FILE_RETRIEVAL_CONTRACT,
     preview: "mcp-default",
     quality_repetition: 5,
+    quality_aggregation: "mean_of_five",
     suite: structuredClone(baseline.suite),
     scope: baseline.scope,
     expected_task_ids: [...baseline.expected_task_ids],
@@ -184,7 +194,7 @@ function compareValidatedReports(baseline, candidate, before, after) {
       "Task IDs and modes match as sets; tables follow baseline task order and hybrid/fts/vector mode order.",
     quality_gate: "report-only; no quality threshold or causal attribution",
     aggregation:
-      "Five metrics recomputed from matched repetition-5 public items on the SWE-QA accepted-file projection: file Hit@1/5/10 and MRR@10 use query means; nDCG@10 uses the repository macro.",
+      "Five metrics recomputed from every repetition's public items on the SWE-QA accepted-file projection: first average five calls per query/mode; file Hit@1/5/10 and MRR@10 then use query means; nDCG@10 uses the repository macro.",
     baseline: reportIdentity(baseline),
     candidate: reportIdentity(candidate),
     warnings: [baseline, candidate].flatMap((report, i) =>
@@ -234,22 +244,30 @@ const signed = (value) =>
   typeof value === "number"
     ? `${value > 0 ? "+" : ""}${value.toFixed(4)}`
     : "N/A";
+const hitCalls = (view) =>
+  view.quality_mean ? `${view.quality_mean.hit_at_10_calls}/5` : "N/A";
+const stable = (view) =>
+  view.quality_mean
+    ? view.quality_mean.ranking_repeatable
+      ? "Yes"
+      : "No"
+    : "N/A";
 
 export function markdownComparison(result) {
   const lines = [
     "# zg Retrieval-only version comparison",
     "",
-    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. All modes use the Rust public MCP default presentation. Quality uses the fifth call. Delta is candidate minus baseline.`,
+    `Scope: **${result.scope} / ${result.expected_task_ids.length} original questions**. All modes use the Rust public MCP default presentation. Quality averages five calls per query/mode. Delta is candidate minus baseline.`,
     "",
     "Source, Gold, frozen accepted-file targets and protocol identities match; task/mode coverage and scoring eligibility are validated. All five metrics are recomputed from saved public result items. This is a report-only comparison with no quality threshold or causal attribution.",
     "",
-    "| Arm / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Latency P50 (ms) |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Arm / version | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Output mean (KiB) | Avg RT (ms) | P50 RT (ms) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...ZG_MODES.flatMap((mode) =>
       ["baseline", "candidate"].map((side) => {
         const entry = result.modes[mode],
           file = entry.file_retrieval[side];
-        return `| zg-${mode} / ${side} | ${file.hit_at_1_count}/${file.scored_tasks} | ${file.hit_at_5_count}/${file.scored_tasks} | ${file.hit_at_10_count}/${file.scored_tasks} | ${number(file.mrr_at_10)} | ${number(entry.ndcg[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
+        return `| zg-${mode} / ${side} | ${number(file.hit_at_1)} | ${number(file.hit_at_5)} | ${number(file.hit_at_10)} | ${number(file.mrr_at_10)} | ${number(entry.ndcg[side].repository_macro.ndcg_at_10)} | ${number(entry.measurements[side].output_bytes_mean == null ? null : entry.measurements[side].output_bytes_mean / 1024)} | ${number(entry.measurements[side].latency_ms_mean)} | ${number(entry.measurements[side].latency_ms_p50)} |`;
       }),
     ),
     "",
@@ -268,11 +286,11 @@ export function markdownComparison(result) {
     "<details>",
     "<summary>Per-question changes</summary>",
     "",
-    "| Question / arm | File first rank (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Question / arm | Hit@10 calls (baseline → candidate) | Stable Top 10 (baseline → candidate) | ΔFile Hit@1 | ΔFile Hit@5 | ΔFile Hit@10 | ΔFile RR@10 | ΔnDCG@10 | Execution |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...result.tasks.map(
       (row) =>
-        `| ${cell(row.task_id)} / zg-${cell(row.mode)} | ${cell(row.baseline.file_retrieval?.first_hit_rank)} → ${cell(row.candidate.file_retrieval?.first_hit_rank)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.ndcg_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
+        `| ${cell(row.task_id)} / zg-${cell(row.mode)} | ${hitCalls(row.baseline)} → ${hitCalls(row.candidate)} | ${stable(row.baseline)} → ${stable(row.candidate)} | ${signed(row.file_retrieval_delta.hit_at_1)} | ${signed(row.file_retrieval_delta.hit_at_5)} | ${signed(row.file_retrieval_delta.hit_at_10)} | ${signed(row.file_retrieval_delta.rr_at_10)} | ${signed(row.ndcg_delta.ndcg_at_10)} | ${cell(row.execution_transition)} |`,
     ),
     "",
     "</details>",
@@ -284,7 +302,7 @@ export function markdownComparison(result) {
       }),
     ),
     "",
-    "Output means use public UTF-8 bytes / 1024; latency P50 includes session load and fixed-order cache effects. Measurements are recomputed from saved per-call metadata, whose raw-response identities are audited by aggregation; this comparison does not reread raw captures. Cross-environment timings do not establish a speed winner.",
+    "Output means use public UTF-8 bytes / 1024; Avg RT and P50 RT include session load and fixed-order cache effects. Measurements are recomputed from saved per-call metadata, whose raw-response identities are audited by aggregation; this comparison does not reread raw captures. Cross-environment timings do not establish a speed winner.",
     "",
     "Product-error zeros remain in the denominator. Invalid experiments are rejected; unreviewed Gold is N/A. JSON retains input identities, target ranks and per-question status transitions.",
   );
