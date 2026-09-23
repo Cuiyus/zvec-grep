@@ -1,6 +1,7 @@
 use std::{collections::HashMap, env};
 
-use super::{catalog::get_embedding_model_catalog_entry, spi::ModelError};
+use super::get_embedding_model_catalog_entry;
+use crate::models::spi::ModelError;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolveEmbeddingReferenceOptions {
@@ -50,7 +51,7 @@ pub fn resolve_embedding_reference(
         return Err(ModelError::new(
             crate::EngineError::INVALID_ARGUMENT,
             format!(
-                "Invalid ZVEC_GREP_EMBEDDING: unsupported model {reference}. Run `zg help models` to list supported models."
+                "Invalid ZVEC_GREP_EMBEDDING: unsupported model {reference}. Run `zg --help models` to list supported models."
             ),
             Some("source=ZVEC_GREP_EMBEDDING".to_owned()),
         ));
@@ -101,6 +102,6 @@ mod tests {
         })
         .expect_err("unsupported environment model must fail");
         assert_eq!(error.code(), crate::EngineError::INVALID_ARGUMENT);
-        assert!(error.to_string().contains("zg help models"));
+        assert!(error.to_string().contains("zg --help models"));
     }
 }

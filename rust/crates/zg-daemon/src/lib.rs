@@ -81,7 +81,8 @@ impl FromStr for ListenAddress {
 pub struct ServerConfig {
     pub listen: ListenAddress,
     pub home: PathBuf,
-    pub mcp_toolset: McpToolset,
+    /// None reuses an existing daemon profile and defaults new daemons to agent.
+    pub mcp_toolset: Option<McpToolset>,
     pub token_file: Option<PathBuf>,
 }
 
@@ -91,7 +92,7 @@ impl ServerConfig {
         Self {
             listen,
             home,
-            mcp_toolset: McpToolset::Agent,
+            mcp_toolset: None,
             token_file: None,
         }
     }
@@ -108,7 +109,7 @@ pub enum DaemonError {
     #[error("zvec-grep server is already running with PID {pid}")]
     AlreadyRunning { pid: u32 },
     #[error(
-        "zvec-grep server is already running with MCP toolset {active:?}; run `zg server off` before changing toolsets"
+        "zvec-grep server is already running with MCP toolset {active:?}; run `zg --server off` before changing toolsets"
     )]
     ToolsetMismatch { active: String },
     #[error("server address {0} is already in use")]

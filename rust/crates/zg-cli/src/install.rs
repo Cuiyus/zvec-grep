@@ -24,6 +24,7 @@ const GUIDANCE_END: &str = "<!-- ZVEC_GREP_END -->";
 const CLAUDE_PERMISSION: &str = "mcp__zvec_grep__*";
 const SEARCH_PERMISSION: &str = "mcp__zvec_grep__zvec_grep_search";
 const RG_PERMISSION: &str = "mcp__zvec_grep__zvec_grep_rg";
+// Persisted ownership markers stay stable across CLI grammar migrations.
 const QODER_DESCRIPTION: &str = "Managed by zg install";
 const QODER_OWNERSHIP_PREFIX: &str = "Managed by zg install; managed permissions=";
 
@@ -130,9 +131,16 @@ pub fn execute_install(args: &InstallArgs) -> Result<InstallOutcome, InstallErro
 
     println!("\nInstalling integrations\n");
     for agent in &agents {
-        install_agent(*agent, &options)?;
+        let result = install_agent(*agent, &options)?;
         println!("  ✓ {}", agent.label());
-        println!("    MCP       configured\n");
+        println!("    MCP       configured");
+        if let Some(path) = result.config_path {
+            println!("    Config    {}", path.display());
+        }
+        if let Some(note) = result.config_note {
+            println!("    Note      {note}");
+        }
+        println!();
     }
 
     Ok(InstallOutcome {
@@ -514,15 +522,22 @@ fn qoder_ide_candidates() -> Vec<PathBuf> {
     ]
 }
 
-fn install_agent(agent: Agent, options: &AgentOptions) -> Result<(), InstallError> {
+#[derive(Default)]
+struct AgentInstallResult {
+    config_path: Option<PathBuf>,
+    config_note: Option<&'static str>,
+}
+
+fn install_agent(agent: Agent, options: &AgentOptions) -> Result<AgentInstallResult, InstallError> {
     match agent {
         Agent::Claude => install_claude(options),
         Agent::Codex => install_codex(options),
-        Agent::OpenCode => install_opencode(options),
+        Agent::OpenCode => return install_opencode(options),
         Agent::Cursor => install_cursor(options),
         Agent::Qwen => install_qwen(options),
         Agent::Qoder => install_qoder(options),
-    }
+    }?;
+    Ok(AgentInstallResult::default())
 }
 
 fn uninstall_agent(agent: Agent) -> Result<(), InstallError> {
@@ -643,9 +658,42 @@ fn uninstall_claude() -> Result<(), InstallError> {
     remove_marked_file(&directory.join("CLAUDE.md"), GUIDANCE_START, GUIDANCE_END)
 }
 
-fn install_opencode(options: &AgentOptions) -> Result<(), InstallError> {
-    let path = env_path("OPENCODE_CONFIG")
-        .unwrap_or_else(|| home_dir().join(".config/opencode/opencode.json"));
+struct OpenCodeConfig {
+    path: PathBuf,
+    cleanup_paths: Vec<PathBuf>,
+    note: Option<&'static str>,
+}
+
+fn resolve_opencode_config() -> OpenCodeConfig {
+    let trimmed_path = |name| non_empty_env(name).map(|value| absolute_path(value.trim()));
+    if let Some(path) = trimmed_path("OPENCODE_CONFIG") {
+        return OpenCodeConfig {
+            cleanup_paths: vec![path.clone()],
+            path,
+            note: None,
+        };
+    }
+    let directory = trimmed_path("XDG_CONFIG_HOME")
+        .unwrap_or_else(|| absolute_path(home_dir().join(".config")))
+        .join("opencode");
+    let jsonc = directory.join("opencode.jsonc");
+    let json = directory.join("opencode.json");
+    let has_jsonc = jsonc.exists();
+    OpenCodeConfig {
+        path: if has_jsonc {
+            jsonc.clone()
+        } else {
+            json.clone()
+        },
+        note: (has_jsonc && json.exists())
+            .then_some("both opencode.jsonc and opencode.json exist; selected opencode.jsonc"),
+        cleanup_paths: vec![jsonc, json],
+    }
+}
+
+fn install_opencode(options: &AgentOptions) -> Result<AgentInstallResult, InstallError> {
+    let config = resolve_opencode_config();
+    let path = config.path;
     let server = match options.transport {
         McpInstallTransport::Stdio => json!({
             "type": "local", "command": stdio_command(options.toolset), "enabled": true,
@@ -662,7 +710,15 @@ fn install_opencode(options: &AgentOptions) -> Result<(), InstallError> {
             server
         }
     };
-    install_strict_json_server(&path, "mcp", server, options.force, "OpenCode")?;
+    update_jsonc_container(
+        &path,
+        &server,
+        options.force,
+        "OpenCode",
+        is_managed_json_server,
+        "mcp",
+        true,
+    )?;
     write_marked_file(
         &path
             .parent()
@@ -678,13 +734,26 @@ fn install_opencode(options: &AgentOptions) -> Result<(), InstallError> {
         true,
         None,
         None,
-    )
+    )?;
+    Ok(AgentInstallResult {
+        config_path: Some(path),
+        config_note: config.note,
+    })
 }
 
 fn uninstall_opencode() -> Result<(), InstallError> {
-    let path = env_path("OPENCODE_CONFIG")
-        .unwrap_or_else(|| home_dir().join(".config/opencode/opencode.json"));
-    remove_strict_json_server(&path, "mcp")?;
+    let config = resolve_opencode_config();
+    let path = config.path;
+    // Clean legacy managed entries from both global files; explicit overrides stay scoped.
+    for cleanup_path in config.cleanup_paths {
+        remove_jsonc_container(
+            &cleanup_path,
+            "OpenCode",
+            is_managed_json_server,
+            "mcp",
+            true,
+        )?;
+    }
     remove_marked_file(
         &path
             .parent()
@@ -829,7 +898,7 @@ fn qoder_ide_server(options: &AgentOptions) -> Result<Value, InstallError> {
 }
 
 fn stdio_args(toolset: Option<McpToolset>) -> Vec<&'static str> {
-    let mut args = vec!["server", "--stdio"];
+    let mut args = vec!["--server", "--stdio"];
     if let Some(toolset) = toolset {
         args.extend([
             "--mcp-toolset",
@@ -887,7 +956,7 @@ fn guidance_block(search: &str, rg: &str, qoder_recovery: bool) -> String {
         format!("`{rg}` when it is listed by the current host; otherwise native Grep or `rg`");
     let recovery = if qoder_recovery {
         format!(
-            "\n\n### Qoder Remote Embedding authorization recovery\n- When `{search}` needs `remote_embedding_authorization` and the current Qoder host returns `code = 51500 message = method not found: No request handler configured` without showing an authorization form, returns `The connected MCP host does not support the Remote Embedding authorization interaction required by elicitation/create. The agent should use the current host's built-in user-question tool; for Qoder, the exact name is ask_user_question in Qoder IDE or AskUserQuestion in Qoder CLI/SDK. Ask the user to choose: allow Remote Embedding for this workspace, use local FTS only, or cancel. No user decision was received, and no remote data was sent.`, or reports that authorization was declined or cancelled without showing the user an authorization form, treat it as a Qoder client interaction limitation: the host lacks the server-to-client `elicitation/create` request handler. The outer MCP `tools/call` has already reached the registered MCP server and tool, so do not diagnose this error as a disconnected or missing MCP server or as a missing tool. Apply this recovery only to the Remote Embedding authorization path, not to arbitrary 51500 failures. Do not immediately fall back to broad file reads, do not treat it as a missing API credential, and do not grant access silently. If the user actually declined a displayed authorization form, respect that decision and do not ask again.\n- Use the current Qoder host's built-in user-question tool (`ask_user_question` in Qoder IDE or `AskUserQuestion` in Qoder CLI/SDK) to offer exactly these choices: allow Remote Embedding for this workspace, use local FTS only, or cancel. Explain that workspace approval may send query text and selected workspace content to the configured provider and endpoint and may incur provider charges.\n- Only after the user explicitly chooses workspace approval, run `zg auth grant \"<absolute-root>\" --capability embedding --scope workspace`, substituting the same absolute root used by the failed search, and then retry the original search call once. Do not use `--allow-remote`; it applies only to one CLI command and does not authorize the MCP retry.\n- If the user chooses local FTS, retry `{search}` once with the original search text in `fts`, omit `query`, `queries`, and `vector`, set `autoUpdate` to `false` and `freshness` to `eventual`, and preserve `root`, filters, and limits. This route is lexical-only, does not refresh the remote-embedding index, and sends no query text or workspace content to a remote Embedding provider.\n- If the user cancels, the grant command fails, or interactive user input is unavailable, stop and report that no remote data was sent. Provider credentials and Remote Embedding data authorization are separate; never request or modify an API key merely to resolve this interaction error."
+            "\n\n### Qoder Remote Embedding authorization recovery\n- When `{search}` needs `remote_embedding_authorization` and the current Qoder host returns `code = 51500 message = method not found: No request handler configured` without showing an authorization form, returns `The connected MCP host does not support the Remote Embedding authorization interaction required by elicitation/create. The agent should use the current host's built-in user-question tool; for Qoder, the exact name is ask_user_question in Qoder IDE or AskUserQuestion in Qoder CLI/SDK. Ask the user to choose: allow Remote Embedding for this workspace, use local FTS only, or cancel. No user decision was received, and no remote data was sent.`, or reports that authorization was declined or cancelled without showing the user an authorization form, treat it as a Qoder client interaction limitation: the host lacks the server-to-client `elicitation/create` request handler. The outer MCP `tools/call` has already reached the registered MCP server and tool, so do not diagnose this error as a disconnected or missing MCP server or as a missing tool. Apply this recovery only to the Remote Embedding authorization path, not to arbitrary 51500 failures. Do not immediately fall back to broad file reads, do not treat it as a missing API credential, and do not grant access silently. If the user actually declined a displayed authorization form, respect that decision and do not ask again.\n- Use the current Qoder host's built-in user-question tool (`ask_user_question` in Qoder IDE or `AskUserQuestion` in Qoder CLI/SDK) to offer exactly these choices: allow Remote Embedding for this workspace, use local FTS only, or cancel. Explain that workspace approval may send query text and selected workspace content to the configured provider and endpoint and may incur provider charges.\n- Only after the user explicitly chooses workspace approval, run `zg --auth grant \"<absolute-root>\" --capability embedding --scope workspace`, substituting the same absolute root used by the failed search, and then retry the original search call once. Do not use `--allow-remote`; it applies only to one CLI command and does not authorize the MCP retry.\n- If the user chooses local FTS, retry `{search}` once with the original search text in `fts`, omit `query`, `queries`, and `vector`, set `autoUpdate` to `false` and `freshness` to `eventual`, and preserve `root`, filters, and limits. This route is lexical-only, does not refresh the remote-embedding index, and sends no query text or workspace content to a remote Embedding provider.\n- If the user cancels, the grant command fails, or interactive user input is unavailable, stop and report that no remote data was sent. Provider credentials and Remote Embedding data authorization are separate; never request or modify an API key merely to resolve this interaction error."
         )
     } else {
         String::new()
@@ -1075,7 +1144,10 @@ fn is_qoder_ide_stdio_args(value: &Value) -> bool {
     };
     (args.len() == 3 || args.len() == 5)
         && args.first().and_then(Value::as_str).is_some()
-        && args.get(1).and_then(Value::as_str) == Some("server")
+        && matches!(
+            args.get(1).and_then(Value::as_str),
+            Some("--server" | "server")
+        )
         && args.get(2).and_then(Value::as_str) == Some("--stdio")
         && (args.len() == 3
             || (args.get(3).and_then(Value::as_str) == Some("--mcp-toolset")
@@ -1087,7 +1159,10 @@ fn is_stdio_args(value: &Value) -> bool {
         return false;
     };
     (args.len() == 2 || args.len() == 4)
-        && args.first().and_then(Value::as_str) == Some("server")
+        && matches!(
+            args.first().and_then(Value::as_str),
+            Some("--server" | "server")
+        )
         && args.get(1).and_then(Value::as_str) == Some("--stdio")
         && (args.len() == 2
             || (args.get(2).and_then(Value::as_str) == Some("--mcp-toolset")
@@ -1521,24 +1596,33 @@ fn update_jsonc_server(
     label: &str,
     managed: fn(&Value) -> bool,
 ) -> Result<(), InstallError> {
+    update_jsonc_container(path, server, force, label, managed, "mcpServers", false)
+}
+
+fn update_jsonc_container(
+    path: &Path,
+    server: &Value,
+    force: bool,
+    label: &str,
+    managed: fn(&Value) -> bool,
+    container: &str,
+    allow_trailing_comma: bool,
+) -> Result<(), InstallError> {
     let existing = read_if_exists(path)?;
     let source = if existing.trim().is_empty() {
         "{}\n".to_owned()
     } else {
         existing
     };
-    let root = parse_jsonc_object(path, &source, label)?;
-    if root
-        .get("mcpServers")
-        .is_some_and(|value| !value.is_object())
-    {
+    let root = parse_jsonc_object_options(path, &source, label, allow_trailing_comma)?;
+    if root.get(container).is_some_and(|value| !value.is_object()) {
         return Err(InstallError::Message(format!(
-            "Invalid mcpServers configuration in {}.",
+            "Invalid {container} configuration in {}.",
             path.display()
         )));
     }
     let current = root
-        .get("mcpServers")
+        .get(container)
         .and_then(Value::as_object)
         .and_then(|servers| servers.get("zvec_grep"));
     if current.is_some_and(|value| !managed(value)) && !force {
@@ -1550,7 +1634,7 @@ fn update_jsonc_server(
     if current == Some(server) {
         return Ok(());
     }
-    let next = jsonc_set_path(&source, &["mcpServers", "zvec_grep"], server)?;
+    let next = jsonc_set_path(&source, &[container, "zvec_grep"], server)?;
     atomic_write(path, &ensure_newline(next))
 }
 
@@ -1559,21 +1643,37 @@ fn remove_jsonc_server(
     label: &str,
     managed: fn(&Value) -> bool,
 ) -> Result<(), InstallError> {
+    remove_jsonc_container(path, label, managed, "mcpServers", false)
+}
+
+fn remove_jsonc_container(
+    path: &Path,
+    label: &str,
+    managed: fn(&Value) -> bool,
+    container: &str,
+    allow_trailing_comma: bool,
+) -> Result<(), InstallError> {
     let source = read_if_exists(path)?;
     if source.trim().is_empty() {
         return Ok(());
     }
-    let root = parse_jsonc_object(path, &source, label)?;
-    let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
+    let root = parse_jsonc_object_options(path, &source, label, allow_trailing_comma)?;
+    if root.get(container).is_some_and(|value| !value.is_object()) {
+        return Err(InstallError::Message(format!(
+            "Invalid {container} configuration in {}.",
+            path.display()
+        )));
+    }
+    let Some(servers) = root.get(container).and_then(Value::as_object) else {
         return Ok(());
     };
     if !servers.get("zvec_grep").is_some_and(managed) {
         return Ok(());
     }
     let path_to_remove: &[&str] = if servers.len() == 1 && !has_jsonc_comments(&source) {
-        &["mcpServers"]
+        &[container]
     } else {
-        &["mcpServers", "zvec_grep"]
+        &[container, "zvec_grep"]
     };
     let next = jsonc_remove_path(&source, path_to_remove)?;
     if next != source {
@@ -1625,7 +1725,24 @@ fn parse_jsonc_object(
     source: &str,
     label: &str,
 ) -> Result<Map<String, Value>, InstallError> {
-    let stripped = strip_jsonc_comments(source)?;
+    parse_jsonc_object_options(path, source, label, false)
+}
+
+fn parse_jsonc_object_options(
+    path: &Path,
+    source: &str,
+    label: &str,
+    allow_trailing_comma: bool,
+) -> Result<Map<String, Value>, InstallError> {
+    let mut stripped = strip_jsonc_comments(source)?;
+    if allow_trailing_comma {
+        stripped = crate::jsonc::without_trailing_commas(&stripped).map_err(|_| {
+            InstallError::Message(format!(
+                "Invalid {label} configuration in {}.",
+                path.display()
+            ))
+        })?;
+    }
     let value: Value = serde_json::from_str(&stripped).map_err(|_| {
         InstallError::Message(format!(
             "Invalid {label} configuration in {}.",
@@ -1928,6 +2045,15 @@ fn qoder_description(owned: &BTreeSet<String>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trailing_commas_are_only_enabled_for_opencode() {
+        let path = std::path::Path::new("settings.json");
+        let source = "{\"mcpServers\": {},}";
+        assert!(super::parse_jsonc_object(path, source, "Qwen Code").is_err());
+        assert!(super::parse_jsonc_object(path, source, "Qoder").is_err());
+        assert!(super::parse_jsonc_object_options(path, source, "OpenCode", true).is_ok());
+    }
+
     use super::*;
 
     #[test]
@@ -1985,6 +2111,28 @@ mod tests {
 
     #[test]
     fn managed_stdio_shapes_are_recognized() {
+        assert_eq!(stdio_args(None), ["--server", "--stdio"]);
+        assert_eq!(
+            stdio_args(Some(McpToolset::Full)),
+            ["--server", "--stdio", "--mcp-toolset", "full"]
+        );
+        for toolset in [None, Some(McpToolset::Agent), Some(McpToolset::Full)] {
+            assert!(is_managed_json_server(
+                &json!({"command":"zg","args":stdio_args(toolset)})
+            ));
+            assert!(is_managed_json_server(
+                &json!({"type":"local","command":stdio_command(toolset)})
+            ));
+            assert!(is_managed_qwen(
+                &json!({"command":"zg","args":stdio_args(toolset)})
+            ));
+            assert!(is_managed_qoder_ide(&json!({
+                "command": "/path/to/zg",
+                "args": stdio_args(toolset),
+                "description": QODER_DESCRIPTION
+            })));
+        }
+        // Previously generated configurations must still be upgradeable/removable.
         assert!(is_managed_json_server(
             &json!({"command":"zg","args":["server","--stdio"]})
         ));

@@ -29,7 +29,7 @@ struct ServerGuard {
 impl ServerGuard {
     fn stop(&mut self) -> Result<Output, std::io::Error> {
         let mut command = Command::new(&self.binary);
-        command.args(["server", "off", "--home"]).arg(&self.home);
+        command.args(["--server", "off", "--home"]).arg(&self.home);
         if let Some(token_file) = &self.token_file {
             command.arg("--token-file").arg(token_file);
         }
@@ -103,7 +103,7 @@ fn start_server(
     start_on_available_port(binary, home, token_file, |listen| {
         let mut command = Command::new(binary);
         command
-            .args(["server", "on", "--home"])
+            .args(["--server", "on", "--home"])
             .arg(home.path())
             .args(["--listen", listen, "--mcp-toolset", toolset]);
         if let Some(token_file) = token_file {
@@ -186,20 +186,32 @@ struct StdioBridge {
 
 impl StdioBridge {
     fn spawn(binary: &Path, home: &Path, listen: &str) -> Result<Self, Box<dyn Error>> {
+        Self::spawn_with_toolset(binary, home, listen, Some("full"))
+    }
+
+    fn spawn_with_toolset(
+        binary: &Path,
+        home: &Path,
+        listen: &str,
+        toolset: Option<&str>,
+    ) -> Result<Self, Box<dyn Error>> {
         let stderr = NamedTempFile::new()?;
         let daemon_log_start =
             std::fs::metadata(home.join("daemon/server.log")).map_or(0, |metadata| metadata.len());
-        let mut child = Command::new(binary)
-            .args([
-                "server",
-                "--stdio",
-                "--home",
-                path_text(home)?,
-                "--listen",
-                listen,
-                "--mcp-toolset",
-                "full",
-            ])
+        let mut command = Command::new(binary);
+        command.env_remove("ZVEC_GREP_MCP_TOOLSET");
+        command.args([
+            "--server",
+            "--stdio",
+            "--home",
+            path_text(home)?,
+            "--listen",
+            listen,
+        ]);
+        if let Some(toolset) = toolset {
+            command.args(["--mcp-toolset", toolset]);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr.reopen()?)
@@ -390,7 +402,7 @@ fn server_start_retries_a_bind_race_without_stopping_the_port_owner() -> Result<
         }
         server_start_output(
             Command::new(&binary)
-                .args(["server", "on", "--home"])
+                .args(["--server", "on", "--home"])
                 .arg(home.path())
                 .args(["--listen", listen, "--mcp-toolset", "full"]),
         )
@@ -489,7 +501,7 @@ fn server_on_exposes_only_agent_search_and_off_stops_it() -> Result<(), Box<dyn 
     // CLI administration uses the typed daemon protocol rather than the
     // public MCP toolset, so status remains available with the agent profile.
     let cli_status = Command::new(&guard.binary)
-        .args(["status", "--mode", "server", "--home"])
+        .args(["--status", "--mode", "server", "--home"])
         .arg(&guard.home)
         .arg(home.path())
         .output()?;
@@ -520,7 +532,7 @@ fn full_toolset_exposes_lifecycle_tools_and_runs_managed_rg() -> Result<(), Box<
     let consent = Command::new(&binary)
         .env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key)
         .args([
-            "auth",
+            "--auth",
             "grant",
             path_text(workspace.path())?,
             "--capability",
@@ -727,8 +739,21 @@ fn full_toolset_exposes_lifecycle_tools_and_runs_managed_rg() -> Result<(), Box<
             "autoUpdate": false, "freshness": "wait_for_fresh"
         } }
     });
-    let response = post_json(port, Some(&session), &wait_search.to_string())?;
-    assert!(response.contains("fresh.txt"), "{response}");
+    // Resident Wait drains delivered notifications; OS delivery itself is
+    // asynchronous. Controlled runtime tests verify waiting for in-flight jobs.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let response = loop {
+        let response = post_json(port, Some(&session), &wait_search.to_string())?;
+        assert!(response.contains("\"isError\":false"), "{response}");
+        if response.contains("fresh.txt") {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "watcher did not deliver change: {response}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(response.contains("freshness: fresh"), "{response}");
     assert!(!response.contains("background_refresh:"), "{response}");
     assert!(
@@ -754,14 +779,296 @@ fn full_toolset_exposes_lifecycle_tools_and_runs_managed_rg() -> Result<(), Box<
         !response.contains("freshness: served_from_current_index"),
         "{response}"
     );
+    // A native watcher can deliver delayed or duplicate notifications after the
+    // preceding fresh query. Controlled runtime tests cover the quiet idle case.
     assert!(
-        response.contains("background_refresh: scheduled"),
+        response.contains("background_refresh: idle")
+            || response.contains("background_refresh: scheduled"),
         "{response}"
     );
     assert!(response.contains("\"isError\":false"), "{response}");
 
     let output = guard.stop()?;
     assert_command_success(&output);
+    Ok(())
+}
+
+#[test]
+fn new_daemon_defaults_to_agent_without_a_toolset() -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let (mut guard, output) = start_on_available_port(&binary, &home, None, |listen| {
+        server_start_output(
+            Command::new(&binary)
+                .env_remove("ZVEC_GREP_MCP_TOOLSET")
+                .args(["--server", "on", "--home"])
+                .arg(home.path())
+                .args(["--listen", listen]),
+        )
+    })?;
+    assert!(String::from_utf8_lossy(&output.stdout).contains("MCP toolset: agent"));
+    assert_command_success(&guard.stop()?);
+    Ok(())
+}
+
+#[test]
+fn default_connections_reuse_either_toolset_and_explicit_conflicts_fail()
+-> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    for profile in ["agent", "full"] {
+        let home = TempDir::new()?;
+        let (mut guard, _) = start_server(&binary, &home, profile, None, |_| {})?;
+        let status = std::fs::read(home.path().join("daemon/instance.lock"))?;
+        let original: serde_json::Value = serde_json::from_slice(&status)?;
+        for (argument, environment, success) in [
+            (None, None, true),
+            (Some(profile), None, true),
+            (None, Some(profile), true),
+            (
+                Some(profile),
+                Some(if profile == "agent" { "full" } else { "agent" }),
+                true,
+            ),
+            (
+                Some(if profile == "agent" { "full" } else { "agent" }),
+                None,
+                false,
+            ),
+            (
+                None,
+                Some(if profile == "agent" { "full" } else { "agent" }),
+                false,
+            ),
+        ] {
+            let mut command = Command::new(&binary);
+            command
+                .args(["--server", "on", "--home"])
+                .arg(home.path())
+                .env_remove("ZVEC_GREP_MCP_TOOLSET");
+            if let Some(argument) = argument {
+                command.args(["--mcp-toolset", argument]);
+            }
+            if let Some(environment) = environment {
+                command.env("ZVEC_GREP_MCP_TOOLSET", environment);
+            }
+            let output = command.output()?;
+            assert_eq!(
+                output.status.success(),
+                success,
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if success {
+                assert!(
+                    String::from_utf8_lossy(&output.stdout)
+                        .contains(&format!("MCP toolset: {profile}"))
+                );
+            } else {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("before changing toolsets")
+                );
+            }
+        }
+        let mut bridge =
+            StdioBridge::spawn_with_toolset(&binary, home.path(), &guard.listen, None)?;
+        bridge.request(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": { "name": "toolset-reuse-test", "version": "1" } }
+        }))?;
+        bridge.notify(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
+        let tools = bridge.request(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))?;
+        assert_eq!(
+            tools["result"]["tools"]
+                .as_array()
+                .ok_or("tool list")?
+                .len(),
+            if profile == "agent" { 1 } else { 6 }
+        );
+        bridge.close()?;
+        let current: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(home.path().join("daemon/instance.lock"))?)?;
+        assert_eq!(current["instanceToken"], original["instanceToken"]);
+        assert_eq!(current["pid"], original["pid"]);
+        assert_command_success(&guard.stop()?);
+    }
+    Ok(())
+}
+
+#[test]
+fn agent_search_uses_workspace_runtime() -> Result<(), Box<dyn Error>> {
+    search_uses_workspace_runtime("agent")
+}
+
+#[test]
+fn full_search_uses_workspace_runtime() -> Result<(), Box<dyn Error>> {
+    search_uses_workspace_runtime("full")
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Compare both toolsets through the same MCP lifecycle"
+)]
+fn search_uses_workspace_runtime(toolset: &str) -> Result<(), Box<dyn Error>> {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_zg"));
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let missing = TempDir::new()?;
+    let embedding = EmbeddingServer::start()?;
+    let endpoint = format!("http://{}/embeddings", embedding.address);
+    let source = workspace.path().join("source.txt");
+    std::fs::write(&source, "orchard documentation")?;
+    // Build before starting the daemon so only search can activate its runtime.
+    let indexed = Command::new(&binary)
+        .current_dir(workspace.path())
+        .env("ZVEC_GREP_HOME", home.path())
+        .env(
+            "ZVEC_GREP_WORKSPACE_REGISTRY",
+            home.path().join("workspaces.json"),
+        )
+        .env("ZVEC_GREP_API_KEY", "local-test-key")
+        .args([
+            "--index",
+            "--mode",
+            "direct",
+            "--allow-remote",
+            "--embedding",
+            "qwen/text-embedding-v4",
+            "--endpoint",
+            &endpoint,
+        ])
+        .output()?;
+    assert_command_success(&indexed);
+    let signing_key = home.path().join("authorization.key");
+    let consent = Command::new(&binary)
+        .env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key)
+        .args([
+            "--auth",
+            "grant",
+            path_text(workspace.path())?,
+            "--capability",
+            "embedding",
+            "--scope",
+            "workspace",
+            "--embedding",
+            "qwen/text-embedding-v4",
+            "--endpoint",
+            &endpoint,
+        ])
+        .output()?;
+    assert_command_success(&consent);
+    let (mut guard, _) = start_server(&binary, &home, toolset, None, |command| {
+        command
+            .env("ZVEC_GREP_AUTHORIZATION_KEY_FILE", &signing_key)
+            .env("ZVEC_GREP_API_KEY", "local-test-key")
+            .env(
+                "ZVEC_GREP_WORKSPACE_REGISTRY",
+                home.path().join("workspaces.json"),
+            );
+    })?;
+    let port = guard.listen.parse::<SocketAddr>()?.port();
+    let response = post_json(
+        port,
+        None,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": { "name": "runtime-parity-test", "version": "1" } }
+        })
+        .to_string(),
+    )?;
+    let session = response
+        .lines()
+        .find_map(|line| line.strip_prefix("mcp-session-id:").map(str::trim))
+        .ok_or("missing MCP session")?;
+    post_json(
+        port,
+        Some(session),
+        &json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        })
+        .to_string(),
+    )?;
+    let search = |root: &Path, query: &str, freshness: &str, auto_update: bool| {
+        post_json(
+            port,
+            Some(session),
+            &json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "zvec_grep_search", "arguments": {
+                    "root": root, "fts": query, "freshness": freshness,
+                    "autoUpdate": auto_update
+                } }
+            })
+            .to_string(),
+        )
+    };
+    for (freshness, auto_update) in [
+        ("eventual", false),
+        ("eventual", true),
+        ("wait_for_fresh", false),
+    ] {
+        let response = search(missing.path(), "orchard", freshness, auto_update)?;
+        assert!(response.contains("\"isError\":true"), "{response}");
+        assert!(!missing.path().join(".zvec-grep").exists());
+    }
+    std::fs::write(&source, "vineyard documentation")?;
+    let response = search(workspace.path(), "orchard", "eventual", false)?;
+    assert!(response.contains("source.txt"), "{response}");
+    assert!(response.contains("background_refresh: off"), "{response}");
+    let response = search(workspace.path(), "orchard", "eventual", true)?;
+    assert!(response.contains("source.txt"), "{response}");
+    assert!(
+        response.contains("background_refresh: scheduled"),
+        "{response}"
+    );
+    // Poll without requesting more refreshes: the first eventual search must do the work.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = search(workspace.path(), "vineyard", "eventual", false)?;
+        if response.contains("source.txt") && response.contains("\"isError\":false") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "background refresh did not complete: {response}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let before_edit = embedding.requests.load(Ordering::SeqCst);
+    std::fs::write(&source, "harvest documentation")?;
+    // Wait covers delivered watcher events; OS delivery can lag behind the write.
+    embedding.wait_for_request_after(before_edit);
+    let response = search(workspace.path(), "harvest", "wait_for_fresh", false)?;
+    assert!(response.contains("source.txt"), "{response}");
+    assert!(response.contains("freshness: fresh"), "{response}");
+    assert!(response.contains("\"isError\":false"), "{response}");
+    // Once activated, the watcher must refresh later edits even with autoUpdate off.
+    std::fs::write(&source, "autumn documentation")?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = search(workspace.path(), "autumn", "eventual", false)?;
+        if response.contains("source.txt") && response.contains("\"isError\":false") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "watcher did not refresh: {response}\n{}",
+            log_tail(&home.path().join("daemon/server.log"), 0)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    embedding.fail.store(true, Ordering::Release);
+    let before_failure = embedding.requests.load(Ordering::SeqCst);
+    std::fs::write(&source, "winter documentation")?;
+    embedding.wait_for_request_after(before_failure);
+    let response = search(workspace.path(), "winter", "wait_for_fresh", false)?;
+    assert!(
+        response.contains("\"isError\":true"),
+        "failed refresh reported success: {response}"
+    );
+    assert!(!response.contains("freshness: fresh"), "{response}");
+    assert_command_success(&guard.stop()?);
     Ok(())
 }
 
@@ -812,7 +1119,7 @@ fn concurrent_stdio_bootstraps_share_one_resident_daemon() -> Result<(), Box<dyn
     }
 
     let status = Command::new(&binary)
-        .args(["server", "status", "--home"])
+        .args(["--server", "status", "--home"])
         .arg(home.path())
         .output()?;
     assert_command_success(&status);
@@ -846,7 +1153,7 @@ fn direct_writes_retire_daemon_read_sessions() -> Result<(), Box<dyn Error>> {
                 home.path().join("workspaces.json"),
             )
             .env("ZVEC_GREP_API_KEY", "local-test-key")
-            .args(["index", "--mode", "direct"])
+            .args(["--index", "--mode", "direct"])
             .args(extra);
         if !extra.contains(&"--drop") {
             command.arg("--allow-remote");
@@ -959,7 +1266,7 @@ fn indexed_fragment_coordinates_survive_direct_server_and_mcp() -> Result<(), Bo
         .env("ZVEC_GREP_WORKSPACE_REGISTRY", &registry)
         .env("ZVEC_GREP_API_KEY", "local-test-key")
         .args([
-            "index",
+            "--index",
             "--mode",
             "direct",
             "--allow-remote",
@@ -990,7 +1297,6 @@ fn indexed_fragment_coordinates_survive_direct_server_and_mcp() -> Result<(), Bo
                 .env("ZVEC_GREP_HOME", home.path())
                 .env("ZVEC_GREP_WORKSPACE_REGISTRY", &registry)
                 .args([
-                    "query",
                     "--mode",
                     mode,
                     "--fts",
@@ -1106,25 +1412,42 @@ struct EmbeddingServer {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     requests: Arc<AtomicUsize>,
+    fail: Arc<AtomicBool>,
 }
 
 impl EmbeddingServer {
+    fn wait_for_request_after(&self, previous: usize) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while self.requests.load(Ordering::SeqCst) <= previous {
+            assert!(
+                Instant::now() < deadline,
+                "watcher did not submit the edited file"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn start() -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(false));
         let worker = std::thread::spawn({
             let stop = Arc::clone(&stop);
             let requests = Arc::clone(&requests);
+            let fail = Arc::clone(&fail);
             move || {
                 for stream in listener.incoming() {
                     if stop.load(Ordering::Acquire) {
                         break;
                     }
                     requests.fetch_add(1, Ordering::SeqCst);
-                    respond_embedding(stream.expect("mock embedding connection"))
-                        .expect("mock embedding response");
+                    respond_embedding(
+                        stream.expect("mock embedding connection"),
+                        fail.load(Ordering::Acquire),
+                    )
+                    .expect("mock embedding response");
                 }
             }
         });
@@ -1133,6 +1456,7 @@ impl EmbeddingServer {
             stop,
             worker: Some(worker),
             requests,
+            fail,
         })
     }
 }
@@ -1150,7 +1474,7 @@ impl Drop for EmbeddingServer {
     }
 }
 
-fn respond_embedding(mut stream: TcpStream) -> std::io::Result<()> {
+fn respond_embedding(mut stream: TcpStream, fail: bool) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -1169,6 +1493,11 @@ fn respond_embedding(mut stream: TcpStream) -> std::io::Result<()> {
     }
     let mut body = vec![0; content_length.expect("request body length")];
     reader.read_exact(&mut body)?;
+    if fail {
+        return stream.write_all(
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+    }
     let request: serde_json::Value = serde_json::from_slice(&body)?;
     let dimension = usize::try_from(request["dimensions"].as_u64().expect("dimension"))
         .expect("usize dimension");
@@ -1255,7 +1584,7 @@ fn token_file_protects_daemon_requests_and_is_forwarded_to_child() -> Result<(),
     let workspace = TempDir::new()?;
     let status = Command::new(&binary)
         .current_dir(workspace.path())
-        .args(["status", "--mode", "server", "--home"])
+        .args(["--status", "--mode", "server", "--home"])
         .arg(home.path())
         .env_remove("ZVEC_GREP_SERVER_TOKEN")
         .env("ZVEC_GREP_SERVER_TOKEN_FILE", &token_file)
@@ -1266,7 +1595,7 @@ fn token_file_protects_daemon_requests_and_is_forwarded_to_child() -> Result<(),
         String::from_utf8_lossy(&status.stderr)
     );
     let stopped = Command::new(&binary)
-        .args(["server", "off", "--home"])
+        .args(["--server", "off", "--home"])
         .arg(home.path())
         .arg("--token-file")
         .arg(&token_file)

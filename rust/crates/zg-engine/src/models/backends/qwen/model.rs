@@ -6,14 +6,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::{Content, FileFormat};
 
-use super::{
+use crate::domain::model::{EmbeddingModelInfo, EmbeddingResult, ModelConfig, ModelInfo};
+use crate::models::{
     catalog::QwenConfig,
     spi::{
         EmbeddingConcurrencyDefaults, EmbeddingModel, EmbeddingOptions, EmbeddingTraceHeaders,
         ModelError, input_text, validate_inputs, validate_result,
     },
 };
-use crate::domain::model::{EmbeddingModelInfo, EmbeddingResult, ModelConfig, ModelInfo};
 
 const REMOTE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_MULTIMODAL_IMAGES: usize = 10;
@@ -46,7 +46,8 @@ impl QwenEmbeddingModel {
                     "model={}\nhint=Pass --api-key, set ZVEC_GREP_API_KEY, or configure the qwen provider API key.",
                     entry.reference
                 )),
-            ));
+            )
+            .shared());
         }
         let endpoint = options.endpoint.map_or_else(
             || entry.default_endpoint.to_owned(),
@@ -57,7 +58,8 @@ impl QwenEmbeddingModel {
                 crate::EngineError::INVALID_ARGUMENT,
                 format!("{display_name} model requires an endpoint"),
                 Some(format!("model={}", entry.reference)),
-            ));
+            )
+            .shared());
         }
         Ok(Self {
             entry,
@@ -373,10 +375,19 @@ fn qwen_http_error(message: &str, endpoint: &str, error: reqwest::Error) -> Mode
         "endpoint={endpoint} timeoutMs={}",
         REMOTE_TIMEOUT.as_millis()
     ));
-    if error.is_timeout() {
-        ModelError::new(crate::EngineError::DEADLINE_EXCEEDED, message, context).with_cause(error)
+    let timed_out = error.is_timeout();
+    let transient = !error.is_builder()
+        && (timed_out || error.is_connect() || error.is_request() || error.is_body());
+    let code = if timed_out {
+        crate::EngineError::DEADLINE_EXCEEDED
     } else {
-        ModelError::new(crate::EngineError::INTERNAL, message, context).with_cause(error)
+        crate::EngineError::INTERNAL
+    };
+    let error = ModelError::new(code, message, context).with_cause(error);
+    if transient {
+        error.transient(None)
+    } else {
+        error.shared()
     }
 }
 
@@ -390,15 +401,21 @@ fn parse_response_body(
         } else {
             provider_error_code(response.status)
         };
-        ModelError::new(
-            code,
-            format!("{} response was not valid JSON", model_name(entry)),
-            Some(format!(
-                "model={} status={}",
-                entry.reference, response.status
-            )),
+        classify_provider_failure(
+            ModelError::new(
+                code,
+                format!("{} response was not valid JSON", model_name(entry)),
+                Some(format!(
+                    "model={} status={}",
+                    entry.reference, response.status
+                )),
+            )
+            .with_cause(error),
+            response.status,
+            response.retry_after.as_deref().and_then(retry_after_millis),
+            None,
+            None,
         )
-        .with_cause(error)
     })
 }
 
@@ -439,14 +456,145 @@ fn provider_error(entry: QwenConfig, response: &QwenHttpResponse, body: &Value) 
         .as_deref()
         .and_then(retry_after_millis)
         .map_or_else(String::new, |millis| format!(" retryAfterMs={millis}"));
-    ModelError::new(
-        provider_error_code(response.status),
-        format!("{} request returned an error", model_name(entry)),
-        Some(format!(
-            "model={} status={}{} providerCode={} providerType={} providerMessage={}",
-            entry.model, response.status, retry_after, code, error_type, message
-        )),
+    classify_provider_failure(
+        ModelError::new(
+            provider_error_code(response.status),
+            format!("{} request returned an error", model_name(entry)),
+            Some(format!(
+                "model={} status={}{} providerCode={} providerType={} providerMessage={}",
+                entry.model, response.status, retry_after, code, error_type, message
+            )),
+        ),
+        response.status,
+        response.retry_after.as_deref().and_then(retry_after_millis),
+        Some(code),
+        Some(message),
     )
+}
+
+fn classify_provider_failure(
+    error: ModelError,
+    status: u16,
+    retry_after_millis: Option<u128>,
+    provider_code: Option<&str>,
+    provider_message: Option<&str>,
+) -> ModelError {
+    let retry_after = retry_after_millis
+        .map(|millis| Duration::from_millis(u64::try_from(millis).unwrap_or(u64::MAX)));
+    let rate_limited = status == 429
+        || [provider_code, provider_message]
+            .into_iter()
+            .flatten()
+            .any(is_rate_limit_text);
+    if rate_limited {
+        return error.rate_limited(retry_after);
+    }
+    if status == 408 || (500..=599).contains(&status) {
+        return error.transient(retry_after);
+    }
+    if matches!(status, 401 | 403 | 404)
+        || is_authentication_failure(provider_code, provider_message)
+        || (status == 400 && is_permanent_model_bad_request(provider_code, provider_message))
+    {
+        return error.shared();
+    }
+    error
+}
+
+fn is_rate_limit_text(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace(['_', '-'], " ");
+    [
+        "rate limit",
+        "quota exceeded",
+        "too many requests",
+        "request rate increased too quickly",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn is_authentication_failure(provider_code: Option<&str>, provider_message: Option<&str>) -> bool {
+    [provider_code, provider_message]
+        .into_iter()
+        .flatten()
+        .any(|value| {
+            let compact = value
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|character| character.to_ascii_lowercase())
+                .collect::<String>();
+            [
+                "invalidkey",
+                "invalidapikey",
+                "missingkey",
+                "missingapikey",
+                "unauthorizedkey",
+                "unauthorizedapikey",
+                "forbiddenkey",
+                "forbiddenapikey",
+            ]
+            .iter()
+            .any(|marker| compact.contains(marker))
+        })
+}
+
+fn is_permanent_model_bad_request(
+    provider_code: Option<&str>,
+    provider_message: Option<&str>,
+) -> bool {
+    const PERMANENT_CODES: &[&str] = &[
+        "invalid_model",
+        "model_not_found",
+        "unsupported_model",
+        "invalid_dimension",
+        "invalid_dimensions",
+        "unsupported_dimension",
+        "unsupported_dimensions",
+        "dimension_out_of_range",
+        "invalid_embedding_dimension",
+        "unsupported_embedding_dimension",
+    ];
+    let normalized_code = provider_code.map(|code| {
+        code.split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|part| !part.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>()
+            .join("_")
+    });
+    if normalized_code
+        .as_deref()
+        .is_some_and(|code| PERMANENT_CODES.contains(&code))
+    {
+        return true;
+    }
+    let Some(message) = provider_message.map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let model_failure = message.contains("model")
+        && [
+            "invalid",
+            "unsupported",
+            "unknown",
+            "not found",
+            "does not exist",
+        ]
+        .iter()
+        .any(|marker| message.contains(marker));
+    let dimension_failure = message.contains("dimension")
+        && [
+            "invalid",
+            "unsupported",
+            "not supported",
+            "out of range",
+            "must",
+            "should",
+            "expected",
+            "between",
+            "only support",
+        ]
+        .iter()
+        .any(|marker| message.contains(marker));
+    model_failure || dimension_failure
 }
 
 fn provider_error_code(status: u16) -> &'static str {
@@ -642,317 +790,4 @@ fn model_name(entry: QwenConfig) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use super::*;
-    use crate::domain::{ImageContent, TableContent, model::Metric};
-
-    struct MockHttp {
-        response: Mutex<Option<QwenHttpResponse>>,
-        requests: Mutex<Vec<(Value, Option<EmbeddingTraceHeaders>)>>,
-    }
-
-    #[async_trait]
-    impl QwenHttpClient for MockHttp {
-        async fn post(&self, request: QwenHttpRequest) -> Result<QwenHttpResponse, ModelError> {
-            assert_eq!(request.endpoint, "https://example.test/embed");
-            assert_eq!(request.bearer_token, "secret");
-            self.requests
-                .lock()
-                .expect("requests lock")
-                .push((request.body, request.trace_headers));
-            self.response
-                .lock()
-                .expect("response lock")
-                .take()
-                .ok_or_else(|| ModelError::internal("mock Qwen response is missing"))
-        }
-    }
-
-    fn config(kind: &'static str, model: &'static str, dimension: usize) -> QwenConfig {
-        QwenConfig {
-            kind,
-            reference: "qwen/test",
-            provider: "qwen",
-            model,
-            dimension,
-            metric: Metric::Cosine,
-            default_endpoint: "https://default.test/embed",
-            max_batch_size: 20,
-            max_input_tokens: 512,
-            max_image_bytes: Some(1024),
-        }
-    }
-
-    fn options() -> ModelConfig {
-        ModelConfig {
-            api_key: Some(" secret ".to_owned()),
-            endpoint: Some(" https://example.test/embed ".to_owned()),
-            ..ModelConfig::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn text_request_and_index_order_match_main() {
-        let http = Arc::new(MockHttp {
-            response: Mutex::new(Some(QwenHttpResponse {
-                status: 200,
-                retry_after: None,
-                body: serde_json::to_vec(&json!({
-                    "data": [
-                        { "index": 1, "embedding": [4.0, 5.0, 6.0] },
-                        { "index": 0, "embedding": [1.0, 2.0, 3.0] }
-                    ]
-                }))
-                .expect("fixture JSON"),
-            })),
-            requests: Mutex::new(Vec::new()),
-        });
-        let model = QwenEmbeddingModel::with_http(
-            config("text", "text-embedding-v4", 3),
-            options(),
-            http.clone(),
-        )
-        .expect("model");
-        let result = model
-            .embed(
-                &[
-                    vec![
-                        Content::Text("one".to_owned()),
-                        Content::Text("part".to_owned()),
-                    ],
-                    vec![Content::Text("two".to_owned())],
-                ],
-                EmbeddingOptions {
-                    trace_headers: Some(EmbeddingTraceHeaders {
-                        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-                            .to_owned(),
-                        tracestate: Some("vendor=value".to_owned()),
-                        baggage: Some("tenant=search".to_owned()),
-                    }),
-                    ..EmbeddingOptions::default()
-                },
-            )
-            .await
-            .expect("embedding");
-        assert_eq!(result.vectors, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
-        assert_eq!(
-            http.requests.lock().expect("requests lock")[0].0,
-            json!({
-                "model": "text-embedding-v4",
-                "input": ["one\npart", "two"],
-                "dimensions": 3,
-                "encoding_format": "float"
-            })
-        );
-        assert_eq!(
-            http.requests.lock().expect("requests lock")[0].1,
-            Some(EmbeddingTraceHeaders {
-                traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_owned(),
-                tracestate: Some("vendor=value".to_owned()),
-                baggage: Some("tenant=search".to_owned()),
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn text_backend_rejects_images_before_http_dispatch() {
-        let http = Arc::new(MockHttp {
-            response: Mutex::new(None),
-            requests: Mutex::new(Vec::new()),
-        });
-        let model = QwenEmbeddingModel::with_http(
-            config("text", "text-embedding-v4", 2),
-            options(),
-            http.clone(),
-        )
-        .expect("model");
-        let image = ImageContent::new(vec![1], FileFormat::Png).expect("image");
-        let error = model
-            .embed(&[vec![Content::Image(image)]], EmbeddingOptions::default())
-            .await
-            .expect_err("text backend must reject images");
-        assert_eq!(error.code(), crate::EngineError::UNSUPPORTED);
-        assert!(http.requests.lock().expect("requests lock").is_empty());
-    }
-
-    #[tokio::test]
-    async fn multimodal_request_preserves_content_and_rejects_unsupported_inputs() {
-        let http = Arc::new(MockHttp {
-            response: Mutex::new(Some(QwenHttpResponse {
-                status: 200,
-                retry_after: None,
-                body: serde_json::to_vec(&json!({
-                    "output": { "embeddings": [
-                        { "text_index": 0, "embedding": [1.0, 0.0] },
-                        { "index": 1, "embedding": [0.0, 1.0] }
-                    ] }
-                }))
-                .expect("fixture JSON"),
-            })),
-            requests: Mutex::new(Vec::new()),
-        });
-        let model = QwenEmbeddingModel::with_http(
-            config("multimodal", "qwen3-vl-embedding", 2),
-            options(),
-            http.clone(),
-        )
-        .expect("model");
-        let result = model
-            .embed(
-                &[
-                    vec![Content::Text("query".to_owned())],
-                    vec![Content::Image(
-                        ImageContent::new(vec![1, 2, 3], FileFormat::Png).expect("image"),
-                    )],
-                ],
-                EmbeddingOptions::default(),
-            )
-            .await
-            .expect("embedding");
-        assert_eq!(result.vectors, [[1.0, 0.0], [0.0, 1.0]]);
-        assert_eq!(
-            http.requests.lock().expect("requests lock")[0].0["input"]["contents"][1]["image"],
-            "AQID"
-        );
-
-        for content in [
-            Content::Image(ImageContent::new(vec![1], FileFormat::Gif).expect("image")),
-            Content::Image(ImageContent::new(vec![1], FileFormat::Svg).expect("image")),
-            Content::Table(TableContent {
-                row_count: 0,
-                column_count: 0,
-                cells: Vec::new(),
-            }),
-        ] {
-            let error = model
-                .embed(
-                    &[vec![Content::Text("query".to_owned())], vec![content]],
-                    EmbeddingOptions::default(),
-                )
-                .await
-                .expect_err("unsupported content must be rejected before dispatch");
-            assert_eq!(error.code(), crate::EngineError::UNSUPPORTED);
-        }
-        for parts in [
-            vec![
-                Content::Text("first".to_owned()),
-                Content::Text("second".to_owned()),
-            ],
-            vec![
-                Content::Text("query".to_owned()),
-                Content::Image(ImageContent::new(vec![1], FileFormat::Png).expect("image")),
-            ],
-        ] {
-            let error = model
-                .embed(&[parts], EmbeddingOptions::default())
-                .await
-                .expect_err("composed multimodal inputs are unsupported");
-            assert_eq!(error.code(), crate::EngineError::UNSUPPORTED);
-        }
-        assert_eq!(http.requests.lock().expect("requests lock").len(), 1);
-    }
-
-    #[tokio::test]
-    async fn invalid_json_and_provider_errors_match_main() {
-        let invalid_json = Arc::new(MockHttp {
-            response: Mutex::new(Some(QwenHttpResponse {
-                status: 502,
-                retry_after: None,
-                body: b"not json".to_vec(),
-            })),
-            requests: Mutex::new(Vec::new()),
-        });
-        let model = QwenEmbeddingModel::with_http(
-            config("text", "text-embedding-v4", 3),
-            options(),
-            invalid_json,
-        )
-        .expect("model");
-        let error = model
-            .embed(
-                &[vec![Content::Text("one".to_owned())]],
-                EmbeddingOptions::default(),
-            )
-            .await
-            .expect_err("invalid JSON");
-        assert_eq!(error.code(), crate::EngineError::INTERNAL);
-
-        let invalid_provider_body = QwenHttpResponse {
-            status: 429,
-            retry_after: Some("1".to_owned()),
-            body: b"rate limited".to_vec(),
-        };
-        let error = parse_response_body(
-            &invalid_provider_body,
-            config("text", "text-embedding-v4", 3),
-        )
-        .expect_err("non-JSON provider error");
-        assert_eq!(error.code(), crate::EngineError::RESOURCE_BUSY);
-
-        let provider_error_response = Arc::new(MockHttp {
-            response: Mutex::new(Some(QwenHttpResponse {
-                status: 429,
-                retry_after: Some("1.5".to_owned()),
-                body: serde_json::to_vec(&json!({
-                    "error": {
-                        "code": "rate_limit",
-                        "type": "throttled",
-                        "message": "slow down"
-                    }
-                }))
-                .expect("fixture JSON"),
-            })),
-            requests: Mutex::new(Vec::new()),
-        });
-        let model = QwenEmbeddingModel::with_http(
-            config("text", "text-embedding-v4", 3),
-            options(),
-            provider_error_response,
-        )
-        .expect("model");
-        let error = model
-            .embed(
-                &[vec![Content::Text("one".to_owned())]],
-                EmbeddingOptions::default(),
-            )
-            .await
-            .expect_err("provider error");
-        assert_eq!(error.code(), crate::EngineError::RESOURCE_BUSY);
-        let context = error.context().expect("provider context");
-        assert!(context.contains("status=429 retryAfterMs=1500"));
-        assert!(context.contains("providerCode=rate_limit"));
-        assert!(context.contains("providerType=throttled"));
-        assert!(context.contains("providerMessage=slow down"));
-        assert!(!context.contains("secret"));
-
-        assert_eq!(
-            provider_error_code(400),
-            crate::EngineError::INVALID_ARGUMENT
-        );
-        assert_eq!(
-            provider_error_code(401),
-            crate::EngineError::PERMISSION_DENIED
-        );
-        assert_eq!(provider_error_code(404), crate::EngineError::NOT_FOUND);
-        assert_eq!(provider_error_code(405), crate::EngineError::UNSUPPORTED);
-        assert_eq!(
-            provider_error_code(408),
-            crate::EngineError::DEADLINE_EXCEEDED
-        );
-        assert_eq!(provider_error_code(429), crate::EngineError::RESOURCE_BUSY);
-        assert_eq!(provider_error_code(500), crate::EngineError::INTERNAL);
-    }
-
-    #[test]
-    fn requires_api_key_and_keeps_catalog_endpoint() {
-        let error = QwenEmbeddingModel::new(
-            config("text", "qwen3.7-text-embedding", 3),
-            ModelConfig::default(),
-        )
-        .err()
-        .expect("missing API key");
-        assert_eq!(error.code(), crate::EngineError::PERMISSION_DENIED);
-    }
-}
+mod tests;

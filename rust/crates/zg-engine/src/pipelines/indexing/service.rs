@@ -109,7 +109,7 @@ impl WorkspaceIndexService {
             manifest.workspace.name = name;
         } else if let Some(previous) = registry.root_for_name(&manifest.workspace.name)? {
             return Err(EngineError::invalid_argument(format!(
-                "workspace name '{}' is already registered at {}; use index --name to choose another name",
+                "workspace name '{}' is already registered at {}; use zg --index --name to choose another name",
                 manifest.workspace.name,
                 previous.display()
             )));
@@ -388,7 +388,7 @@ impl WorkspaceIndexService {
                     expected_version: CURRENT_INDEX_VERSION,
                     reason,
                 };
-                info.suggestion = Some("rebuild the index with `zg index --rebuild`".to_owned());
+                info.suggestion = Some("rebuild the index with `zg --index --rebuild`".to_owned());
                 return Ok(info);
             }
         };
@@ -642,7 +642,7 @@ fn acquire_model(
         crate::config::runtime_device(
             &config,
             &reference,
-            options.device.or_else(|| {
+            options.runtime_device.or(options.device).or_else(|| {
                 options
                     .embedding
                     .as_ref()
@@ -843,7 +843,7 @@ fn unindexed_info(location: WorkspaceIndexLocation, policy: WorkspaceIndexPolicy
         source: InfoSource::Unindexed,
         workspace_index: None,
         status: None,
-        suggestion: Some("run index to create a workspace index".to_owned()),
+        suggestion: Some("run zg --index to create a workspace index".to_owned()),
     }
 }
 
@@ -1209,6 +1209,59 @@ mod tests {
             .expect("active");
         assert_ne!(rebuilt.storage_generation, active.storage_generation);
         assert!(!active.storage_home().exists());
+        models.close();
+    }
+
+    #[tokio::test]
+    async fn search_device_override_does_not_persist_in_manifest() {
+        let directory = tempdir().expect("workspace");
+        let service = WorkspaceIndexService::with_test_registry();
+        let models = ModelRuntimeManager::new();
+        service
+            .index(&models, empty_index_options(directory.path()))
+            .await
+            .expect("initial index");
+        let home = directory.path().join(".zvec-grep");
+        let mut manifest = super::read_workspace_manifest(&home)
+            .expect("read")
+            .expect("manifest");
+        for runtime in manifest.embedding_runtimes.values_mut() {
+            runtime.device = Some(Device::Auto);
+        }
+        super::write_workspace_manifest(&home, &manifest).expect("save automatic device");
+        let request = crate::api::context::ContextOptions {
+            device: Some(Device::Cpu),
+            ..Default::default()
+        };
+        let options = crate::pipelines::indexed_search::service::refresh_options(
+            &request,
+            directory.path().to_path_buf(),
+        );
+        service.index(&models, options).await.expect("refresh");
+        let refreshed = super::read_workspace_manifest(&home)
+            .expect("read")
+            .expect("manifest");
+        assert_eq!(refreshed.embedding_runtimes, manifest.embedding_runtimes);
+        service
+            .index(
+                &models,
+                IndexOptions {
+                    root: Some(directory.path().to_path_buf()),
+                    device: Some(Device::Cpu),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("explicit configuration update");
+        let configured = super::read_workspace_manifest(&home)
+            .expect("read")
+            .expect("manifest");
+        assert!(
+            configured
+                .embedding_runtimes
+                .values()
+                .all(|runtime| runtime.device == Some(Device::Cpu))
+        );
         models.close();
     }
 

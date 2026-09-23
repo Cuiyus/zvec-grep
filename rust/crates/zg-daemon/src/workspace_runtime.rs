@@ -36,10 +36,15 @@ use crate::job_scheduler::{
     IndexExecutor, IndexJobCompletion, IndexJobScheduler, IndexJobSnapshot, JobReason, JobState,
     SchedulerConfig, SchedulerError, SchedulerSnapshot,
 };
+mod lifecycle;
+use lifecycle::{RuntimeActivity, RuntimeLifecycle};
 use zg_transport_mcp::{
     IndexOperationError, IndexOperationProvider, IndexOperationResult, IndexOperationState,
     IndexRuntimeSnapshot,
 };
+
+mod freshness;
+use freshness::Freshness;
 
 #[derive(Clone)]
 pub(crate) struct WorkspaceRuntimeManager {
@@ -53,9 +58,12 @@ struct RuntimeManagerInner {
     runtimes: Mutex<HashMap<PathBuf, Arc<WorkspaceRuntime>>>,
     shutdown: CancellationToken,
     closed: AtomicBool,
+    idle_ttl: std::time::Duration,
+    maintenance: Mutex<Option<JoinHandle<()>>>,
 }
 
 struct WorkspaceRuntime {
+    lifecycle: Mutex<RuntimeLifecycle>,
     canonical_root: PathBuf,
     index_template: Mutex<IndexOptions>,
     pending_watcher_configuration: Mutex<Option<(uuid::Uuid, IndexOptions)>>,
@@ -64,6 +72,8 @@ struct WorkspaceRuntime {
     watcher_active: AtomicBool,
     dirty_revision: AtomicU64,
     indexed_revision: AtomicU64,
+    freshness: Mutex<Freshness>,
+    refresh: tokio::sync::Mutex<()>,
 }
 
 /// The epoch prevents a scan started before a mutation from restoring an invalidated snapshot.
@@ -243,6 +253,8 @@ impl WorkspaceRuntimeManager {
                 runtimes: Mutex::new(HashMap::new()),
                 shutdown: CancellationToken::new(),
                 closed: AtomicBool::new(false),
+                idle_ttl: Self::DEFAULT_IDLE_TTL,
+                maintenance: Mutex::new(None),
             }),
         }
     }
@@ -271,27 +283,33 @@ impl WorkspaceRuntimeManager {
         }
         let canonical_root = canonical_root(options.root.as_deref())?;
         options.root = Some(canonical_root.clone());
-        let runtime = self.runtime(canonical_root.clone(), &options);
+        let runtime = self.runtime(canonical_root.clone(), &options)?;
         let reconfigure = options.reset_paths || options.scan != ScanRulesUpdate::default();
         let template = index_template(&options);
-        runtime.invalidate_status();
+        runtime.require_reconciliation();
         let target_revision = runtime.dirty_revision.load(Ordering::Acquire);
-        let submitted = self
-            .inner
-            .scheduler
-            .submit(canonical_root, options, JobReason::Manual)?;
+        let submitted =
+            runtime.submit_tracked(&self.inner.scheduler, options, JobReason::Manual)?;
         {
             let manager = self.clone();
             let job_id = submitted.job.id;
             let template = template.clone();
+            let activity = runtime.continuation();
             tokio::spawn(async move {
                 let Ok(completed) = manager.inner.scheduler.wait(job_id).await else {
+                    activity.forget_job_proof(job_id);
                     return;
                 };
-                manager.invalidate_status(&completed.job.canonical_root);
+                activity.complete_job(&completed);
                 if completed.job.state == JobState::Succeeded {
                     let _ = manager
-                        .on_index_succeeded(completed.job, target_revision, template, reconfigure)
+                        .on_index_succeeded(
+                            Arc::clone(&activity),
+                            completed.job,
+                            target_revision,
+                            template,
+                            reconfigure,
+                        )
                         .await;
                 }
             });
@@ -309,10 +327,11 @@ impl WorkspaceRuntimeManager {
             .scheduler
             .wait_with_progress(submitted.job.id, reporter)
             .await?;
-        runtime.invalidate_status();
+        runtime.complete_job(&completed);
         if completed.job.state == JobState::Succeeded
             && let Err(error) = self
                 .on_index_succeeded(
+                    Arc::clone(&runtime),
                     completed.job.clone(),
                     target_revision,
                     template,
@@ -340,73 +359,118 @@ impl WorkspaceRuntimeManager {
         Ok(submission(completed, submitted.reused))
     }
 
-    async fn refresh_index(&self, options: IndexOptions, wait: bool) -> Result<(), EngineError> {
+    /// Returns whether refresh work was scheduled or is already in flight.
+    async fn refresh_index(
+        &self,
+        mut options: IndexOptions,
+        wait: bool,
+    ) -> Result<bool, EngineError> {
         let root = canonical_root(options.root.as_deref())
             .map_err(WorkspaceRuntimeError::into_engine_error)?;
-        let runtime = self.runtime(root.clone(), &options);
-        // Watch submissions always queue a successor to an already running job.
-        // A full reconciliation also covers changes still in watcher debounce.
-        let mut options = options;
+        let runtime = self.runtime(root.clone(), &options)?;
         let reporter = options.on_progress.take();
         if !wait {
+            // A submitted background job outlives the request that created it.
             options.signal = None;
         }
-        options.changes = vec![IndexChange::Rescan];
-        if wait {
+        let mut scheduled = false;
+        loop {
+            let refresh = if wait {
+                runtime.refresh.lock().await
+            } else {
+                let Ok(refresh) = runtime.refresh.try_lock() else {
+                    return Ok(true);
+                };
+                refresh
+            };
+            let busy = self
+                .job_for_root(&root)
+                .is_some_and(|job| matches!(job.state, JobState::Queued | JobState::Running));
+            if !wait && busy {
+                return Ok(true);
+            }
             self.ensure_watching(Arc::clone(&runtime))
                 .await
                 .map_err(WorkspaceRuntimeError::into_engine_error)?;
             self.flush_watcher(&runtime).await?;
-        }
-        runtime.invalidate_status();
-        let revision = runtime.dirty_revision.load(Ordering::Acquire);
-        let submitted = self
-            .inner
-            .scheduler
-            .submit(root.clone(), options, JobReason::Watch)
-            .map_err(|error| WorkspaceRuntimeError::from(error).into_engine_error())?;
-        {
-            let manager = self.clone();
-            let runtime = Arc::clone(&runtime);
-            let job_id = submitted.job.id;
-            tokio::spawn(async move {
-                if let Ok(completed) = manager.inner.scheduler.wait(job_id).await {
-                    runtime.invalidate_status();
-                    if completed.job.state != JobState::Succeeded {
+            if !wait
+                && self
+                    .job_for_root(&root)
+                    .is_some_and(|job| matches!(job.state, JobState::Queued | JobState::Running))
+            {
+                return Ok(true);
+            }
+            // Apply proofs ourselves as well: completion callbacks can be scheduled
+            // after scheduler waiters, and must not cause a duplicate reconciliation.
+            if !runtime.settle_completed_jobs(&self.inner.scheduler)
+                || self.inner.scheduler.has_active_root(&root)
+            {
+                if !wait {
+                    return Ok(true);
+                }
+                // Coordination covers admission only. Every waiting request can
+                // subscribe to shared jobs while another request waits for them.
+                drop(refresh);
+                self.inner
+                    .scheduler
+                    .wait_for_root_idle_with_progress(&root, reporter.clone())
+                    .await;
+                runtime
+                    .settle_jobs(&self.inner.scheduler, reporter.clone())
+                    .await;
+                // The watcher may have buffered changes during the existing job.
+                // Reacquire coordination and drain it before trusting the proof.
+                continue;
+            }
+            if runtime.is_reconciled() {
+                return Ok(scheduled);
+            }
+            runtime.invalidate_status();
+            options.changes = vec![IndexChange::Rescan];
+            let submitted = runtime
+                .submit_tracked(&self.inner.scheduler, options.clone(), JobReason::Watch)
+                .map_err(|error| WorkspaceRuntimeError::from(error).into_engine_error())?;
+            scheduled = true;
+            {
+                let manager = self.clone();
+                let runtime = runtime.continuation();
+                let job_id = submitted.job.id;
+                tokio::spawn(async move {
+                    let Ok(completed) = manager.inner.scheduler.wait(job_id).await else {
+                        runtime.forget_job_proof(job_id);
                         return;
-                    }
-                    runtime
-                        .indexed_revision
-                        .fetch_max(revision, Ordering::AcqRel);
-                    if let Err(error) = manager.ensure_watching(runtime).await {
+                    };
+                    runtime.complete_job(&completed);
+                    if completed.job.state == JobState::Succeeded
+                        && let Err(error) = manager.ensure_watching(Arc::clone(&runtime)).await
+                    {
                         warn!(%error, "search refresh watcher activation failed");
                     }
-                }
-            });
+                });
+            }
+            if !wait {
+                return Ok(true);
+            }
+            drop(refresh);
+            let completed = self
+                .inner
+                .scheduler
+                .wait_with_progress(submitted.job.id, reporter.clone())
+                .await
+                .map_err(|error| WorkspaceRuntimeError::from(error).into_engine_error())?;
+            runtime.complete_job(&completed);
+            ensure_refresh_succeeded(&completed.job)?;
+            if completed
+                .result
+                .as_ref()
+                .is_none_or(|result| result.files_failed != 0)
+            {
+                return Err(EngineError::storage_failure(
+                    "index refresh left failed files",
+                ));
+            }
+            // Flush again after indexing to include events that arrived during it.
         }
-        if !wait {
-            return Ok(());
-        }
-        let completed = self
-            .inner
-            .scheduler
-            .wait_with_progress(submitted.job.id, reporter)
-            .await
-            .map_err(|error| WorkspaceRuntimeError::from(error).into_engine_error())?;
-        runtime.invalidate_status();
-        ensure_refresh_succeeded(&completed.job)?;
-        runtime
-            .indexed_revision
-            .fetch_max(revision, Ordering::AcqRel);
-        self.ensure_watching(runtime)
-            .await
-            .map_err(WorkspaceRuntimeError::into_engine_error)?;
-        // Include successor jobs submitted by the watcher while reconciliation ran.
-        self.inner.scheduler.wait_for_root_idle(&root).await;
-        if let Some(job) = self.job_for_root(&root) {
-            ensure_refresh_succeeded(&job)?;
-        }
-        Ok(())
     }
 
     async fn flush_watcher(&self, runtime: &WorkspaceRuntime) -> Result<(), EngineError> {
@@ -416,7 +480,11 @@ impl WorkspaceRuntimeManager {
                 "workspace watcher is not active",
             ));
         };
-        handle.session.flush().await.map_err(map_host_error)?;
+        handle
+            .session
+            .flush_pending()
+            .await
+            .map_err(map_host_error)?;
         let (sender, receiver) = oneshot::channel();
         handle
             .barrier
@@ -440,6 +508,7 @@ impl WorkspaceRuntimeManager {
                 "workspace runtimes have been closed",
             ));
         }
+        let _activity = self.existing_activity(options.root.as_deref())?;
         if !options.include_status {
             return engine.info(options).await;
         }
@@ -456,7 +525,7 @@ impl WorkspaceRuntimeManager {
                 root: Some(metadata.root.clone()),
                 ..IndexOptions::default()
             },
-        );
+        )?;
         let epoch = lock(&runtime.index_status).invalidate();
         let observed_job = self
             .job_for_root(&runtime.canonical_root)
@@ -516,6 +585,7 @@ impl WorkspaceRuntimeManager {
     ) -> Result<bool, WorkspaceRuntimeError> {
         let canonical_root = canonical_root(options.root.as_deref())?;
         options.root = Some(canonical_root.clone());
+        let _activity = self.existing_activity(Some(&canonical_root))?;
         self.invalidate_status(&canonical_root);
         self.stop_watching(&canonical_root).await?;
         self.inner.scheduler.cancel_root(&canonical_root);
@@ -524,14 +594,28 @@ impl WorkspaceRuntimeManager {
             .wait_for_root_idle(&canonical_root)
             .await;
         let removed = self.inner.executor.drop_index(options).await?;
-        lock(&self.inner.runtimes).remove(&canonical_root);
-        self.inner.scheduler.forget_root(&canonical_root);
+        let retired = {
+            let mut runtimes = lock(&self.inner.runtimes);
+            let runtime = runtimes.remove(&canonical_root);
+            if let Some(runtime) = &runtime {
+                runtime.retire();
+            }
+            self.inner.scheduler.forget_root(&canonical_root);
+            runtime
+        };
+        if let Some(runtime) = retired {
+            Self::close_watcher(&runtime).await?;
+        }
         Ok(removed)
     }
 
     pub(crate) async fn shutdown_all(&self) -> Result<(), WorkspaceRuntimeError> {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.shutdown.cancel();
+        let maintenance = lock(&self.inner.maintenance).take();
+        if let Some(maintenance) = maintenance {
+            let _ = maintenance.await;
+        }
         let roots = lock(&self.inner.runtimes)
             .keys()
             .cloned()
@@ -553,11 +637,21 @@ impl WorkspaceRuntimeManager {
         }
     }
 
-    fn runtime(&self, canonical_root: PathBuf, options: &IndexOptions) -> Arc<WorkspaceRuntime> {
+    fn runtime(
+        &self,
+        canonical_root: PathBuf,
+        options: &IndexOptions,
+    ) -> Result<RuntimeActivity, EngineError> {
         let mut runtimes = lock(&self.inner.runtimes);
-        Arc::clone(runtimes.entry(canonical_root.clone()).or_insert_with(|| {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(EngineError::resource_closed(
+                "workspace runtimes have been closed",
+            ));
+        }
+        let runtime = runtimes.entry(canonical_root.clone()).or_insert_with(|| {
             let template = index_template(options);
             Arc::new(WorkspaceRuntime {
+                lifecycle: Mutex::new(RuntimeLifecycle::default()),
                 canonical_root,
                 index_template: Mutex::new(template),
                 pending_watcher_configuration: Mutex::new(None),
@@ -566,19 +660,45 @@ impl WorkspaceRuntimeManager {
                 watcher_active: AtomicBool::new(false),
                 dirty_revision: AtomicU64::new(1),
                 indexed_revision: AtomicU64::new(0),
+                freshness: Mutex::new(Freshness::default()),
+                refresh: tokio::sync::Mutex::new(()),
             })
-        }))
+        });
+        let activity = RuntimeActivity::begin(runtime, true)
+            .ok_or_else(|| EngineError::resource_busy("workspace runtime is retiring"))?;
+        drop(runtimes);
+        self.start_maintenance();
+        Ok(activity)
+    }
+
+    fn existing_activity(
+        &self,
+        root: Option<&Path>,
+    ) -> Result<Option<RuntimeActivity>, EngineError> {
+        let root = canonical_root(root).map_err(WorkspaceRuntimeError::into_engine_error)?;
+        let runtimes = lock(&self.inner.runtimes);
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(EngineError::resource_closed(
+                "workspace runtimes have been closed",
+            ));
+        }
+        // Queries may name a subdirectory or a symlink to an active workspace.
+        Ok(runtimes
+            .iter()
+            .filter(|(candidate, _)| root.starts_with(candidate))
+            .max_by_key(|(candidate, _)| candidate.components().count())
+            .and_then(|(_, runtime)| RuntimeActivity::begin(runtime, true)))
     }
 
     async fn on_index_succeeded(
         &self,
+        runtime: Arc<WorkspaceRuntime>,
         job: IndexJobSnapshot,
         revision: u64,
         template: IndexOptions,
         reconfigure: bool,
     ) -> Result<(), WorkspaceRuntimeError> {
-        let runtime = lock(&self.inner.runtimes).get(&job.canonical_root).cloned();
-        let Some(runtime) = runtime else {
+        let Some(_activity) = RuntimeActivity::begin(&runtime, false) else {
             return Ok(());
         };
         runtime
@@ -601,7 +721,7 @@ impl WorkspaceRuntimeManager {
                     .scheduler
                     .wait_for_root_idle(&runtime.canonical_root)
                     .await;
-                if let Err(error) = manager.ensure_watching(runtime).await {
+                if let Err(error) = manager.ensure_watching(Arc::clone(&runtime)).await {
                     warn!(%error, "pending watcher configuration could not be activated");
                 }
             });
@@ -626,7 +746,13 @@ impl WorkspaceRuntimeManager {
         if self.inner.closed.load(Ordering::Acquire) {
             return Ok(());
         }
+        let Some(_activity) = RuntimeActivity::begin(&runtime, false) else {
+            return Ok(());
+        };
         let mut watcher = runtime.watcher.lock().await;
+        if runtime.is_retired() || self.inner.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
         if let Some(completed) = completed {
             *lock(&runtime.pending_watcher_configuration) = Some(completed);
         }
@@ -639,6 +765,7 @@ impl WorkspaceRuntimeManager {
             lock(&runtime.pending_watcher_configuration).take();
             return Ok(());
         }
+        runtime.require_reconciliation();
         let cancellation = self.inner.shutdown.child_token();
         let session = self
             .inner
@@ -652,6 +779,11 @@ impl WorkspaceRuntimeManager {
                 &TaskControl::new(cancellation.clone()),
             )
             .await?;
+        if runtime.is_retired() || self.inner.closed.load(Ordering::Acquire) {
+            cancellation.cancel();
+            session.close().await?;
+            return Ok(());
+        }
         // Prepare the new policy before retiring the current session. A failed
         // initialization leaves the previous watcher running.
         if let Some(previous) = watcher.take() {
@@ -712,6 +844,10 @@ impl WorkspaceRuntimeManager {
         let Some(runtime) = runtime else {
             return Ok(());
         };
+        Self::close_watcher(&runtime).await
+    }
+
+    async fn close_watcher(runtime: &WorkspaceRuntime) -> Result<(), WorkspaceRuntimeError> {
         let handle = runtime.watcher.lock().await.take();
         let Some(handle) = handle else {
             return Ok(());
@@ -766,9 +902,14 @@ impl IndexOperationProvider for WorkspaceRuntimeManager {
         engine: &ZvecGrep,
         mut request: ContextOptions,
     ) -> Result<ContextResult, EngineError> {
+        // In-process callers without a request token must still be interruptible at shutdown.
+        if request.signal.is_none() {
+            request.signal = Some(self.inner.shutdown.child_token());
+        }
         if request.rg {
             return engine.context(request).await;
         }
+        let _activity = self.existing_activity(request.root.as_deref())?;
         let policy = request.refresh.unwrap_or(if request.auto_update {
             RefreshPolicy::Background
         } else {
@@ -792,7 +933,7 @@ impl IndexOperationProvider for WorkspaceRuntimeManager {
             endpoint: request.endpoint.clone(),
             embedding_concurrency: request.embedding_concurrency,
             lock_timeout_ms: request.lock_timeout_ms,
-            device: request.device,
+            runtime_device: request.device,
             model_cache: request.model_cache.clone(),
             ..IndexOptions::default()
         };
@@ -804,7 +945,8 @@ impl IndexOperationProvider for WorkspaceRuntimeManager {
             options.root = Some(reply.root.clone());
             reply.freshness = Some("served_from_current_index".to_owned());
             reply.background_refresh = Some(match self.refresh_index(options, false).await {
-                Ok(()) => "scheduled".to_owned(),
+                Ok(true) => "scheduled".to_owned(),
+                Ok(false) => "idle".to_owned(),
                 Err(error) => {
                     warn!(%error, "search background refresh could not be scheduled");
                     "failed".to_owned()
@@ -820,25 +962,39 @@ impl IndexOperationProvider for WorkspaceRuntimeManager {
             .max_by_key(|root| root.components().count())
             .cloned()
             .unwrap_or(requested_root);
-        wait_for_search_refresh(&request, async {
-            self.inner.scheduler.wait_for_root_idle(&root).await;
-            let info = engine
-                .info(InfoOptions {
-                    root: request.root.clone(),
-                    include_status: false,
-                })
-                .await?;
+        let _refresh_activity = wait_for_search_refresh(&request, async {
+            let info = wait_for_search_admission(&request, async {
+                self.inner
+                    .scheduler
+                    .wait_for_root_idle_with_progress(&root, request.on_progress.clone())
+                    .await;
+                // Metadata admission also waits on writers outside this daemon.
+                engine
+                    .info(InfoOptions {
+                        root: request.root.clone(),
+                        include_status: false,
+                    })
+                    .await
+            })
+            .await?;
             info.compatibility.ensure_compatible()?;
+            let activity = if info.indexed {
+                Some(self.runtime(info.root.clone(), &options)?)
+            } else {
+                None
+            };
             if info.indexed {
                 let mut options = options;
                 options.root = Some(info.root);
                 self.refresh_index(options, true).await?;
             }
             // Preserve the engine's missing-index error without silently creating one.
-            Ok(())
+            Ok(activity)
         })
         .await?;
-        let mut reply = engine.context(request).await?;
+        // Resident Wait reconciles delivered watcher events. OS notifications
+        // still in flight belong to a later refresh, not a second disk scan.
+        let mut reply = engine.context_after_refresh(request).await?;
         reply.freshness = Some("fresh".to_owned());
         reply.background_refresh = Some("idle".to_owned());
         Ok(reply)
@@ -889,10 +1045,6 @@ async fn wait_for_search_refresh<T>(
     request: &ContextOptions,
     work: impl std::future::Future<Output = Result<T, EngineError>>,
 ) -> Result<T, EngineError> {
-    let timeout = std::time::Duration::from_millis(request.lock_timeout_ms.unwrap_or(30_000));
-    let deadline = tokio::time::Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| EngineError::invalid_argument("workspace lock timeout is too large"))?;
     let cancelled = async {
         match &request.signal {
             Some(signal) => signal.cancelled().await,
@@ -902,10 +1054,21 @@ async fn wait_for_search_refresh<T>(
     tokio::select! {
         biased;
         () = cancelled => Err(EngineError::cancelled("search refresh wait was cancelled")),
-        result = tokio::time::timeout_at(deadline, work) => result.unwrap_or_else(|_| {
-            Err(EngineError::resource_busy("timed out waiting for search refresh"))
-        }),
+        result = work => result,
     }
+}
+
+async fn wait_for_search_admission<T>(
+    request: &ContextOptions,
+    work: impl std::future::Future<Output = Result<T, EngineError>>,
+) -> Result<T, EngineError> {
+    let timeout = std::time::Duration::from_millis(request.lock_timeout_ms.unwrap_or(30_000));
+    let deadline = tokio::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| EngineError::invalid_argument("workspace lock timeout is too large"))?;
+    tokio::time::timeout_at(deadline, work)
+        .await
+        .map_err(|_| EngineError::resource_busy("timed out waiting for search refresh admission"))?
 }
 
 fn ensure_refresh_succeeded(job: &IndexJobSnapshot) -> Result<(), EngineError> {
@@ -959,8 +1122,11 @@ async fn watch_loop(
         if inner.closed.load(Ordering::Acquire) {
             break;
         }
+        let Some(activity) = RuntimeActivity::begin(&runtime, false) else {
+            break;
+        };
         runtime.invalidate_status();
-        let target_revision = runtime.dirty_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        runtime.dirty_revision.fetch_add(1, Ordering::AcqRel);
         let mut options = lock(&runtime.index_template).clone();
         // One-operation consent must never authorize later watcher jobs.
         options.allow_remote = false;
@@ -971,10 +1137,10 @@ async fn watch_loop(
         options.root = Some(runtime.canonical_root.clone());
         options.rebuild = false;
         options.changes = batch.changes.into_iter().map(map_change).collect();
-        let Ok(submitted) =
-            inner
-                .scheduler
-                .submit(runtime.canonical_root.clone(), options, JobReason::Watch)
+        if options.changes.contains(&IndexChange::Rescan) {
+            runtime.require_reconciliation();
+        }
+        let Ok(submitted) = runtime.submit_tracked(&inner.scheduler, options, JobReason::Watch)
         else {
             continue;
         };
@@ -982,27 +1148,23 @@ async fn watch_loop(
         let manager = WorkspaceRuntimeManager {
             inner: Arc::clone(&inner),
         };
-        let weak_runtime = Arc::downgrade(&runtime);
         tokio::spawn(async move {
+            let runtime = activity;
             let Ok(completed) = scheduler.wait(submitted.job.id).await else {
+                runtime.forget_job_proof(submitted.job.id);
                 return;
             };
-            if let Some(runtime) = weak_runtime.upgrade() {
-                runtime.invalidate_status();
-                if completed.job.state != JobState::Succeeded {
-                    return;
-                }
-                runtime
-                    .indexed_revision
-                    .fetch_max(target_revision, Ordering::AcqRel);
-                if let Err(error) = manager.ensure_watching(runtime).await {
-                    warn!(%error, "watch successor could not activate pending configuration");
-                }
+            runtime.complete_job(&completed);
+            if completed.job.state != JobState::Succeeded {
+                return;
+            }
+            if let Err(error) = manager.ensure_watching(Arc::clone(&runtime)).await {
+                warn!(%error, "watch successor could not activate pending configuration");
             }
         });
     }
     if let Some(runtime) = weak_runtime.upgrade() {
-        runtime.invalidate_status();
+        runtime.require_reconciliation();
         runtime.watcher_active.store(false, Ordering::Release);
     }
 }
@@ -1043,6 +1205,7 @@ fn index_template(options: &IndexOptions) -> IndexOptions {
     template.on_progress = None;
     template.allow_remote = false;
     template.authorized_remote.clear();
+    template.runtime_device = None;
     template.rebuild = false;
     template.reset_paths = false;
     template.changes.clear();
@@ -1355,7 +1518,9 @@ mod tests {
             }),
             SchedulerConfig::default(),
         );
-        let runtime = manager.runtime(root.clone(), &IndexOptions::default());
+        let runtime = manager
+            .runtime(root.clone(), &IndexOptions::default())
+            .expect("runtime");
         let epoch = super::lock(&runtime.index_status).invalidate();
         assert!(super::lock(&runtime.index_status).record(epoch, &inspected_info(), None));
         let submitted = manager
@@ -1399,6 +1564,77 @@ mod tests {
             .expect_err("failed refresh cannot report freshness");
         assert_eq!(error.code(), EngineError::INTERNAL);
         assert_eq!(error.message(), "fixture index failed");
+        manager.shutdown_all().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn search_refresh_execution_can_exceed_lock_timeout() {
+        let request = zg_engine::api::context::ContextOptions {
+            lock_timeout_ms: Some(1),
+            ..Default::default()
+        };
+        super::wait_for_search_refresh(&request, async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok(())
+        })
+        .await
+        .expect("admitted work is not bounded by the lock timeout");
+    }
+
+    #[tokio::test]
+    async fn search_refresh_can_cancel_non_resolving_work() {
+        let signal = tokio_util::sync::CancellationToken::new();
+        let request = zg_engine::api::context::ContextOptions {
+            signal: Some(signal.clone()),
+            ..Default::default()
+        };
+        let waiter = tokio::spawn(async move {
+            super::wait_for_search_refresh::<()>(&request, std::future::pending()).await
+        });
+        tokio::task::yield_now().await;
+        signal.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("cancel stuck work")
+            .expect("waiter")
+            .expect_err("cancelled");
+        assert_eq!(error.code(), EngineError::CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn waiting_search_bounds_external_workspace_lock_admission() {
+        use zg_engine::{
+            ZvecGrep,
+            api::context::{ContextOptions, options::RefreshPolicy},
+        };
+        use zg_transport_mcp::IndexOperationProvider;
+        let workspace = tempdir().expect("workspace");
+        let home = workspace.path().join(".zvec-grep");
+        std::fs::create_dir_all(home.join("locks")).expect("lock directory");
+        std::fs::write(home.join("manifest.json"), "{}").expect("manifest marker");
+        let writer = std::fs::File::create(home.join("locks/home")).expect("writer lock");
+        writer.lock().expect("exclusive workspace lock");
+        let engine = Arc::new(ZvecGrep::new());
+        let manager = WorkspaceRuntimeManager::native(engine.clone());
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.search(
+                &engine,
+                ContextOptions {
+                    root: Some(workspace.path().to_path_buf()),
+                    refresh: Some(RefreshPolicy::Wait),
+                    lock_timeout_ms: Some(25),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .expect("request timeout must cover the external file lock");
+        assert_eq!(
+            result.expect_err("writer is still active").code(),
+            EngineError::RESOURCE_BUSY
+        );
+        drop(writer);
         manager.shutdown_all().await.expect("shutdown");
     }
 
@@ -1478,19 +1714,38 @@ mod tests {
             )
             .await
             .expect("submit writer");
-        jobs.recv().await.expect("writer running");
+        let running = jobs.recv().await.expect("writer running");
+        let (progress, mut updates) = mpsc::unbounded_channel();
+        let reporter = zg_engine::api::index::progress::IndexProgressReporter::new(move |event| {
+            let _ = progress.send(event);
+        });
         let signal = tokio_util::sync::CancellationToken::new();
         let request = ContextOptions {
             root: Some(root.clone()),
             refresh: Some(RefreshPolicy::Wait),
             signal: Some(signal.clone()),
+            on_progress: Some(reporter),
             ..ContextOptions::default()
         };
         let waiting = tokio::spawn({
             let manager = manager.clone();
             async move { manager.search(&ZvecGrep::new(), request).await }
         });
-        tokio::task::yield_now().await;
+        running.on_progress.expect("scheduler reporter").report(
+            zg_engine::api::index::progress::IndexProgress {
+                phase: zg_engine::api::index::progress::IndexProgressPhase::Indexing,
+                files_total: Some(7),
+                files_indexed: Some(2),
+                files_failed: Some(0),
+                detail: None,
+                embedding: None,
+            },
+        );
+        let event = tokio::time::timeout(Duration::from_secs(2), updates.recv())
+            .await
+            .expect("public Wait receives live progress")
+            .expect("progress event");
+        assert_eq!(event.files_total, Some(7));
         signal.cancel();
         let error = tokio::time::timeout(Duration::from_secs(2), waiting)
             .await
@@ -1553,12 +1808,12 @@ mod tests {
         let waiting =
             tokio::spawn(async move { waiting_manager.refresh_index(options, true).await });
         tokio::time::timeout(Duration::from_secs(2), async {
-            while manager.snapshot().jobs.queued == 0 {
+            while !manager.runtime_snapshot(&root).watcher_active {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("refresh must queue behind the running job");
+        .expect("refresh waits for the running job after flushing its watcher");
         assert!(!waiting.is_finished());
         executor.release.add_permits(1);
         let refresh = jobs.recv().await.expect("refresh started");
@@ -1624,7 +1879,9 @@ mod tests {
         assert_eq!(indexed.job.canonical_root, canonical_root);
         assert_eq!(manager.snapshot().active_runtimes, 1);
         assert!(manager.runtime_snapshot(&canonical_root).watcher_active);
-        let runtime = manager.runtime(canonical_root.clone(), &IndexOptions::default());
+        let runtime = manager
+            .runtime(canonical_root.clone(), &IndexOptions::default())
+            .expect("runtime");
         assert!(super::lock(&runtime.index_template).name.is_none());
         assert_eq!(
             watchers
@@ -1923,9 +2180,11 @@ mod tests {
             watchers.clone(),
             SchedulerConfig::default(),
         );
-        let runtime = manager.runtime(root.clone(), &IndexOptions::default());
+        let runtime = manager
+            .runtime(root.clone(), &IndexOptions::default())
+            .expect("runtime");
         manager
-            .ensure_watching(runtime.clone())
+            .ensure_watching(Arc::clone(&runtime))
             .await
             .expect("old watcher");
         watchers.busy.store(true, Ordering::Release);
@@ -2038,7 +2297,9 @@ mod tests {
         assert_eq!(failed.job.state, crate::job_scheduler::JobState::Failed);
         assert_eq!(watchers.watches.lock().expect("watches").len(), 1);
         assert_eq!(watchers.closes.load(Ordering::Acquire), 0);
-        let runtime = manager.runtime(root.clone(), &IndexOptions::default());
+        let runtime = manager
+            .runtime(root.clone(), &IndexOptions::default())
+            .expect("runtime");
         assert_eq!(
             super::lock(&runtime.index_template).embedding_concurrency,
             Some(2)
@@ -2046,4 +2307,7 @@ mod tests {
         assert!(manager.runtime_snapshot(&root).watcher_active);
         manager.shutdown_all().await.expect("shutdown");
     }
+
+    mod freshness;
+    mod lifecycle;
 }

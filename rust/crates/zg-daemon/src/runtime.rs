@@ -78,8 +78,10 @@ pub(crate) async fn run_server(
         engine: Arc::clone(&engine),
     });
     let index_operations: Arc<dyn IndexOperationProvider> = Arc::new(runtimes.clone());
-    let mcp_server = match config.mcp_toolset {
-        McpToolset::Agent => ZvecGrepMcpServer::agent(Arc::clone(&engine)),
+    let mcp_server = match config.mcp_toolset.unwrap_or_default() {
+        McpToolset::Agent => {
+            ZvecGrepMcpServer::agent_with_index_operations(Arc::clone(&engine), index_operations)
+        }
         McpToolset::Full => ZvecGrepMcpServer::full_with_index_operations(
             Arc::clone(&engine),
             status,
@@ -241,13 +243,20 @@ async fn execute_command(
             zg_engine::authorization::grant_index(&target)
                 .map(|()| DaemonReply::GrantIndexAuthorization),
         ),
-        DaemonCommand::Context(request) => engine_execution(
-            state
-                .runtimes
-                .search(&state.engine, request)
-                .await
-                .map(|reply| DaemonReply::Context(Box::new(reply))),
-        ),
+        DaemonCommand::Context(mut request) => {
+            // HTTP bodies cannot carry in-process cancellation tokens. Tie this wait
+            // to request disposal and daemon shutdown, as the MCP transport does.
+            let signal = state.shutdown.child_token();
+            let _guard = signal.clone().drop_guard();
+            request.signal = Some(signal);
+            engine_execution(
+                state
+                    .runtimes
+                    .search(&state.engine, request)
+                    .await
+                    .map(|reply| DaemonReply::Context(Box::new(reply))),
+            )
+        }
         DaemonCommand::Index(request) => match state.runtimes.submit_index(request, true).await {
             Ok(submitted) if submitted.job.state == JobState::Succeeded => {
                 submitted.result.map_or_else(
