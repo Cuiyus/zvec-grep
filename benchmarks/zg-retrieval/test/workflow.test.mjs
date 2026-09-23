@@ -178,6 +178,10 @@ test("the selected workflow ref is frozen once for every downstream job", () => 
 
 test("the selected source is built from rust/ and exact-commit package caching bypasses recompilation", () => {
   const job = jobs["package-candidate"];
+  assert.match(
+    job,
+    /repository: \$\{\{ inputs\.candidate_ref == 'main' && 'zvec-ai\/zvec-grep' \|\| github\.repository \}\}/,
+  );
   assert.match(job, /ref: \$\{\{ inputs\.candidate_ref \}\}/);
   assert.match(job, /path: candidate/);
   assert.match(job, /working-directory: candidate\/rust/);

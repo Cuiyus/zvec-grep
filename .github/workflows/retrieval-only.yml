@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_ref:
-        description: Candidate branch, tag, or commit containing the rust/ workspace
+        description: Candidate ref (main resolves from zvec-ai/zvec-grep; other refs resolve from this fork)
         required: true
         default: main
         type: string
@@ -86,6 +86,7 @@ jobs:
       - name: Check out the selected candidate source
         uses: actions/checkout@v6
         with:
+          repository: ${{ inputs.candidate_ref == 'main' && 'zvec-ai/zvec-grep' || github.repository }}
           ref: ${{ inputs.candidate_ref }}
           path: candidate
           fetch-depth: 1
