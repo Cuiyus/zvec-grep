@@ -294,21 +294,32 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
   try {
     const install = await run(
       candidate.cli,
-      ["install", "--target", "opencode", "--yes", "--mcp-transport", "stdio"],
+      [
+        "--install",
+        "--target",
+        "opencode",
+        "--yes",
+        "--mcp-transport",
+        "stdio",
+      ],
       { cwd: root, env },
     );
     await writeJson(join(evidence, "install.json"), install);
     const config = JSON.parse(await readFile(opencode, "utf8"));
     assert.equal(config.mcp?.zvec_grep?.type, "local");
     const command = config.mcp.zvec_grep.command;
-    assert.ok(Array.isArray(command) && command.length >= 2);
-    await run(candidate.cli, ["server", "off"], { cwd: root, env });
+    assert.ok(
+      Array.isArray(command) &&
+        command.length >= 3 &&
+        command.every((part) => typeof part === "string"),
+    );
+    await run(candidate.cli, ["--server", "off"], { cwd: root, env });
     const indexStart = performance.now();
     try {
       const indexed = await run(
         candidate.cli,
         [
-          "index",
+          "--index",
           root,
           "--mode",
           "direct",
@@ -476,7 +487,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     throw error;
   } finally {
     if (client) await client.close().catch(() => undefined);
-    await run(candidate.cli, ["server", "off"], { cwd: root, env }).catch(
+    await run(candidate.cli, ["--server", "off"], { cwd: root, env }).catch(
       () => undefined,
     );
   }

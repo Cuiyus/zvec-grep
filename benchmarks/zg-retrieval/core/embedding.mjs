@@ -30,7 +30,7 @@ export function embeddingRuntime(model, environment = process.env) {
     remote: true,
     indexArguments: ["--endpoint", endpoint, "--allow-remote"],
     grantArguments: (root) => [
-      "auth",
+      "--auth",
       "grant",
       root,
       "--capability",

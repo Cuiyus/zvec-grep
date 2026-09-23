@@ -43,7 +43,7 @@ test("remote embedding uses one explicit HTTPS endpoint for indexing and MCP con
     "--allow-remote",
   ]);
   assert.deepEqual(runtime.grantArguments("/workspace"), [
-    "auth",
+    "--auth",
     "grant",
     "/workspace",
     "--capability",
