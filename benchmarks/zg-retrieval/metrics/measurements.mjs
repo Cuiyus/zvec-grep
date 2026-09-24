@@ -28,6 +28,9 @@ export function summarizeMeasurements(
     .filter((value) => Number.isSafeInteger(value) && value >= 0);
   const middle = Math.floor(latencies.length / 2);
   return {
+    latency_ms_mean: latencies.length
+      ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length
+      : null,
     latency_ms_p50: latencies.length
       ? latencies.length % 2
         ? latencies[middle]

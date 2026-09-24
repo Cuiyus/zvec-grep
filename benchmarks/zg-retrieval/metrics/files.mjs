@@ -73,7 +73,10 @@ export function summarizeFileRetrieval(rows) {
         b = String(right.task_id ?? "");
       return a < b ? -1 : a > b ? 1 : 0;
     })
-    .map(fileRetrievalForRow)
+    .map((row) => {
+      const eligible = fileRetrievalForRow(row);
+      return eligible === null ? null : (row.quality_mean?.file ?? eligible);
+    })
     .filter((score) => score !== null);
   const mean = (values) =>
     values.length

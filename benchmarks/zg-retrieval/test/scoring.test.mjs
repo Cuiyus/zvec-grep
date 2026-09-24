@@ -253,6 +253,33 @@ test("Rust MCP served-from-current-index framing is parsed without changing rank
   assert.equal(parsed.items[0].rank, 1);
 });
 
+test("all suites accept at most one empty source line after the public range", () => {
+  const body = (last) =>
+    response(
+      item(
+        1,
+        `source:\n20\tdef wanted():\n21\t    return True\n22\t${last}`,
+        "pkg/main.py:20-21",
+      ),
+    );
+  const accepted = scoreResponse(body(""), gold());
+  assert.equal(accepted.status, "scored");
+  assert.equal(accepted.items[0].path, "pkg/main.py");
+  for (const bad of [
+    body("unexpected"),
+    response(
+      item(
+        1,
+        "source:\n20\tdef wanted():\n21\t    return True\n22\t\n23\t",
+        "pkg/main.py:20-21",
+      ),
+    ),
+  ]) {
+    assert.throws(() => parseVisibleResponse(bad), VisibleFormatError);
+    assert.equal(scoreResponse(bad, gold()).status, "harness_invalid");
+  }
+});
+
 test("explicit empty is valid; missing, unrelated and malformed formats invalidate the harness", () => {
   for (const label of ["No matches.", "No searchable files."]) {
     const parsed = scoreResponse(response(label), gold());

@@ -27,6 +27,15 @@ let reply = zg.context(ContextOptions {
 zg.close();
 ```
 
+`zg --install --target opencode` respects a nonempty `OPENCODE_CONFIG` override.
+Otherwise it selects an existing `opencode.jsonc` before `opencode.json` under
+`${XDG_CONFIG_HOME:-~/.config}/opencode`, creating `opencode.json` when neither
+exists. Installation reports the selected path and explains when both files
+exist. JSONC comments, trailing commas, unrelated settings and other MCP entries
+are preserved. Uninstall removes managed entries from both global files, or only
+from the explicit override, and removes managed guidance from the adjacent
+`AGENTS.md`.
+
 `ZvecGrep` is normally shared for the lifetime of a process. Workspace root is
 request state, so the same instance can serve multiple workspaces. It exposes
 typed `context`, `index`, `info`, and `drop_index` methods. It
@@ -81,15 +90,36 @@ legacy synchronous auto-update queries never borrow partial writer state. A
 rebuild's unpublished generation remains private. The daemon preserves the refresh
 policy when invoking the engine and also bounds cancellable waits for scheduled jobs.
 
-The native engine supports indexing, indexed FTS and vector search, `zg query
---rg`, workspace discovery, `info`, and idempotent `drop_index`.
+The daemon retires workspace runtimes and watchers after four hours without a
+foreground operation. Maintenance runs once per minute and does not renew the
+idle deadline. Active queries, inspections, watcher setup, queued indexing and
+running indexing prevent retirement; background changes and job completion do
+not restart the four-hour timer. Retirement forgets the workspace's finished job
+history and prevents old callbacks from restarting its watcher. A later request
+can activate a new runtime without deleting the persisted index. Model runtimes
+remain shared at engine scope and follow their own lease lifetime.
+
+The native engine supports indexing, indexed FTS and vector search, `zg --rg`,
+workspace discovery, `info`, and idempotent `drop_index`.
+
+Search directly with `zg "where authentication is validated"`, `zg --fts
+"AuthService"`, or `zg --rg -F "AuthService" src`. Management uses flags:
+`zg --index`, `zg --status`, `zg --server`, `zg --config`, `zg --auth`,
+`zg --install`, and `zg --uninstall`. Bare words such as `query`, `index`, and
+`help` are literal search text, not commands. Use `zg --help [topic]` (for example,
+`zg --help search`) and `zg --version` for help and version information.
+
+Terminal searches default to human-readable output with full source previews;
+piped output is compact. `--compact` forces compact output, and
+`--preview=full` explicitly requests full previews even in compact output.
+The former `--human` option is no longer accepted.
 
 This version indexes text with one embedding model per workspace. Choose it with
-`zg index --embedding <model>` or set a default with
-`zg config model set <model> --default`. Code, documents and structured text use
+`zg --index --embedding <model>` or set a default with
+`zg --config model set <model> --default`. Code, documents and structured text use
 that same model. Images and other unsupported sources are reported as skipped;
 multimodal content and per-content model routing are not supported. Changing the
-model requires `zg index --rebuild --embedding <model>`.
+model requires `zg --index --rebuild --embedding <model>`.
 
 Each entity stores one complete source content object, its location in the source
 file, metadata, and its fragments. Each text fragment has a unique ID and selects
@@ -102,7 +132,7 @@ metadata included in search projections. Index format 5 uses this layout.
 Lexical search runs in-process with ripgrep's `grep` and `ignore` crates; the
 binary and ordinary CI jobs do not require a system `rg` executable.
 
-Managed `zg query --rg` preserves literal pattern whitespace and supports empty
+Managed `zg --rg` preserves literal pattern whitespace and supports empty
 patterns with `-e ''`. Matching options include fixed strings (`-F`), case
 selection (`-i`, `-s`, `-S`, with the last option winning), word/whole-line
 matching (`-w`, `-x`), inversion (`-v`), multiline search (`-U`),
@@ -119,7 +149,7 @@ ripgrep output-format switches are rejected; Unicode BOM decoding is automatic.
 
 ## Remote embedding authorization
 
-In an interactive terminal, `zg index` prompts before sending data to an
+In an interactive terminal, `zg --index` prompts before sending data to an
 unauthorized remote embedding destination. Choose `1. Allow once`,
 `2. Allow for this workspace`, or `3. Cancel`. Direct and server modes show the
 same prompt; server mode resolves the destination and saves workspace consent
@@ -130,9 +160,9 @@ Non-interactive commands require existing consent or `--allow-remote`.
 You can also authorize a workspace explicitly:
 
 ```sh
-zg auth grant /path/to/workspace --capability embedding --scope workspace --embedding qwen/text-embedding-v4
-zg auth status /path/to/workspace
-zg auth revoke /path/to/workspace
+zg --auth grant /path/to/workspace --capability embedding --scope workspace --embedding qwen/text-embedding-v4
+zg --auth status /path/to/workspace
+zg --auth revoke /path/to/workspace
 ```
 
 Granting consent does not send data, load a model, or build an index. Subsequent
@@ -156,8 +186,8 @@ direct parent directory, but that directory's parent must already exist.
 
 Direct CLI, server CLI, and MCP read the same authorization on each operation;
 configure them to use the same signing key. Revocation takes effect for new
-operations without restarting the server. `--allow-remote` on `zg index` or
-`zg query` grants consent for that operation only, including its synchronous
+operations without restarting the server. `--allow-remote` on `zg --index` or
+`zg <query>` grants consent for that operation only, including its synchronous
 refresh, and never authorizes later watcher jobs. MCP reuses existing workspace
 grants and otherwise asks form-capable clients for explicit consent before index
 or search sends data remotely. The form discloses the root, source roots, model,
@@ -167,6 +197,17 @@ signed persistent grant, or `cancel` to deny transmission. Search also offers
 invalid responses, declined forms, cancellation and timeouts never grant consent.
 Cancelling the originating request also sends a cancellation notification for its
 pending consent form; clients control how that notification is presented.
+
+Daemon freshness checks reuse successful reconciliation proofs while the watcher
+is active and all observed revisions are indexed. `Wait` drains delivered watcher
+events and queued successors; concurrent waiters share one refresh. A clean
+`Background` query reports `idle` without submitting another job. Initial watcher
+installation, recovery, overflow, rejected batches, and failed indexing require a
+full reconciliation. Proofs retain their original revision and recovery epoch so
+an older completion cannot clear newer changes; partial file failures are never
+cached as fresh. Native `flush_pending` drains delivered events without forcing a
+scan, while explicit `flush` and periodic/recovery checks retain full rescans.
+Explicit `info` inspection still reads current disk status.
 
 ## MCP request lifecycle
 

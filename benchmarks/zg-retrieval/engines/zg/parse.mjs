@@ -155,9 +155,12 @@ export function parseVisibleResponse(response) {
         number <= (item.source_lines.at(-1)?.line ?? 0)
       )
         fail("Repeated or unordered visible source lines.");
+      // The public Rust/Node presentation numbers a terminal newline as one
+      // empty line after the advertised content range.
       if (
         item.range.kind === "text" &&
-        (number < item.range.start_line || number > item.range.end_line)
+        (number < item.range.start_line || number > item.range.end_line) &&
+        !(number === item.range.end_line + 1 && source[2] === "")
       )
         fail("Visible source falls outside the item's public range.");
       item.source_lines.push({ line: number, text: source[2] });

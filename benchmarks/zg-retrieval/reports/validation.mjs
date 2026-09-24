@@ -6,6 +6,10 @@ import {
   fileRetrievalForRow,
 } from "../metrics/files.mjs";
 import { validateCallLatency } from "../metrics/measurements.mjs";
+import {
+  rankingSignature,
+  summarizeRepeatedQuality,
+} from "../metrics/repetitions.mjs";
 
 export const ZG_MODES = Object.freeze(["hybrid", "fts", "vector"]);
 const FILE_METRICS = ["hit_at_1", "hit_at_5", "hit_at_10", "rr_at_10"];
@@ -30,7 +34,12 @@ function uniqueStrings(values, label) {
 }
 
 /** Bind row identity and labels to the checked-out frozen suite. */
-export function validateFrozenTask(row, suite, label) {
+export function validateFrozenTask(
+  row,
+  suite,
+  label,
+  { allowMissingTargets = false } = {},
+) {
   const task = suite.lock.tasks.find((task) => task.task_id === row.task_id);
   assert.ok(task, `${label}: unknown task ${row.task_id}`);
   for (const field of ["repository", "category"])
@@ -45,11 +54,12 @@ export function validateFrozenTask(row, suite, label) {
     suite.gold[row.task_id].status,
     `${label}: Gold status mismatch`,
   );
-  assert.deepEqual(
-    row.ndcg?.targets,
-    suite.file_gold[row.task_id].targets,
-    `${label}: frozen file targets differ`,
-  );
+  if (!allowMissingTargets)
+    assert.deepEqual(
+      row.ndcg?.targets,
+      suite.file_gold[row.task_id].targets,
+      `${label}: frozen file targets differ`,
+    );
 }
 
 /** Check all five calls before aggregation can omit invalid measurements. */
@@ -186,15 +196,59 @@ function validateQualityRow(row, label) {
     `${label}: file retrieval score differs from public items or frozen projection`,
   );
   validateMeasurements(row, label);
+  assert.ok(
+    Array.isArray(row.quality_observations) &&
+      row.quality_observations.length === 5,
+    `${label}: incomplete quality repetition coverage`,
+  );
+  for (const [index, observation] of row.quality_observations.entries()) {
+    assert.equal(observation.repetition, index + 1);
+    assert.ok(Array.isArray(observation.items));
+    const measurement = row.measurement_observations[index];
+    if (measurement.execution_status === "product_error")
+      assert.deepEqual(
+        observation.items,
+        [],
+        `${label}: failed call earned credit`,
+      );
+    else validateSearchRoute(observation.items, row.mode);
+  }
+  assert.equal(
+    rankingSignature(row.quality_observations[4].items),
+    rankingSignature(row.items),
+    `${label}: fifth quality evidence differs from representative row`,
+  );
+  const repeated =
+    row.gold_status === "reviewed"
+      ? summarizeRepeatedQuality(row.quality_observations, targets)
+      : null;
+  assert.deepEqual(
+    row.quality_mean,
+    repeated,
+    `${label}: five-call quality mean or stability differs from public items`,
+  );
+  assert.equal(
+    row.ranking_repeatable,
+    row.measurement_observations.every(
+      (sample) => sample.execution_status === "success",
+    )
+      ? (repeated?.ranking_repeatable ?? null)
+      : null,
+    `${label}: ranking stability differs from public items`,
+  );
   return { ...normalized, file_retrieval: file };
 }
 
 /** Validate the Rust MCP-default, three-mode report from saved public evidence. */
-export function validateZgReport(report, label = "ZG", { suite } = {}) {
+export function validateZgReport(
+  report,
+  label = "ZG",
+  { suite, allowPartial = false } = {},
+) {
   assert.equal(
     report.schema_version,
-    6,
-    `${label}: unsupported report schema; schema 6 required`,
+    7,
+    `${label}: unsupported report schema; schema 7 required`,
   );
   assert.equal(
     report.preview,
@@ -222,25 +276,43 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
     `${label}: quality repetition 5 required`,
   );
   assert.equal(
-    report.quality_score_valid,
-    true,
-    `${label}: invalid quality report`,
+    report.quality_aggregation,
+    "mean_of_five",
+    `${label}: five-call quality aggregation required`,
   );
-  assert.ok(
-    Array.isArray(report.integrity_errors) &&
-      report.integrity_errors.length === 0,
-    `${label}: experimental integrity errors`,
-  );
+  const partial = allowPartial && report.quality_score_valid === false;
+  if (partial) {
+    // Only isolated, explicitly marked observations may be omitted. Global
+    // protocol, candidate, corpus, or model failures still withhold all scores.
+    assert.deepEqual(
+      report.integrity_errors,
+      ["one or more observations are experimentally invalid"],
+      `${label}: non-local experimental integrity errors`,
+    );
+    assert.equal(report.integrity_passed, false);
+  } else {
+    assert.equal(
+      report.quality_score_valid,
+      true,
+      `${label}: invalid quality report`,
+    );
+    assert.ok(
+      Array.isArray(report.integrity_errors) &&
+        report.integrity_errors.length === 0,
+      `${label}: experimental integrity errors`,
+    );
+  }
   assert.ok(
     Number.isSafeInteger(report.product_error_calls) &&
       report.product_error_calls >= 0,
     `${label}: invalid product error count`,
   );
-  assert.equal(
-    report.integrity_passed,
-    report.product_error_calls === 0,
-    `${label}: integrity flag and product errors disagree`,
-  );
+  if (!partial)
+    assert.equal(
+      report.integrity_passed,
+      report.product_error_calls === 0,
+      `${label}: integrity flag and product errors disagree`,
+    );
   for (const field of ["source", "gold", "file_gold", "protocol"])
     assert.match(
       report.suite?.[field] ?? "",
@@ -287,6 +359,8 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
   );
   assert.ok(Array.isArray(report.tasks), `${label}: missing task rows`);
   const rows = new Map();
+  const invalidRows = [];
+  const seen = new Set();
   for (const row of report.tasks) {
     const context = `${label}: ${row.task_id}/${row.mode}`;
     assert.equal(
@@ -298,7 +372,8 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
       ids.includes(row.task_id) && modes.includes(row.mode),
       `${context}: unexpected task/mode`,
     );
-    assert.ok(!rows.has(key(row)), `${context}: duplicate task/mode`);
+    assert.ok(!seen.has(key(row)), `${context}: duplicate task/mode`);
+    seen.add(key(row));
     assert.equal(
       row.repetition,
       5,
@@ -318,14 +393,39 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
         typeof row[field] === "string" && row[field].length > 0,
         `${context}: missing ${field}`,
       );
-    if (suite) validateFrozenTask(row, suite, context);
-    rows.set(key(row), validateQualityRow(row, context));
+    const invalid = partial && row.status === "harness_invalid";
+    if (suite)
+      validateFrozenTask(row, suite, context, {
+        allowMissingTargets: invalid,
+      });
+    if (invalid) {
+      assert.equal(
+        row.file_retrieval,
+        null,
+        `${context}: invalid row has score`,
+      );
+      assert.equal(row.ndcg, null, `${context}: invalid row has nDCG`);
+      assert.ok(
+        typeof row.invalid_reason === "string" && row.invalid_reason.length,
+        `${context}: missing invalid reason`,
+      );
+      assert.match(
+        row.invalid_reason,
+        /^(?:repetition [1-5]: )?format_unknown: [^;]+$/,
+        `${context}: only isolated public-response format failures permit partial scoring`,
+      );
+      invalidRows.push(row);
+    } else {
+      rows.set(key(row), validateQualityRow(row, context));
+    }
   }
   assert.equal(
-    rows.size,
+    seen.size,
     ids.length * ZG_MODES.length,
     `${label}: missing task/mode coverage`,
   );
+  if (partial)
+    assert.ok(invalidRows.length > 0, `${label}: no isolated invalid rows`);
   assert.equal(
     report.product_error_calls,
     report.tasks
@@ -333,5 +433,5 @@ export function validateZgReport(report, label = "ZG", { suite } = {}) {
       .filter((sample) => sample.execution_status === "product_error").length,
     `${label}: product error count differs from measurement evidence`,
   );
-  return { ids, modes: [...ZG_MODES], rows };
+  return { ids, modes: [...ZG_MODES], rows, invalidRows };
 }

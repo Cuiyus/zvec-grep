@@ -26,7 +26,7 @@ Install the packed native candidate outside the corpus and connect through its p
 
 FTS/vector requests omit the primary `query` and the other route. All requests use `limit: 10`, `autoUpdate: false`, `freshness: eventual` and `preferSymbol: false`. The harness sends no `preview` field because the Rust MCP schema does not expose one; its bounded default presentation is measured as returned. Disabling symbol preference prevents vector-only requests from adding a symbol-oriented FTS route. Public `matchedBy` evidence is checked against the requested mode. Native file aggregation, fusion and ranking remain product behavior under test; the harness adds no reranker.
 
-Modes run in fixed order **hybrid → fts → vector**. Within each mode, each original question runs five consecutive times, with only the fifth result contributing quality and output size. This gives **20 × 3 × 5 = 300 MCP calls**, **60 quality observations**, and **20 quality samples per mode**. Repetitions are not independent questions.
+Modes run in fixed order **hybrid → fts → vector**. Within each mode, each original question runs five consecutive times. All five results contribute quality and ranking-stability observations; only the fifth supplies output size. This gives **20 × 3 × 5 = 300 MCP calls** and **60 question/mode quality summaries**. Repetitions are not independent questions.
 
 The protocol fixes the same model, corpus policy and index across modes. Shared runtime and model caches, together with fixed order, affect latency: later modes can reuse work initialized by earlier modes. Timings are observations under this protocol, not an unbiased speed comparison or cold-start benchmark.
 
@@ -34,13 +34,14 @@ The protocol fixes the same model, corpus policy and index across modes. Shared 
 
 | Metric | Definition and denominator |
 | --- | --- |
-| File Hit@1 | Fraction of 20 questions whose first result matches a labeled relevant file |
-| File Hit@5 | Fraction with a relevant file among the first five native results |
-| File Hit@10 | Fraction with a relevant file among the first ten native results |
-| File MRR@10 | Mean of 1/r for the first matching native rank r; Top-10 misses contribute zero |
-| nDCG@10 | First-target binary discounted gain normalized by target-count ideal gain; average within each repository, then equally across 11 repositories |
+| File Hit@1 | Mean of five binary rank-1 observations per question/mode, then equally across questions |
+| File Hit@5 | Mean of five binary Top-5 observations per question/mode, then equally across questions |
+| File Hit@10 | Mean of five binary Top-10 observations per question/mode, then equally across questions |
+| File MRR@10 | Mean of five 1/r observations per question/mode; Top-10 misses contribute zero |
+| nDCG@10 | Mean of five first-target binary discounted-gain observations per question/mode, then repository macro across 11 repositories |
+| Stable Top 10 | Count of question/mode cases where all five ordered public result locations match |
 | Mean output (KiB) | Mean UTF-8 bytes of successful fifth-call response text divided by 1024; normally 20 samples per mode |
-| Latency P50 (ms) | Median duration of all successful MCP search calls; normally 100 samples per mode; excludes indexing |
+| Avg RT / P50 RT (ms) | Mean and median duration of all successful MCP search calls; normally 100 samples per mode; excludes indexing |
 
 All five quality metrics share [39 frozen relevant-file targets](../benchmarks/zg-retrieval/gold/files-v1.json), deduplicated from accepted annotation paths. Bridge-only paths earn no credit. Matching normalizes separators and accepts exact paths or directory-boundary suffixes without case folding. Preserve native ranks: repeated file chunks consume positions and are not collapsed or renumbered. Response length and visible declarations do not affect relevance.
 
@@ -52,13 +53,13 @@ IDCG@10(q) = sum(1 / log2(i + 1), i = 1..min(10, |T_q|))
 nDCG@10(q) = DCG@10(q) / IDCG@10(q)
 ```
 
-Unretrieved targets remain in the ideal-gain denominator; later chunks from an already matched file add no gain. Hit/MRR weight questions equally, while nDCG weights repositories equally after their within-repository means. The JavaScript nDCG implementation is checked against byte-identical pinned Python functions in [`test/fixtures/ndcg-reference/`](../benchmarks/zg-retrieval/test/fixtures/ndcg-reference/), with their MIT license attribution preserved. This reference runs only in unit tests.
+Unretrieved targets remain in the ideal-gain denominator; later chunks from an already matched file add no gain. Each question/mode first averages its five call-level scores. Hit/MRR then weight questions equally, while nDCG weights repositories equally after their within-repository means. Stability compares ranked public paths, ranges and match routes; equal quality scores alone do not imply stable retrieval. The JavaScript nDCG implementation is checked against byte-identical pinned Python functions in [`test/fixtures/ndcg-reference/`](../benchmarks/zg-retrieval/test/fixtures/ndcg-reference/), with their MIT license attribution preserved. This reference runs only in unit tests.
 
 ## Integrity and labels
 
 Each question/mode/repetition has its own raw response and hash. Offline aggregation reparses public responses and verifies frozen identities, original questions, exclusive route arguments, omitted preview override, repetition count/order, corpus/model inventories and public index status. Three-mode coverage is mandatory even for an explicitly selected local subset. Saved derived scores are not trusted as scoring inputs.
 
-Installation, indexing and product-call failures fail operational integrity. Undelivered quality results retain zero credit in the denominator. Failed calls are excluded from output and latency measurements. Unknown formats, route mismatches, identity drift, missing/duplicate calls and invalid measurements invalidate the experiment and withhold all aggregates. Quality values have no arbitrary pass threshold.
+Installation, indexing and product-call failures fail operational integrity. Product-call failures with valid evidence retain zero credit in the denominator. Failed calls are excluded from output and latency measurements. An isolated public-response format failure is excluded from diagnostic partial scores and listed by task ID, mode and reason; coverage shows the smaller denominator, and CI still fails. Protocol, identity, missing-call and other integrity errors withhold all aggregates. Quality values have no arbitrary pass threshold.
 
 Labels came from AI-assisted source review and remain partial positives, without independent blind human validation. Original source anchors remain provenance and do not score relevance. A file hit does not establish sufficient answer evidence or complete recall. One Hit change is five percentage points on this suite; these public development questions support regression diagnosis rather than broad superiority claims. See the [metric validity review](./zg-retrieval-metric-review.md).
 
@@ -68,6 +69,6 @@ Labels came from AI-assisted source review and remain partial positives, without
 - `retrieval-zg-report`: `report.json`, `report.md` and per-call `scores.jsonl`.
 - `retrieval-data-<owner>__<repo>`: raw requests/responses, installation evidence, corpus/model inventories and public index status.
 
-The overview uses schema 4 and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows. It identifies the frozen harness commit and selected candidate ref/commit. ZG reports use schema 6 with `preview: mcp-default`, three mode aggregates and 60 quality rows for a complete suite. `file_retrieval` contains Hit/MRR, `ndcg` contains nDCG and its target evidence, and `measurements` contains output size, latency and sample counts. Each quality row retains all five measurement observations for recomputation.
+The overview uses schema 5 and fixed `zg-hybrid`, `zg-fts`, `zg-vector` rows. It identifies the frozen harness commit and selected candidate ref/commit and lists failed tasks and their reasons. ZG reports use schema 7 with `preview: mcp-default`, three mode aggregates and 60 quality rows for a complete suite. `quality_mean` contains the five-call quality means and ranking stability; the representative fifth-call `file_retrieval` and `ndcg` retain detailed target evidence. Each quality row retains all five public result lists and measurement observations for recomputation.
 
-The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v6`. Compare only schema 6 reports with matching protocol and frozen inputs. Reports from other protocol versions require their matching scorer checkout; saved-evidence replay must not be presented as a new product run.
+The protocol ID is `sweqa20-zg-rust-three-modes-mcp-default-v7`. Compare only schema 7 reports with matching protocol and frozen inputs. Reports from other protocol versions require their matching scorer checkout; saved-evidence replay must not be presented as a new product run.

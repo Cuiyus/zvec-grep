@@ -308,6 +308,12 @@ impl IndexJobScheduler {
             .map(|job| lock(&job.snapshot).clone())
     }
 
+    pub(crate) fn has_active_root(&self, canonical_root: &PathBuf) -> bool {
+        let state = lock(&self.inner.state);
+        state.active_by_root.contains_key(canonical_root)
+            || state.followup_by_root.contains_key(canonical_root)
+    }
+
     pub(crate) fn cancel_root(&self, canonical_root: &PathBuf) -> bool {
         let (active, followup) = {
             let mut state = lock(&self.inner.state);
@@ -353,6 +359,15 @@ impl IndexJobScheduler {
     }
 
     pub(crate) async fn wait_for_root_idle(&self, canonical_root: &PathBuf) {
+        self.wait_for_root_idle_with_progress(canonical_root, None)
+            .await;
+    }
+
+    pub(crate) async fn wait_for_root_idle_with_progress(
+        &self,
+        canonical_root: &PathBuf,
+        reporter: Option<zg_engine::api::index::progress::IndexProgressReporter>,
+    ) {
         loop {
             let active = lock(&self.inner.state)
                 .active_by_root
@@ -361,7 +376,7 @@ impl IndexJobScheduler {
             let Some(active) = active else {
                 return;
             };
-            wait_for_job(&active, None).await;
+            wait_for_job(&active, reporter.clone()).await;
         }
     }
 
@@ -486,10 +501,15 @@ fn spawn_job(inner: Arc<SchedulerInner>, job: Arc<ScheduledJob>) {
             finish_job(&inner, &job);
             return;
         }
-        lock(&job.snapshot).state = JobState::Running;
-        let mut options = lock(&job.options)
-            .take()
-            .expect("a queued daemon job must retain its index options");
+        let mut options = {
+            // submit inspects state and merges options under this same lock.
+            // Claiming must be atomic with that decision or a queued grant can be lost.
+            let _state = lock(&inner.state);
+            lock(&job.snapshot).state = JobState::Running;
+            lock(&job.options)
+                .take()
+                .expect("a queued daemon job must retain its index options")
+        };
         options.signal = Some(job.cancellation.clone());
         let weak_job = Arc::downgrade(&job);
         options.on_progress = Some(
@@ -642,6 +662,7 @@ fn merge_runtime_options(current: &mut IndexOptions, incoming: &mut IndexOptions
             .is_some_and(|endpoint| current.endpoint.as_ref() != Some(endpoint));
     if destination_changed {
         current.allow_remote = incoming.allow_remote;
+        current.authorized_remote.clear();
         current.api_key = None;
         current.endpoint = None;
     }
@@ -652,6 +673,7 @@ fn merge_runtime_options(current: &mut IndexOptions, incoming: &mut IndexOptions
     merge_update(&mut current.api_key, incoming.api_key.take());
     merge_update(&mut current.endpoint, incoming.endpoint.take());
     merge_update(&mut current.device, incoming.device.take());
+    merge_update(&mut current.runtime_device, incoming.runtime_device.take());
     merge_update(&mut current.model_cache, incoming.model_cache.take());
     merge_update(
         &mut current.lock_timeout_ms,
@@ -665,6 +687,11 @@ fn merge_runtime_options(current: &mut IndexOptions, incoming: &mut IndexOptions
     merge_update(&mut current.on_progress, incoming.on_progress.take());
     // Consent is scoped to this coalesced job. Runtime watch templates clear it.
     current.allow_remote |= incoming.allow_remote;
+    for target in incoming.authorized_remote.drain(..) {
+        if !current.authorized_remote.contains(&target) {
+            current.authorized_remote.push(target);
+        }
+    }
 }
 
 fn merge_update<T>(current: &mut Option<T>, incoming: Option<T>) {
@@ -944,6 +971,36 @@ mod tests {
                 _ => Ok(IndexResult::default()),
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claiming_a_job_is_serialized_with_submission() {
+        let scheduler =
+            IndexJobScheduler::new(Arc::new(ImmediateExecutor), SchedulerConfig::default());
+        let root = std::env::temp_dir().join("claim-serialization");
+        let permits = scheduler
+            .inner
+            .permits
+            .clone()
+            .acquire_many_owned(2)
+            .await
+            .expect("permits");
+        let submitted = scheduler
+            .submit(root, IndexOptions::default(), JobReason::Watch)
+            .expect("submit");
+        {
+            let state = super::lock(&scheduler.inner.state);
+            let job = state.jobs.get(&submitted.job.id).expect("job");
+            drop(permits);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert_eq!(
+                super::lock(&job.snapshot).state,
+                JobState::Queued,
+                "a worker must not claim options while submit owns scheduler state"
+            );
+        }
+        scheduler.wait(submitted.job.id).await.expect("completion");
+        scheduler.shutdown().await;
     }
 
     #[tokio::test]
@@ -1595,6 +1652,54 @@ mod tests {
         let reset = pending.expect("pending reset");
         assert!(reset.reset_paths);
         assert_eq!(reset.scan.nested_git, None);
+    }
+
+    #[test]
+    fn merged_refresh_preserves_target_scoped_once_consent() {
+        let target = zg_engine::authorization::IndexAuthorization {
+            root: std::env::temp_dir(),
+            workspace_roots: vec![std::env::temp_dir()],
+            model: "qwen/text-embedding-v4".into(),
+            endpoint: "https://a.test/embeddings".into(),
+            endpoint_host: "a.test".into(),
+        };
+        let mut pending = Some(IndexOptions::default());
+        super::merge_options(
+            &mut pending,
+            IndexOptions {
+                authorized_remote: vec![target.clone()],
+                ..IndexOptions::default()
+            },
+        );
+        super::merge_options(
+            &mut pending,
+            IndexOptions {
+                authorized_remote: vec![target.clone()],
+                runtime_device: Some(zg_engine::api::index::options::Device::Cpu),
+                ..IndexOptions::default()
+            },
+        );
+        let merged = pending.as_ref().expect("merged");
+        assert_eq!(merged.authorized_remote, [target]);
+        assert!(!merged.allow_remote);
+        assert!(merged.device.is_none());
+        assert_eq!(
+            merged.runtime_device,
+            Some(zg_engine::api::index::options::Device::Cpu)
+        );
+        super::merge_options(
+            &mut pending,
+            IndexOptions {
+                endpoint: Some("https://b.test/embeddings".into()),
+                ..IndexOptions::default()
+            },
+        );
+        assert!(
+            pending
+                .expect("new destination")
+                .authorized_remote
+                .is_empty()
+        );
     }
 
     #[test]
