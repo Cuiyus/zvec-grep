@@ -458,8 +458,7 @@ jobs:
         with:
           pattern: swe-qa-task-report-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/task-reports
-      - name: Detect completed report scope
-        id: report-set
+      - name: Validate completed report scope
         env:
           EXPECTED_COUNT: ${{ needs.validate.outputs.task-count }}
         run: |
@@ -481,10 +480,8 @@ jobs:
           fi
 
           if [[ "$actual_count" == "$expected_count" ]]; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "complete=false" >> "$GITHUB_OUTPUT"
           echo "::warning::Aggregating ${actual_count} of ${expected_count} task reports; failed tasks will be listed but excluded from all Aggregate metrics."
       - name: Combine reports without re-judging
         env:
