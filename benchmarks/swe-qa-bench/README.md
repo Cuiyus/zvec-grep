@@ -146,7 +146,9 @@ unauthorized benchmark execution.
 selects the Rust source branch, tag, or commit to build as the candidate npm
 package; the harness checkout and candidate source are separate. Its `model` input defaults to
 `glm-5.2`; select `qwen3.8-max` to run the same protocol with Qwen. The selected
-model is used for both execution and judging.
+model is used for both execution and judging. The independent `embedding` input
+defaults to `local`, using `local/potion-code-16m-v2`; select `remote` to use
+`qwen/qwen3.7-text-embedding`, matching the Retrieval-only workflow.
 
 The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
 tasks were selected from [run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943)
@@ -166,15 +168,19 @@ to a subagent whose internal calls are absent from the main trace. Compare new
 trials against the same three historical tasks, and account for failed-attempt
 overhead separately.
 
-CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2` by default, the local
-`local/potion-code-16m-v2` embedding model, and five trials per task and
-profile. Configure the repository's `GLM_API_KEY` Actions secret for agent
+CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2` and local embedding by
+default, with five trials per task and profile. Configure the repository's
+`GLM_API_KEY` Actions secret for agent
 execution and judging. The existing secret name is retained for both models;
 its Bailian business-space API key must have access to the selected model.
+Remote embedding additionally requires the `QWEN_EMBEDDING_API_KEY` Actions
+secret and `QWEN_EMBEDDING_ENDPOINT` repository variable. Source content is sent
+to that remote embedding endpoint only when `embedding=remote`.
 The Claude Code configuration above describes the published local protocol.
-CI reads the fixed trial count, failure retry limit, and embedding model from
-[`ci-config.json`](ci-config.json). The workflow's model, scope, and Rust source
-are manual run inputs; credentials and the Bailian endpoint are runtime settings.
+CI reads the fixed trial count, failure retry limit, and local/remote embedding
+model mapping from [`ci-config.json`](ci-config.json). The workflow's execution
+model, embedding runtime, scope, and Rust source are manual run inputs;
+credentials and endpoints are runtime settings.
 
 The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
 trials. CI passes `--max-retries 2`: an exception, including an agent timeout,

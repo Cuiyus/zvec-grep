@@ -78,7 +78,7 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 [SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 仅支持通过 `workflow_dispatch` 手动运行，push 和 PR 均不触发。核心维护成员限定为仓库角色明确为 `admin` 或 `maintain` 的用户。每个 job 的第一步都会实时检查 `github.actor` 和 `github.triggering_actor` 两人的当前角色，通过后才 checkout 和使用模型密钥；单独重跑某个 job 也会重新检查。权限不足或权限查询失败时停止执行。GitHub 的 write 用户可能仍能点击手动运行或重跑按钮，但工作流会拒绝未授权的 benchmark 执行。
 
-`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`candidate_ref` 默认是 `main`，指定要单独检出并打包的 Rust 源码分支、标签或提交；benchmark harness 与候选源码分开。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。
+`workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`candidate_ref` 默认是 `main`，指定要单独检出并打包的 Rust 源码分支、标签或提交；benchmark harness 与候选源码分开。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。独立的 `embedding` 输入默认是 `local`，对应 `local/potion-code-16m-v2`；选择 `remote` 时使用与 Retrieval-only 工作流一致的 `qwen/qwen3.7-text-embedding`。
 
 `repro-3` 固定运行 3 题 × 2 个 profile × 5 次 = 30 个 trial，供小规模复现与迭代。任务按[运行 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943) 中的调查路径和评分波动选取。下表范围均来自该轮最终成功的五次测试：
 
@@ -90,9 +90,9 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 此分层是历史样本的描述，不是统计显著性标准，也不是模型的固有随机性等级。低波动组仍存在路径变化；高波动组的一次 baseline 使用子代理，主轨迹未展开其内部调用。新一轮应与历史同三题比较，失败尝试的开销单独计入。
 
-CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding 模型 `local/potion-code-16m-v2`，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。上文的 Claude Code 配置对应已发布的本地测试协议。
+CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding，每个任务、每个 profile 独立运行 5 次。请在仓库的 Actions secret 中配置 `GLM_API_KEY`，用于 Agent 执行和评审。两个执行模型沿用同一个 secret 名称；其中的百炼业务空间 API Key 需要具有所选模型的调用权限。远端 Embedding 还需要 Actions secret `QWEN_EMBEDDING_API_KEY` 和仓库 variable `QWEN_EMBEDDING_ENDPOINT`；只有选择 `embedding=remote` 时才会将源码内容发送到该远端 Embedding endpoint。上文的 Claude Code 配置对应已发布的本地测试协议。
 
-CI 的固定 trial 次数、失败重试上限和 Embedding 模型由版本化的 [`ci-config.json`](ci-config.json) 指定。模型、任务范围和 Rust 源码是手动运行的输入；密钥与百炼 endpoint 属于运行环境配置。
+CI 的固定 trial 次数、失败重试上限及 local/remote Embedding 模型映射由版本化的 [`ci-config.json`](ci-config.json) 指定。执行模型、Embedding runtime、任务范围和 Rust 源码是手动运行的输入；密钥与 endpoint 属于运行环境配置。
 
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 

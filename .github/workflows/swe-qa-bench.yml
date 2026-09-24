@@ -1,5 +1,5 @@
 name: SWE-QA Bench
-run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.scope || 'repro-3' }}
+run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}
 
 on:
   workflow_dispatch:
@@ -26,6 +26,14 @@ on:
         options:
           - glm-5.2
           - qwen3.8-max
+      embedding:
+        description: Embedding runtime (local uses Potion; remote uses Qwen3.7 Text Embedding)
+        required: true
+        default: local
+        type: choice
+        options:
+          - local
+          - remote
 
 permissions: {}
 
@@ -47,6 +55,7 @@ jobs:
       task-matrix: ${{ steps.task-matrix.outputs.tasks }}
       task-count: ${{ steps.task-matrix.outputs.count }}
       task_ids_json: ${{ steps.task-matrix.outputs.task_ids_json }}
+      embedding-model: ${{ steps.embedding.outputs.model }}
     permissions:
       contents: read
     steps:
@@ -111,6 +120,21 @@ jobs:
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa matrix \
             --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json \
             --scope "$SCOPE" >> "$GITHUB_OUTPUT"
+      - name: Resolve and validate the embedding runtime
+        id: embedding
+        env:
+          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
+          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          config=benchmarks/swe-qa-bench/ci-config.json
+          model="$(jq -er --arg runtime "$EMBEDDING_RUNTIME" '.embedding_models[$runtime]' "$config")"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
+            test -n "$ZVEC_GREP_API_KEY" || { echo 'QWEN_EMBEDDING_API_KEY secret is missing'; exit 1; }
+            test -n "$ZVEC_GREP_ENDPOINT" || { echo 'QWEN_EMBEDDING_ENDPOINT variable is missing'; exit 1; }
+          fi
       - name: Install pinned OpenCode for local request verification
         run: npm install --global opencode-ai@1.18.4
       - name: Run benchmark tests and verify sampling and web-tool restrictions
@@ -130,8 +154,17 @@ jobs:
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Verify the Harbor command without credentials
+        env:
+          EMBEDDING_MODEL: ${{ steps.embedding.outputs.model }}
+          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
+          set -euo pipefail
           config=benchmarks/swe-qa-bench/ci-config.json
+          embedding_args=(--embedding-model "$EMBEDDING_MODEL")
+          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
+            embedding_args+=(--embedding-endpoint "$ZVEC_GREP_ENDPOINT")
+          fi
           uv run --project benchmarks/swe-qa-bench zg-bench run \
             swe-qa-bench \
             --tier full \
@@ -140,7 +173,7 @@ jobs:
             --profile all \
             --n-attempts "$(jq -r '.trials_per_profile' "$config")" \
             --max-retries "$(jq -r '.max_retries' "$config")" \
-            --embedding-model "$(jq -r '.embedding_model' "$config")" \
+            "${embedding_args[@]}" \
             --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
             --job-name preflight \
             --dry-run
@@ -210,11 +243,12 @@ jobs:
             --directory "$RUNNER_TEMP/package" \
             --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Restore this task's zvec index seed
+        if: inputs.embedding == 'local'
         id: zvec-index-seed-restore
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/swe-qa-index-seed
-          key: swe-qa-zvec-index-seed-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
+          key: swe-qa-zvec-index-seed-v3-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-embedding-${{ inputs.embedding }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/ci-config.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
       - name: Install locked dependencies
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
@@ -222,6 +256,10 @@ jobs:
       - name: Run baseline and zvec-grep on the same runner
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+          EMBEDDING_MODEL: ${{ needs.validate.outputs.embedding-model }}
+          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
           TASK_NAME: ${{ matrix.task }}
           ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
         run: |
@@ -230,9 +268,17 @@ jobs:
             echo "GLM_API_KEY Actions secret is not configured" >&2
             exit 2
           fi
+          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
+            test -n "$ZVEC_GREP_API_KEY" || { echo 'QWEN_EMBEDDING_API_KEY secret is missing'; exit 2; }
+            test -n "$ZVEC_GREP_ENDPOINT" || { echo 'QWEN_EMBEDDING_ENDPOINT variable is missing'; exit 2; }
+          fi
           runs_dir="$RUNNER_TEMP/swe-qa-runs/$TASK_NAME"
           config=benchmarks/swe-qa-bench/ci-config.json
           trials="$(jq -r '.trials_per_profile' "$config")"
+          embedding_args=(--embedding-model "$EMBEDDING_MODEL")
+          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
+            embedding_args+=(--embedding-endpoint "$ZVEC_GREP_ENDPOINT")
+          fi
           uv run --project benchmarks/swe-qa-bench zg-bench run \
             swe-qa-bench \
             --tier full \
@@ -242,7 +288,7 @@ jobs:
             --profile all \
             --n-attempts "$trials" \
             --max-retries "$(jq -r '.max_retries' "$config")" \
-            --embedding-model "$(jq -r '.embedding_model' "$config")" \
+            "${embedding_args[@]}" \
             --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
             --jobs-dir "$runs_dir" \
             --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
@@ -306,6 +352,7 @@ jobs:
         if: always() && steps.authorize.outcome == 'success'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
           TASK_NAME: ${{ matrix.task }}
           ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
         run: |
@@ -324,14 +371,18 @@ jobs:
                       tail = window[-overlap:] if overlap else b""
               return False
 
-          secret = os.environ.get("GLM_API_KEY", "").encode()
+          secrets = {
+              value.encode()
+              for name in ("GLM_API_KEY", "ZVEC_GREP_API_KEY")
+              if (value := os.environ.get(name, ""))
+          }
           roots = [
               Path(os.environ["RUNNER_TEMP"]) / "swe-qa-runs" / os.environ["TASK_NAME"],
               Path(os.environ["RUNNER_TEMP"]) / f"pair-{os.environ['TASK_NAME']}.json",
               Path(os.environ["RUNNER_TEMP"]) / "swe-qa-task-report" / os.environ["TASK_NAME"],
               Path(os.environ["ZG_BENCH_INDEX_SEED_DIR"]),
           ]
-          if secret:
+          for secret in secrets:
               for root in roots:
                   files = [root] if root.is_file() else root.rglob("*") if root.exists() else []
                   for path in files:
@@ -358,7 +409,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
       - name: Save this task's populated zvec index seed
-        if: success() && steps.zvec-index-seed-restore.outputs.cache-hit != 'true'
+        if: inputs.embedding == 'local' && success() && steps.zvec-index-seed-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}/swe-qa-index-seed
@@ -384,12 +435,16 @@ jobs:
         env:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
+          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
+          EMBEDDING_MODEL: ${{ needs.validate.outputs.embedding-model }}
         run: |
           {
             echo "## Rust candidate"
             echo
             echo "- Requested ref: \`$CANDIDATE_REF\`"
             echo "- Resolved commit: \`$CANDIDATE_COMMIT\`"
+            echo "- Embedding runtime: \`$EMBEDDING_RUNTIME\`"
+            echo "- Embedding model: \`$EMBEDDING_MODEL\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@v6
         with:

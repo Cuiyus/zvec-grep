@@ -45,11 +45,32 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         config = json.loads((BENCHMARK / "ci-config.json").read_text())
         self.assertEqual(config["trials_per_profile"], 5)
         self.assertEqual(config["max_retries"], 2)
-        self.assertEqual(config["embedding_model"], "local/potion-code-16m-v2")
+        self.assertEqual(
+            config["embedding_models"],
+            {
+                "local": "local/potion-code-16m-v2",
+                "remote": "qwen/qwen3.7-text-embedding",
+            },
+        )
         workflow_text = WORKFLOW.read_text()
         self.assertIn("benchmarks/swe-qa-bench/ci-config.json", workflow_text)
         self.assertNotIn("SWE_QA_TRIALS_PER_PROFILE", workflow_text)
         self.assertNotIn("SWE_QA_MAX_RETRIES", workflow_text)
+
+        embedding = self.workflow["on"]["workflow_dispatch"]["inputs"]["embedding"]
+        self.assertEqual(embedding["default"], "local")
+        self.assertEqual(set(embedding["options"]), set(config["embedding_models"]))
+        validate = self.workflow["jobs"]["validate"]
+        self.assertEqual(
+            validate["outputs"]["embedding-model"],
+            "${{ steps.embedding.outputs.model }}",
+        )
+        pair_commands = "\n".join(
+            step.get("run", "")
+            for step in self.workflow["jobs"]["run-pair"]["steps"]
+        )
+        self.assertIn('--embedding-model "$EMBEDDING_MODEL"', pair_commands)
+        self.assertIn('--embedding-endpoint "$ZVEC_GREP_ENDPOINT"', pair_commands)
 
         selection_path = BENCHMARK / "zg_bench/swe_qa/data/selection.json"
         selection = json.loads(selection_path.read_text())
