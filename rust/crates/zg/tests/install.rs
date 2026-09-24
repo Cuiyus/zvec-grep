@@ -163,6 +163,79 @@ fn qoder_manages_owned_permissions_and_both_clients() {
 }
 
 #[test]
+fn qoder_trims_ide_environment_paths() {
+    let temporary = TempDir::new().expect("tempdir");
+    let home = temporary.path().join(".qoder");
+    let ide = home.join("mcp.json");
+    let executable = temporary.path().join("Qoder IDE");
+    let empty_path = temporary.path().join("empty-bin");
+    fs::create_dir_all(&empty_path).expect("mkdir");
+    fs::write(&executable, "#!/bin/sh\n").expect("executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&executable).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("permissions");
+    }
+
+    let stdout = run_ok(
+        zg().args(["--install", "--yes"])
+            .env("PATH", &empty_path)
+            .env("HOME", temporary.path())
+            .env("USERPROFILE", temporary.path())
+            .env("QODER_CONFIG_DIR", &home)
+            .env(
+                "QODER_IDE_EXECUTABLE",
+                format!("  {}  ", executable.display()),
+            )
+            .env("QODER_IDE_MCP_PATH", format!("  {}  ", ide.display())),
+    );
+
+    assert!(stdout.contains("Qoder"));
+    assert!(home.join("settings.json").is_file());
+    assert!(ide.is_file());
+}
+
+#[test]
+fn qoder_force_drops_unmanaged_always_allow_tools() {
+    let temporary = TempDir::new().expect("tempdir");
+    let home = temporary.path().join(".qoder");
+    let settings = home.join("settings.json");
+    let ide = home.join("mcp.json");
+    fs::create_dir_all(&home).expect("mkdir");
+    fs::write(
+        &settings,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "mcpServers": {
+                "zvec_grep": {
+                    "type": "http",
+                    "url": "https://example.test/user-owned-mcp",
+                    "alwaysAllow": ["user_tool", "zvec_grep_search"]
+                }
+            },
+            "permissions": {
+                "allow": ["mcp__zvec_grep__zvec_grep_search"]
+            }
+        }))
+        .expect("serialize"),
+    )
+    .expect("settings");
+
+    run_ok(
+        zg().args(["--install", "--target", "qoder", "--yes", "--force"])
+            .env("QODER_CONFIG_DIR", &home)
+            .env("QODER_IDE_MCP_PATH", &ide),
+    );
+
+    let installed = json(&settings);
+    assert_eq!(
+        installed["mcpServers"]["zvec_grep"]["alwaysAllow"],
+        serde_json::json!(["zvec_grep_search", "zvec_grep_rg"])
+    );
+}
+
+#[test]
 fn http_token_requires_an_explicit_http_transport() {
     let output = zg()
         .args([
