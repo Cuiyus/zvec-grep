@@ -141,6 +141,11 @@ or a failed permission lookup stop execution. GitHub users with write access
 may still see and use the dispatch/rerun controls, but the workflow rejects
 unauthorized benchmark execution.
 
+The separate [SWE-QA Offline workflow](../../.github/workflows/swe-qa-offline.yml)
+runs path-scoped Python and shared Node regression tests on pull requests and
+`main` pushes. It does not read model credentials, build a candidate, or run
+Harbor/model trials.
+
 `workflow_dispatch` defaults to `repro-3` (3 tasks); `all-full` (20 tasks) and
 `smoke` (5 tasks) remain available. `candidate_ref` defaults to `main` and
 selects the Rust source branch, tag, or commit to build as the candidate npm
@@ -182,11 +187,12 @@ model mapping from [`ci-config.json`](ci-config.json). The workflow's execution
 model, embedding runtime, scope, and Rust source are manual run inputs;
 credentials and endpoints are runtime settings.
 
-Before zvec-grep indexing, the harness applies the versioned
+The SWE-QA suite explicitly configures the versioned
 [`index.ignore`](zg_bench/swe_qa/data/index.ignore) file. It contains only three
 fixed benchmark fixtures that have text suffixes but contain a PNG or malformed
 UTF-16/32 data. The ignore-file digest is part of the local index-seed identity;
-any other indexing failure remains fatal and visible in the task result.
+any other indexing failure remains fatal and visible in the task result. This
+setting belongs to the suite and is not inherited by other runner suites.
 
 The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
 trials. CI passes `--max-retries 2`: an exception, including an agent timeout,
@@ -284,6 +290,7 @@ swe-qa-bench/
     cli.py                 Stable zg-bench entrypoint
     runner.py              Suite/profile execution and setup caches
     retries.py             Failed-trial retry policy
+    ci/                    Artifact checks called by workflows
     core/                  Shared errors, JSON I/O, model requests and report protocol
     engines/
       registry.py          Supported agent/model catalog and credentials
@@ -291,6 +298,7 @@ swe-qa-bench/
       opencode/config.py   OpenCode model/provider configuration
     metrics/               Numeric checks, usage accounting and comparisons
     reports/               Report validation, aggregation and Markdown output
+      retries.py           Trial retry summary rendering
     agents/                Stable Harbor adapter import paths and session export
     swe_qa/                Suite validation, pair collection and judge orchestration
       cli.py               Stable python -m zg_bench.swe_qa entrypoint
@@ -311,8 +319,9 @@ formulas.
 
 To add an execution model or agent, extend the engine registry and its provider
 or Harbor adapter tests. Models used for both execution and self-judging share
-one request specification in `core/protocol.py`; judge endpoint routing remains
-in `swe_qa/judge.py`. To add a CI task scope, update `swe_qa/selection.py`.
+one request specification in `core/protocol.py`; provider, credential and
+endpoint resolution is shared through `engines/registry.py`. To add a CI task
+scope, update `swe_qa/selection.py`.
 To add a metric, define its calculation and accounting checks in `metrics/`,
 then update report validation and rendering.
 A new suite owns its input validation and evidence conversion rather than

@@ -1,0 +1,54 @@
+name: SWE-QA Offline
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/swe-qa-bench.yml
+      - .github/workflows/swe-qa-offline.yml
+      - benchmarks/swe-qa-bench/**
+      - benchmarks/shared/rust-package-cache.mjs
+      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/swe-qa-bench.yml
+      - .github/workflows/swe-qa-offline.yml
+      - benchmarks/swe-qa-bench/**
+      - benchmarks/shared/rust-package-cache.mjs
+      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: swe-qa-offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Offline benchmark checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install locked benchmark environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Run offline benchmark tests
+        run: >-
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover
+          -s benchmarks/swe-qa-bench/tests -v
+      - name: Test shared Rust package identity helper
+        run: node --test benchmarks/zg-retrieval/test/rust-package-cache.test.mjs

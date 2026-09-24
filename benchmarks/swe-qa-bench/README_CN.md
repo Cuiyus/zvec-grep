@@ -78,6 +78,8 @@ Aggregate 汇总放在最前面，先于任务明细。每轮 workflow 独立筛
 
 [SWE-QA Bench 工作流](../../.github/workflows/swe-qa-bench.yml) 仅支持通过 `workflow_dispatch` 手动运行，push 和 PR 均不触发。核心维护成员限定为仓库角色明确为 `admin` 或 `maintain` 的用户。每个 job 的第一步都会实时检查 `github.actor` 和 `github.triggering_actor` 两人的当前角色，通过后才 checkout 和使用模型密钥；单独重跑某个 job 也会重新检查。权限不足或权限查询失败时停止执行。GitHub 的 write 用户可能仍能点击手动运行或重跑按钮，但工作流会拒绝未授权的 benchmark 执行。
 
+独立的 [SWE-QA Offline 工作流](../../.github/workflows/swe-qa-offline.yml) 会在相关路径的 PR 和 `main` push 上运行 Python 与共享 Node 回归测试。它不读取模型密钥、不构建 candidate，也不运行 Harbor 或模型 trial。
+
 `workflow_dispatch` 默认选择 `repro-3`（3 题），也可选择 `all-full`（20 题）或 `smoke`（5 题）。`candidate_ref` 默认是 `main`，指定要单独检出并打包的 Rust 源码分支、标签或提交；benchmark harness 与候选源码分开。`model` 输入默认是 `glm-5.2`，也可选择 `qwen3.8-max`；所选模型同时用于执行和评审。独立的 `embedding` 输入默认是 `local`，对应 `local/potion-code-16m-v2`；选择 `remote` 时使用与 Retrieval-only 工作流一致的 `qwen/qwen3.7-text-embedding`。
 
 `repro-3` 固定运行 3 题 × 2 个 profile × 5 次 = 30 个 trial，供小规模复现与迭代。任务按[运行 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943) 中的调查路径和评分波动选取。下表范围均来自该轮最终成功的五次测试：
@@ -94,7 +96,7 @@ CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding�
 
 CI 的固定 trial 次数、失败重试上限及 local/remote Embedding 模型映射由版本化的 [`ci-config.json`](ci-config.json) 指定。执行模型、Embedding runtime、任务范围和 Rust 源码是手动运行的输入；密钥与 endpoint 属于运行环境配置。
 
-zvec-grep 建索引前会应用版本化的 [`index.ignore`](zg_bench/swe_qa/data/index.ignore)。其中只列出 3 个后缀为文本、实际内容为 PNG 或损坏 UTF-16/32 数据的固定 benchmark fixture。ignore 文件摘要会计入本地索引种子的身份；其他索引失败仍会使任务失败并出现在结果中。
+SWE-QA suite 显式配置版本化的 [`index.ignore`](zg_bench/swe_qa/data/index.ignore)。其中只列出 3 个后缀为文本、实际内容为 PNG 或损坏 UTF-16/32 数据的固定 benchmark fixture。ignore 文件摘要会计入本地索引种子的身份；其他索引失败仍会使任务失败并出现在结果中。该设置属于 suite，其他 runner suite 不会继承。
 
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 
@@ -139,6 +141,7 @@ swe-qa-bench/
     cli.py                 稳定的 zg-bench 命令入口
     runner.py              Suite/profile 执行编排与安装缓存
     retries.py             失败 trial 的重试策略
+    ci/                    由 workflow 调用的制品检查
     core/                  公共异常、JSON 读写、模型请求与报告协议
     engines/
       registry.py          Agent/模型支持目录与凭证路由
@@ -146,6 +149,7 @@ swe-qa-bench/
       opencode/config.py   OpenCode 模型和 provider 配置
     metrics/               数值检查、用量核算与对比计算
     reports/               报告校验、聚合与 Markdown 输出
+      retries.py           Trial 重试摘要渲染
     agents/                稳定的 Harbor 适配器导入路径与会话导出
     swe_qa/                Suite 校验、配对结果采集与评审编排
       cli.py               稳定的 python -m zg_bench.swe_qa 命令入口
@@ -159,7 +163,7 @@ swe-qa-bench/
 
 Suite 适配层采集并校验执行证据，judge engine 对最终答案评分，metrics 基于规范化记录计算指标，reports 校验和聚合这些记录后再渲染。指标计算不调用模型，也不依赖具体 Agent engine；Markdown 渲染不发起模型请求。Runner 负责 Harbor 执行编排，不定义报告中的统计公式。
 
-新增执行模型或 Agent 时，扩展 engine 注册及对应的 provider 或 Harbor 适配器测试。执行与评审共用的模型在 `core/protocol.py` 使用同一份请求规格；评审的 endpoint 路由仍在 `swe_qa/judge.py`。新增 CI 任务范围时修改 `swe_qa/selection.py`。新增指标时，在 `metrics/` 中定义计算方式与用量检查，再更新报告校验和渲染。新增 suite 负责自身的输入校验和证据转换，不向公共指标代码添加数据集分支。两个 CLI、Harbor 适配器导入路径及锁定资源路径保持稳定。
+新增执行模型或 Agent 时，扩展 engine 注册及对应的 provider 或 Harbor 适配器测试。执行与评审共用的模型在 `core/protocol.py` 使用同一份请求规格，并通过 `engines/registry.py` 共用 provider、凭据和 endpoint 解析。新增 CI 任务范围时修改 `swe_qa/selection.py`。新增指标时，在 `metrics/` 中定义计算方式与用量检查，再更新报告校验和渲染。新增 suite 负责自身的输入校验和证据转换，不向公共指标代码添加数据集分支。两个 CLI、Harbor 适配器导入路径及锁定资源路径保持稳定。
 
 这里统一的是与 Retrieval-only 的目录职责；两个 benchmark 分别保留自己的 Python 或 JavaScript 实现和统计协议。两套工作流共用 [`rust-candidate-package`](../../.github/actions/rust-candidate-package/action.yml) 构建 Rust 候选包，并用共享的 [`rust-package-cache.mjs`](../shared/rust-package-cache.mjs) 校验清单。模块迁移不改变任务选择、trial 次数、用量统计范围或 Aggregate 排除规则。
 

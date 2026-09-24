@@ -263,8 +263,8 @@ class LocalPackageTests(unittest.TestCase):
             f"zvec_grep_package={runner.LOCAL_ZVEC_GREP_PACKAGE_TARGET}", command
         )
         self.assertIn(f"zvec_grep_package_sha256={digest}", command)
-        self.assertIn(
-            f"index_ignore_file={runner.ZVEC_GREP_INDEX_IGNORE_FILE}", command
+        self.assertFalse(
+            any(value.startswith("index_ignore_file=") for value in command)
         )
 
     def test_claude_code_local_package_is_bound_into_zvec_profile(self) -> None:
@@ -1046,6 +1046,40 @@ class SuiteTierTests(unittest.TestCase):
         self.assertEqual(list(suite.tasks or ()), selected_slugs)
         self.assertIn("--path", command)
         self.assertNotIn("--dataset", command)
+
+    def test_only_swe_qa_suite_supplies_its_index_ignore_file(self) -> None:
+        swe_qa_path = (
+            Path(__file__).resolve().parents[1] / "suites" / "swe-qa-bench.yaml"
+        )
+        swe_qa = runner.load_suite(swe_qa_path, tier="smoke")
+        external = runner.load_suite(self.suite_name, tier="smoke")
+
+        self.assertEqual(
+            swe_qa.index_ignore_file,
+            (
+                Path(__file__).resolve().parents[1]
+                / "zg_bench/swe_qa/data/index.ignore"
+            ).resolve(),
+        )
+        self.assertIsNone(external.index_ignore_file)
+        swe_qa_command = runner.build_harbor_command(
+            swe_qa,
+            profile="zvec-grep",
+            agent="opencode",
+            model="custom-openai/glm-5.2",
+            job_name="swe-qa-ignore",
+        )
+        external_command = runner.build_harbor_command(
+            external,
+            profile="zvec-grep",
+            agent="opencode",
+            model="custom-openai/glm-5.2",
+            job_name="external-no-ignore",
+        )
+        self.assertIn(f"index_ignore_file={swe_qa.index_ignore_file}", swe_qa_command)
+        self.assertFalse(
+            any(value.startswith("index_ignore_file=") for value in external_command)
+        )
 
     def test_full_tier_runs_all_dataset_tasks(self) -> None:
         suite = runner.load_suite(self.suite_name, tier="full")

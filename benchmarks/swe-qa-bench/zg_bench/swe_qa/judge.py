@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,6 +21,7 @@ from zg_bench.engines.judge import (
     judge_task_trials,
     judge_temperature,
 )
+from zg_bench.engines.registry import resolve_opencode_model
 from zg_bench.metrics.comparison import (
     case_comparison,
 )
@@ -36,11 +36,7 @@ from zg_bench.reports.aggregate import aggregate_reports as aggregate_reports
 from zg_bench.reports.render import (
     write_report,
 )
-from zg_bench.settings import (
-    BENCHMARK_SEED,
-    OPENCODE_CUSTOM_GLM_BASE_URL,
-    OPENCODE_CUSTOM_QWEN_BASE_URL,
-)
+from zg_bench.settings import BENCHMARK_SEED
 from zg_bench.swe_qa.pairs import (
     load_pairs,
     load_references,
@@ -71,24 +67,13 @@ def judge_pairs(
             "hard gate is missing reference(s): " + ", ".join(missing_references)
         )
 
-    # Both models use the same custom OpenAI-compatible deployment by default.
-    # Preserve legacy GLM settings, with shared OpenAI settings as a fallback.
-    api_key = (
-        os.environ.get("GLM_API_KEY", "").strip()
-        or os.environ.get("OPENAI_API_KEY", "").strip()
-    )
-    if not api_key:
-        raise SweQaError("OPENAI_API_KEY or GLM_API_KEY is required for the self-judge")
-    default_base = (
-        OPENCODE_CUSTOM_QWEN_BASE_URL
-        if model == "qwen3.8-max"
-        else OPENCODE_CUSTOM_GLM_BASE_URL
-    )
-    api_base = os.environ.get(
-        "GLM_BASE_URL", os.environ.get("OPENAI_BASE_URL", default_base)
-    ).strip()
-    if not api_base:
-        raise SweQaError("self-judge API base URL must not be empty")
+    try:
+        runtime = resolve_opencode_model(model, require_credentials=True)
+    except ValueError as error:
+        raise SweQaError(str(error)) from error
+    assert runtime.api_key is not None  # Guaranteed by require_credentials.
+    api_key = runtime.api_key
+    api_base = runtime.configuration.base_url
     completion_fn = completion_fn or default_completion()
 
     cases: list[dict[str, Any]] = []

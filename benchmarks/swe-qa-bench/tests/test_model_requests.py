@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from zg_bench.core.protocol import JUDGE_MODELS, model_request_spec
 from zg_bench.engines.judge import judge_generation_metadata, judge_temperature
-from zg_bench.engines.registry import resolve_agent_model
+from zg_bench.engines.registry import resolve_agent_model, resolve_opencode_model
 
 
 class ModelRequestTests(unittest.TestCase):
@@ -32,3 +33,28 @@ class ModelRequestTests(unittest.TestCase):
                         "response_format": None,
                     },
                 )
+
+    def test_execution_and_judge_models_share_endpoint_and_key_priority(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "GLM_API_KEY": "preferred-key",
+                "OPENAI_API_KEY": "fallback-key",
+                "GLM_BASE_URL": "https://preferred.invalid/v1",
+                "OPENAI_BASE_URL": "https://fallback.invalid/v1",
+            },
+            clear=True,
+        ):
+            for model in JUDGE_MODELS:
+                with self.subTest(model=model):
+                    execution = resolve_opencode_model(
+                        f"custom-openai/{model}", require_credentials=True
+                    )
+                    judge = resolve_opencode_model(model, require_credentials=True)
+                    self.assertEqual(execution, judge)
+                    self.assertEqual(judge.credential_name, "GLM_API_KEY")
+                    self.assertEqual(judge.api_key, "preferred-key")
+                    self.assertEqual(
+                        judge.configuration.base_url,
+                        "https://preferred.invalid/v1",
+                    )

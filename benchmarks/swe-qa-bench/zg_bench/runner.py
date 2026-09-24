@@ -35,6 +35,7 @@ from .engines.registry import (
 )
 from .engines.registry import (
     resolve_agent_model,
+    resolve_opencode_model,
 )
 from .engines.registry import (
     validate_profile_credentials as validate_profile_credentials,
@@ -49,7 +50,6 @@ from .settings import (
     ZVEC_GREP_BINDING_PACKAGE,
     ZVEC_GREP_EMBEDDING,
     ZVEC_GREP_EMBEDDING_ENDPOINT,
-    ZVEC_GREP_INDEX_IGNORE_FILE,
     ZVEC_GREP_INDEX_SEED_ENV,
     ZVEC_GREP_PACKAGE,
     resolve_zvec_grep_index_seed_dir,
@@ -98,6 +98,7 @@ class BenchmarkSuite:
     tier: Tier
     tasks: tuple[str, ...] | None
     path: Path | None = None
+    index_ignore_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -207,12 +208,26 @@ def load_suite(
     if path.parent == SUITES_DIR and name != path.stem:
         raise SuiteConfigError(f"suite name {name!r} must match filename {path.stem!r}")
 
+    raw_index_ignore_file = root.get("index_ignore_file")
+    index_ignore_file: Path | None = None
+    if raw_index_ignore_file is not None:
+        ignore_value = _require_nonempty_string(
+            raw_index_ignore_file, "index_ignore_file"
+        )
+        index_ignore_file = (path.parent / ignore_value).resolve()
+        if not index_ignore_file.is_file():
+            raise SuiteConfigError(
+                "index_ignore_file must reference an existing file: "
+                f"{index_ignore_file}"
+            )
+
     return BenchmarkSuite(
         name=name,
         dataset=dataset,
         path=local_path,
         tier=tier,
         tasks=tasks,
+        index_ignore_file=index_ignore_file,
     )
 
 
@@ -616,8 +631,9 @@ def build_harbor_command(
         agent_kwargs.append(f"version={OPENCODE_VERSION}")
         agent_kwargs.append("collect_session_usage=true")
         if support.opencode is not None:
-            harbor_model = support.opencode.harbor_model
-            opencode_config = build_opencode_config(support.opencode, profile=profile)
+            provider = resolve_opencode_model(model).configuration
+            harbor_model = provider.harbor_model
+            opencode_config = build_opencode_config(provider, profile=profile)
             agent_kwargs.append(
                 "opencode_config=" + json.dumps(opencode_config, separators=(",", ":"))
             )
@@ -634,9 +650,10 @@ def build_harbor_command(
                 f"zvec_grep_package={zvec_grep_package}",
                 f"zvec_binding_package={ZVEC_GREP_BINDING_PACKAGE}",
                 f"embedding_model={embedding_model}",
-                f"index_ignore_file={ZVEC_GREP_INDEX_IGNORE_FILE}",
             ]
         )
+        if suite.index_ignore_file is not None:
+            agent_kwargs.append(f"index_ignore_file={suite.index_ignore_file}")
         if (
             embedding_endpoint is not None
             and not embedding_model.startswith("local/")

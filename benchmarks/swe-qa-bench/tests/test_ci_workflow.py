@@ -14,6 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 BENCHMARK = ROOT / "benchmarks/swe-qa-bench"
 WORKFLOW = ROOT / ".github/workflows/swe-qa-bench.yml"
+OFFLINE_WORKFLOW = ROOT / ".github/workflows/swe-qa-offline.yml"
 
 
 class BenchmarkWorkflowTests(unittest.TestCase):
@@ -66,8 +67,7 @@ class BenchmarkWorkflowTests(unittest.TestCase):
             "${{ steps.embedding.outputs.model }}",
         )
         pair_commands = "\n".join(
-            step.get("run", "")
-            for step in self.workflow["jobs"]["run-pair"]["steps"]
+            step.get("run", "") for step in self.workflow["jobs"]["run-pair"]["steps"]
         )
         self.assertIn('--embedding-model "$EMBEDDING_MODEL"', pair_commands)
         self.assertIn('--embedding-endpoint "$ZVEC_GREP_ENDPOINT"', pair_commands)
@@ -113,7 +113,9 @@ class BenchmarkWorkflowTests(unittest.TestCase):
                     [slugs_by_id[task_id] for task_id in expected_ids],
                 )
 
-    def test_aggregate_is_published_from_completed_tasks_after_pair_failures(self) -> None:
+    def test_aggregate_is_published_from_completed_tasks_after_pair_failures(
+        self,
+    ) -> None:
         aggregate = self.workflow["jobs"]["aggregate-report"]
         combine = next(
             step
@@ -131,3 +133,31 @@ class BenchmarkWorkflowTests(unittest.TestCase):
                 item for item in aggregate["steps"] if item.get("name") == step_name
             )
             self.assertNotIn("if", step)
+
+    def test_workflow_calls_testable_retry_and_secret_scan_modules(self) -> None:
+        workflow_text = WORKFLOW.read_text()
+        self.assertIn("python -m zg_bench.reports.retries", workflow_text)
+        self.assertIn("python -m zg_bench.ci.secret_scan", workflow_text)
+        self.assertNotIn("python - <<'PY'", workflow_text)
+
+
+class OfflineWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = OFFLINE_WORKFLOW.read_text()
+        cls.workflow = yaml.load(cls.text, Loader=yaml.BaseLoader)
+
+    def test_pr_check_is_path_scoped_and_credential_free(self) -> None:
+        triggers = self.workflow["on"]
+        self.assertIn("pull_request", triggers)
+        self.assertIn("workflow_dispatch", triggers)
+        self.assertIn("benchmarks/swe-qa-bench/**", triggers["pull_request"]["paths"])
+        self.assertNotIn("secrets.", self.text)
+        self.assertNotIn("rust-candidate-package", self.text)
+
+    def test_runs_python_and_shared_node_tests_without_building_candidate(self) -> None:
+        commands = "\n".join(
+            step.get("run", "") for step in self.workflow["jobs"]["test"]["steps"]
+        )
+        self.assertIn("python -m unittest discover", commands)
+        self.assertIn("rust-package-cache.test.mjs", commands)
