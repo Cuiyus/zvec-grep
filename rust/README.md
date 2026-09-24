@@ -116,6 +116,12 @@ Search directly with `zg "where authentication is validated"`, `zg --fts
 `help` are literal search text, not commands. Use `zg --help [topic]` (for example,
 `zg --help search`) and `zg --version` for help and version information.
 
+The resident daemon writes JSON Lines to `<home>/daemon/logs/server.log`.
+It rotates at 10 MiB and keeps five numbered backups by default. The global
+`~/.zvec-grep/config.json` accepts `log.maxBytes`, `log.keep`, and `log.level`
+(`info` or `debug`); restart the daemon after changing them. Bootstrap failures
+are written to `<home>/daemon/bootstrap.log`.
+
 Terminal searches default to human-readable output with full source previews;
 piped output is compact. `--compact` forces compact output, and
 `--preview=full` explicitly requests full previews even in compact output.
