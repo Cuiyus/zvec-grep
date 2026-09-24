@@ -805,6 +805,39 @@ class AggregateReportTests(unittest.TestCase):
                     expected=["reflex:6", "sqlfluff:2"],
                 )
 
+    def test_partial_aggregate_excludes_missing_tasks_from_every_metric(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reports_root = root / "reports"
+            _write_json(
+                reports_root / "reflex-6" / "report.json",
+                _judged_task_report("reflex:6"),
+            )
+
+            report = aggregate_reports(
+                reports_root=reports_root,
+                output_dir=root / "combined",
+                expected=["reflex:6", "sqlfluff:2"],
+                allow_missing=True,
+            )
+
+            self.assertFalse(report["gate"]["passed"])
+            self.assertEqual(
+                report["gate"]["expected_tasks"], ["reflex:6", "sqlfluff:2"]
+            )
+            self.assertEqual(report["gate"]["completed_tasks"], ["reflex:6"])
+            self.assertEqual(report["gate"]["missing_tasks"], ["sqlfluff:2"])
+            self.assertEqual(report["gate"]["valid_pairs"], 1)
+            self.assertEqual(report["aggregate"]["filter"]["total_count"], 1)
+            self.assertEqual(
+                [case["task_id"] for case in report["cases"]], ["reflex:6"]
+            )
+            markdown = (root / "combined" / "report.md").read_text()
+            self.assertIn("**Incomplete run:** aggregated 1 completed task(s)", markdown)
+            self.assertIn("`sqlfluff:2`", markdown)
+            self.assertIn("Missing tasks are not assigned zero values", markdown)
+            self.assertNotIn("| sqlfluff:2 |", markdown)
+
     def test_aggregate_rejects_zero_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

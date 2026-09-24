@@ -23,6 +23,6 @@ gh workflow run swe-qa-bench.yml --repo OWNER/zvec-grep \
 
 测试自己的 Rust 改动时，将 `candidate_ref` 改为 fork 中 Rust 分支名或完整提交 SHA。`--ref` 指向 **benchmark harness**，`candidate_ref` 指向 **Rust 候选包**。push 和 PR 不会触发这个工作流，也不会占用上游仓库 CI。只有 `write` 权限的用户可能看得到触发按钮，但工作流会在检出代码及读取模型密钥之前拒绝执行。
 
-运行 Summary 会显示 Rust 候选提交及已完成的任务报告；全部任务完成后还会显示整体报告。`swe-qa-aggregate-report-*` artifact 包含 `report.md`、`report.json` 和记录候选提交及包哈希的 `candidate-manifest.json`，任务报告保留 90 天；Harbor 配对证据（包括 `.retry-history/` 中的失败尝试）保留 30 天。若任务未全部完成，只展示已有的单任务报告，不生成不完整的跨任务 Aggregate。
+运行 Summary 会显示 Rust 候选提交及成功任务的 Aggregate。`swe-qa-aggregate-report-*` artifact 包含 `report.md`、`report.json` 和记录候选提交及包哈希的 `candidate-manifest.json`，任务报告保留 90 天；Harbor 配对证据（包括 `.retry-history/` 中的失败尝试）保留 30 天。若部分任务失败，它们会被列为缺失且不进入任何 Aggregate 指标；工作流结论仍保持失败。
 
 参考：[GitHub 手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[Actions Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)、[百炼 API Key](https://help.aliyun.com/zh/model-studio/get-api-key)、[百炼地域与 endpoint](https://help.aliyun.com/zh/model-studio/regions/)。

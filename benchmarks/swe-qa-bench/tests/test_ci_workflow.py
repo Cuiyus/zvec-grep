@@ -112,3 +112,22 @@ class BenchmarkWorkflowTests(unittest.TestCase):
                     json.loads(outputs["tasks"]),
                     [slugs_by_id[task_id] for task_id in expected_ids],
                 )
+
+    def test_aggregate_is_published_from_completed_tasks_after_pair_failures(self) -> None:
+        aggregate = self.workflow["jobs"]["aggregate-report"]
+        combine = next(
+            step
+            for step in aggregate["steps"]
+            if step.get("name") == "Combine reports without re-judging"
+        )
+        self.assertNotIn("if", combine)
+        self.assertIn("--allow-missing", combine["run"])
+        for step_name in (
+            "Keep the Rust package manifest with the aggregate report",
+            "Verify and archive the candidate identity",
+            "Upload aggregate report",
+        ):
+            step = next(
+                item for item in aggregate["steps"] if item.get("name") == step_name
+            )
+            self.assertNotIn("if", step)

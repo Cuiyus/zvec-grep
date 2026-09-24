@@ -28,6 +28,7 @@ from ..settings import (
 )
 
 _SETUP_METADATA_FILENAME = "zvec-grep-setup.json"
+_INDEX_IGNORE_TARGET = ".zg-bench-index.ignore"
 _MAX_METADATA_OUTPUT_CHARS = 20_000
 _NVM_INIT = 'if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi;'
 
@@ -42,6 +43,7 @@ class ZvecGrepMixin:
         zvec_binding_package: str = ZVEC_GREP_BINDING_PACKAGE,
         embedding_model: str = ZVEC_GREP_EMBEDDING,
         embedding_endpoint: str | None = ZVEC_GREP_EMBEDDING_ENDPOINT,
+        index_ignore_file: str | None = None,
         mcp_target: str | None = None,
         zvec_grep_package_sha256: str | None = None,
         extra_env: dict[str, str] | None = None,
@@ -55,6 +57,14 @@ class ZvecGrepMixin:
             raise ValueError("embedding_model must not be empty")
         if embedding_endpoint is not None and not embedding_endpoint.strip():
             raise ValueError("embedding_endpoint must not be empty")
+        resolved_index_ignore_file = None
+        if index_ignore_file is not None:
+            resolved_index_ignore_file = Path(index_ignore_file).expanduser().resolve()
+            if not resolved_index_ignore_file.is_file():
+                raise ValueError(
+                    "index_ignore_file must be an existing file: "
+                    f"{resolved_index_ignore_file}"
+                )
         if mcp_target is not None and not mcp_target.strip():
             raise ValueError("mcp_target must not be empty")
         if zvec_grep_package_sha256 is not None and not re.fullmatch(
@@ -94,6 +104,7 @@ class ZvecGrepMixin:
         self._embedding_endpoint = (
             None if embedding_model.startswith("local/") else embedding_endpoint
         )
+        self._index_ignore_file = resolved_index_ignore_file
         self._mcp_target = mcp_target
         self._zvec_grep_package_sha256 = zvec_grep_package_sha256
         self._api_key_source = api_key_source
@@ -151,6 +162,12 @@ class ZvecGrepMixin:
             metadata["git_exclude_updated"] = await self._hide_index_from_git(
                 environment, workdir
             )
+            if self._index_ignore_file is not None:
+                await environment.upload_file(
+                    self._index_ignore_file,
+                    posixpath.join(workdir, _INDEX_IGNORE_TARGET),
+                )
+                metadata["index_ignore_sha256"] = self._index_ignore_sha256()
 
             authorization_command = self._authorization_command(
                 self._embedding_model
@@ -218,7 +235,14 @@ class ZvecGrepMixin:
                 index_started = time.monotonic()
                 index_result = await self.exec_as_agent(
                     environment,
-                    command=self._index_command(self._embedding_model),
+                    command=self._index_command(
+                        self._embedding_model,
+                        ignore_file=(
+                            _INDEX_IGNORE_TARGET
+                            if self._index_ignore_file is not None
+                            else None
+                        ),
+                    ),
                     cwd=workdir,
                 )
                 metadata["index_duration_seconds"] = round(
@@ -334,6 +358,7 @@ class ZvecGrepMixin:
             "zvec_grep_package": package_identity,
             "binding_package": self._zvec_binding_package,
             "embedding_model": self._embedding_model,
+            "index_ignore_sha256": self._index_ignore_sha256(),
             "platform": "linux/amd64",
             "workdir": workdir,
         }
@@ -724,8 +749,18 @@ class ZvecGrepMixin:
         return tuple(int(part) for part in match.groups()) >= (0, 1, 6)
 
     @staticmethod
-    def _index_command(embedding_model: str) -> str:
-        return f"zg --index --embedding {shlex.quote(embedding_model)}"
+    def _index_command(
+        embedding_model: str, *, ignore_file: str | None = None
+    ) -> str:
+        command = f"zg --index --embedding {shlex.quote(embedding_model)}"
+        if ignore_file is not None:
+            command += f" --ignore-file {shlex.quote(ignore_file)}"
+        return command
+
+    def _index_ignore_sha256(self) -> str | None:
+        if self._index_ignore_file is None:
+            return None
+        return hashlib.sha256(self._index_ignore_file.read_bytes()).hexdigest()
 
     @staticmethod
     def _authorization_command(embedding_model: str) -> str | None:
@@ -776,7 +811,9 @@ class ZvecGrepMixin:
                 'mkdir -p "$(dirname "$exclude_file")"; '
                 'touch "$exclude_file"; '
                 "grep -qxF '.zvec-grep/' \"$exclude_file\" || "
-                "printf '\\n.zvec-grep/\\n' >> \"$exclude_file\""
+                "printf '\\n.zvec-grep/\\n' >> \"$exclude_file\"; "
+                f"grep -qxF '{_INDEX_IGNORE_TARGET}' \"$exclude_file\" || "
+                f"printf '{_INDEX_IGNORE_TARGET}\\n' >> \"$exclude_file\""
             ),
             cwd=workdir,
         )

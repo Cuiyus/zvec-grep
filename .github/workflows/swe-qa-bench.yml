@@ -248,7 +248,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/swe-qa-index-seed
-          key: swe-qa-zvec-index-seed-v3-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-embedding-${{ inputs.embedding }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/ci-config.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
+          key: swe-qa-zvec-index-seed-v3-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-embedding-${{ inputs.embedding }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/ci-config.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
       - name: Install locked dependencies
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
@@ -458,7 +458,7 @@ jobs:
         with:
           pattern: swe-qa-task-report-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/task-reports
-      - name: Detect report scope and show partial task reports
+      - name: Detect completed report scope
         id: report-set
         env:
           EXPECTED_COUNT: ${{ needs.validate.outputs.task-count }}
@@ -484,36 +484,9 @@ jobs:
             echo "complete=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          mapfile -d '' -t markdown_reports < <(
-            find "$report_root" -type f -name report.md -print0 | LC_ALL=C sort -z
-          )
-          if (( ${#markdown_reports[@]} != actual_count )); then
-            echo "::error::Expected one report.md for each downloaded report.json."
-            exit 1
-          fi
-
           echo "complete=false" >> "$GITHUB_OUTPUT"
-          {
-            echo "## SWE-QA Aggregate"
-            echo
-            echo "**Incomplete report set:** attempt ${GITHUB_RUN_ATTEMPT} contains ${actual_count} of ${expected_count} task reports. The cross-task Aggregate was skipped, and no partial Aggregate artifact was generated."
-            echo
-            echo "The independent task report(s) produced by this attempt are shown below. Any Aggregate row inside an embedded report covers that task only."
-
-            shown=0
-            for report in "${markdown_reports[@]}"; do
-              if (( shown > 0 )); then
-                echo
-                echo "---"
-              fi
-              shown=$((shown + 1))
-              echo
-              sed '1s/^# /### /' "$report"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Aggregating ${actual_count} of ${expected_count} task reports; failed tasks will be listed but excluded from all Aggregate metrics."
       - name: Combine reports without re-judging
-        if: steps.report-set.outputs.complete == 'true'
         env:
           EXPECTED_TASKS_JSON: ${{ needs.validate.outputs.task_ids_json }}
         run: |
@@ -528,15 +501,14 @@ jobs:
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa aggregate \
             --reports-root "$RUNNER_TEMP/task-reports" \
             --output-dir "$RUNNER_TEMP/swe-qa-aggregate-report" \
+            --allow-missing \
             --expected "${expected_tasks[@]}"
-      - name: Keep the Rust package manifest with the completed report
-        if: steps.report-set.outputs.complete == 'true'
+      - name: Keep the Rust package manifest with the aggregate report
         uses: actions/download-artifact@v8
         with:
           name: swe-qa-rust-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/aggregate-candidate
       - name: Verify and archive the candidate identity
-        if: steps.report-set.outputs.complete == 'true'
         run: |
           node benchmarks/shared/rust-package-cache.mjs verify \
             --directory "$RUNNER_TEMP/aggregate-candidate" \
@@ -544,7 +516,6 @@ jobs:
           cp "$RUNNER_TEMP/aggregate-candidate/manifest.json" \
             "$RUNNER_TEMP/swe-qa-aggregate-report/candidate-manifest.json"
       - name: Upload aggregate report
-        if: steps.report-set.outputs.complete == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: swe-qa-aggregate-report-${{ github.run_id }}-${{ github.run_attempt }}

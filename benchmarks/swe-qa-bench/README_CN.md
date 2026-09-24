@@ -94,9 +94,13 @@ CI 默认使用 OpenCode `1.18.4`、`custom-openai/glm-5.2` 和本地 Embedding�
 
 CI 的固定 trial 次数、失败重试上限及 local/remote Embedding 模型映射由版本化的 [`ci-config.json`](ci-config.json) 指定。执行模型、Embedding runtime、任务范围和 Rust 源码是手动运行的输入；密钥与 endpoint 属于运行环境配置。
 
+zvec-grep 建索引前会应用版本化的 [`index.ignore`](zg_bench/swe_qa/data/index.ignore)。其中只列出 3 个后缀为文本、实际内容为 PNG 或损坏 UTF-16/32 数据的固定 benchmark fixture。ignore 文件摘要会计入本地索引种子的身份；其他索引失败仍会使任务失败并出现在结果中。
+
 完整运行包含 20 题 × 2 个 profile × 5 次 = 200 个独立 trial。CI 通过 `--max-retries 2` 为异常失败（包括 Agent 超时）的 trial 最多额外重试 2 次；API 使用额度耗尽不重试。成功的 trial 和低分答案不重跑，重试次数不计入每组 5 次的样本数。本地运行默认不重试，可显式传入 `--max-retries` 开启。
 
 每次失败的日志和轨迹保存在 Harbor job 的 `.retry-history/` 下，并随原始证据上传；Job Summary 展示重试次数和最终错误数。报告中的 token、工具调用、耗时及费用仅统计每个 trial 最终成功的那次执行，不包含失败尝试的额外开销；这些开销可在归档证据中查看。用尽重试次数仍失败时，该任务保持失败。每个任务 job 的总时限为 6 小时，包含准备和重试时间。
+
+即使部分任务最终失败，工作流仍会输出 Aggregate。Aggregate 只使用成功产出独立报告的任务；失败任务不进入任何均值、总量、筛选分母或样本数，并会作为缺失任务单独列出。工作流本身仍保持失败状态，以明确提示覆盖不完整。
 
 OpenCode 的两个 profile、子代理和评审统一使用所选模型，并请求以下参数，常量位于 `zg_bench/settings.py`：
 

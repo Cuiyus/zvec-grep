@@ -49,6 +49,7 @@ from .settings import (
     ZVEC_GREP_BINDING_PACKAGE,
     ZVEC_GREP_EMBEDDING,
     ZVEC_GREP_EMBEDDING_ENDPOINT,
+    ZVEC_GREP_INDEX_IGNORE_FILE,
     ZVEC_GREP_INDEX_SEED_ENV,
     ZVEC_GREP_PACKAGE,
     resolve_zvec_grep_index_seed_dir,
@@ -633,6 +634,7 @@ def build_harbor_command(
                 f"zvec_grep_package={zvec_grep_package}",
                 f"zvec_binding_package={ZVEC_GREP_BINDING_PACKAGE}",
                 f"embedding_model={embedding_model}",
+                f"index_ignore_file={ZVEC_GREP_INDEX_IGNORE_FILE}",
             ]
         )
         if (

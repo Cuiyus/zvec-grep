@@ -89,6 +89,7 @@ def aggregate_reports(
     reports_root: Path,
     output_dir: Path,
     expected: Sequence[str] | None = None,
+    allow_missing: bool = False,
 ) -> dict[str, Any]:
     """Combine successful one-task reports without making any model calls."""
     source_reports: list[dict[str, Any]] = []
@@ -107,6 +108,8 @@ def aggregate_reports(
         source_reports.append(source)
         cases.append(case)
 
+    expected_tasks: list[str] | None = None
+    missing: list[str] = []
     if expected is not None:
         expected_tasks = list(expected)
         if (
@@ -119,7 +122,7 @@ def aggregate_reports(
             raise SweQaError("expected aggregate tasks must be non-empty and unique")
         missing = [task for task in expected_tasks if task not in task_sources]
         unexpected = sorted(set(task_sources) - set(expected_tasks))
-        if missing or unexpected:
+        if unexpected or (missing and not allow_missing):
             raise SweQaError(
                 "aggregate report task mismatch "
                 f"(missing={missing}, unexpected={unexpected})"
@@ -128,8 +131,9 @@ def aggregate_reports(
         reports_by_task = {
             report["cases"][0]["task_id"]: report for report in source_reports
         }
-        cases = [cases_by_task[task] for task in expected_tasks]
-        source_reports = [reports_by_task[task] for task in expected_tasks]
+        completed_tasks = [task for task in expected_tasks if task in cases_by_task]
+        cases = [cases_by_task[task] for task in completed_tasks]
+        source_reports = [reports_by_task[task] for task in completed_tasks]
     else:
         cases.sort(key=lambda case: case["task_id"])
     task_ids = [case["task_id"] for case in cases]
@@ -149,10 +153,12 @@ def aggregate_reports(
             "kind": "completion-only",
             "report_only": True,
             "numeric_thresholds": False,
-            "expected_tasks": task_ids,
+            "expected_tasks": expected_tasks or task_ids,
+            "completed_tasks": task_ids,
+            "missing_tasks": missing,
             "valid_pairs": len(cases),
             "successful_judgements": successful_judgements,
-            "passed": True,
+            "passed": not missing,
         },
         "cases": cases,
         "aggregate": aggregate_cases(cases),

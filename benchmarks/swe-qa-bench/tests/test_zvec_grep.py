@@ -104,7 +104,13 @@ class _FakeEnvironment:
 
 
 class _SetupHarness(ZvecGrepMixin, _SetupBase):
-    def __init__(self, seed_root: Path, *, secret: str | None = None) -> None:
+    def __init__(
+        self,
+        seed_root: Path,
+        *,
+        secret: str | None = None,
+        index_ignore_file: Path | None = None,
+    ) -> None:
         self.agent_commands: list[str] = []
         self.root_commands: list[str] = []
         self.setup_metadata: dict[str, Any] = {}
@@ -116,6 +122,9 @@ class _SetupHarness(ZvecGrepMixin, _SetupBase):
                 zvec_grep_package="/tmp/zg-bench-zvec-grep.tgz",
                 zvec_binding_package="@zvec/bindings-linux-x64@0.5.0",
                 embedding_model="local/potion-code-16m-v2",
+                index_ignore_file=(
+                    str(index_ignore_file) if index_ignore_file is not None else None
+                ),
                 zvec_grep_package_sha256="a" * 64,
             )
         self._embedding_api_key = secret
@@ -347,6 +356,37 @@ class InstallZvecGrepTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(identity)
         self.assertEqual(harness.agent_commands, [])
+
+    async def test_index_ignore_file_is_uploaded_and_part_of_seed_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ignore_file = root / "index.ignore"
+            ignore_file.write_text("broken-fixture.txt\n", encoding="utf-8")
+            environment = _FakeEnvironment(root / "container")
+            harness = _SetupHarness(
+                root / "seed-cache",
+                index_ignore_file=ignore_file,
+            )
+
+            await harness.setup(environment)
+
+            uploaded = environment.container_path(
+                "/workspace/.zg-bench-index.ignore"
+            )
+            self.assertEqual(uploaded.read_text(), "broken-fixture.txt\n")
+            self.assertIn(
+                "zg --index --embedding local/potion-code-16m-v2 "
+                "--ignore-file .zg-bench-index.ignore",
+                harness.agent_commands,
+            )
+            self.assertEqual(
+                harness.setup_metadata["index_ignore_sha256"],
+                harness.setup_metadata["index_seed_identity"][
+                    "index_ignore_sha256"
+                ],
+            )
 
     async def test_host_seed_roundtrip_restores_and_skips_cold_index(self) -> None:
         secret = "embedding-secret-must-not-be-persisted"

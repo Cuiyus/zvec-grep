@@ -263,6 +263,9 @@ class LocalPackageTests(unittest.TestCase):
             f"zvec_grep_package={runner.LOCAL_ZVEC_GREP_PACKAGE_TARGET}", command
         )
         self.assertIn(f"zvec_grep_package_sha256={digest}", command)
+        self.assertIn(
+            f"index_ignore_file={runner.ZVEC_GREP_INDEX_IGNORE_FILE}", command
+        )
 
     def test_claude_code_local_package_is_bound_into_zvec_profile(self) -> None:
         digest = "d" * 64

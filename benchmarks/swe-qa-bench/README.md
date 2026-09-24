@@ -182,6 +182,12 @@ model mapping from [`ci-config.json`](ci-config.json). The workflow's execution
 model, embedding runtime, scope, and Rust source are manual run inputs;
 credentials and endpoints are runtime settings.
 
+Before zvec-grep indexing, the harness applies the versioned
+[`index.ignore`](zg_bench/swe_qa/data/index.ignore) file. It contains only three
+fixed benchmark fixtures that have text suffixes but contain a PNG or malformed
+UTF-16/32 data. The ignore-file digest is part of the local index-seed identity;
+any other indexing failure remains fatal and visible in the task result.
+
 The full run contains 20 tasks × 2 profiles × 5 trials = 200 independent
 trials. CI passes `--max-retries 2`: an exception, including an agent timeout,
 can trigger at most two additional attempts of the same trial. API usage-limit
@@ -260,10 +266,11 @@ consecutive tool-calling requests, including Qwen's historical
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired
 results, and uploads Harbor evidence and an independent task report as
-artifacts. Complete runs also produce an aggregate report. If some tasks fail,
-the summary still shows completed task reports without presenting a partial
-set as the full benchmark. Reports from separate GitHub run attempts are kept
-separate; automatic trial retries happen within one attempt.
+artifacts. The final Aggregate is also generated when some tasks fail. It uses
+only completed task reports: failed tasks do not enter any mean, total, filter,
+or sample count, and are listed separately as missing. The workflow remains
+failed so the missing coverage stays visible. Reports from separate GitHub run
+attempts are kept separate; automatic trial retries happen within one attempt.
 
 ## Code structure
 

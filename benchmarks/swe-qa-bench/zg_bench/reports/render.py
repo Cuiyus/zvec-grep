@@ -84,19 +84,34 @@ def render_report(report: dict[str, Any]) -> str:
     lines = [
         "# SWE-QA-Bench CI report",
         "",
-        "All cells use `baseline / zvec-grep / change`. Resource savings are negative; Judge gains are positive.",
-        "",
-        "| Case | Judge self-judge | input_token | toolcall | time (s) |",
-        "|---|---:|---:|---:|---:|",
-        table_row(
-            "**Aggregate**",
-            baseline,
-            zvec,
-            baseline["judge"],
-            zvec["judge"],
-            aggregate["comparison"],
-        ),
     ]
+    missing_tasks = report.get("gate", {}).get("missing_tasks", [])
+    if missing_tasks:
+        lines.extend(
+            (
+                f"**Incomplete run:** aggregated {len(report['cases'])} completed task(s); "
+                f"{len(missing_tasks)} expected task(s) did not produce reports: "
+                + ", ".join(f"`{task}`" for task in missing_tasks)
+                + ". Missing tasks are not assigned zero values and are excluded from every Aggregate metric.",
+                "",
+            )
+        )
+    lines.extend(
+        (
+            "All cells use `baseline / zvec-grep / change`. Resource savings are negative; Judge gains are positive.",
+            "",
+            "| Case | Judge self-judge | input_token | toolcall | time (s) |",
+            "|---|---:|---:|---:|---:|",
+            table_row(
+                "**Aggregate**",
+                baseline,
+                zvec,
+                baseline["judge"],
+                zvec["judge"],
+                aggregate["comparison"],
+            ),
+        )
+    )
     for case in report["cases"]:
         if case["task_id"] not in included:
             continue
@@ -205,6 +220,12 @@ def render_report(report: dict[str, Any]) -> str:
                 )
             )
 
+    completion_statement = (
+        "The completion gate failed because one or more expected tasks did not produce a valid judged pair. "
+        "The displayed Aggregate covers completed tasks only."
+        if missing_tasks
+        else "The hard gate requires every expected pair and every judge call to succeed, including excluded tasks."
+    )
     lines.extend(
         (
             "Each task's baseline and zvec-grep values are arithmetic means across its trials. "
@@ -268,7 +289,7 @@ def render_report(report: dict[str, Any]) -> str:
     lines.extend(
         (
             "This run is **report-only**. Numeric scores and the Aggregate filter are not code-review or merge gates. "
-            "The hard gate still requires every expected pair and every judge call to succeed, including excluded tasks.",
+            + completion_statement,
             "",
             f"Usage scope: **`{usage_scope}`**. "
             + (
