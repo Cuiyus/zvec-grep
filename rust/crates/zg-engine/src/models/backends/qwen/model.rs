@@ -410,12 +410,12 @@ fn parse_response_body(
                 response.status
             )
         };
-        let mut context = format!("model={} status={}", entry.reference, response.status);
-        if response.status == 404 {
-            context.push_str(
-                "\nhint=Check --endpoint or ZVEC_GREP_ENDPOINT and model availability at the configured service.",
-            );
-        }
+        let context = format!(
+            "model={} status={}{}",
+            entry.reference,
+            response.status,
+            provider_error_hint(response.status)
+        );
         let failure = ModelError::new(code, message, Some(context));
         let failure = if response.success() {
             failure.with_cause(error)
@@ -474,8 +474,14 @@ fn provider_error(entry: QwenConfig, response: &QwenHttpResponse, body: &Value) 
             provider_error_code(response.status),
             format!("{} request returned an error", model_name(entry)),
             Some(format!(
-                "model={} status={}{} providerCode={} providerType={} providerMessage={}",
-                entry.model, response.status, retry_after, code, error_type, message
+                "model={} status={}{} providerCode={} providerType={} providerMessage={}{}",
+                entry.model,
+                response.status,
+                retry_after,
+                code,
+                error_type,
+                message,
+                provider_error_hint(response.status)
             )),
         ),
         response.status,
@@ -483,6 +489,14 @@ fn provider_error(entry: QwenConfig, response: &QwenHttpResponse, body: &Value) 
         Some(code),
         Some(message),
     )
+}
+
+fn provider_error_hint(status: u16) -> &'static str {
+    if status == 404 {
+        "\nhint=Check --endpoint or ZVEC_GREP_ENDPOINT and model availability at the configured service."
+    } else {
+        ""
+    }
 }
 
 fn classify_provider_failure(

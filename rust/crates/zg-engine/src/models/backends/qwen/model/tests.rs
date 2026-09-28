@@ -411,6 +411,64 @@ fn non_json_http_errors_report_status_without_echoing_the_response_body() {
     assert!(error.cause().is_some());
 }
 
+#[tokio::test]
+async fn json_http_errors_include_endpoint_hint_only_for_not_found() {
+    for body in [
+        json!({
+            "error": {
+                "code": "DeploymentNotFound",
+                "type": "not_found_error",
+                "message": "Unknown deployment",
+            }
+        }),
+        json!({"code": "DeploymentNotFound", "message": "Unknown deployment"}),
+    ] {
+        for status in [400, 404] {
+            let http = Arc::new(MockHttp {
+                response: Mutex::new(Some(QwenHttpResponse {
+                    status,
+                    retry_after: None,
+                    body: serde_json::to_vec(&body).expect("fixture JSON"),
+                })),
+                requests: Mutex::new(Vec::new()),
+            });
+            let model = QwenEmbeddingModel::with_http(
+                config("text", "qwen3.7-text-embedding", 3),
+                options(),
+                http,
+            )
+            .expect("model");
+            let error = model
+                .embed(
+                    &[vec![Content::Text("one".to_owned())]],
+                    EmbeddingOptions::default(),
+                )
+                .await
+                .expect_err("provider error");
+            assert_eq!(
+                error.code(),
+                if status == 404 {
+                    crate::EngineError::NOT_FOUND
+                } else {
+                    crate::EngineError::INVALID_ARGUMENT
+                }
+            );
+            let context = error.context().expect("provider context");
+            assert!(context.contains(&format!("status={status}")));
+            assert!(context.contains("providerCode=DeploymentNotFound"));
+            assert!(context.contains("providerMessage=Unknown deployment"));
+            for hint in ["--endpoint", "ZVEC_GREP_ENDPOINT", "model availability"] {
+                assert_eq!(context.contains(hint), status == 404, "{context}");
+            }
+            assert!(!context.contains("secret"));
+            assert!(!error.is_retryable());
+            if status == 404 {
+                assert!(error.should_fail_fast());
+            }
+        }
+    }
+}
+
 #[test]
 fn requires_api_key_and_keeps_catalog_endpoint() {
     let error = QwenEmbeddingModel::new(
