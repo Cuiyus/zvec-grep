@@ -65,7 +65,11 @@ fn direct_and_server_report_index_progress_on_stderr() {
         assert!(stderr.contains("Index complete"), "{mode}: {stderr}");
         assert!(!stderr.contains('\r') && !stderr.contains("\x1b["));
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("Workspace index: ready"));
+        assert!(stdout.starts_with("Workspace index\nfiles\t"));
+        assert!(stdout.contains(" retried, "));
+        assert!(stdout.contains("\nentities\t"));
+        assert!(stdout.contains("\nduration\t"));
+        assert!(stdout.contains("\nroots\t"));
         assert!(!stdout.contains("Scanning") && !stdout.contains("Downloading"));
     }
     let failed = fixture.run(&[
@@ -77,5 +81,5 @@ fn direct_and_server_report_index_progress_on_stderr() {
         "unsupported/model",
     ]);
     assert!(!failed.status.success());
-    assert!(!String::from_utf8_lossy(&failed.stdout).contains("Workspace index: ready"));
+    assert!(!String::from_utf8_lossy(&failed.stdout).contains("Workspace index\n"));
 }

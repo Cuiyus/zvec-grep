@@ -4,16 +4,12 @@ use std::{
 };
 
 use thiserror::Error;
-use zg_engine::api::{
-    context::{
-        ContextResult,
-        result::{
-            CodeMetadata, ContentRange, ContextItem, ContextItemStatus, EntityMetadata,
-            MarkdownMetadata,
-        },
+use zg_engine::api::context::{
+    ContextResult,
+    result::{
+        CodeMetadata, ContentRange, ContextItem, ContextItemStatus, EntityMetadata,
+        MarkdownMetadata,
     },
-    index::IndexResult,
-    info::{InfoResult, result::IndexCompatibility},
 };
 
 /// Writes a context reply in the stable CLI text layout.
@@ -226,143 +222,6 @@ fn range_label(range: &ContentRange) -> String {
         return format!("bytes:{start_offset}-{end_offset}");
     }
     "file".to_owned()
-}
-
-/// Writes workspace status with the requested presentation and color policy.
-/// # Errors
-/// Returns the underlying writer error.
-pub fn write_info_with_options(
-    mut writer: impl Write,
-    result: &InfoResult,
-    options: crate::OutputOptions,
-    terminal: bool,
-) -> io::Result<()> {
-    let mut buffer = Vec::new();
-    write_info_result(&mut buffer, result)?;
-    let color = options.color == crate::ColorMode::Always
-        || (options.color == crate::ColorMode::Auto
-            && terminal
-            && std::env::var_os("NO_COLOR").is_none());
-    for line in String::from_utf8_lossy(&buffer).lines() {
-        if color && let Some((key, value)) = line.split_once(':') {
-            writeln!(writer, "\x1b[1;36m{key}\x1b[0m:{value}")?;
-            continue;
-        }
-        if options.human {
-            writeln!(writer, "  {line}")?;
-        } else {
-            writeln!(writer, "{line}")?;
-        }
-    }
-    Ok(())
-}
-
-/// Writes a completed index reply.
-///
-/// # Errors
-///
-/// Returns the underlying writer error.
-pub fn write_index_result(
-    mut writer: impl Write,
-    root: &Path,
-    result: &IndexResult,
-) -> io::Result<()> {
-    writeln!(writer, "Workspace index: ready")?;
-    writeln!(writer, "Root: {}", root.display())?;
-    writeln!(
-        writer,
-        "Files: scanned={} added={} modified={} deleted={} unchanged={} failed={}",
-        result.files_scanned,
-        result.files_added,
-        result.files_modified,
-        result.files_deleted,
-        result.files_unchanged,
-        result.files_failed
-    )?;
-    for file in &result.failed_files {
-        writeln!(writer, "Failed: {}: {}", file.path.display(), file.reason)?;
-    }
-    writeln!(writer, "Entities: {}", result.entities_created)
-}
-
-/// Writes workspace index status.
-///
-/// # Errors
-///
-/// Returns the underlying writer error.
-pub fn write_info_result(mut writer: impl Write, result: &InfoResult) -> io::Result<()> {
-    let state = result.index_status().as_str();
-    writeln!(writer, "Workspace index: {state}")?;
-    writeln!(writer, "Root: {}", result.root.display())?;
-    writeln!(writer, "Index path: {}", result.index_path.display())?;
-    match &result.compatibility {
-        IndexCompatibility::Unbuilt => {}
-        IndexCompatibility::Compatible { version } => {
-            writeln!(writer, "Index version: {version}")?;
-        }
-        IndexCompatibility::RebuildRequired {
-            actual_version,
-            expected_version,
-            reason,
-        } => {
-            let actual =
-                actual_version.map_or_else(|| "unknown".to_owned(), |version| version.to_string());
-            writeln!(
-                writer,
-                "Index version: {actual} (expected {expected_version})"
-            )?;
-            writeln!(writer, "Reason: {reason}")?;
-            if result.suggestion.is_none() {
-                writeln!(writer, "Suggestion: zg --index --rebuild")?;
-            }
-        }
-    }
-    if let Some(index) = &result.workspace_index {
-        writeln!(
-            writer,
-            "Nested Git repositories: {}",
-            if index.scan.nested_git {
-                "included"
-            } else {
-                "excluded"
-            }
-        )?;
-        if let Some(embedding) = &index.embedding {
-            writeln!(
-                writer,
-                "Embedding: {}/{}",
-                embedding.provider, embedding.model
-            )?;
-        }
-        if let Some(fts) = &index.fts {
-            writeln!(
-                writer,
-                "FTS: tokenizer={} filters={}",
-                fts.tokenizer,
-                fts.filters.join(", ")
-            )?;
-        }
-    }
-    if let Some(status) = &result.status {
-        writeln!(
-            writer,
-            "Files: scanned={} indexed={} pending={} failed={}",
-            status.files_scanned, status.files_indexed, status.files_pending, status.files_failed
-        )?;
-        for file in &status.failed_files {
-            writeln!(writer, "Failed: {}: {}", file.path.display(), file.reason)?;
-        }
-        writeln!(writer, "Entities: {}", status.entities_indexed)?;
-        writeln!(
-            writer,
-            "Indexed source size: {} bytes",
-            status.indexed_size_bytes
-        )?;
-    }
-    if let Some(suggestion) = &result.suggestion {
-        writeln!(writer, "Suggestion: {suggestion}")?;
-    }
-    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -623,6 +482,10 @@ ZVEC_GREP_EMBEDDING.
 --endpoint selects the exact provider URL to authorize; otherwise the stored
 index endpoint, ZVEC_GREP_ENDPOINT, or provider default is used. Grants bind the
 canonical workspace root, model, and endpoint. Granting sends no remote data.
+
+Output:
+  --color <auto|always|never>       Color output (default: auto)
+  --no-color                        Disable color output
 
 Scopes used during operations:
   once                              Current CLI command or Agent tool call only
@@ -893,36 +756,6 @@ mod output_tests {
         ContextContentRole, ContextCoverage, ContextDiagnostics, ContextItemKind, ContextSource,
         MatchedBy,
     };
-
-    #[test]
-    fn incompatible_status_shows_versions_reason_and_rebuild_guidance() {
-        use zg_engine::api::info::result::{InfoSource, WorkspaceIndexPolicy};
-        for (actual_version, actual_label) in [(Some(1), "1"), (None, "unknown")] {
-            let result = InfoResult {
-                root: "/workspace".into(),
-                indexed: false,
-                compatibility: IndexCompatibility::RebuildRequired {
-                    actual_version,
-                    expected_version: 2,
-                    reason: "unsupported persisted index".into(),
-                },
-                index_policy: WorkspaceIndexPolicy::Enabled,
-                home: "/workspace/.zvec-grep".into(),
-                index_path: "/workspace/.zvec-grep/storage".into(),
-                source: InfoSource::Unindexed,
-                workspace_index: None,
-                status: None,
-                suggestion: None,
-            };
-            let mut output = Vec::new();
-            write_info_result(&mut output, &result).expect("status output");
-            let output = String::from_utf8(output).expect("UTF-8");
-            assert!(output.contains("Workspace index: rebuild_required"));
-            assert!(output.contains(&format!("Index version: {actual_label} (expected 2)")));
-            assert!(output.contains("unsupported persisted index"));
-            assert!(output.contains("zg --index --rebuild"));
-        }
-    }
 
     fn indexed_item() -> ContextItem {
         ContextItem {

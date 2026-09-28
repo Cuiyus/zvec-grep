@@ -27,6 +27,22 @@ pub struct IndexAuthorization {
     pub endpoint_host: String,
 }
 
+/// Verified workspace consent, without terminal presentation details.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizationStatus {
+    pub root: PathBuf,
+    pub path: PathBuf,
+    pub grants: Vec<AuthorizationGrantStatus>,
+}
+
+/// A verified remote destination approved for a workspace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizationGrantStatus {
+    pub model: String,
+    pub endpoint: String,
+    pub endpoint_host: String,
+}
+
 /// Resolves required consent without loading models, writing state, or sending data.
 ///
 /// # Errors
@@ -511,23 +527,53 @@ fn read_grants(root: &Path) -> Result<Vec<Grant>, EngineError> {
 ///
 /// # Errors
 /// Returns an error if existing consent cannot be verified.
-pub fn status(root: &Path) -> Result<String, EngineError> {
+pub fn status_snapshot(root: &Path) -> Result<AuthorizationStatus, EngineError> {
     let root = root_path(root)?;
-    let grants = read_grants(&root)?;
-    if grants.is_empty() {
+    let grants = read_grants(&root)?
+        .into_iter()
+        .map(|grant| {
+            let endpoint_host = reqwest::Url::parse(&grant.endpoint).map_or_else(
+                |_| grant.endpoint.clone(),
+                |url| match url.port() {
+                    Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+                    None => url.host_str().unwrap_or_default().to_owned(),
+                },
+            );
+            AuthorizationGrantStatus {
+                model: grant.model,
+                endpoint: grant.endpoint,
+                endpoint_host,
+            }
+        })
+        .collect();
+    Ok(AuthorizationStatus {
+        path: root.join(".zvec-grep/authorization.json"),
+        root,
+        grants,
+    })
+}
+
+/// Reports verified consent without creating any state.
+///
+/// # Errors
+/// Returns an error if existing consent cannot be verified.
+pub fn status(root: &Path) -> Result<String, EngineError> {
+    let status = status_snapshot(root)?;
+    if status.grants.is_empty() {
         return Ok(format!(
             "Remote Embedding: not authorized\nRoot: {}",
-            root.display()
+            status.root.display()
         ));
     }
-    let destinations = grants
+    let destinations = status
+        .grants
         .iter()
         .map(|grant| format!("Model: {}\nEndpoint: {}", grant.model, grant.endpoint))
         .collect::<Vec<_>>()
         .join("\n");
     Ok(format!(
         "Remote Embedding: authorized\nRoot: {}\nScope: workspace\n{destinations}",
-        root.display()
+        status.root.display()
     ))
 }
 
@@ -537,16 +583,40 @@ pub fn status(root: &Path) -> Result<String, EngineError> {
 /// Returns an error when the authorization file cannot be removed or its deletion synced.
 pub fn revoke(root: &Path) -> Result<String, EngineError> {
     let root = root_path(root)?;
-    let home = root.join(".zvec-grep");
-    match fs::remove_file(home.join("authorization.json")) {
-        Ok(()) => sync_directory(&home)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(io(e)),
-    }
+    revoke_all(&root)?;
     Ok(format!(
         "Remote Embedding: not authorized\nRoot: {}",
         root.display()
     ))
+}
+
+/// Removes all workspace grants and reports how many records were removed.
+/// Invalid consent can still be removed without a working signing key.
+/// Returns `None` when removed consent could not be read or parsed to count records.
+///
+/// # Errors
+/// Returns an error when authorization state cannot be removed or synced.
+pub fn revoke_all(root: &Path) -> Result<Option<usize>, EngineError> {
+    let root = root_path(root)?;
+    let home = root.join(".zvec-grep");
+    let path = home.join("authorization.json");
+    let count = match fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice::<SignedGrants>(&bytes) {
+            Ok(SignedGrants::Many(records)) => Some(records.len()),
+            Ok(SignedGrants::One(_)) => Some(1),
+            // Explicit revocation remains the recovery path for malformed consent.
+            Err(_) => None,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(0)),
+        // Revocation must also work when existing consent cannot be read.
+        Err(_) => None,
+    };
+    match fs::remove_file(path) {
+        Ok(()) => sync_directory(&home)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(0)),
+        Err(e) => return Err(io(e)),
+    }
+    Ok(count)
 }
 
 fn approved_destination(

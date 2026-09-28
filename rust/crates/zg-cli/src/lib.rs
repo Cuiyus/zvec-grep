@@ -4,9 +4,17 @@ mod authorization;
 mod install;
 mod jsonc;
 mod managed_rg;
+mod management;
 mod progress;
 mod render;
+mod status;
+mod theme;
+pub use management::{
+    write_authorization_revoke_result, write_authorization_status, write_index_drop_result,
+    write_index_result, write_index_with_options,
+};
 pub use progress::IndexProgressDisplay;
+pub use status::{write_info_result, write_info_with_options};
 
 use std::{
     ffi::{OsStr, OsString},
@@ -45,7 +53,6 @@ pub use install::{
 pub use managed_rg::{ManagedRgArgumentError, parse_managed_rg_args};
 pub use render::{
     HelpTopicError, help_text, print_help, write_context_result, write_context_with_options,
-    write_index_result, write_info_result, write_info_with_options,
 };
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7999";
@@ -97,6 +104,10 @@ pub struct AuthArgs {
     pub embedding: Option<String>,
     #[arg(long, global = true)]
     pub endpoint: Option<String>,
+    #[arg(long, global = true, value_enum)]
+    pub color: Option<ColorMode>,
+    #[arg(long = "no-color", global = true, conflicts_with = "color")]
+    pub no_color: bool,
 }
 
 #[derive(Debug, Subcommand)]

@@ -590,8 +590,8 @@ fn server_on_exposes_only_agent_search_and_off_stops_it() -> Result<(), Box<dyn 
         .output()?;
     assert_command_success(&cli_status);
     let cli_stdout = String::from_utf8_lossy(&cli_status.stdout);
-    assert!(cli_stdout.contains("Workspace index: uninitialized"));
-    assert!(cli_stdout.contains(&format!("Root: {}", home.path().display())));
+    assert!(cli_stdout.contains("? Workspace index is not configured"));
+    assert!(cli_stdout.contains(&format!("  {}", home.path().display())));
 
     let output = guard.stop()?;
     assert_command_success(&output);
