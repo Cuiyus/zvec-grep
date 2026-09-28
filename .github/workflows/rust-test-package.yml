@@ -1,0 +1,85 @@
+name: Rust executable test package
+
+on:
+  push:
+    branches: [dev/rust-qwen37-test-package-20260928]
+    paths: [.github/workflows/rust-test-package.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package macOS ARM64
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify platform and pinned toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          rustup show active-toolchain
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore Cargo build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-test-package-v1-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rust-cargo-v1-
+      - name: Check CLI and configuration behavior
+        run: cargo test --locked --package zg --test config --test cli_help
+      - name: Build and package native runtime
+        run: |
+          npm ci
+          npm run pack:local
+          node scripts/npm-local.mjs smoke --no-build
+      - name: Stage standalone archive
+        env:
+          SOURCE_COMMIT: fe94c3dad1a30d0e9c4713e0b489e4c29dcc323b
+        run: |
+          bundle=zg-rust-0.0.1-fe94c3d-darwin-arm64
+          mkdir -p "dist/standalone/$bundle"
+          cp -R dist/npm/zvec-grep-package/bin "dist/standalone/$bundle/bin"
+          cp dist/npm/zvec-grep-package/checksums.json "dist/standalone/$bundle/checksums.json"
+          cp ../LICENSE "dist/standalone/$bundle/LICENSE"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          directory = pathlib.Path('dist/standalone/zg-rust-0.0.1-fe94c3d-darwin-arm64')
+          (directory / 'BUILD.json').write_text(json.dumps({
+              'sourceRepository': 'https://github.com/Cuiyus/zvec-grep',
+              'sourceCommit': os.environ['SOURCE_COMMIT'],
+              'buildCommit': os.environ['GITHUB_SHA'],
+              'target': 'darwin-arm64',
+              'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
+              'workflowRun': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }, indent=2) + '\n')
+          (directory / 'README.txt').write_text('Rust development test build for macOS Apple Silicon.\nRun ./bin/zg --version and ./bin/zg --help.\nKeep bin/ and its runtime files together. No Rust or Node installation is needed to run it.\nThis is an unsigned development package, not a published release.\n')
+          PY
+          "dist/standalone/$bundle/bin/zg" --version
+          "dist/standalone/$bundle/bin/zg" --help models
+          "dist/standalone/$bundle/bin/zg" --rg -F 'zvec-grep Rust rewrite' README.md
+          tar -C dist/standalone -czf "dist/standalone/$bundle.tar.gz" "$bundle"
+          cd dist/standalone
+          shasum -a 256 "$bundle.tar.gz" > "$bundle.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zg-rust-fe94c3d-darwin-arm64
+          path: |
+            rust/dist/standalone/*.tar.gz
+            rust/dist/standalone/*.sha256
+            rust/dist/npm/*.tgz
+          retention-days: 14
+          if-no-files-found: error
