@@ -15,7 +15,7 @@ REFERENCES_PATH = SWE_QA_BENCH_DIR / "zg_bench" / "swe_qa" / "data" / "reference
 DATASET_PATH = SWE_QA_BENCH_DIR / "datasets"
 EXPECTED_AUTO_TASK_IDS = (
     "reflex:6",
-    "pylint:9",
+    "flask:5",
     "matplotlib:37",
     "streamlink:14",
     "xarray:32",

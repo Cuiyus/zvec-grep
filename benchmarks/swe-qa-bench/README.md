@@ -34,6 +34,14 @@ The benchmark inputs are locked in this directory:
 The validation command below checks the locked selection, repository commits,
 hashes, and reference isolation before model-backed runs.
 
+The current CI selection replaces `pylint:9` with `flask:5` and `pylint:10`
+with `reflex:10` to evaluate more clearly bounded code-navigation questions
+after observing repeated variability in the original tasks. Both replacements
+retain the `what` category and come from the same pinned SWE-QA revision.
+Their stability and zvec-grep benefit remain to be measured. Previously published
+results use the original selection and should not be directly compared as the
+same 20-task aggregate.
+
 ## Published protocol
 
 - **Coverage:** 20 retrieval-intensive tasks spanning What, Where, How, and

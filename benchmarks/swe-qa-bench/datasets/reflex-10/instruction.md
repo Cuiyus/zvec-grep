@@ -1,0 +1,1 @@
+What is the mechanism by which the function that resets state subclasses during module reloading ensures that reloading a module does not leave stale references in the internal state class for handling page load events and its subclass hierarchy?

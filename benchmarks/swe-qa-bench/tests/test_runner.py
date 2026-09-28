@@ -1009,7 +1009,7 @@ class SuiteTierTests(unittest.TestCase):
             suite.tasks,
             (
                 "reflex-6",
-                "pylint-9",
+                "flask-5",
                 "matplotlib-37",
                 "streamlink-14",
                 "xarray-32",
