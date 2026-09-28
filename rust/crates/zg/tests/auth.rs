@@ -284,3 +284,60 @@ fn resident_server_observes_grant_and_revoke_without_restart() {
     );
     assert!(String::from_utf8_lossy(&fixture.run(&args).stderr).contains("authorization required"));
 }
+
+#[test]
+fn api_base_url_grants_match_resolved_index_endpoints() {
+    let model = "qwen/qwen3.7-text-embedding";
+    let base = "https://example.test/compatible-mode/v1/";
+    let endpoint = "https://example.test/compatible-mode/v1/embeddings";
+    for mode in ["direct", "server"] {
+        let fixture = Fixture::new();
+        let _stop = Stop(&fixture);
+        if mode == "server" {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("available port");
+            let address = listener.local_addr().expect("address").to_string();
+            drop(listener);
+            fixture.success(&["--server", "on", "--listen", &address]);
+        }
+        fixture.success(&[
+            "--auth",
+            "grant",
+            ".",
+            "--capability",
+            "embedding",
+            "--scope",
+            "workspace",
+            "--embedding",
+            model,
+            "--endpoint",
+            base,
+        ]);
+        let grant: serde_json::Value = serde_json::from_slice(
+            &fs::read(fixture.root.path().join(".zvec-grep/authorization.json"))
+                .expect("authorization"),
+        )
+        .expect("signed grant");
+        assert_eq!(grant["grant"]["endpoint"], endpoint);
+
+        // Empty workspaces resolve and persist the runtime without network I/O.
+        // Both spellings must reuse the grant for the actual request URL.
+        for requested in [base, endpoint] {
+            fixture.success(&[
+                "--index",
+                "--mode",
+                mode,
+                "--embedding",
+                model,
+                "--endpoint",
+                requested,
+                "--api-key",
+                "test-key",
+            ]);
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &fs::read(fixture.root.path().join(".zvec-grep/manifest.json")).expect("manifest"),
+            )
+            .expect("workspace manifest");
+            assert_eq!(manifest["embeddingRuntimes"][model]["endpoint"], endpoint);
+        }
+    }
+}

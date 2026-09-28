@@ -401,16 +401,29 @@ fn parse_response_body(
         } else {
             provider_error_code(response.status)
         };
-        classify_provider_failure(
-            ModelError::new(
-                code,
-                format!("{} response was not valid JSON", model_name(entry)),
-                Some(format!(
-                    "model={} status={}",
-                    entry.reference, response.status
-                )),
+        let message = if response.success() {
+            format!("{} response was not valid JSON", model_name(entry))
+        } else {
+            format!(
+                "{} request returned HTTP {} with a non-JSON response",
+                model_name(entry),
+                response.status
             )
-            .with_cause(error),
+        };
+        let mut context = format!("model={} status={}", entry.reference, response.status);
+        if response.status == 404 {
+            context.push_str(
+                "\nhint=Check --endpoint or ZVEC_GREP_ENDPOINT and model availability at the configured service.",
+            );
+        }
+        let failure = ModelError::new(code, message, Some(context));
+        let failure = if response.success() {
+            failure.with_cause(error)
+        } else {
+            failure
+        };
+        classify_provider_failure(
+            failure,
             response.status,
             response.retry_after.as_deref().and_then(retry_after_millis),
             None,

@@ -158,6 +158,17 @@ zg --index \
   --allow-remote
 ```
 
+For Qwen text models, the Rust CLI accepts either a full Embedding endpoint or
+an OpenAI-compatible API base URL ending in `/v1` (with an optional trailing
+slash). For example, `https://example.com/compatible-mode/v1` resolves to
+`https://example.com/compatible-mode/v1/embeddings`. Authorization and index
+metadata use the resolved request URL. Complete endpoints and custom paths are
+preserved; this expansion does not apply to the Qwen VL endpoint.
+
+If an endpoint returns an empty or non-JSON HTTP error response, the error
+reports the HTTP status. For HTTP 404, check the endpoint and whether the model
+is available at that service.
+
 Credentials configure access to a provider; they do not authorize data
 transfer. `--allow-remote` authorizes Remote Embedding only for the current
 command. To create a signed Workspace grant shared by the CLI and MCP server:

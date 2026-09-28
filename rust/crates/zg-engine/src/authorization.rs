@@ -345,7 +345,7 @@ pub(crate) fn remote_endpoint(
         .or_else(|| crate::config::string(&config, &["models", reference, "endpoint"]))
         .or_else(|| env::var("ZVEC_GREP_ENDPOINT").ok())
         .unwrap_or_else(|| entry.default_endpoint.to_string());
-    let url = reqwest::Url::parse(endpoint.trim())
+    let mut url = reqwest::Url::parse(endpoint.trim())
         .map_err(|_| EngineError::invalid_argument("Invalid remote embedding endpoint"))?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -356,6 +356,12 @@ pub(crate) fn remote_endpoint(
         return Err(EngineError::invalid_argument(
             "Embedding endpoint must be an HTTP(S) URL without credentials or fragment",
         ));
+    }
+    // SDK examples provide an API base URL. Resolve it before consent is
+    // checked so the signed destination and the actual request URL agree.
+    let path = url.path().trim_end_matches('/');
+    if entry.kind == "text" && path.ends_with("/v1") {
+        url.set_path(&format!("{path}/embeddings"));
     }
     Ok(url.to_string())
 }
@@ -632,6 +638,52 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         None
+    }
+
+    #[test]
+    fn text_embedding_base_urls_resolve_before_authorization() {
+        let Some(_root) = isolated_authorization_root(
+            "authorization::tests::text_embedding_base_urls_resolve_before_authorization",
+        ) else {
+            return;
+        };
+        for model in ["qwen/text-embedding-v4", "qwen/qwen3.7-text-embedding"] {
+            for (input, expected) in [
+                ("/v1", "/v1/embeddings"),
+                ("/v1/", "/v1/embeddings"),
+                ("/compatible-mode/v1", "/compatible-mode/v1/embeddings"),
+                ("/compatible-mode/v1/", "/compatible-mode/v1/embeddings"),
+                (
+                    "/gateway/v1/?api-version=2026-01",
+                    "/gateway/v1/embeddings?api-version=2026-01",
+                ),
+                ("/v1/embeddings", "/v1/embeddings"),
+                ("/custom-embeddings", "/custom-embeddings"),
+                ("/v10", "/v10"),
+            ] {
+                let expected = format!("https://example.test{expected}");
+                let resolved =
+                    remote_endpoint(model, Some(&format!(" https://example.test{input} ")))
+                        .expect("valid text endpoint");
+                assert_eq!(resolved, expected);
+                assert_eq!(
+                    remote_endpoint(model, Some(&resolved)).expect("idempotent endpoint"),
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            remote_endpoint("qwen/qwen3-vl-embedding", Some("https://example.test/v1/"))
+                .expect("multimodal endpoint"),
+            "https://example.test/v1/"
+        );
+        for endpoint in [
+            "ftp://example.test/v1",
+            "https://user:password@example.test/v1",
+            "https://example.test/v1#fragment",
+        ] {
+            assert!(remote_endpoint("qwen/qwen3.7-text-embedding", Some(endpoint)).is_err());
+        }
     }
 
     #[test]

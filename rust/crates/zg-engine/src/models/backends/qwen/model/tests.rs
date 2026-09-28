@@ -371,6 +371,47 @@ fn provider_failures_expose_structured_retry_and_failure_scope() {
 }
 
 #[test]
+fn non_json_http_errors_report_status_without_echoing_the_response_body() {
+    let entry = config("text", "qwen3.7-text-embedding", 3);
+    for body in [b"".as_slice(), b"<html>sensitive-provider-body</html>"] {
+        let error = parse_response_body(
+            &QwenHttpResponse {
+                status: 404,
+                retry_after: None,
+                body: body.to_vec(),
+            },
+            entry,
+        )
+        .expect_err("missing embedding route");
+        assert_eq!(error.code(), crate::EngineError::NOT_FOUND);
+        assert!(error.to_string().contains("request returned HTTP 404"));
+        assert!(error.context().expect("context").contains("--endpoint"));
+        assert!(error.should_fail_fast());
+        assert!(!error.is_retryable());
+        assert!(error.cause().is_none());
+        assert!(
+            !error
+                .into_engine_error()
+                .message()
+                .contains("sensitive-provider-body")
+        );
+    }
+
+    let error = parse_response_body(
+        &QwenHttpResponse {
+            status: 200,
+            retry_after: None,
+            body: Vec::new(),
+        },
+        entry,
+    )
+    .expect_err("invalid successful response");
+    assert_eq!(error.code(), crate::EngineError::INTERNAL);
+    assert!(error.to_string().contains("response was not valid JSON"));
+    assert!(error.cause().is_some());
+}
+
+#[test]
 fn requires_api_key_and_keeps_catalog_endpoint() {
     let error = QwenEmbeddingModel::new(
         config("text", "qwen3.7-text-embedding", 3),
