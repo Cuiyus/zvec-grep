@@ -109,7 +109,8 @@ fn config_merges_settings_and_index_consumes_model_defaults() {
     );
     let status = fixture.success(&["--status", "--mode", "direct"]);
     assert!(
-        String::from_utf8_lossy(&status.stdout).contains("FTS: tokenizer=jieba filters=lowercase")
+        String::from_utf8_lossy(&status.stdout)
+            .contains("  FTS         tokenizer=jieba filters=lowercase")
     );
 }
 
