@@ -73,13 +73,31 @@ pub(crate) fn display_path(path: &Path) -> String {
 }
 
 fn display_path_with_home(path: &Path, home: Option<&Path>) -> String {
-    if let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) {
+    if let Some(relative) = home.and_then(|home| relative_to_home(path, home)) {
         if relative.as_os_str().is_empty() {
             return "~".into();
         }
         return PathBuf::from("~").join(relative).display().to_string();
     }
     path.display().to_string()
+}
+
+fn relative_to_home(path: &Path, home: &Path) -> Option<PathBuf> {
+    if let Ok(relative) = path.strip_prefix(home) {
+        return Some(relative.to_path_buf());
+    }
+    // Windows can report the same directory as C:\... and \\?\C:\...,
+    // or with short (8.3) names. Compare existing paths in the same form.
+    #[cfg(windows)]
+    {
+        let path = path.canonicalize().ok()?;
+        let home = home.canonicalize().ok()?;
+        path.strip_prefix(home).ok().map(Path::to_path_buf)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 pub(crate) fn storage_path(path: &Path, root: &Path) -> String {
@@ -139,5 +157,16 @@ mod tests {
         assert_eq!(format_count(999), "999");
         assert_eq!(format_count(1234), "1,234");
         assert_eq!(format_count(u64::MAX), "18,446,744,073,709,551,615");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn home_display_accepts_ordinary_and_canonical_windows_paths() {
+        let ordinary = std::env::temp_dir();
+        let canonical = ordinary
+            .canonicalize()
+            .expect("canonical temporary directory");
+        assert_eq!(display_path_with_home(&ordinary, Some(&canonical)), "~");
+        assert_eq!(display_path_with_home(&canonical, Some(&ordinary)), "~");
     }
 }

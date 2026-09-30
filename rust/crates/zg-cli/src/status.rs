@@ -142,7 +142,14 @@ fn write_statistics(
         if total == 0 {
             0
         } else {
-            (completed.min(total) as u128 * scale + total as u128 / 2) / total as u128
+            let rounded =
+                (completed.min(total) as u128 * scale + total as u128 / 2) / total as u128;
+            // Rounding must not make an unfinished scan look complete.
+            if completed < total {
+                rounded.min(scale - 1)
+            } else {
+                rounded
+            }
         }
     };
     let percent = ratio(100);
@@ -343,6 +350,9 @@ pub(crate) fn scan_filters(scan: &ScanRules) -> String {
     if scan.follow_symlinks {
         filters.push("follow".into());
     }
+    if !scan.nested_git {
+        filters.push("nested-git=false".into());
+    }
     filters.join(" ")
 }
 
@@ -444,6 +454,42 @@ mod tests {
         assert!(output.contains("Changes     0 added · 1 modified · 20 deleted"));
         assert!(output.contains("Next        zg --index"));
         assert!(!output.contains("100%"));
+    }
+
+    #[test]
+    fn incomplete_coverage_never_rounds_to_a_full_percentage_or_bar() {
+        let unicode = !cfg!(windows) && std::env::var("TERM").as_deref() != Ok("linux");
+        for (completed, total, percent, filled) in [
+            (199, 200, 99, 19),
+            (999, 1000, 99, 19),
+            (200, 200, 100, 20),
+            (0, 200, 0, 0),
+            (0, 0, 0, 0),
+        ] {
+            let mut info = ready();
+            info.status = Some(IndexStats {
+                files_scanned: total,
+                files_unchanged: completed,
+                files_modified: total - completed,
+                ..IndexStats::default()
+            });
+            for color in [ColorMode::Never, ColorMode::Always] {
+                let bar =
+                    crate::progress::gradient_bar(filled, 20, color == ColorMode::Always, unicode);
+                let output = render(&info, color);
+                assert!(
+                    output.contains(&format!(
+                        "{bar} {percent:>3}%  {} / {} files",
+                        format_count(completed),
+                        format_count(total)
+                    )),
+                    "{output}"
+                );
+                if completed < total {
+                    assert!(output.contains("! Workspace index needs an update"));
+                }
+            }
+        }
     }
 
     #[test]

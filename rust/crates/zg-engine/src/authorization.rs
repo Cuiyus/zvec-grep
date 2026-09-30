@@ -1,4 +1,8 @@
 //! Signed workspace consent shared by direct, daemon, and MCP operations.
+//!
+//! Consent preflight and grant-file management are the explicit exception to
+//! the `ZvecGrep` operation boundary described in `rust/CONTRIBUTING.md`.
+//! They operate before engine work and never load models or send remote data.
 
 use crate::{
     EngineError,
@@ -117,10 +121,7 @@ fn authorization_for_manifest(
     }
     let url = reqwest::Url::parse(&endpoint)
         .map_err(|_| EngineError::invalid_argument("Invalid embedding endpoint"))?;
-    let endpoint_host = match url.port() {
-        Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
-        None => url.host_str().unwrap_or_default().to_owned(),
-    };
+    let endpoint_host = format_endpoint_host(&url);
     let workspace_roots = vec![root.clone()];
     Ok(Some(IndexAuthorization {
         root,
@@ -129,6 +130,13 @@ fn authorization_for_manifest(
         endpoint,
         endpoint_host,
     }))
+}
+
+fn format_endpoint_host(url: &reqwest::Url) -> String {
+    match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+        None => url.host_str().unwrap_or_default().to_owned(),
+    }
 }
 
 /// Destination and data categories requiring consent for an indexed query.
@@ -532,13 +540,8 @@ pub fn status_snapshot(root: &Path) -> Result<AuthorizationStatus, EngineError> 
     let grants = read_grants(&root)?
         .into_iter()
         .map(|grant| {
-            let endpoint_host = reqwest::Url::parse(&grant.endpoint).map_or_else(
-                |_| grant.endpoint.clone(),
-                |url| match url.port() {
-                    Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
-                    None => url.host_str().unwrap_or_default().to_owned(),
-                },
-            );
+            let endpoint_host = reqwest::Url::parse(&grant.endpoint)
+                .map_or_else(|_| grant.endpoint.clone(), |url| format_endpoint_host(&url));
             AuthorizationGrantStatus {
                 model: grant.model,
                 endpoint: grant.endpoint,
@@ -1133,5 +1136,43 @@ mod tests {
         options.allow_remote = false;
         options.embedding.as_mut().expect("model").reference = "local/potion-code-16m-v2".into();
         assert!(index_authorization(&options).expect("local").is_none());
+    }
+
+    #[test]
+    fn disclosure_and_status_use_the_same_endpoint_host() {
+        let Some(root) = isolated_authorization_root(
+            "authorization::tests::disclosure_and_status_use_the_same_endpoint_host",
+        ) else {
+            return;
+        };
+        for (endpoint, expected) in [
+            ("https://provider.test/v1/embeddings", "provider.test"),
+            ("https://provider.test:443/v1/embeddings", "provider.test"),
+            (
+                "https://provider.test:8443/v1/embeddings",
+                "provider.test:8443",
+            ),
+            ("http://[::1]:8080/v1/embeddings", "[::1]:8080"),
+        ] {
+            let target = index_authorization(&IndexOptions {
+                root: Some(root.clone()),
+                embedding: Some(EmbeddingModelSpec {
+                    reference: "qwen/text-embedding-v4".into(),
+                    revision: None,
+                    cache_dir: None,
+                    endpoint: Some(endpoint.into()),
+                    device: Device::Auto,
+                }),
+                ..IndexOptions::default()
+            })
+            .expect("disclosure")
+            .expect("consent required");
+            assert_eq!(target.endpoint_host, expected);
+            grant_index(&target).expect("grant");
+            let status = status_snapshot(&root).expect("verified status");
+            assert_eq!(status.grants.len(), 1);
+            assert_eq!(status.grants[0].endpoint_host, target.endpoint_host);
+            assert_eq!(revoke_all(&root).expect("revoke"), Some(1));
+        }
     }
 }

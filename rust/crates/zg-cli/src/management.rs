@@ -5,10 +5,14 @@ use std::{
     path::Path,
 };
 
-use zg_engine::{api::index::IndexResult, authorization::AuthorizationStatus};
+use zg_engine::{
+    api::index::{IndexResult, options::ScanRules},
+    authorization::AuthorizationStatus,
+};
 
 use crate::{
     ColorMode, OutputOptions,
+    status::scan_filters,
     theme::{StatusTheme, display_path, storage_path, write_status_field},
 };
 
@@ -17,10 +21,11 @@ use crate::{
 /// # Errors
 /// Returns the underlying writer error.
 pub fn write_index_result(writer: impl Write, root: &Path, result: &IndexResult) -> io::Result<()> {
-    write_index_with_options(writer, root, result, OutputOptions::default(), false)
+    write_index_with_options(writer, root, result, None, OutputOptions::default(), false)
 }
 
 /// Writes a completed index reply in the Node.js CLI's summary layout.
+/// Pass the saved scan rules to describe the effective indexing scope.
 ///
 /// # Errors
 /// Returns the underlying writer error.
@@ -28,6 +33,7 @@ pub fn write_index_with_options(
     mut writer: impl Write,
     root: &Path,
     result: &IndexResult,
+    scan: Option<&ScanRules>,
     options: OutputOptions,
     terminal: bool,
 ) -> io::Result<()> {
@@ -70,12 +76,13 @@ pub fn write_index_with_options(
             theme.muted(&format!("({duration_ms}ms)")),
         ),
     )?;
-    index_field(
-        &mut writer,
-        theme,
-        "roots",
-        &theme.path(&root.display().to_string()),
-    )?;
+    let filters = scan.map(scan_filters).unwrap_or_default();
+    let roots = if filters.is_empty() {
+        root.display().to_string()
+    } else {
+        format!("{} ({filters})", root.display())
+    };
+    index_field(&mut writer, theme, "roots", &theme.path(&roots))?;
     for file in &result.failed_files {
         index_field(
             &mut writer,
@@ -264,6 +271,7 @@ mod tests {
                 &mut bytes,
                 Path::new("/workspace"),
                 &result,
+                None,
                 OutputOptions {
                     color,
                     ..OutputOptions::default()
@@ -275,6 +283,38 @@ mod tests {
             assert_eq!(output.contains("\x1b[31m1 failed\x1b[0m"), styled);
             assert_eq!(output.contains("\x1b["), styled);
         }
+    }
+
+    #[test]
+    fn index_summary_displays_saved_scan_rules() {
+        let scan = ScanRules {
+            globs: vec![
+                "*.rs".into(),
+                zg_engine::api::index::options::GlobRule {
+                    pattern: "!vendor/**".into(),
+                    case_insensitive: true,
+                },
+            ],
+            hidden: true,
+            no_ignore: true,
+            ignore_files: vec!["custom.ignore".into()],
+            max_depth: Some(2),
+            max_file_size_bytes: Some(4096),
+            follow_symlinks: true,
+            nested_git: false,
+        };
+        let mut bytes = Vec::new();
+        write_index_with_options(
+            &mut bytes,
+            Path::new("/workspace"),
+            &IndexResult::default(),
+            Some(&scan),
+            OutputOptions::default(),
+            false,
+        )
+        .expect("summary");
+        let output = String::from_utf8(bytes).expect("UTF-8");
+        assert!(output.contains("\nroots\t/workspace (glob=*.rs iglob=!vendor/** hidden no-ignore ignore-file=custom.ignore max-depth=2 max-filesize=4096 follow nested-git=false)\n"));
     }
 
     #[test]

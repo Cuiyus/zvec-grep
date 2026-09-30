@@ -585,10 +585,22 @@ async fn execute_index(
                 result
             };
             progress.finish();
+            // Inspect saved metadata so omitted flags and --reset-paths are
+            // reflected in the summary without rescanning workspace files.
+            let info = read_workspace_info(
+                server,
+                home,
+                zg_engine::api::info::InfoOptions {
+                    root: Some(root.clone()),
+                    include_status: false,
+                },
+            )
+            .await?;
             zg_cli::write_index_with_options(
                 io::stdout().lock(),
-                &root,
+                &info.root,
                 &result,
+                info.workspace_index.as_ref().map(|index| &index.scan),
                 output,
                 io::stdout().is_terminal(),
             )?;
@@ -686,19 +698,7 @@ async fn execute_status(
     check_ready: bool,
     output: zg_cli::OutputOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let result = if use_server(mode, home).await? {
-        let home = zg_daemon::resolve_home(home.map(Path::to_owned))?;
-        let reply = zg_daemon::execute_command(&home, DaemonCommand::Info(request)).await?;
-        let DaemonReply::Info(result) = reply else {
-            return Err(protocol_mismatch("info"));
-        };
-        *result
-    } else {
-        let engine = ZvecGrep::new();
-        let result = engine.info(request).await?;
-        engine.close();
-        result
-    };
+    let result = read_workspace_info(use_server(mode, home).await?, home, request).await?;
     zg_cli::write_info_with_options(
         io::stdout().lock(),
         &result,
@@ -713,6 +713,26 @@ async fn execute_status(
         return Err(io::Error::other("workspace index is not ready").into());
     }
     Ok(())
+}
+
+async fn read_workspace_info(
+    server: bool,
+    home: Option<&Path>,
+    request: zg_engine::api::info::InfoOptions,
+) -> Result<zg_engine::api::info::InfoResult, Box<dyn Error>> {
+    if server {
+        let home = zg_daemon::resolve_home(home.map(Path::to_owned))?;
+        let reply = zg_daemon::execute_command(&home, DaemonCommand::Info(request)).await?;
+        let DaemonReply::Info(result) = reply else {
+            return Err(protocol_mismatch("info"));
+        };
+        Ok(*result)
+    } else {
+        let engine = ZvecGrep::new();
+        let result = engine.info(request).await;
+        engine.close();
+        Ok(result?)
+    }
 }
 
 async fn use_server(mode: ClientMode, home: Option<&Path>) -> Result<bool, Box<dyn Error>> {
