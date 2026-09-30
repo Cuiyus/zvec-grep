@@ -641,15 +641,21 @@ fn server_on_exposes_only_agent_search_and_off_stops_it() -> Result<(), Box<dyn 
 
     // CLI administration uses the typed daemon protocol rather than the
     // public MCP toolset, so status remains available with the agent profile.
+    // Pin the display home so temporary paths are rendered consistently even
+    // when the runner's temporary directory is inside its real user home.
     let cli_status = Command::new(&guard.binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .args(["--status", "--mode", "server", "--home"])
         .arg(&guard.home)
         .arg(home.path())
         .output()?;
     assert_command_success(&cli_status);
     let cli_stdout = String::from_utf8_lossy(&cli_status.stdout);
-    assert!(cli_stdout.contains("? Workspace index is not configured"));
-    assert!(cli_stdout.contains(&format!("  {}", home.path().display())));
+    assert!(
+        cli_stdout.starts_with("? Workspace index is not configured\n  ~\n"),
+        "{cli_stdout}"
+    );
 
     let output = guard.stop()?;
     assert_command_success(&output);
