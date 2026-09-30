@@ -145,10 +145,10 @@ fn write_statistics(
             let rounded =
                 (completed.min(total) as u128 * scale + total as u128 / 2) / total as u128;
             // Rounding must not make an unfinished scan look complete.
-            if completed < total {
-                rounded.min(scale - 1)
-            } else {
+            if completed == total {
                 rounded
+            } else {
+                rounded.min(scale - 1)
             }
         }
     };
@@ -325,6 +325,12 @@ pub(crate) fn scan_filters(scan: &ScanRules) -> String {
             )
         })
         .collect();
+    if !scan.file_types.is_empty() {
+        filters.push(format!("type={}", scan.file_types.join("|")));
+    }
+    if !scan.excluded_file_types.is_empty() {
+        filters.push(format!("type-not={}", scan.excluded_file_types.join("|")));
+    }
     if scan.hidden {
         filters.push("hidden".into());
     }
