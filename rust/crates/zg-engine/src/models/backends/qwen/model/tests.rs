@@ -371,6 +371,105 @@ fn provider_failures_expose_structured_retry_and_failure_scope() {
 }
 
 #[test]
+fn non_json_http_errors_report_status_without_echoing_the_response_body() {
+    let entry = config("text", "qwen3.7-text-embedding", 3);
+    for body in [b"".as_slice(), b"<html>sensitive-provider-body</html>"] {
+        let error = parse_response_body(
+            &QwenHttpResponse {
+                status: 404,
+                retry_after: None,
+                body: body.to_vec(),
+            },
+            entry,
+        )
+        .expect_err("missing embedding route");
+        assert_eq!(error.code(), crate::EngineError::NOT_FOUND);
+        assert!(error.to_string().contains("request returned HTTP 404"));
+        assert!(error.context().expect("context").contains("--endpoint"));
+        assert!(error.should_fail_fast());
+        assert!(!error.is_retryable());
+        assert!(error.cause().is_none());
+        assert!(
+            !error
+                .into_engine_error()
+                .message()
+                .contains("sensitive-provider-body")
+        );
+    }
+
+    let error = parse_response_body(
+        &QwenHttpResponse {
+            status: 200,
+            retry_after: None,
+            body: Vec::new(),
+        },
+        entry,
+    )
+    .expect_err("invalid successful response");
+    assert_eq!(error.code(), crate::EngineError::INTERNAL);
+    assert!(error.to_string().contains("response was not valid JSON"));
+    assert!(error.cause().is_some());
+}
+
+#[tokio::test]
+async fn json_http_errors_include_endpoint_hint_only_for_not_found() {
+    for body in [
+        json!({
+            "error": {
+                "code": "DeploymentNotFound",
+                "type": "not_found_error",
+                "message": "Unknown deployment",
+            }
+        }),
+        json!({"code": "DeploymentNotFound", "message": "Unknown deployment"}),
+    ] {
+        for status in [400, 404] {
+            let http = Arc::new(MockHttp {
+                response: Mutex::new(Some(QwenHttpResponse {
+                    status,
+                    retry_after: None,
+                    body: serde_json::to_vec(&body).expect("fixture JSON"),
+                })),
+                requests: Mutex::new(Vec::new()),
+            });
+            let model = QwenEmbeddingModel::with_http(
+                config("text", "qwen3.7-text-embedding", 3),
+                options(),
+                http,
+            )
+            .expect("model");
+            let error = model
+                .embed(
+                    &[vec![Content::Text("one".to_owned())]],
+                    EmbeddingOptions::default(),
+                )
+                .await
+                .expect_err("provider error");
+            assert_eq!(
+                error.code(),
+                if status == 404 {
+                    crate::EngineError::NOT_FOUND
+                } else {
+                    crate::EngineError::INVALID_ARGUMENT
+                }
+            );
+            let context = error.context().expect("provider context");
+            assert!(context.contains(&format!("status={status}")));
+            assert!(context.contains("providerCode=DeploymentNotFound"));
+            assert!(context.contains("providerMessage=Unknown deployment"));
+            for hint in ["--endpoint", "ZVEC_GREP_ENDPOINT", "model availability"] {
+                assert_eq!(context.contains(hint), status == 404, "{context}");
+            }
+            assert!(!context.contains("secret"));
+            assert!(!error.is_retryable());
+            if status == 404 {
+                assert!(error.should_fail_fast());
+            }
+        }
+    }
+}
+
+#[test]
 fn requires_api_key_and_keeps_catalog_endpoint() {
     let error = QwenEmbeddingModel::new(
         config("text", "qwen3.7-text-embedding", 3),
