@@ -24,14 +24,14 @@ test("PR comment jobs have write permission and the run title retains its PR num
   for (const name of ["request", "reply"]) {
     const job = workflow
       .split(`\n  ${name}:\n`)[1]
-      .split(/\n  [a-z][\w-]*:\n/)[0];
+      .split(/\n {2}[a-z][\w-]*:\n/)[0];
     assert.match(job, /pull-requests: write/);
     assert.match(job, /issues: write/);
   }
   for (const name of ["retrieval", "e2e"]) {
     const job = workflow
       .split(`\n  ${name}:\n`)[1]
-      .split(/\n  [a-z][\w-]*:\n/)[0];
+      .split(/\n {2}[a-z][\w-]*:\n/)[0];
     assert.doesNotMatch(job, /: write/);
   }
 });
@@ -339,6 +339,20 @@ test("oversize reports are bounded and raw mentions are neutralized", () => {
   assert.ok(result.body.length < 60000);
   assert.match(result.body, /Report truncated/);
   assert.ok(!result.body.includes("@someone"));
+});
+
+test("a single e2e artifact extracted directly into its target directory is loaded", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "bench-comment-flat-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = join(root, "e2e");
+  await mkdir(dir);
+  await writeFile(join(dir, "report.json"), JSON.stringify(e2e.json));
+  await writeFile(join(dir, "report.md"), e2e.markdown);
+  const manifest = join(dir, "candidate-manifest.json");
+  await writeFile(manifest, JSON.stringify(e2e.identity));
+  assert.deepEqual((await loadReports(root, 123, sha)).e2e, e2e);
+  await writeFile(manifest, JSON.stringify({ candidate_commit: newerSha }));
+  assert.equal((await loadReports(root, 123, sha)).e2e, null);
 });
 
 test("final reply uses a matching earlier-attempt e2e artifact and updates the status comment", async (t) => {
