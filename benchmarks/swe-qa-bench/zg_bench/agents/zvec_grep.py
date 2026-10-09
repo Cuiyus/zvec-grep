@@ -159,6 +159,17 @@ class ZvecGrepMixin:
 
             workdir = await self._resolve_workdir(environment)
             metadata["workdir"] = workdir
+            expected_binary = os.environ.get("PR179_EXPECTED_ZG_BINARY_SHA256")
+            if expected_binary:
+                fingerprint = await self.exec_as_agent(
+                    environment,
+                    command='sha256sum "$(readlink -f "$(command -v zg)")"',
+                    cwd=workdir,
+                )
+                actual_binary = fingerprint.stdout.split()[0]
+                metadata["native_cli_sha256"] = actual_binary
+                if actual_binary != expected_binary:
+                    raise RuntimeError("Installed zg binary differs from the pinned PR179 package")
             metadata["git_exclude_updated"] = await self._hide_index_from_git(
                 environment, workdir
             )
