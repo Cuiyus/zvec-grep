@@ -112,7 +112,7 @@ export async function aggregate(directory, { expectedTasks } = {}) {
             2,
             "unsupported native snapshot",
           );
-          assert.equal(snapshot.kind, "rust-public-status");
+          assert.ok(["rust-public-status", "node-public-status"].includes(snapshot.kind));
           assert.equal(
             snapshot.logical_content_sha256,
             manifest.index_content_sha256,

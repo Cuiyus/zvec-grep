@@ -33,6 +33,12 @@ _MAX_METADATA_OUTPUT_CHARS = 20_000
 _NVM_INIT = 'if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi;'
 
 
+def _zg(subcommand: str) -> str:
+    """Use each release's public command spelling without wrapping its MCP."""
+    prefix = "" if os.environ.get("ZG_BENCH_CLI_RUNTIME") == "node" else "--"
+    return f"zg {prefix}{subcommand}"
+
+
 class ZvecGrepMixin:
     """Provision zvec-grep before an installed Harbor agent starts."""
 
@@ -159,7 +165,7 @@ class ZvecGrepMixin:
 
             workdir = await self._resolve_workdir(environment)
             metadata["workdir"] = workdir
-            expected_binary = os.environ.get("PR179_EXPECTED_ZG_BINARY_SHA256")
+            expected_binary = os.environ.get("ZG_BENCH_EXPECTED_CLI_SHA256") or os.environ.get("PR179_EXPECTED_ZG_BINARY_SHA256")
             if expected_binary:
                 fingerprint = await self.exec_as_agent(
                     environment,
@@ -167,9 +173,9 @@ class ZvecGrepMixin:
                     cwd=workdir,
                 )
                 actual_binary = fingerprint.stdout.split()[0]
-                metadata["native_cli_sha256"] = actual_binary
+                metadata["cli_sha256" if os.environ.get("ZG_BENCH_EXPECTED_CLI_SHA256") else "native_cli_sha256"] = actual_binary
                 if actual_binary != expected_binary:
-                    raise RuntimeError("Installed zg binary differs from the pinned PR179 package")
+                    raise RuntimeError("Installed zg CLI differs from the pinned package")
             metadata["git_exclude_updated"] = await self._hide_index_from_git(
                 environment, workdir
             )
@@ -265,9 +271,9 @@ class ZvecGrepMixin:
                 status_result = await self.exec_as_agent(
                     environment,
                     command=(
-                        "zg --status --check-ready"
+                        f"{_zg('status')} --check-ready"
                         if supports_ready_check
-                        else "zg --status"
+                        else f"{_zg('status')}"
                     ),
                     cwd=workdir,
                 )
@@ -428,7 +434,7 @@ class ZvecGrepMixin:
             result = await self.exec_as_agent(
                 environment,
                 command=(
-                    "if zg --status --check-ready; then ready=1; else ready=0; fi; "
+                    f"if {_zg('status')} --check-ready; then ready=1; else ready=0; fi; "
                     "printf 'ZG_INDEX_SEED_READY=%s\\n' \"$ready\""
                 ),
                 cwd=workdir,
@@ -441,7 +447,7 @@ class ZvecGrepMixin:
 
         result = await self.exec_as_agent(
             environment,
-            command="zg --status",
+            command=f"{_zg('status')}",
             cwd=workdir,
         )
         return result, self._index_is_ready(result.stdout or "")
@@ -540,7 +546,7 @@ class ZvecGrepMixin:
         mcp_result = await self.exec_as_agent(
             environment,
             command=(
-                "zg --install --target " f"{shlex.quote(self._mcp_target)} --yes"
+                f"{_zg('install')} --target " f"{shlex.quote(self._mcp_target)} --yes"
             ),
             **install_kwargs,
         )
@@ -553,9 +559,9 @@ class ZvecGrepMixin:
         server_status = await self.exec_as_agent(
             environment,
             command=(
-                "zg --server status --check-ready"
+                f"{_zg('server')} status --check-ready"
                 if supports_ready_check
-                else "zg --server status"
+                else f"{_zg('server')} status"
             ),
             cwd=workdir,
         )
@@ -763,7 +769,7 @@ class ZvecGrepMixin:
     def _index_command(
         embedding_model: str, *, ignore_file: str | None = None
     ) -> str:
-        command = f"zg --index --embedding {shlex.quote(embedding_model)}"
+        command = f"{_zg('index')} --embedding {shlex.quote(embedding_model)}"
         if ignore_file is not None:
             command += f" --ignore-file {shlex.quote(ignore_file)}"
         return command
@@ -778,7 +784,7 @@ class ZvecGrepMixin:
         if embedding_model.startswith("local/"):
             return None
         return (
-            "zg --auth grant --capability embedding --scope workspace "
+            f"{_zg('auth')} grant --capability embedding --scope workspace "
             f"--embedding {shlex.quote(embedding_model)}"
         )
 

@@ -37,7 +37,7 @@ test("the packed Rust npm metadata resolves to a native zg binary", () => {
   );
   assert.throws(
     () => nativeCandidate(root, "/tmp/candidate", { bin: { zg: "cli.mjs" } }),
-    /native Rust CLI/,
+    /0.2.2/,
   );
   assert.throws(
     () => nativeCandidate(root, "/tmp/candidate", { bin: { zg: "../zg" } }),
@@ -258,4 +258,22 @@ test("public index-readiness failures are product errors", () => {
     isProductPreparationFailure("mcp_contract", new Error("schema mismatch")),
     false,
   );
+});
+
+test("published Node 0.2.2 entrypoint and public ready status are accepted", () => {
+  const candidate = nativeCandidate("/tmp/package", "/tmp/consumer", { version: "0.2.2", bin: { zg: "dist/cli/index.js" } });
+  assert.equal(candidate.runtime, "node");
+  const status = parseNativeStatus(`✓ Workspace index is ready
+  /tmp/corpus
+
+  Coverage    [====================] 100%  1,200 / 1,200 files
+  Entities    2,400
+  Queue       0 pending · 0 failed
+  Embedding   local/potion-code-16m-v2
+              384 dimensions · cosine
+  Storage     .zvec-grep
+`);
+  assert.equal(status.files_indexed, 1200);
+  assert.equal(status.entities_indexed, 2400);
+  assert.equal(status.indexed_source_bytes, null);
 });

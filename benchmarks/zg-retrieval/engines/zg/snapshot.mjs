@@ -1,7 +1,7 @@
 // Passive audit through the native candidate's public status command.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileHash, objectHash, run, writeJson } from "../../core/lib.mjs";
 
 function required(pattern, text, label) {
@@ -27,6 +27,7 @@ async function writeStatusEvidence(output, result) {
 }
 
 export function parseNativeStatus(stdout) {
+  if (/Workspace index is /.test(stdout)) return parseNodeStatus(stdout);
   const state = required(
     /^Workspace index: (ready|missing)$/m,
     stdout,
@@ -81,6 +82,26 @@ export function parseNativeStatus(stdout) {
   return status;
 }
 
+export function parseNodeStatus(stdout) {
+  requireSearchable(/^✓ Workspace index is ready$/m.test(stdout), "Node index is not ready");
+  const root = required(/^✓ Workspace index is ready\n  (.+)$/m, stdout, "root")[1];
+  const coverage = required(/^  Coverage\s+.*?([\d,]+) \/ ([\d,]+) files$/m, stdout, "coverage");
+  const queue = required(/^  Queue\s+([\d,]+) pending · ([\d,]+) failed$/m, stdout, "queue");
+  const count = value => Number(value.replaceAll(",", ""));
+  const status = {
+    state: "ready", root,
+    index_path: resolve(root, required(/^  Storage\s+(.+)$/m, stdout, "storage")[1]),
+    embedding: required(/^  Embedding\s+(\S+)$/m, stdout, "embedding")[1],
+    files_scanned: count(coverage[2]), files_indexed: count(coverage[1]),
+    files_pending: count(queue[1]), files_failed: count(queue[2]),
+    entities_indexed: count(required(/^  Entities\s+([\d,]+)$/m, stdout, "entities")[1]),
+    indexed_source_bytes: null,
+  };
+  requireSearchable(status.files_pending === 0 && status.files_failed === 0, "Node index has pending or failed files");
+  requireSearchable(status.files_indexed > 0 && status.entities_indexed > 0, "Node index is empty");
+  return status;
+}
+
 export async function snapshotIndex({
   cli,
   root,
@@ -119,7 +140,7 @@ export async function snapshotIndex({
   await writeJson(join(output, "status.json"), status);
   const summary = {
     schema_version: 2,
-    kind: "rust-public-status",
+    kind: /Workspace index is /.test(result.stdout) ? "node-public-status" : "rust-public-status",
     logical_content_sha256: objectHash(identity),
     files: status.files_indexed,
     fragments: status.entities_indexed,
