@@ -24,14 +24,14 @@ test("PR comment jobs have write permission and the run title retains its PR num
   for (const name of ["request", "reply"]) {
     const job = workflow
       .split(`\n  ${name}:\n`)[1]
-      .split(/\n  [a-z][\w-]*:\n/)[0];
+      .split(/\n {2}[a-z][\w-]*:\n/)[0];
     assert.match(job, /pull-requests: write/);
     assert.match(job, /issues: write/);
   }
   for (const name of ["retrieval", "e2e"]) {
     const job = workflow
       .split(`\n  ${name}:\n`)[1]
-      .split(/\n  [a-z][\w-]*:\n/)[0];
+      .split(/\n {2}[a-z][\w-]*:\n/)[0];
     assert.doesNotMatch(job, /: write/);
   }
 });
