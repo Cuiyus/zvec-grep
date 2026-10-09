@@ -8,6 +8,21 @@
 
 配置方法和运行命令参见各 benchmark 的 README。
 
+## 从 PR 评论触发
+
+仓库的 admin/maintain 角色可以在 PR 的 **Conversation** 评论区新建评论，单独写一行 `@zg-bench`。[ZG Bench](../.github/workflows/zg-bench.yml) 会锁定该 PR 的 head SHA，同时运行现有的两套协议：
+
+- **Retrieval：** SWE-QA20、BEIR、DuRetrieval、Quarry，使用 local embedding。
+- **e2e：** 完整 20 道 SWE-QA 题，OpenCode + GLM-5.2，baseline 和 zvec-grep 每题每组各运行 5 次，使用 local embedding。
+
+`github-actions[bot]` 先回复排队状态，再更新同一条评论，输出两份报告、候选提交 SHA 和 Actions/artifact 链接。报告保留现有 Retrieval 指标以及 e2e 的 Judge、input token、tool call、耗时比较。失败或缺失结果明确标记为未完成。运行期间推送新代码不会改变本次候选提交，需要再次评论才能测试新提交；重跑失败任务会更新原机器人评论。引用文字、代码块中的命令、机器人评论、编辑旧评论、普通 Issue 和代码行 review 评论均不会启动评测。
+
+启用前需要把入口和可复用工作流的改动合入仓库的**默认分支**，配置现有的 `GLM_API_KEY` Actions secret，并允许工作流使用 `issues: write`。也可以通过 `workflow_dispatch` 的 `pr_number` 手动启动同样的流程。开发验证使用 `Cuiyus/zvec-grep`，在上游仓库启用是单独的部署步骤。
+
+只有评论任务持有写权限 token。评测 harness 使用受信任的工作流版本，候选代码在 GitHub 托管 runner 上单独检出为固定 SHA。发出命令意味着允许这份候选代码使用现有 Benchmark 的模型凭证执行，应先检查 fork 的改动。每个 Benchmark job 都会重新检查原始触发者和重跑者当前的 admin/maintain 权限。
+
+`@zg-bench` 是命令关键字，无需注册同名账号。如果希望回复者显示为专属的 `zg-bench[bot]`，可以注册并安装 GitHub App，授予 Issues 读写、Pull requests 读取权限，再让评论任务使用其 installation token 和 bot login。初版使用 `GITHUB_TOKEN` 和 `github-actions[bot]`。
+
 ## 评测项目
 
 | Benchmark | 说明 | Agent | 评测规模 |

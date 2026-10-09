@@ -50,7 +50,7 @@ test("Retrieval-only is one manual workflow with candidate and embedding inputs"
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
     ),
-    ["workflow_dispatch"],
+    ["workflow_call", "workflow_dispatch"],
   );
   const dispatch = block(workflow, "workflow_dispatch", 2);
   assert.match(dispatch, /^ {4}inputs:$/m);
@@ -185,7 +185,7 @@ test("the selected source is built from rust/ and exact-commit package caching b
   assert.match(job, /uses: \.\/\.github\/actions\/rust-candidate-package/);
   assert.match(
     job,
-    /candidate_repository: \$\{\{ inputs\.candidate_ref == 'main' && 'zvec-ai\/zvec-grep' \|\| github\.repository \}\}/,
+    /candidate_repository: \$\{\{ inputs\.candidate_repository \|\| \(inputs\.candidate_ref == 'main' && 'zvec-ai\/zvec-grep' \|\| github\.repository\) \}\}/,
   );
   assert.match(job, /candidate_ref: \$\{\{ inputs\.candidate_ref \}\}/);
   assert.match(job, /cache_namespace: retrieval-rust/);
@@ -353,6 +353,7 @@ function attempt({
   rerun = dispatch,
   roles = { maintainer: maintain },
   apiError,
+  payload = {},
 } = {}) {
   const calls = [],
     messages = [],
@@ -398,7 +399,7 @@ function attempt({
       authorize(
         github,
         { info: (message) => messages.push(message), summary },
-        { eventName, repo: { owner: "owner", repo: "repo" } },
+        { eventName, payload, repo: { owner: "owner", repo: "repo" } },
         { env: { DISPATCH_ACTOR: dispatch, RERUN_ACTOR: rerun } },
       ),
   };
@@ -483,7 +484,10 @@ test("missing actors, nonmanual events and permission API failures are denied ra
   }
   for (const eventName of ["push", "pull_request", "workflow_run"]) {
     const result = attempt({ eventName });
-    await assert.rejects(result.run(), /manual workflow_dispatch only/);
+    await assert.rejects(
+      result.run(),
+      /workflow_dispatch or a PR comment caller/,
+    );
     assert.equal(result.calls.length, 0);
     assertDeniedSummary(result);
   }
@@ -491,4 +495,21 @@ test("missing actors, nonmanual events and permission API failures are denied ra
   const result = attempt({ apiError });
   await assert.rejects(result.run(), (error) => error === apiError);
   assertDeniedSummary(result);
+});
+
+test("reusable retrieval accepts created PR comments with maintainer permission", async () => {
+  const result = attempt({
+    eventName: "issue_comment",
+    payload: { action: "created", issue: { pull_request: {} } },
+  });
+  await result.run();
+  assert.equal(result.calls.length, 1);
+  for (const payload of [
+    { action: "created", issue: {} },
+    { action: "edited", issue: { pull_request: {} } },
+  ]) {
+    const denied = attempt({ eventName: "issue_comment", payload });
+    await assert.rejects(denied.run(), /PR comment caller/);
+    assert.equal(denied.calls.length, 0);
+  }
 });

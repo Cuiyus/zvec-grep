@@ -10,8 +10,11 @@ runs:
       with:
         script: |
           try {
-            if (context.eventName !== 'workflow_dispatch') {
-              throw new Error('Retrieval-only permits manual workflow_dispatch only.');
+            // Reusable workflows retain the caller's event and original actor.
+            const prComment = context.eventName === 'issue_comment' &&
+              context.payload?.action === 'created' && context.payload?.issue?.pull_request;
+            if (context.eventName !== 'workflow_dispatch' && !prComment) {
+              throw new Error('Retrieval-only requires workflow_dispatch or a PR comment caller.');
             }
             const actors = new Set([process.env.DISPATCH_ACTOR, process.env.RERUN_ACTOR]);
             for (const username of actors) {
