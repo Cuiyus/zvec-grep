@@ -126,7 +126,7 @@ fn green(value: &str, color: bool) -> String {
     }
 }
 
-fn gradient_bar(filled: usize, width: usize, color: bool, unicode: bool) -> String {
+pub(crate) fn gradient_bar(filled: usize, width: usize, color: bool, unicode: bool) -> String {
     let filled = filled.min(width);
     let (solid, empty) = if unicode { ("█", "░") } else { ("#", "-") };
     if !color {

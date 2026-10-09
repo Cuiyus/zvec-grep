@@ -9,6 +9,7 @@ mod controller;
 pub use authentication::resolve_token;
 mod http_client;
 mod job_scheduler;
+mod mcp_sessions;
 pub mod rolling_log;
 mod runtime;
 mod stdio;
@@ -72,8 +73,9 @@ impl FromStr for ListenAddress {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let value = value.trim();
         let normalized = value
-            .strip_prefix("localhost:")
-            .map_or_else(|| value.to_owned(), |port| format!("127.0.0.1:{port}"));
+            .split_once(':')
+            .filter(|(host, _)| host.eq_ignore_ascii_case("localhost"))
+            .map_or_else(|| value.to_owned(), |(_, port)| format!("127.0.0.1:{port}"));
         let socket = normalized
             .parse::<SocketAddr>()
             .map_err(|_| DaemonError::InvalidListen(value.to_owned()))?;
@@ -329,6 +331,7 @@ mod tests {
     fn listen_address_accepts_only_loopback() {
         assert!(ListenAddress::from_str("127.0.0.1:7999").is_ok());
         assert!(ListenAddress::from_str("localhost:7999").is_ok());
+        assert!(ListenAddress::from_str("LOCALHOST:7999").is_ok());
         assert!(ListenAddress::from_str("[::1]:7999").is_ok());
         assert!(ListenAddress::from_str("0.0.0.0:7999").is_err());
         assert!(ListenAddress::from_str("127.0.0.1:0").is_err());

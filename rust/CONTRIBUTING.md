@@ -29,6 +29,17 @@ Keep the application surface centered on `ZvecGrep`:
 Do not add a generic `Core`, command bus, operation envelope, adapter registry or
 transport executor to connect an in-process method to its implementation.
 
+`zg_engine::authorization` is an explicit exception for remote-consent preflight
+and signed grant-file management. CLI, daemon and MCP callers must be able to
+resolve destinations and inspect, grant or revoke consent before starting an
+engine operation. These functions use workspace metadata and authorization files;
+they do not require a `ZvecGrep` instance, acquire model runtimes, open index
+storage or send remote requests. Keep their implementation helpers private and
+return typed data for new callers; terminal rendering belongs in `zg-cli`.
+The existing string-returning helpers remain for compatibility. This exception
+does not extend to indexing, search or other engine operations, which continue
+to use typed `ZvecGrep` methods backed by private services.
+
 ## Native and transport changes
 
 Native dependency types remain in their owning crate. Daemon framing and wire

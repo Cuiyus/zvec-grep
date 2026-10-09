@@ -69,9 +69,9 @@ impl Fixture {
     fn assert_model(&self, mode: &str, reference: &str) {
         let output = self.success(&["--status", "--mode", mode, "--no-color"]);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("Workspace index: ready"), "{stdout}");
+        assert!(stdout.contains("✓ Workspace index is ready"), "{stdout}");
         assert!(
-            stdout.contains(&format!("Embedding: {reference}")),
+            stdout.contains(&format!("  Embedding   {reference}")),
             "{stdout}"
         );
     }
@@ -93,6 +93,104 @@ fn success(output: Output) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+#[test]
+fn status_uses_grouped_layout_compact_paths_and_explicit_color_policy() {
+    let fixture = Fixture::new();
+    let root = fs::canonicalize(fixture.root.path()).expect("canonical workspace");
+    let run = |color: &str, no_color: bool| {
+        let mut command = fixture.command(&["--status", "--mode", "direct", "--color", color]);
+        command.env("HOME", &root).env("USERPROFILE", &root);
+        if no_color {
+            command.env("NO_COLOR", "1");
+        } else {
+            command.env_remove("NO_COLOR");
+        }
+        let output = success(command.output().expect("workspace status"));
+        String::from_utf8(output.stdout).expect("UTF-8 status")
+    };
+
+    let plain = run("never", false);
+    assert!(
+        plain.starts_with("? Workspace index is not configured\n  ~\n"),
+        "{plain}"
+    );
+    let storage = std::path::Path::new(".zvec-grep").join("storage");
+    assert!(
+        plain.contains(&format!("\n\n  Storage     {}", storage.display())),
+        "{plain}"
+    );
+    assert!(!plain.contains("\u{1b}["), "{plain}");
+    assert!(!plain.contains("Root:"), "{plain}");
+    assert!(!plain.contains("Index path:"), "{plain}");
+    assert_eq!(
+        run("auto", false),
+        plain,
+        "piped auto output stays uncolored"
+    );
+    assert_eq!(
+        run("auto", true),
+        plain,
+        "NO_COLOR suppresses automatic color"
+    );
+    assert_eq!(run("never", true), plain);
+
+    let colored = run("always", true);
+    assert!(
+        colored.contains("\u{1b}[33m? Workspace index is not configured\u{1b}[0m"),
+        "{colored:?}"
+    );
+    assert!(colored.contains("\u{1b}[36m~\u{1b}[0m"), "{colored:?}");
+    assert!(
+        colored.contains("\u{1b}[2mStorage     \u{1b}[0m"),
+        "{colored:?}"
+    );
+    assert!(
+        !fixture.root.path().join(".zvec-grep").exists(),
+        "status must not create an index"
+    );
+}
+
+#[test]
+fn status_check_ready_keeps_direct_and_server_exit_semantics() {
+    let mut fixture = Fixture::new();
+    fixture.start_server();
+    let check = |heading: &str, ready: bool| {
+        for mode in ["direct", "server"] {
+            let output = fixture
+                .command(&["--status", "--mode", mode, "--check-ready", "--no-color"])
+                .output()
+                .expect("readiness status");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.success(), ready, "{mode}: {stdout}\n{stderr}");
+            assert!(stdout.starts_with(heading), "{mode}: {stdout}");
+            assert_eq!(
+                stderr.contains("workspace index is not ready"),
+                !ready,
+                "{mode}: {stderr}"
+            );
+            if ready {
+                assert!(stdout.contains("  Coverage    "), "{mode}: {stdout}");
+                assert!(stdout.contains("0 / 0 files"), "{mode}: {stdout}");
+            }
+        }
+    };
+
+    check("? Workspace index is not configured", false);
+    // An empty local index never loads or downloads the embedding model.
+    fixture.success(&[
+        "--index",
+        "--mode",
+        "direct",
+        "--embedding",
+        "local/potion-code-16m-v2",
+        "--no-color",
+    ]);
+    check("✓ Workspace index is ready", true);
+    fs::write(fixture.root.path().join("added.rs"), "fn added() {}\n").expect("new source file");
+    check("! Workspace index needs an update", false);
 }
 
 struct GatedEmbedding {
@@ -453,9 +551,9 @@ fn auto_and_server_build_at_the_query_root_not_the_daemon_working_directory() {
                 .expect("query workspace status"),
         );
         let stdout = String::from_utf8_lossy(&status.stdout);
-        assert!(stdout.contains("Workspace index: ready"), "{stdout}");
+        assert!(stdout.contains("✓ Workspace index is ready"), "{stdout}");
         assert!(
-            stdout.contains(&format!("Embedding: {expected}")),
+            stdout.contains(&format!("  Embedding   {expected}")),
             "{stdout}"
         );
         assert!(!fixture.root.path().join(".zvec-grep").exists());
@@ -498,7 +596,10 @@ fn disabled_workspace_is_not_rebuilt_from_a_nested_query_directory() {
         assert!(!stderr.contains("Index complete"), "{stderr}");
         let status = fixture.success(&["--status", "--mode", mode, "--no-color"]);
         let stdout = String::from_utf8_lossy(&status.stdout);
-        assert!(stdout.contains("Workspace index: disabled"), "{stdout}");
+        assert!(
+            stdout.contains("○ Workspace indexing is disabled"),
+            "{stdout}"
+        );
         assert!(!nested.join(".zvec-grep").exists());
     }
 }

@@ -85,7 +85,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let runtime = Builder::new_multi_thread().enable_all().build()?;
 
-    runtime.block_on(async move { execute_plan(plan).await })
+    runtime.block_on(Box::pin(execute_plan(plan)))
 }
 
 #[cfg(target_os = "macos")]
@@ -121,7 +121,7 @@ async fn execute_plan(plan: CliPlan) -> Result<(), Box<dyn Error>> {
             home,
             request,
             output,
-        } => execute_request(mode, home.as_deref(), *request, output).await,
+        } => Box::pin(execute_request(mode, home.as_deref(), *request, output)).await,
         CliPlan::Index {
             mode,
             home,
@@ -171,16 +171,29 @@ async fn execute_plan(plan: CliPlan) -> Result<(), Box<dyn Error>> {
                 .root
                 .as_deref()
                 .ok_or_else(|| io::Error::other("auth root is required"))?;
-            let status = match args.action {
-                zg_cli::AuthAction::Grant { .. } => zg_engine::authorization::grant(
+            if matches!(args.action, zg_cli::AuthAction::Revoke) {
+                let count = zg_engine::authorization::revoke_all(root)?;
+                zg_cli::write_authorization_revoke_result(io::stdout().lock(), count)?;
+                return Ok(());
+            }
+            if matches!(args.action, zg_cli::AuthAction::Grant { .. }) {
+                zg_engine::authorization::grant(
                     root,
                     args.embedding.as_deref(),
                     args.endpoint.as_deref(),
-                )?,
-                zg_cli::AuthAction::Status => zg_engine::authorization::status(root)?,
-                zg_cli::AuthAction::Revoke => zg_engine::authorization::revoke(root)?,
-            };
-            println!("{status}");
+                )?;
+            }
+            let status = zg_engine::authorization::status_snapshot(root)?;
+            zg_cli::write_authorization_status(
+                io::stdout().lock(),
+                &status,
+                if args.no_color {
+                    zg_cli::ColorMode::Never
+                } else {
+                    args.color.unwrap_or_default()
+                },
+                io::stdout().is_terminal(),
+            )?;
             Ok(())
         }
         CliPlan::Server(plan) => execute_server_plan(plan).await,
@@ -572,17 +585,25 @@ async fn execute_index(
                 result
             };
             progress.finish();
-            let color = output.color == zg_cli::ColorMode::Always
-                || (output.color == zg_cli::ColorMode::Auto
-                    && io::stdout().is_terminal()
-                    && std::env::var_os("NO_COLOR").is_none());
-            if color {
-                print!("\x1b[36m");
-            }
-            zg_cli::write_index_result(io::stdout().lock(), &root, &result)?;
-            if color {
-                print!("\x1b[0m");
-            }
+            // Inspect saved metadata so omitted flags and --reset-paths are
+            // reflected in the summary without rescanning workspace files.
+            let info = read_workspace_info(
+                server,
+                home,
+                zg_engine::api::info::InfoOptions {
+                    root: Some(root.clone()),
+                    include_status: false,
+                },
+            )
+            .await?;
+            zg_cli::write_index_with_options(
+                io::stdout().lock(),
+                &info.root,
+                &result,
+                info.workspace_index.as_ref().map(|index| &index.scan),
+                output,
+                io::stdout().is_terminal(),
+            )?;
             if output.debug {
                 eprintln!("Index diagnostics: {}", serde_json::to_string(&result)?);
             }
@@ -602,11 +623,7 @@ async fn execute_index(
                 engine.close();
                 removed
             };
-            println!(
-                "Workspace index: {}",
-                if removed { "dropped" } else { "missing" }
-            );
-            println!("Root: {}", root.display());
+            zg_cli::write_index_drop_result(io::stdout().lock(), &root, removed)?;
         }
     }
     Ok(())
@@ -681,19 +698,7 @@ async fn execute_status(
     check_ready: bool,
     output: zg_cli::OutputOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let result = if use_server(mode, home).await? {
-        let home = zg_daemon::resolve_home(home.map(Path::to_owned))?;
-        let reply = zg_daemon::execute_command(&home, DaemonCommand::Info(request)).await?;
-        let DaemonReply::Info(result) = reply else {
-            return Err(protocol_mismatch("info"));
-        };
-        *result
-    } else {
-        let engine = ZvecGrep::new();
-        let result = engine.info(request).await?;
-        engine.close();
-        result
-    };
+    let result = read_workspace_info(use_server(mode, home).await?, home, request).await?;
     zg_cli::write_info_with_options(
         io::stdout().lock(),
         &result,
@@ -708,6 +713,26 @@ async fn execute_status(
         return Err(io::Error::other("workspace index is not ready").into());
     }
     Ok(())
+}
+
+async fn read_workspace_info(
+    server: bool,
+    home: Option<&Path>,
+    request: zg_engine::api::info::InfoOptions,
+) -> Result<zg_engine::api::info::InfoResult, Box<dyn Error>> {
+    if server {
+        let home = zg_daemon::resolve_home(home.map(Path::to_owned))?;
+        let reply = zg_daemon::execute_command(&home, DaemonCommand::Info(request)).await?;
+        let DaemonReply::Info(result) = reply else {
+            return Err(protocol_mismatch("info"));
+        };
+        Ok(*result)
+    } else {
+        let engine = ZvecGrep::new();
+        let result = engine.info(request).await;
+        engine.close();
+        Ok(result?)
+    }
 }
 
 async fn use_server(mode: ClientMode, home: Option<&Path>) -> Result<bool, Box<dyn Error>> {
@@ -773,7 +798,11 @@ async fn execute_server_plan(plan: ServerPlan) -> Result<(), Box<dyn Error>> {
 
 fn server_config(args: ServerStartArgs) -> Result<ServerConfig, Box<dyn Error>> {
     zg_daemon::resolve_token(args.token_file.as_deref())?;
-    let listen = args.listen.parse::<ListenAddress>()?;
+    let address = match args.listen {
+        Some(listen) => listen,
+        None => zg_engine::config::server_listen()?,
+    };
+    let listen = address.parse::<ListenAddress>()?;
     let home = zg_daemon::resolve_home(args.home)?;
     let mut config = ServerConfig::new(listen, home);
     config.token_file = args.token_file;

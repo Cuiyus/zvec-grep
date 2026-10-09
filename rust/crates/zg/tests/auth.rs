@@ -66,18 +66,20 @@ impl Drop for Stop<'_> {
 #[test]
 fn grants_are_signed_scoped_and_revocable_without_remote_requests() {
     let fixture = Fixture::new();
+    let missing = fixture.success(&["--auth", "status", "--no-color"]);
+    assert!(missing.starts_with("○ Remote Embedding is not authorized\n  "));
     assert!(
-        fixture
-            .success(&["--auth", "status"])
-            .contains("not authorized")
+        missing.contains("\n\nRun\n  zg --auth grant --capability embedding --scope workspace\n")
     );
+    assert!(!missing.contains("\x1b["));
     assert!(!fixture.root.path().join(".zvec-grep").exists());
     fixture.grant();
-    assert!(
-        fixture
-            .success(&["--auth", "status", "."])
-            .contains("Model: qwen/text-embedding-v4")
-    );
+    let status = fixture.success(&["--auth", "status", ".", "--no-color"]);
+    assert!(status.starts_with("✓ Remote Embedding is authorized\n  "));
+    assert!(status.contains("\n\nAuthorization\n  Scope       Workspace\n"));
+    assert!(status.contains("  Target      qwen/text-embedding-v4\n"));
+    assert!(status.contains("\n\nStorage\n  Grant       "));
+    assert!(!status.contains("https://") && !status.contains("\x1b["));
     assert!(
         !fixture
             .root
@@ -87,6 +89,12 @@ fn grants_are_signed_scoped_and_revocable_without_remote_requests() {
     );
     let path = fixture.root.path().join(".zvec-grep/authorization.json");
     let original = fs::read(&path).expect("authorization test fixture operation");
+    let styled = fixture.success(&["--auth", "--color", "always", "status"]);
+    assert!(styled.contains("\x1b[32m✓ Remote Embedding is authorized\x1b[0m"));
+    assert!(styled.contains("\x1b[1mAuthorization\x1b[0m"));
+    let plain = fixture.success(&["--auth", "status", "--no-color"]);
+    assert!(!plain.contains("\x1b["));
+    assert_eq!(fs::read(&path).expect("unchanged signed grants"), original);
     let other = Fixture::new();
     fs::create_dir_all(other.root.path().join(".zvec-grep"))
         .expect("authorization test fixture operation");
@@ -110,12 +118,37 @@ fn grants_are_signed_scoped_and_revocable_without_remote_requests() {
     )
     .expect("authorization test fixture operation");
     assert!(!fixture.run(&["--auth", "status"]).status.success());
-    fixture.success(&["--auth", "revoke"]);
-    fixture.success(&["--auth", "revoke"]);
+    assert_eq!(
+        fixture.success(&["--auth", "revoke"]),
+        "Revoked 1 Remote Embedding Workspace grant(s).\n",
+    );
+    assert_eq!(
+        fixture.success(&["--auth", "revoke"]),
+        "No Remote Embedding Workspace grants found.\n",
+    );
     assert!(
         fixture
             .success(&["--auth", "status"])
             .contains("not authorized")
+    );
+}
+
+#[test]
+fn malformed_grants_can_be_revoked_without_claiming_a_record_count() {
+    let fixture = Fixture::new();
+    let home = fixture.root.path().join(".zvec-grep");
+    fs::create_dir(&home).expect("authorization directory");
+    let path = home.join("authorization.json");
+    fs::write(&path, "{malformed authorization").expect("malformed grant fixture");
+    assert!(!fixture.run(&["--auth", "status"]).status.success());
+    assert_eq!(
+        fixture.success(&["--auth", "revoke"]),
+        "Removed Remote Embedding Workspace authorization.\n",
+    );
+    assert!(!path.exists());
+    assert_eq!(
+        fixture.success(&["--auth", "revoke"]),
+        "No Remote Embedding Workspace grants found.\n",
     );
 }
 
@@ -148,7 +181,10 @@ fn remembered_model_grants_coexist_and_remain_independently_signed() {
     grants[1]["grant"]["endpoint"] = "https://unapproved.example.test/embeddings".into();
     fs::write(&path, serde_json::to_vec(&grants).expect("tampered grant")).expect("write grant");
     assert!(!fixture.run(&["--auth", "status"]).status.success());
-    fixture.success(&["--auth", "revoke"]);
+    assert_eq!(
+        fixture.success(&["--auth", "revoke"]),
+        "Revoked 2 Remote Embedding Workspace grant(s).\n",
+    );
     assert!(
         fixture
             .success(&["--auth", "status"])
@@ -283,4 +319,61 @@ fn resident_server_observes_grant_and_revoke_without_restart() {
             .contains("not authorized")
     );
     assert!(String::from_utf8_lossy(&fixture.run(&args).stderr).contains("authorization required"));
+}
+
+#[test]
+fn api_base_url_grants_match_resolved_index_endpoints() {
+    let model = "qwen/qwen3.7-text-embedding";
+    let base = "https://example.test/compatible-mode/v1/";
+    let endpoint = "https://example.test/compatible-mode/v1/embeddings";
+    for mode in ["direct", "server"] {
+        let fixture = Fixture::new();
+        let _stop = Stop(&fixture);
+        if mode == "server" {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("available port");
+            let address = listener.local_addr().expect("address").to_string();
+            drop(listener);
+            fixture.success(&["--server", "on", "--listen", &address]);
+        }
+        fixture.success(&[
+            "--auth",
+            "grant",
+            ".",
+            "--capability",
+            "embedding",
+            "--scope",
+            "workspace",
+            "--embedding",
+            model,
+            "--endpoint",
+            base,
+        ]);
+        let grant: serde_json::Value = serde_json::from_slice(
+            &fs::read(fixture.root.path().join(".zvec-grep/authorization.json"))
+                .expect("authorization"),
+        )
+        .expect("signed grant");
+        assert_eq!(grant["grant"]["endpoint"], endpoint);
+
+        // Empty workspaces resolve and persist the runtime without network I/O.
+        // Both spellings must reuse the grant for the actual request URL.
+        for requested in [base, endpoint] {
+            fixture.success(&[
+                "--index",
+                "--mode",
+                mode,
+                "--embedding",
+                model,
+                "--endpoint",
+                requested,
+                "--api-key",
+                "test-key",
+            ]);
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &fs::read(fixture.root.path().join(".zvec-grep/manifest.json")).expect("manifest"),
+            )
+            .expect("workspace manifest");
+            assert_eq!(manifest["embeddingRuntimes"][model]["endpoint"], endpoint);
+        }
+    }
 }
