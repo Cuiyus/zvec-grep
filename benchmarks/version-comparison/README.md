@@ -27,6 +27,13 @@ reports. E2e gates the other 19 tasks on the first task in all selected model an
 embedding configurations. Incomplete reports retain the planned denominator and
 list missing cases. Numerical improvements do not decide CI success.
 
+The primary version summary includes every completed task, without filtering on
+observed score or token changes. The historical aggregate excludes large changes
+and is retained only as `legacy_filtered_aggregate` for sensitivity analysis.
+Runs dispatched before this reporting fix retain their immutable CI artifacts;
+`zg_bench.version_summary.include_all_cases` recomputes the full-case summary
+offline from those original cases without any new agent or judge calls.
+
 The registered Actions paths are reused on this isolated experiment branch.
 Historical workflow contract tests read the legacy fixtures; the active workflow
 guards and complete runtime matrix are checked by test_version_e2e.py.

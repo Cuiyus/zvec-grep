@@ -71,7 +71,9 @@ def summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_cases(
+    cases: Sequence[dict[str, Any]], *, filter_outcomes: bool = True
+) -> dict[str, Any]:
     # Validate every case before filtering. An excluded task must not hide a
     # mixture of legacy root-only and complete session-tree accounting.
     usage_scope = compatible_usage_scope(
@@ -84,6 +86,9 @@ def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     for case in cases:
+        if not filter_outcomes:
+            included.append(case)
+            continue
         baseline_input = case["profiles"]["baseline"]["metrics"]["input_tokens"]
         zvec_input = case["profiles"]["zvec-grep"]["metrics"]["input_tokens"]
         if baseline_input == 0:
@@ -200,7 +205,7 @@ def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
                     "max": 10.0,
                     "unit": "points",
                 },
-            ],
+            ] if filter_outcomes else [],
             "total_count": len(cases),
             "included_count": count,
             "excluded_count": len(excluded),
