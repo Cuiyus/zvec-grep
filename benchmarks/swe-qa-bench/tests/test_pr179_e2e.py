@@ -40,7 +40,7 @@ class AdoptionComparisonTests(unittest.TestCase):
                     }})
 
     def test_fork_only_manual_workflow_guards_all_jobs_and_preserves_evidence(self):
-        path=runner.ROOT.parents[1]/'.github/workflows/swe-qa-bench.yml'
+        path=runner.ROOT.parents[1]/'benchmarks/version-comparison/legacy-swe-qa-bench.yml'
         workflow=yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow['on']), {'workflow_dispatch'})
         for job in workflow['jobs'].values():

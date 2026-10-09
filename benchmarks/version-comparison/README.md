@@ -20,9 +20,13 @@ separately from agent time. A full matrix contains 800 planned agent trials;
 failed-trial retries are retained separately. These are existing development
 questions, not an independent held-out sample.
 
-Run `.github/workflows/version-retrieval.yml` for each runtime/embedding pair,
-and `.github/workflows/version-e2e.yml` with embedding_scope local and remote.
+Run `.github/workflows/retrieval-only.yml` for each runtime/embedding pair,
+and `.github/workflows/swe-qa-bench.yml` with embedding_scope local and remote.
 Both workflows retain package hashes, raw evidence, per-task results and aggregate
 reports. E2e gates the other 19 tasks on the first task in all selected model and
 embedding configurations. Incomplete reports retain the planned denominator and
 list missing cases. Numerical improvements do not decide CI success.
+
+The registered Actions paths are reused on this isolated experiment branch.
+Historical workflow contract tests read the legacy fixtures; the active workflow
+guards and complete runtime matrix are checked by test_version_e2e.py.

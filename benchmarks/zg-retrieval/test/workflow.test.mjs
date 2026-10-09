@@ -4,7 +4,7 @@ import test from "node:test";
 
 const repository = new URL("../../../", import.meta.url);
 const workflow = await readFile(
-  new URL(".github/workflows/retrieval-only.yml", repository),
+  new URL("benchmarks/version-comparison/legacy-retrieval-only.yml", repository),
   "utf8",
 );
 const action = await readFile(
@@ -16,6 +16,8 @@ const rustAction = await readFile(
   "utf8",
 );
 
+// Preserve the historical Rust-only workflow contract as a fixture;
+// test_version_e2e.py verifies the active version comparison workflows.
 // These bounded layout readers check our checked-in workflow contract. They are
 // not YAML parsers; actionlint validates the complete workflow/action syntax.
 function block(source, key, indent) {
