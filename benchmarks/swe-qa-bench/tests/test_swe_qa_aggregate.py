@@ -91,7 +91,7 @@ class AggregateReportTests(unittest.TestCase):
             ("conan:1", [60] * 5, [70, 70, 70, 70, 71], 100, 50),
             ("reflex:10", [70, 70, 70, 70, 71], [60] * 5, 100, 50),
             ("flask:5", [60] * 5, [90, 55, 55, 55, 55], 100, 50),
-            ("sympy:38", [60] * 5, [70, 70, 70, 70, 71], 100, 300),
+            ("sympy:36", [60] * 5, [70, 70, 70, 70, 71], 100, 300),
             ("conan:39", [60] * 5, [60] * 5, 100, 300),
             ("xarray:46", [70, 70, 70, 70, 71], [60] * 5, 0, 1),
         ]
@@ -128,7 +128,7 @@ class AggregateReportTests(unittest.TestCase):
             excluded = {row["task_id"]: row for row in filtering["excluded_tasks"]}
             self.assertEqual(
                 set(excluded),
-                {"conan:1", "reflex:10", "sympy:38", "conan:39", "xarray:46"},
+                {"conan:1", "reflex:10", "sympy:36", "conan:39", "xarray:46"},
             )
             for task_id in ("conan:1", "reflex:10"):
                 self.assertEqual(
@@ -137,7 +137,7 @@ class AggregateReportTests(unittest.TestCase):
             self.assertAlmostEqual(excluded["conan:1"]["judge_delta"], 10.2)
             self.assertAlmostEqual(excluded["reflex:10"]["judge_delta"], -10.2)
             self.assertEqual(
-                excluded["sympy:38"]["reasons"],
+                excluded["sympy:36"]["reasons"],
                 [
                     "input_token_change_outside_range",
                     "judge_delta_outside_range",
@@ -187,7 +187,7 @@ class AggregateReportTests(unittest.TestCase):
             )
             self.assertIn("| conan:1 | 60.00 | 70.20 | +10.20 |", excluded_section)
             self.assertIn("| reflex:10 | 70.20 | 60.00 | -10.20 |", excluded_section)
-            self.assertIn("| sympy:38 | 60.00 | 70.20 | +10.20 |", excluded_section)
+            self.assertIn("| sympy:36 | 60.00 | 70.20 | +10.20 |", excluded_section)
             self.assertIn("| xarray:46 | 70.20 | 60.00 | -10.20 |", excluded_section)
             self.assertNotIn("| conan:39 |", excluded_section)
 
@@ -203,7 +203,7 @@ class AggregateReportTests(unittest.TestCase):
                 ("reflex:10", [0, 0, 0], [0, 0, 0]),
                 ("flask:5", [0, 0, 0], [1, 1, 1]),
                 # One trial rises 400%, but the task mean rises only 66.67%.
-                ("sympy:38", [100, 100, 100], [500, 0, 0]),
+                ("sympy:36", [100, 100, 100], [500, 0, 0]),
             ]
             for index, (task_id, baseline, zvec) in enumerate(rows):
                 source = _judged_task_report(task_id, index)
@@ -242,7 +242,7 @@ class AggregateReportTests(unittest.TestCase):
             self.assertEqual(filtering["total_count"], 6)
             self.assertEqual(filtering["included_count"], 4)
             self.assertEqual(filtering["excluded_count"], 2)
-            included = ["reflex:6", "conan:1", "reflex:10", "sympy:38"]
+            included = ["reflex:6", "conan:1", "reflex:10", "sympy:36"]
             self.assertEqual(filtering["included_task_ids"], included)
             self.assertEqual(
                 filtering["excluded_tasks"],

@@ -34,7 +34,9 @@ import { aggregate } from "../engines/zg/report.mjs";
 
 const suite = await loadSuite();
 const clone = (value) => structuredClone(value);
-const fixedTask = suite.lock.tasks.find((task) => task.task_id === "sympy:38");
+const fixedTask = suite.lock.tasks.find(
+  (task) => task.task_id === "astropy:36",
+);
 
 async function temporary(t) {
   const directory = await mkdtemp(join(tmpdir(), "zg-retrieval-protocol-"));
@@ -107,7 +109,7 @@ test("the locked suite preserves all original questions, category balance and so
       (sum, gold) => sum + gold.targets.length,
       0,
     ),
-    58,
+    57,
   );
   assert.equal(
     Object.values(suite.gold).filter((gold) => gold.ndcg.enabled).length,
@@ -351,7 +353,7 @@ test("the independent file-label projection is frozen and cannot silently inheri
       (n, entry) => n + entry.targets.length,
       0,
     ),
-    38,
+    37,
   );
   const fixture = await isolatedSuite(t);
   const path = join(fixture.directory, "gold/files-v1.json");

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "sympy:36",
+  "question_sha256": "9c1ab86d18f2aa32844c8c0823b7af067e74ddfe2724318112e67dd053a96700",
+  "repository": "sympy/sympy",
+  "repository_commit": "3c817ed8ab551d71e36907ce869afe5e4ca789ff",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "commutator-evaluation-branch",
+      "path": "sympy/diffgeom/diffgeom.py",
+      "symbol": "Commutator.__new__",
+      "kind": "symbol",
+      "role": "accepted",
+      "relevance_reason": "Selects immediate evaluation for one coordinate system; otherwise returns an unevaluated Commutator.",
+      "source_sha256": "0e0c60c4ff41ecd4fe3351dbd7ed40c0760706f5d993f63afcca997063ec98e8",
+      "anchors": [
+        {
+          "start_line": 1163,
+          "end_line": 1163,
+          "text": "    def __new__(cls, v1, v2):",
+          "sha256": "5a5a58a2a9f87e8ef78da6f42273833f26dfac32018ea24b04dd70b1495a943a"
+        },
+        {
+          "start_line": 1170,
+          "end_line": 1189,
+          "text": "        coord_sys = set().union(*[_find_coords(v) for v in (v1, v2)])\n        if len(coord_sys) == 1:\n            # Only one coordinate systems is used, hence it is easy enough to\n            # actually evaluate the commutator.\n            if all(isinstance(v, BaseVectorField) for v in (v1, v2)):\n                return S.Zero\n            bases_1, bases_2 = [list(v.atoms(BaseVectorField))\n                                for v in (v1, v2)]\n            coeffs_1 = [v1.expand().coeff(b) for b in bases_1]\n            coeffs_2 = [v2.expand().coeff(b) for b in bases_2]\n            res = 0\n            for c1, b1 in zip(coeffs_1, bases_1):\n                for c2, b2 in zip(coeffs_2, bases_2):\n                    res += c1*b1(c2)*b2 - c2*b2(c1)*b1\n            return res\n        else:\n            obj = super().__new__(cls, v1, v2)\n            obj._v1 = v1 # deprecated assignment\n            obj._v2 = v2 # deprecated assignment\n            return obj",
+          "sha256": "e035993cccf0caf66c91b941d137bb01b0388a0fde87f1172a4ffddc78e962cd"
+        }
+      ]
+    },
+    {
+      "id": "coordinate-system-discovery",
+      "path": "sympy/diffgeom/diffgeom.py",
+      "symbol": "_find_coords",
+      "kind": "symbol",
+      "role": "bridge",
+      "relevance_reason": "Collects coordinate systems consumed by the constructor; the evaluation decision itself is in Commutator.__new__.",
+      "source_sha256": "0e0c60c4ff41ecd4fe3351dbd7ed40c0760706f5d993f63afcca997063ec98e8",
+      "anchors": [
+        {
+          "start_line": 1122,
+          "end_line": 1123,
+          "text": "def _find_coords(expr):\n    # Finds CoordinateSystems existing in expr",
+          "sha256": "d4d581e8b11dc84db7b7c776b0b132cd7b2cfacf033a2dd915213de9c626c85f"
+        }
+      ]
+    }
+  ],
+  "ndcg": {
+    "enabled": false,
+    "reason": "One direct evaluation decision entry; coordinate discovery is a bridge.",
+    "groups": []
+  },
+  "review": {
+    "proposer": "SWE-QA-Bench c13deac7 reference-answer source locations",
+    "reviewer": "Codex pinned-source verification",
+    "source_checks": [
+      "Source locations proposed in the upstream reference answer were checked against the original question and exact pinned source.",
+      "Verified full-file SHA256, line anchors and qualified Python AST symbols.",
+      "Accepted paths follow source behavior; no retrieval ranking was used to choose targets."
+    ],
+    "notes": "The upstream answer supplies candidate source locations; Codex verified their relevance in the pinned implementation. This is not a second-agent or human annotation review. File targets are partial positives, not complete answer evidence."
+  }
+}

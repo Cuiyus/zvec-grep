@@ -34,13 +34,17 @@ The benchmark inputs are locked in this directory:
 The validation command below checks the locked selection, repository commits,
 hashes, and reference isolation before model-backed runs.
 
-The current CI selection replaces `pylint:9` with `flask:5` and `pylint:10`
-with `reflex:10` to evaluate more clearly bounded code-navigation questions
-after observing repeated variability in the original tasks. Both replacements
-retain the `what` category and come from the same pinned SWE-QA revision.
-Their stability and zvec-grep benefit remain to be measured. Previously published
-results use the original selection and should not be directly compared as the
-same 20-task aggregate.
+The current CI selection replaces `pylint:9` with `flask:5`, `pylint:10`
+with `reflex:10`, `sympy:38` with `sympy:36`, and `astropy:38` with `astropy:36`.
+The latest two replacements retain their original repositories and `where`
+category, so the suite still has 20 tasks across 12 repositories and five tasks
+per question category. They cover the commutator evaluation branch and the two
+file-handler encoding setup paths, respectively. Original upstream questions,
+reference answers, and repository commits remain pinned to the same SWE-QA
+revision. Their stability and zvec-grep benefit remain to be measured; a more
+bounded question does not guarantee stable execution. Historical results retain
+their original selections and are not directly comparable as the same 20-task
+aggregate.
 
 ## Published protocol
 
