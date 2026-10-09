@@ -31,6 +31,9 @@ DATA = ROOT / "zg_bench/swe_qa/data"
 EXPERIMENT = json.loads((ROOT.parent / "version-comparison/experiment.json").read_text())
 COMMITS = {v: EXPERIMENT[v]["source_commit"] for v in SLOTS}
 REPETITIONS = EXPERIMENT["e2e_repetitions"]
+# Docker Hub and the Docker Official Images ECR copy were independently
+# verified to serve this identical linux/amd64 Ubuntu 24.04 manifest.
+UBUNTU_BASE_IMAGE = "public.ecr.aws/docker/library/ubuntu@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b"
 
 
 def write_json(path, value):
@@ -82,10 +85,14 @@ def prebuild_task_image(task_dir, output):
     if config["environment"].get("docker_image"):
         raise ValueError("Expected the original task without a prebuilt image override")
     dockerfile = task_dir / "environment/Dockerfile"
+    if dockerfile.read_text().splitlines()[0] != "FROM ubuntu:24.04":
+        raise ValueError("Pinned base-image context only supports the original Ubuntu 24.04 task")
     digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()
     image = f"zg-bench-task:{task_dir.name}-{digest[:16]}"
     result = subprocess.run([
-        "docker", "build", "--pull=false", "--tag", image, str(dockerfile.parent),
+        "docker", "build", "--pull=false", "--platform", "linux/amd64",
+        "--build-context", f"ubuntu:24.04=docker-image://{UBUNTU_BASE_IMAGE}",
+        "--tag", image, str(dockerfile.parent),
     ], capture_output=True, text=True)
     output.mkdir(parents=True, exist_ok=True)
     (output / "task-image-build.stdout").write_text(result.stdout)
@@ -105,6 +112,7 @@ def prebuild_task_image(task_dir, output):
         raise ValueError("Task image override changed unrelated task settings")
     config_path.write_text(patched)
     receipt = dict(image=image, image_id=inspection["Id"], rootfs=inspection["RootFS"],
+        base_image=UBUNTU_BASE_IMAGE,
         repository_commit=actual_commit, dockerfile_sha256=digest,
         original_task_config_sha256=hashlib.sha256(original.encode()).hexdigest(),
         runtime_task_config_sha256=hashlib.sha256(patched.encode()).hexdigest(),

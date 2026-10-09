@@ -63,11 +63,13 @@ class VersionComparisonTests(unittest.TestCase):
                 receipt=runner.prebuild_task_image(task,Path(temp)/'evidence')
             self.assertEqual(build.call_count,1)
             self.assertIn(str(task/'environment'),build.call_args.args[0])
+            self.assertIn(f'ubuntu:24.04=docker-image://{runner.UBUNTU_BASE_IMAGE}',build.call_args.args[0])
             config=tomllib.loads((task/'task.toml').read_text())
             image=config['environment'].pop('docker_image')
             self.assertEqual(config,tomllib.loads(original))
             self.assertEqual(receipt['repository_commit'],'frozen-repo')
             self.assertEqual(receipt['image_id'],'sha256:task-image')
+            self.assertEqual(receipt['base_image'],runner.UBUNTU_BASE_IMAGE)
             self.assertTrue(should_use_prebuilt_docker_image(task/'environment',docker_image=image,force_build=False))
             self.assertEqual((task/'environment/Dockerfile').read_text(),'FROM ubuntu:24.04\n')
 
