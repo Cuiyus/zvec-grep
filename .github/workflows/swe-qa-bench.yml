@@ -1,10 +1,21 @@
 name: SWE-QA Bench
-run-name: PR179 E2E / GLM-5.2 + Qwen3.8-Max / local + remote / 480 trials
+run-name: PR179 E2E / GLM-5.2 + Qwen3.8-Max / ${{ inputs.embedding_scope || 'all' }} embedding
 on:
   workflow_dispatch:
     inputs:
+      embedding_scope:
+        description: Split the same experiment by embedding runtime without changing tasks or protocol
+        required: true
+        default: all
+        type: choice
+        options: [all, local, remote]
       evidence_run:
         description: Optional prior run containing completed first-task trials to collect and judge without rerunning agents
+        required: false
+        default: ''
+        type: string
+      report_run:
+        description: Optional existing blind scores for the completed local first-task trials; reuse without rescoring
         required: false
         default: ''
         type: string
@@ -64,7 +75,10 @@ jobs:
       - name: Validate recovery run identity
         env:
           EVIDENCE_RUN: ${{ inputs.evidence_run }}
-        run: test -z "$EVIDENCE_RUN" || [[ "$EVIDENCE_RUN" =~ ^[0-9]+$ ]]
+          REPORT_RUN: ${{ inputs.report_run }}
+        run: |
+          test -z "$EVIDENCE_RUN" || [[ "$EVIDENCE_RUN" =~ ^[0-9]+$ ]]
+          test -z "$REPORT_RUN" || [[ "$REPORT_RUN" =~ ^[0-9]+$ ]]
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -99,6 +113,8 @@ jobs:
           PYCODE
       - name: Build the four-configuration frozen task matrix
         id: matrix
+        env:
+          EMBEDDING_SCOPE: ${{ inputs.embedding_scope }}
         run: |
           python - <<'PYCODE'
           import itertools, json, os
@@ -106,9 +122,11 @@ jobs:
           selection=json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())
           tasks=[t['task_slug'] for t in selection['tasks']]
           assert len(tasks)==len(set(tasks))==20 and tasks[0]=='reflex-6'
-          rows=[dict(task=t,model=m,embedding=e) for t,m,e in itertools.product(tasks,['glm-5.2','qwen3.8-max'],['local','remote'])]
+          embeddings=['local','remote'] if os.environ['EMBEDDING_SCOPE']=='all' else [os.environ['EMBEDDING_SCOPE']]
+          rows=[dict(task=t,model=m,embedding=e) for t,m,e in itertools.product(tasks,['glm-5.2','qwen3.8-max'],embeddings)]
+          canary_count=2*len(embeddings)
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              for key,items in [('canary',rows[:4]),('remaining',rows[4:])]:
+              for key,items in [('canary',rows[:canary_count]),('remaining',rows[canary_count:])]:
                   print(key+'='+json.dumps({'include':items},separators=(',',':')),file=f)
           PYCODE
       - name: Validate remote configuration presence
@@ -184,6 +202,14 @@ jobs:
           run-id: ${{ inputs.evidence_run }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/pr179-evidence
+      - name: Reuse already completed local blind judgements
+        if: inputs.report_run != '' && matrix.task == 'reflex-6' && matrix.embedding == 'local'
+        uses: actions/download-artifact@v8
+        with:
+          name: pr179-report-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
+          run-id: ${{ inputs.report_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/pr179-evidence/report
       - name: Run three before-after repetitions, both with zg, and blind judge
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -195,6 +221,7 @@ jobs:
           BENCH_EMBEDDING: ${{ matrix.embedding }}
           ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/pr179-index-seeds
           PR179_EVIDENCE_RUN: ${{ inputs.evidence_run }}
+          PR179_REPORT_RUN: ${{ inputs.report_run }}
         run: |
           recovery_args=()
           if [[ -n "$PR179_EVIDENCE_RUN" && "$BENCH_TASK" == reflex-6 ]]; then

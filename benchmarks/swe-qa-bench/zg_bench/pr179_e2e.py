@@ -22,6 +22,7 @@ from zg_bench.swe_qa.collect import (
     _completed_job, _profile_result, _select_trials,
 )
 from zg_bench.swe_qa.judge import judge_pairs
+from zg_bench.reports.validation import validate_task_report
 
 COMMITS = {
     "before": "f6358f4b7ccac4d55d037ef49900fef2ea552148",
@@ -168,10 +169,26 @@ def run(args):
             result.check_returncode()
     pair = collect(output, args.task, identities, expected_model=args.model, expected_embedding=embedding)
     write_json(output / "pair.json", pair)
-    report = judge_pairs(
-        pairs_root=output / "pair.json", references_path=DATA / "references.json",
-        output_dir=output / "report", expected=[args.task], model=args.model,
-    )
+    cached_report = output / "report/report.json"
+    if args.collect_only and cached_report.exists():
+        report = json.loads(cached_report.read_text())
+        case = validate_task_report(report, cached_report)
+        if case["task_id"].replace(":", "-") != args.task or report["judge"]["model"] != args.model:
+            raise ValueError("Existing blind scores belong to a different task or model")
+        if report.get("comparison_kind") != pair["comparison_kind"] or report["provenance"]["provenance"] != identities:
+            raise ValueError("Existing blind scores belong to different program versions")
+        for slot in SLOTS.values():
+            for judged, original in zip(case["profiles"][slot]["trials"], pair["profiles"][slot]["trials"], strict=True):
+                if judged["trial_name"] != original["trial_name"] or any(
+                    judged["metrics"][key] != original[key] for key in ("input_tokens", "output_tokens", "tool_calls", "agent_wall_seconds")
+                ):
+                    raise ValueError("Existing blind scores do not match the recovered trial evidence")
+        meta["blind_judgements_reused_from_run"] = os.environ.get("PR179_REPORT_RUN")
+    else:
+        report = judge_pairs(
+            pairs_root=output / "pair.json", references_path=DATA / "references.json",
+            output_dir=output / "report", expected=[args.task], model=args.model,
+        )
     report.update(comparison_kind=pair["comparison_kind"], comparison_labels=pair["comparison_labels"], provenance=meta)
     write_json(output / "report/report.json", report)
 
