@@ -42,6 +42,8 @@ class VersionComparisonTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'1 of 10 frozen executions failed'):
                     runner.run(args)
             self.assertEqual(execute.call_count,10)
+            self.assertTrue(all(call.kwargs['env']['ZG_BENCH_CAPTURE_INDEX_OUTPUT']=='1'
+                for call in execute.call_args_list))
             meta=json.loads((args.output/'provenance.json').read_text())
             self.assertEqual(len(meta['execution']),10)
             self.assertEqual(sum(r['returncode']!=0 for r in meta['execution']),1)

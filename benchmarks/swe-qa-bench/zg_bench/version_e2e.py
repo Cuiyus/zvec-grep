@@ -156,6 +156,8 @@ def run(args):
     for rep in ([] if args.collect_only else range(1, REPETITIONS + 1)):
         for variant in version_order(args.task, rep):
             env = dict(os.environ, ZG_BENCH_EXPECTED_CLI_SHA256=identities[variant]["cli_sha256"], ZG_BENCH_CLI_RUNTIME=variant)
+            if args.continue_after_failure:
+                env["ZG_BENCH_CAPTURE_INDEX_OUTPUT"] = "1"
             command = [
                 "zg-bench", "run", "swe-qa-bench", "--tier", "full", "--task", args.task,
                 "--agent", "opencode", "--model", f"custom-openai/{args.model}",
