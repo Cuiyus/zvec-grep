@@ -32,7 +32,7 @@ review comments do not start a run.
 
 Enable this by merging the workflow and reusable-workflow changes into the
 repository's **default branch**, configuring the existing `GLM_API_KEY` Actions
-secret, and allowing the workflow's `issues: write` permission. `workflow_dispatch`
+secret, and allowing the workflow's `issues: write` and `pull-requests: write` permissions. `workflow_dispatch`
 with `pr_number` provides the same operation for manual testing. Keep development
 validation in `Cuiyus/zvec-grep`; installation in an upstream repository is a
 separate deployment step.
@@ -46,7 +46,7 @@ admin/maintain roles are checked again in each benchmark job.
 
 `@zg-bench` is a command keyword and does not require a registered account.
 For a dedicated `zg-bench[bot]` identity, register and install a GitHub App with
-Issues read/write and Pull requests read, then adapt the comment jobs to use its
+Issues read/write and Pull requests read/write, then adapt the comment jobs to use its
 installation token and bot login. The initial implementation uses `GITHUB_TOKEN`
 and `github-actions[bot]`.
 
