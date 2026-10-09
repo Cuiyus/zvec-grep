@@ -47,6 +47,15 @@ class ActiveWorkflowTests(unittest.TestCase):
         self.assertEqual(e2e['jobs']['remaining']['needs'][-1], 'canary')
 
 class MatrixScopeTests(unittest.TestCase):
+    def test_retrieval_retry_runs_only_the_requested_suite(self):
+        import yaml
+        root = runner.ROOT.parents[1]
+        workflow = yaml.load((root / '.github/workflows/retrieval-only.yml').read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['suite']['default'], 'all')
+        for name in ('sweqa','beir','duretrieval','quarry'):
+            self.assertEqual(workflow['jobs'][name]['if'], f"inputs.suite == 'all' || inputs.suite == '{name}'")
+        self.assertIn("inputs.suite == 'all'",workflow['jobs']['results']['if'])
+
     def test_aggregate_uses_the_selected_embedding_scope(self):
         import yaml
         root = runner.ROOT.parents[1]

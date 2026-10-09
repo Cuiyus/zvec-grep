@@ -1,5 +1,5 @@
 name: "Node 0.2.2 vs Rust main \xB7 Retrieval-only"
-run-name: Version Retrieval-only / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding
+run-name: Version Retrieval-only / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding / ${{ inputs.suite || 'all' }}
 'on':
   workflow_dispatch:
     inputs:
@@ -19,6 +19,12 @@ run-name: Version Retrieval-only / ${{ inputs.runtime }} / ${{ inputs.embedding 
         options:
         - local
         - remote
+      suite:
+        description: Run the full matrix or repeat one suite while preserving the original failed evidence
+        required: true
+        default: all
+        type: choice
+        options: [all, sweqa, beir, duretrieval, quarry]
       package_run:
         description: Reuse the verified Rust package artifact from this fork run (empty builds the frozen source)
         required: false
@@ -131,6 +137,7 @@ jobs:
       contents: read
       actions: read
   sweqa:
+    if: inputs.suite == 'all' || inputs.suite == 'sweqa'
     name: SWE-QA20 (20 questions)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -213,6 +220,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 14
   beir:
+    if: inputs.suite == 'all' || inputs.suite == 'beir'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -292,6 +300,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 14
   duretrieval:
+    if: inputs.suite == 'all' || inputs.suite == 'duretrieval'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -371,6 +380,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 14
   quarry:
+    if: inputs.suite == 'all' || inputs.suite == 'quarry'
     name: Quarry / eight languages (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -446,7 +456,7 @@ jobs:
     name: Retrieval results
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && inputs.suite == 'all' }}
     needs:
     - authorize
     - quality-contract
