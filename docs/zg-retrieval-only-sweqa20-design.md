@@ -14,7 +14,7 @@ The final **Retrieval results** job publishes the single overview table with thr
 
 ## Dataset and protocol
 
-The 20 unchanged questions come from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943), using SWE-QA-Bench revision `c13deac7a0d99b0ca2e593e004c4739475785b08`. The [source lock](../benchmarks/zg-retrieval/data/source.lock.json) freezes original questions, UTF-8 hashes, 11 repository commits and provenance fingerprints. There are five questions each in the what, where, how and why categories. No answer agent, query rewriting, subqueries or LLM judge participate.
+The current 20-question selection replaces `pylint:9` with `flask:5` and `pylint:10` with `reflex:10`, matching the E2E selection and using SWE-QA-Bench revision `c13deac7a0d99b0ca2e593e004c4739475785b08`. The [source lock](../benchmarks/zg-retrieval/data/source.lock.json) freezes original questions, UTF-8 hashes, 12 repository commits and provenance fingerprints. Historical reports use the original selection; source-lock identities prevent comparisons across the replacement boundary. New source labels derive from upstream reference locations verified against pinned code, not from retrieval rankings. There are five questions each in the what, where, how and why categories. No answer agent, query rewriting, subqueries or LLM judge participate.
 
 Install the packed native candidate outside the corpus and connect through its product-generated stdio MCP configuration. Each repository gets a fresh code index and one MCP session; repository indexes are never cached. Questions, labels and reports are excluded from the corpus. Corpus and model inventories plus public Rust index-status aggregates are verified before and after retrieval. Model fingerprints exclude only the runtime completion marker `.zvec-grep-artifacts-<24hex>.complete`, which contains machine-specific timestamps; weights, tokenizer, configuration and other files remain hashed.
 
@@ -38,12 +38,12 @@ The protocol fixes the same model, corpus policy and index across modes. Shared 
 | File Hit@5 | Mean of five binary Top-5 observations per question/mode, then equally across questions |
 | File Hit@10 | Mean of five binary Top-10 observations per question/mode, then equally across questions |
 | File MRR@10 | Mean of five 1/r observations per question/mode; Top-10 misses contribute zero |
-| nDCG@10 | Mean of five first-target binary discounted-gain observations per question/mode, then repository macro across 11 repositories |
+| nDCG@10 | Mean of five first-target binary discounted-gain observations per question/mode, then repository macro across 12 repositories |
 | Stable Top 10 | Count of question/mode cases where all five ordered public result locations match |
 | Mean output (KiB) | Mean UTF-8 bytes of successful fifth-call response text divided by 1024; normally 20 samples per mode |
 | Avg RT / P50 RT (ms) | Mean and median duration of all successful MCP search calls; normally 100 samples per mode; excludes indexing |
 
-All five quality metrics share [39 frozen relevant-file targets](../benchmarks/zg-retrieval/gold/files-v1.json), deduplicated from accepted annotation paths. Bridge-only paths earn no credit. Matching normalizes separators and accepts exact paths or directory-boundary suffixes without case folding. Preserve native ranks: repeated file chunks consume positions and are not collapsed or renumbered. Response length and visible declarations do not affect relevance.
+All five quality metrics share [38 frozen relevant-file targets](../benchmarks/zg-retrieval/gold/files-v1.json), deduplicated from accepted annotation paths. Bridge-only paths earn no credit. Matching normalizes separators and accepts exact paths or directory-boundary suffixes without case folding. Preserve native ranks: repeated file chunks consume positions and are not collapsed or renumbered. Response length and visible declarations do not affect relevance.
 
 For each question q, a target contributes only at its first matching native rank. Let g_i be 1 when at least one target first appears at rank i, otherwise 0, and T_q be the labeled target set:
 

@@ -31,7 +31,13 @@ export async function loadSuite({
     "the frozen suite must contain 20 original questions",
   );
   assert.equal(new Set(lock.tasks.map((task) => task.task_id)).size, 20);
-  assert.equal(lock.repositories.length, 11);
+  const repositories = lock.repositories.map((repo) => repo.repository);
+  assert.equal(new Set(repositories).size, repositories.length);
+  assert.deepEqual(
+    [...repositories].sort(),
+    [...new Set(lock.tasks.map((task) => task.repository))].sort(),
+    "repository lock must cover exactly the selected tasks",
+  );
   const queries = (
     await readFile(join(suiteDirectory, "data/queries.jsonl"), "utf8")
   )

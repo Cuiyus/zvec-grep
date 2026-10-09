@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "gold_version": "sweqa20-entry-v1",
+  "task_id": "flask:5",
+  "question_sha256": "fa7cca6ead96e85db1daff714af47cb8f1eb233e7455bce69f10ebb329471810",
+  "repository": "pallets/flask",
+  "repository_commit": "85c5d93cbd049c4bd0679c36fd1ddcae8c37b642",
+  "status": "reviewed",
+  "targets": [
+    {
+      "id": "deferred-filter-registration",
+      "path": "src/flask/sansio/blueprints.py",
+      "kind": "symbol",
+      "source_sha256": "4ea7beec4919fad6d67219bc883a027c3f38f1fd3fde72efe8d3637883ef1f03",
+      "anchors": [
+        {
+          "start_line": 461,
+          "end_line": 463,
+          "text": "    def add_app_template_filter(\n        self, f: ft.TemplateFilterCallable, name: str | None = None\n    ) -> None:",
+          "sha256": "c533fe42cf7d5183a1dbd156458c65921422f0eaf6237ce87e956c6f6a0646e0"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Stores a callback with record_once; the callback writes the filter into state.app.jinja_env.filters. This implements registration into the shared application environment.",
+      "symbol": "Blueprint.add_app_template_filter"
+    },
+    {
+      "id": "blueprint-registration-execution",
+      "path": "src/flask/sansio/blueprints.py",
+      "kind": "symbol",
+      "source_sha256": "4ea7beec4919fad6d67219bc883a027c3f38f1fd3fde72efe8d3637883ef1f03",
+      "anchors": [
+        {
+          "start_line": 273,
+          "end_line": 273,
+          "text": "    def register(self, app: App, options: dict[str, t.Any]) -> None:",
+          "sha256": "02aa4e16707009e0c249d27fc5a147e2cf6ae80c2f7974cd37d82d19ac226f20"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Creates BlueprintSetupState for the application and executes deferred_functions with that state, connecting blueprint setup to shared template registration.",
+      "symbol": "Blueprint.register"
+    },
+    {
+      "id": "shared-template-rendering",
+      "path": "src/flask/templating.py",
+      "kind": "symbol",
+      "source_sha256": "d937172d3f3902c7e59b65bd58e485c4a0a6627e5ee3dc3f26483df8d69a256a",
+      "anchors": [
+        {
+          "start_line": 138,
+          "end_line": 141,
+          "text": "def render_template(\n    template_name_or_list: str | Template | list[str | Template],\n    **context: t.Any,\n) -> str:",
+          "sha256": "6ba1bb2a06c1aaa88b86297710ae71e92bfd55c9d7f707e554fdbd6c871605e7"
+        }
+      ],
+      "role": "accepted",
+      "relevance_reason": "Obtains current_app and selects the template through app.jinja_env, the same application environment populated by the blueprint callback.",
+      "symbol": "render_template"
+    }
+  ],
+  "ndcg": {
+    "enabled": true,
+    "reason": "Separate registration and rendering responsibilities.",
+    "groups": [
+      {
+        "id": "deferred-filter-registration",
+        "target_ids": ["deferred-filter-registration"]
+      },
+      {
+        "id": "blueprint-registration-execution",
+        "target_ids": ["blueprint-registration-execution"]
+      },
+      {
+        "id": "shared-template-rendering",
+        "target_ids": ["shared-template-rendering"]
+      }
+    ]
+  },
+  "review": {
+    "proposer": "SWE-QA-Bench c13deac7 reference-answer source locations",
+    "reviewer": "Codex pinned-source verification",
+    "source_checks": [
+      "Source locations proposed in the upstream reference answer were checked against the original question and exact pinned source.",
+      "Verified full-file SHA256, line anchors and qualified Python AST symbols.",
+      "Accepted paths follow source behavior; no retrieval ranking was used to choose targets."
+    ],
+    "notes": "The upstream answer supplies candidate source locations; Codex verified their relevance in the pinned implementation. This is not a second-agent or human annotation review. File targets are partial positives, not complete answer evidence."
+  }
+}

@@ -1,6 +1,8 @@
 # ZG Retrieval-only benchmark
 
-The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent suites. The original SWE-QA20 suite uses 20 unchanged questions and 11 pinned repositories from [Actions run 35206585943](https://github.com/Cuiyus/zvec-grep/actions/runs/35206585943). The exploratory suites contain 20 original BEIR queries across four datasets, ten DuRetrieval queries and 20 original Quarry queries across eight languages; see the [pilot design](expansion/README.md). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [SWE-QA20 design](../../docs/zg-retrieval-only-sweqa20-design.md) for its frozen protocol and scoring details.
+The workflow measures **zg-hybrid, zg-fts and zg-vector** on four independent suites. The current SWE-QA20 suite uses 20 original questions across 12 pinned repositories, synchronized with the E2E selection. It replaces `pylint:9` with `flask:5` and `pylint:10` with `reflex:10`; the upstream questions are not rewritten. The exploratory suites contain 20 original BEIR queries across four datasets, ten DuRetrieval queries and 20 original Quarry queries across eight languages; see the [pilot design](expansion/README.md). Each mode calls the Rust public MCP search endpoint directly with its default response presentation. No answering agent, query rewriting, subquery generation or LLM judge participates. See the [SWE-QA20 design](../../docs/zg-retrieval-only-sweqa20-design.md) for its frozen protocol and scoring details.
+
+The replacement selection has a new source-lock identity (`zg-retrieval-sweqa20-original-v2`). Historical reports retain their original inputs; their aggregate scores are not directly comparable with this selection, which also changes the repository-macro denominator from 11 to 12. The two E2E rounds stayed within the aggregate exclusion thresholds for both replacements, but individual Qwen trials still varied. This does not establish Retrieval-only gains.
 
 ## Run CI and read the result
 
@@ -26,7 +28,7 @@ Every request also uses `limit: 10`, `autoUpdate: false`, `freshness: eventual` 
 | File Hit@5 | Mean of each question/mode's five binary Top-5 observations |
 | File Hit@10 | Mean of each question/mode's five binary Top-10 observations |
 | File MRR@10 | Mean of five `1 / first matching native rank` observations per question/mode; Top-10 misses are zero |
-| nDCG@10 | Mean of five binary discounted-gain observations per question/mode, then repository macro average across 11 repositories |
+| nDCG@10 | Mean of five binary discounted-gain observations per question/mode, then repository macro average across 12 repositories |
 | Stable Top 10 | Count of question/mode cases whose five ordered public result locations match exactly |
 | Mean output (KiB) | Mean public MCP text UTF-8 bytes / 1024, using successful fifth calls only; not model tokens |
 | Avg RT / P50 RT (ms) | Mean and median of all successful MCP search calls, including five repetitions; excludes indexing |
@@ -37,7 +39,7 @@ Isolated public-response format failures still fail CI, but the overview display
 
 ## Dataset and scoring
 
-Frozen inputs are `data/source.lock.json`, `data/queries.jsonl`, `configs/protocol.json`, and `gold/files-v1.json`. The questions and 39 relevant-file targets are unchanged. Targets are unique accepted paths projected from AI-reviewed source annotations; bridge-only paths do not earn credit. They are partial positives, not independent human ground truth or complete answer evidence. The [metric rationale](../../docs/zg-retrieval-metric-review.md) explains how to interpret the scores and their limits.
+Frozen inputs are `data/source.lock.json`, `data/queries.jsonl`, `configs/protocol.json`, and `gold/files-v1.json`. The selection contains 38 relevant-file targets. Targets are unique accepted paths projected from source annotations; the two new annotations use upstream reference-answer locations checked against pinned implementations, while existing annotations retain their review provenance. Bridge-only paths do not earn credit. They are partial positives, not independent human ground truth or complete answer evidence. The [metric rationale](../../docs/zg-retrieval-metric-review.md) explains how to interpret the scores and their limits.
 
 All five quality metrics use the same file labels and normalized-path matching. Native ranks are preserved: repeated file chunks consume positions and are never collapsed or renumbered. Source declarations, outlines and response length cannot alter these quality scores. File Hit/RR/MRR use contract `sweqa-file-hit-rr-v1`.
 
@@ -51,7 +53,7 @@ Rust candidates are built through the [shared package Action](../../.github/acti
 
 - `retrieval-results`: the unified `summary.md` and machine-readable `summary.json`.
 - `retrieval-zg-report`: the SWE-QA20 suite conclusion (`summary.json` and `summary.md`), validated `report.json`, `report.md` and per-call `scores.jsonl`.
-- `retrieval-zg-evidence`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for all 11 repositories.
+- `retrieval-zg-evidence`: raw public requests/responses, installation evidence, corpus/model inventories and public index status for all 12 repositories.
 - `retrieval-beir-report`, `retrieval-duretrieval-report` and `retrieval-quarry-report`: independent pilot summaries with BEIR dataset and Quarry language coverage and scores.
 - `retrieval-beir-evidence`, `retrieval-duretrieval-evidence` and `retrieval-quarry-evidence`: pilot public requests/responses and index status.
 

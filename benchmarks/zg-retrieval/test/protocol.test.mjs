@@ -54,7 +54,7 @@ async function isolatedSuite(t) {
   return { directory, load: isolated.loadSuite };
 }
 
-test("the locked suite preserves all original questions, category balance and independently reviewed labels", async () => {
+test("the locked suite preserves all original questions, category balance and source-reviewed labels", async () => {
   const data = join(
     dirname(suiteDirectory),
     "swe-qa-bench/zg_bench/swe_qa/data",
@@ -64,12 +64,13 @@ test("the locked suite preserves all original questions, category balance and in
   assert.equal(sha256(selectionBytes), suite.lock.source.selection_sha256);
   assert.equal(sha256(referenceBytes), suite.lock.source.references_sha256);
   const originals = JSON.parse(selectionBytes).tasks;
+  const references = JSON.parse(referenceBytes).references;
   assert.equal(suite.lock.tasks.length, 20);
   assert.equal(
     new Set(suite.lock.tasks.map((task) => task.repository)).size,
-    11,
+    12,
   );
-  assert.equal(suite.lock.repositories.length, 11);
+  assert.equal(suite.lock.repositories.length, 12);
   for (const category of ["what", "where", "how", "why"])
     assert.equal(
       suite.lock.tasks.filter((task) => task.category === category).length,
@@ -78,6 +79,17 @@ test("the locked suite preserves all original questions, category balance and in
   for (const task of suite.lock.tasks) {
     const original = originals.find((entry) => entry.task_id === task.task_id);
     assert.ok(original);
+    assert.equal(task.repository, original.repository);
+    assert.equal(task.repository_commit, original.repository_commit);
+    assert.equal(task.source_file, original.source_file);
+    assert.equal(task.source_index, original.source_index);
+    assert.equal(
+      task.reference_answer_sha256,
+      sha256(
+        references.find((entry) => entry.task_id === task.task_id)
+          .reference_answer,
+      ),
+    );
     assert.equal(task.query, original.question);
     assert.equal(sha256(task.query), original.question_hash);
     const gold = suite.gold[task.task_id];
@@ -95,11 +107,11 @@ test("the locked suite preserves all original questions, category balance and in
       (sum, gold) => sum + gold.targets.length,
       0,
     ),
-    60,
+    58,
   );
   assert.equal(
     Object.values(suite.gold).filter((gold) => gold.ndcg.enabled).length,
-    12,
+    11,
   );
 });
 
@@ -339,7 +351,7 @@ test("the independent file-label projection is frozen and cannot silently inheri
       (n, entry) => n + entry.targets.length,
       0,
     ),
-    39,
+    38,
   );
   const fixture = await isolatedSuite(t);
   const path = join(fixture.directory, "gold/files-v1.json");

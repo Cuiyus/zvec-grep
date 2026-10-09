@@ -150,7 +150,7 @@ test("summary schema 5 has exactly the fixed three Rust MCP ZG arms", async () =
   );
   for (const row of result.rows) {
     assert.equal(row.questions, 20);
-    assert.equal(row.repositories, 11);
+    assert.equal(row.repositories, 12);
     assert.ok(Math.abs(row.metrics.file_mrr_at_10 - 1 / 3) < 1e-14);
     assert.equal(row.measurements.output_sample_count, 20);
     assert.equal(row.measurements.latency_sample_count, 100);
@@ -216,11 +216,11 @@ test("isolated invalid question is excluded from partial scores and named in the
     3,
   );
   const markdown = markdownCiSummary(result);
-  assert.match(markdown, /19\/20 questions; 11\/11 repositories/);
+  assert.match(markdown, /19\/20 questions; 11\/12 repositories/);
   assert.match(markdown, /pylint-dev\/pylint/);
   assert.match(markdown, /public source range mismatch/);
   assert.match(markdown, /Partial scores are diagnostic/);
-  assert.doesNotMatch(markdown, /0\/20 questions; 0\/11 repositories/);
+  assert.doesNotMatch(markdown, /0\/20 questions; 0\/12 repositories/);
 
   report.integrity_errors.unshift("mixed candidate tarball_sha256");
   assertUnavailable(await buildCiSummary({ zg: report }));
@@ -503,7 +503,7 @@ test("Markdown exposes three arms, five quality metrics, stability and latency",
     assert.match(
       text,
       new RegExp(
-        `\\| ${label} \\| ✅ Valid \\| 20/20 questions; 11/11 repositories \\| 20/20 \\| 0.0% \\| 100.0% \\| 100.0% \\| 0.3333`,
+        `\\| ${label} \\| ✅ Valid \\| 20/20 questions; 12/12 repositories \\| 20/20 \\| 0.0% \\| 100.0% \\| 100.0% \\| 0.3333`,
       ),
     );
   assert.match(text, /\| 3\.50 \| 12\.35 \| 12\.35 \|/);

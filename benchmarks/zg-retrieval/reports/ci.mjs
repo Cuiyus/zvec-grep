@@ -238,7 +238,7 @@ export function markdownCiSummary(result) {
   const lines = [
     "# SWE-QA20 Retrieval-only results",
     "",
-    `**${status}** · 20 original questions · 11 pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
+    `**${status}** · ${result.rows[0].expected_questions} original questions · ${result.rows[0].expected_repositories} pinned repositories · ZG hybrid / fts / vector · Rust MCP default presentation`,
     "",
     "| Arm | Status | Coverage | Stable Top 10 | File Hit@1 | File Hit@5 | File Hit@10 | File MRR@10 | nDCG@10 | Mean output (KiB) | Avg RT (ms) | P50 RT (ms) |",
     "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",

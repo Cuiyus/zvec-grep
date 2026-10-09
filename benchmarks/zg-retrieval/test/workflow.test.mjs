@@ -124,10 +124,10 @@ test("the four suites run in independent jobs using one candidate package", asyn
       "utf8",
     ),
   );
-  assert.equal(lock.repositories.length, 11);
+  assert.equal(lock.repositories.length, 12);
   assert.equal(
     new Set(lock.repositories.map((repo) => repo.repository)).size,
-    11,
+    12,
   );
   assert.equal(Object.keys(jobs).length, 8);
   assert.doesNotMatch(workflow, /strategy:|fromJSON\(/);
