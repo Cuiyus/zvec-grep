@@ -183,6 +183,17 @@ export async function loadReports(root, runId, candidateSha) {
       break;
     }
   }
+  // download-artifact extracts a single matching artifact directly into path,
+  // even when it was selected by pattern and merge-multiple is false.
+  if (!e2e) {
+    const report = await loadReport(
+      join(root, "e2e"),
+      "report.json",
+      "report.md",
+      "candidate-manifest.json",
+    );
+    if (report?.identity?.candidate_commit === candidateSha) e2e = report;
+  }
   return { retrieval, e2e };
 }
 
