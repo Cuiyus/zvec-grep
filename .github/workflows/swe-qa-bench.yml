@@ -34,6 +34,7 @@ jobs:
     outputs:
       canary: ${{ steps.matrix.outputs.canary }}
       remaining: ${{ steps.matrix.outputs.remaining }}
+      aggregate: ${{ steps.matrix.outputs.aggregate }}
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -114,7 +115,7 @@ jobs:
         rows=[dict(task=t,model=m,embedding=e) for t,m,e in itertools.product(tasks,['glm-5.2','qwen3.8-max'],embeddings)]
         canary_count=2*len(embeddings)
         with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-            for key,items in [('canary',rows[:canary_count]),('remaining',rows[canary_count:])]:
+            for key,items in [('canary',rows[:canary_count]),('remaining',rows[canary_count:]),('aggregate',[dict(model=m,embedding=e) for m,e in itertools.product(['glm-5.2','qwen3.8-max'],embeddings)])]:
                 print(key+'='+json.dumps({'include':items},separators=(',',':')),file=f)
         PYCODE
     - name: Validate remote configuration presence
@@ -483,13 +484,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix:
-        model:
-        - glm-5.2
-        - qwen3.8-max
-        embedding:
-        - local
-        - remote
+      matrix: ${{ fromJSON(needs.validate.outputs.aggregate) }}
     steps:
     - name: Authorize manual benchmark run
       id: authorize

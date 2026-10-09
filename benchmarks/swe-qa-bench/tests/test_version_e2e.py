@@ -45,3 +45,12 @@ class ActiveWorkflowTests(unittest.TestCase):
         e2e = yaml.load((root / '.github/workflows/swe-qa-bench.yml').read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(e2e['jobs']['canary']['needs']), {'validate','package-node','package-rust'})
         self.assertEqual(e2e['jobs']['remaining']['needs'][-1], 'canary')
+
+class MatrixScopeTests(unittest.TestCase):
+    def test_aggregate_uses_the_selected_embedding_scope(self):
+        import yaml
+        root = runner.ROOT.parents[1]
+        workflow = yaml.load((root / '.github/workflows/swe-qa-bench.yml').read_text(), Loader=yaml.BaseLoader)
+        step = next(s for s in workflow['jobs']['validate']['steps'] if s.get('id')=='matrix')
+        self.assertIn("('aggregate',[dict(model=m,embedding=e)",step['run'])
+        self.assertEqual(workflow['jobs']['aggregate']['strategy']['matrix'], '${{ fromJSON(needs.validate.outputs.aggregate) }}')
