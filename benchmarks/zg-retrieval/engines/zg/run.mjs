@@ -162,7 +162,7 @@ export async function packageCandidate(packagePath, output) {
   console.log("Installing the packed candidate in an isolated consumer...");
   const installed = await run(
     "npm",
-    ["--install", "--no-audit", "--no-fund", tarball, MCP_CLIENT_PACKAGE],
+    ["install", "--no-audit", "--no-fund", tarball, MCP_CLIENT_PACKAGE],
     { cwd: consumer },
   );
   await writeJson(join(output, "package-install.json"), installed);
