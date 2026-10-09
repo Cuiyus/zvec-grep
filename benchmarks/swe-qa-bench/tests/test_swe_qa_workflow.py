@@ -12,7 +12,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW_PATH = ROOT / ".github/workflows/swe-qa-bench.yml"
+# The active experiment has separate fork-only matrix/authorization tests.
+WORKFLOW_PATH = ROOT / "benchmarks/version-comparison/upstream-swe-qa-bench.yml"
 
 
 class ManualBenchmarkAuthorizationTests(unittest.TestCase):

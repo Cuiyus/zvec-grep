@@ -37,3 +37,5 @@ offline from those original cases without any new agent or judge calls.
 The registered Actions paths are reused on this isolated experiment branch.
 Historical workflow contract tests read the legacy fixtures; the active workflow
 guards and complete runtime matrix are checked by test_version_e2e.py.
+`upstream-swe-qa-bench.yml` preserves the Rust-only contract at the frozen
+upstream commit; `legacy-swe-qa-bench.yml` preserves the preceding PR179 matrix.

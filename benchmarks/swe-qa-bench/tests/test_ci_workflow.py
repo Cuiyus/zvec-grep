@@ -13,7 +13,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 BENCHMARK = ROOT / "benchmarks/swe-qa-bench"
-WORKFLOW = ROOT / ".github/workflows/swe-qa-bench.yml"
+# This contract belongs to the upstream Rust-only workflow, preserved while
+# the registered path hosts the isolated two-version experiment.
+WORKFLOW = ROOT / "benchmarks/version-comparison/upstream-swe-qa-bench.yml"
 OFFLINE_WORKFLOW = ROOT / ".github/workflows/swe-qa-offline.yml"
 
 
