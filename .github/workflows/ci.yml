@@ -11,8 +11,9 @@ permissions: {}
 jobs:
   request:
     if:
-      "github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request &&\n github.event.comment.user.type\
-      \ != 'Bot' &&\n contains(github.event.comment.body, '@zg-bench'))"
+      "github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request\
+      \ &&\n github.event.comment.user.type != 'Bot' &&\n contains(github.event.comment.body,\
+      \ '@zg-bench'))"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -37,7 +38,9 @@ jobs:
         with:
           script: "const { pathToFileURL } = require('node:url');
 
-            const { withDemoBanner } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/.github/scripts/bench-comment-ui-demo.mjs`));
+            const { withDemoBanner, translateExistingDemos } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/.github/scripts/bench-comment-ui-demo.mjs`));
+
+            await translateExistingDemos(github, context, Number(process.env.PR_NUMBER));
 
             withDemoBanner(github);
 
@@ -86,7 +89,9 @@ jobs:
         run: node .github/scripts/bench-comment-ui-demo.mjs
       - uses: actions/upload-artifact@v7
         with:
-          name: swe-qa-aggregate-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name:
+            swe-qa-aggregate-report-${{ github.run_id }}-${{ github.run_attempt
+            }}
           path: ${{ runner.temp }}/ui-fixture/
           if-no-files-found: error
           retention-days: 1

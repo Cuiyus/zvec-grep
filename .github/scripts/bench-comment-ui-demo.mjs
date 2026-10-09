@@ -4,7 +4,39 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const banner =
-  "> **UI 联调演示：以下数值是固定测试数据，不是 Benchmark 实测。真实评测见本 PR 的另一条 running 评论。**";
+  "> **UI demo: These values are fixed test fixtures, not measured benchmark results. See the separate running comment on this PR for the real benchmark.**";
+const fixtureNote =
+  "**Fixed test fixtures for comment layout only. No retrieval, model inference, or judging was performed.**";
+
+export async function translateExistingDemos(github, context, prNumber) {
+  const comments = await github.paginate(github.rest.issues.listComments, {
+    ...context.repo,
+    issue_number: prNumber,
+    per_page: 100,
+  });
+  for (const comment of comments) {
+    if (
+      comment.user?.login !== "github-actions[bot]" ||
+      !comment.body?.startsWith("<!-- zg-bench:run:") ||
+      !comment.body.includes("## ZG Benchmark · UI 演示 ·")
+    )
+      continue;
+    await github.rest.issues.updateComment({
+      ...context.repo,
+      comment_id: comment.id,
+      body: comment.body
+        .replace(
+          "> **UI 联调演示：以下数值是固定测试数据，不是 Benchmark 实测。真实评测见本 PR 的另一条 running 评论。**",
+          banner,
+        )
+        .replace("## ZG Benchmark · UI 演示 ·", "## ZG Benchmark · UI demo ·")
+        .replaceAll(
+          "**固定测试数据，仅验证回贴版式；未执行检索、模型推理或 Judge。**",
+          fixtureNote,
+        ),
+    });
+  }
+}
 export function withDemoBanner(github) {
   for (const method of ["createComment", "updateComment"]) {
     const original = github.rest.issues[method].bind(github.rest.issues);
@@ -13,7 +45,7 @@ export function withDemoBanner(github) {
         ...input,
         body: input.body
           .replace(/^(<!--[^\n]+-->)/, `$1\n${banner}\n`)
-          .replace("## ZG Benchmark ·", "## ZG Benchmark · UI 演示 ·"),
+          .replace("## ZG Benchmark ·", "## ZG Benchmark · UI demo ·"),
       });
   }
 }
@@ -22,8 +54,7 @@ async function main() {
   const directory = join(process.env.RUNNER_TEMP, "ui-fixture");
   await mkdir(directory, { recursive: true });
   const candidate = process.env.BENCH_CANDIDATE_SHA;
-  const note =
-    "**固定测试数据，仅验证回贴版式；未执行检索、模型推理或 Judge。**\n\n";
+  const note = `${fixtureNote}\n\n`;
   const retrieval = process.env.BENCH_FIXTURE_KIND === "retrieval";
   const report = retrieval
     ? {
