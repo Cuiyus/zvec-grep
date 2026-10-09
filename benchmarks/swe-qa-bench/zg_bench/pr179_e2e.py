@@ -19,7 +19,7 @@ import time
 
 from zg_bench.metrics.usage import compatible_usage_scope
 from zg_bench.swe_qa.collect import (
-    _completed_job, _job_dirs, _profile_result, _select_trials,
+    _completed_job, _profile_result, _select_trials,
 )
 from zg_bench.swe_qa.judge import judge_pairs
 
@@ -64,12 +64,18 @@ def version_order(task, repetition):
     return ("before", "after") if (position + repetition) % 2 else ("after", "before")
 
 
-def collect(root, task, identities, repetitions=3):
+def collect(root, task, identities, repetitions=3, expected_model=None, expected_embedding=None):
     profiles = {}
     for variant, slot in SLOTS.items():
         trials = []
         for rep in range(1, repetitions + 1):
-            jobs = _job_dirs(root / "runs" / variant / f"r{rep}", "zvec-grep")
+            repetition_root = root / "runs" / variant / f"r{rep}"
+            # Harbor only appends profile suffixes for multi-profile runs.
+            # Single-profile jobs retain --job-name verbatim. Identify their
+            # immediate job directory, then apply the unchanged evidence gates.
+            jobs = [p for p in repetition_root.glob("*") if p.is_dir()
+                    and (p / "result.json").is_file()
+                    and any(p.glob("*/agent/trajectory.json"))]
             if len(jobs) != 1:
                 raise ValueError(f"{variant} repetition {rep}: expected one zg job, got {len(jobs)}")
             job = jobs[0]
@@ -79,9 +85,16 @@ def collect(root, task, identities, repetitions=3):
             setup = json.loads((trial_dir / "agent/zvec-grep-setup.json").read_text())
             if setup.get("status") != "ready":
                 raise ValueError("zg setup did not reach ready")
+            if expected_embedding and setup.get("embedding_model") != expected_embedding:
+                raise ValueError("Installed embedding model differs from the experiment")
             for key in ("package_sha256", "native_cli_sha256"):
                 if setup.get(key) != identities[variant][key]:
                     raise ValueError(f"{variant}: installed {key} mismatch")
+            if expected_model:
+                usage = json.loads((trial_dir / "agent/session-usage.json").read_text())
+                models = {(m["provider_id"], m["model_id"]) for s in usage["sessions"] for m in s["provider_models"]}
+                if models != {("custom-openai", expected_model)}:
+                    raise ValueError(f"Actual session models differ from the experiment: {models}")
             row = _profile_result(
                 profile="zvec-grep", job_dir=job, trial_dir=trial_dir,
                 result=result, trial_index=rep,
@@ -120,8 +133,16 @@ def run(args):
             "zg_bench/swe_qa/data/index.ignore", "uv.lock", "ci-config.json",
         )}, "execution": [],
     }
+    if args.collect_only:
+        recovered = json.loads((output / "provenance.json").read_text())
+        for key in ("model", "embedding", "task", "repetitions", "provenance", "locked_input_sha256"):
+            if recovered[key] != meta[key]:
+                raise ValueError(f"Recovered evidence has mismatched {key}")
+        meta = recovered
+        meta["collector_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        meta["evidence_run"] = os.environ.get("PR179_EVIDENCE_RUN")
     write_json(output / "provenance.json", meta)
-    for rep in range(1, 4):
+    for rep in ([] if args.collect_only else range(1, 4)):
         for variant in version_order(args.task, rep):
             env = dict(os.environ, PR179_EXPECTED_ZG_BINARY_SHA256=identities[variant]["native_cli_sha256"])
             command = [
@@ -145,7 +166,7 @@ def run(args):
                 "returncode": result.returncode})
             write_json(output / "provenance.json", meta)
             result.check_returncode()
-    pair = collect(output, args.task, identities)
+    pair = collect(output, args.task, identities, expected_model=args.model, expected_embedding=embedding)
     write_json(output / "pair.json", pair)
     report = judge_pairs(
         pairs_root=output / "pair.json", references_path=DATA / "references.json",
@@ -162,4 +183,5 @@ if __name__ == "__main__":
     parser.add_argument("--embedding", choices=("local", "remote"), required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--collect-only", action="store_true", help="Validate and judge existing completed trials without executing an agent")
     run(parser.parse_args())

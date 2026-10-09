@@ -28,8 +28,11 @@ class AdoptionComparisonTests(unittest.TestCase):
             (trial/'agent/zvec-grep-setup.json').write_text(json.dumps({
                 'status':'ready', 'package_sha256':'expected', 'native_cli_sha256':'wrong',
             }))
-            with patch.object(runner,'_job_dirs',return_value=[root/'job']), \
-                 patch.object(runner,'_completed_job'), \
+            job=root/'runs/before/r1/custom-single-profile-job'
+            (job/'trial/agent').mkdir(parents=True)
+            (job/'result.json').write_text('{}')
+            (job/'trial/agent/trajectory.json').write_text('{}')
+            with patch.object(runner,'_completed_job'), \
                  patch.object(runner,'_select_trials',return_value=[(trial,{})]):
                 with self.assertRaisesRegex(ValueError, 'native_cli_sha256 mismatch'):
                     runner.collect(root, 'reflex-6', {'before':{
@@ -46,7 +49,7 @@ class AdoptionComparisonTests(unittest.TestCase):
             self.assertEqual(job['permissions']['contents'], 'read')
         self.assertEqual(workflow['jobs']['remaining']['needs'], ['validate','canary'])
         trial_steps=workflow['jobs']['canary']['steps']
-        downloads=[s for s in trial_steps if s.get('uses')=='actions/download-artifact@v8']
+        downloads=[s for s in trial_steps if s.get('uses')=='actions/download-artifact@v8' and s['with']['name']=='package-retrieval-candidate']
         self.assertEqual({s['with']['run-id'] for s in downloads}, {'37903765050','37903768937'})
         self.assertTrue(any(s.get('id')=='secret-scan' for s in trial_steps))
 
