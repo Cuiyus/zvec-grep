@@ -159,6 +159,23 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Wait for the original first-task evidence to finish uploading
+        if: inputs.evidence_run != '' && matrix.task == 'reflex-6'
+        timeout-minutes: 32
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN: ${{ inputs.evidence_run }}
+          ARTIFACT_NAME: pr179-evidence-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
+        run: |
+          for attempt in {1..90}; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN/artifacts" \
+                | jq -e --arg name "$ARTIFACT_NAME" '.artifacts | any(.name == $name)' > /dev/null; then
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Expected completed evidence was not uploaded within the bounded wait.' >&2
+          exit 1
       - name: Recover completed first-task evidence without new agent calls
         if: inputs.evidence_run != '' && matrix.task == 'reflex-6'
         uses: actions/download-artifact@v8
