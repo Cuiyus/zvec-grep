@@ -19,6 +19,11 @@ run-name: Version Retrieval-only / ${{ inputs.runtime }} / ${{ inputs.embedding 
         options:
         - local
         - remote
+      package_run:
+        description: Reuse the verified Rust package artifact from this fork run (empty builds the frozen source)
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 env:
@@ -96,12 +101,23 @@ jobs:
       if: inputs.runtime == 'node'
       run: python3 benchmarks/version-comparison/package_node.py "$RUNNER_TEMP/rust-package-cache"
     - name: Build frozen upstream Rust main
-      if: inputs.runtime == 'rust'
+      if: inputs.runtime == 'rust' && inputs.package_run == ''
       uses: ./.github/actions/rust-candidate-package
       with:
         candidate_repository: zvec-ai/zvec-grep
         candidate_ref: a09cd1236eee003feb699a17c5bf63d76f83f06c
         cache_namespace: retrieval-rust
+    - name: Reuse the canonical Rust package
+      if: inputs.runtime == 'rust' && inputs.package_run != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: package-retrieval-candidate
+        run-id: ${{ inputs.package_run }}
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/rust-package-cache
+    - name: Verify reused package against frozen upstream main
+      if: inputs.runtime == 'rust' && inputs.package_run != ''
+      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit a09cd1236eee003feb699a17c5bf63d76f83f06c
     - name: Record immutable package identity
       id: source
       run: node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/rust-package-cache/manifest.json"));fs.appendFileSync(process.env.GITHUB_OUTPUT,"commit="+m.candidate_commit+"\n")'
@@ -111,6 +127,9 @@ jobs:
         path: ${{ runner.temp }}/rust-package-cache/
         if-no-files-found: error
         retention-days: 30
+    permissions:
+      contents: read
+      actions: read
   sweqa:
     name: SWE-QA20 (20 questions)
     env:

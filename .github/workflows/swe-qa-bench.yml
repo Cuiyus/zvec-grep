@@ -12,6 +12,11 @@ run-name: Version E2e / Node 0.2.2 vs Rust a09cd123 / ${{ inputs.embedding_scope
         - all
         - local
         - remote
+      package_run:
+        description: Reuse the verified Rust package artifact from this fork run (empty builds the frozen source)
+        required: false
+        default: ''
+        type: string
 permissions: {}
 env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
@@ -446,6 +451,18 @@ jobs:
         candidate_repository: zvec-ai/zvec-grep
         candidate_ref: a09cd1236eee003feb699a17c5bf63d76f83f06c
         cache_namespace: retrieval-rust
+      if: inputs.package_run == ''
+    - name: Reuse the canonical Rust package
+      if: inputs.package_run != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: package-retrieval-candidate
+        run-id: ${{ inputs.package_run }}
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/rust-package-cache
+    - name: Verify reused package against frozen upstream main
+      if: inputs.package_run != ''
+      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit a09cd1236eee003feb699a17c5bf63d76f83f06c
     - uses: actions/upload-artifact@v7
       with:
         name: version-package-rust
