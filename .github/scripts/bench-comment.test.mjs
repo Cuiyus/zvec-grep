@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +14,27 @@ import {
 
 const sha = "a".repeat(40);
 const newerSha = "b".repeat(40);
+
+test("PR comment jobs have write permission and the run title retains its PR number", async () => {
+  const workflow = await readFile(
+    new URL("../workflows/zg-bench.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /^run-name: "ZG Bench · PR #\$\{\{/m);
+  for (const name of ["request", "reply"]) {
+    const job = workflow
+      .split(`\n  ${name}:\n`)[1]
+      .split(/\n  [a-z][\w-]*:\n/)[0];
+    assert.match(job, /pull-requests: write/);
+    assert.match(job, /issues: write/);
+  }
+  for (const name of ["retrieval", "e2e"]) {
+    const job = workflow
+      .split(`\n  ${name}:\n`)[1]
+      .split(/\n  [a-z][\w-]*:\n/)[0];
+    assert.doesNotMatch(job, /: write/);
+  }
+});
 const request = {
   accepted: "true",
   candidate_sha: sha,
