@@ -34,6 +34,10 @@ Runs dispatched before this reporting fix retain their immutable CI artifacts;
 `zg_bench.version_summary.include_all_cases` recomputes the full-case summary
 offline from those original cases without any new agent or judge calls.
 
+The retrieval workflow also accepts a single-suite scope for infrastructure
+retries. Keep the original failed report and repeat the unchanged suite at most
+once per provider-error attempt; retain both attempts in the comparison evidence.
+
 The registered Actions paths are reused on this isolated experiment branch.
 Historical workflow contract tests read the legacy fixtures; the active workflow
 guards and complete runtime matrix are checked by test_version_e2e.py.
