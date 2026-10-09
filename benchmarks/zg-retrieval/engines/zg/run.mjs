@@ -28,6 +28,7 @@ import {
   inside,
 } from "../../core/lib.mjs";
 import { embeddingRuntime } from "../../core/embedding.mjs";
+import { captureRankingDiagnostics } from "../../core/ranking-diagnostics.mjs";
 import { aggregate } from "./report.mjs";
 import { NativeIndexProductError, snapshotIndex } from "./snapshot.mjs";
 
@@ -321,7 +322,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     const install = await runCandidate(
       candidate,
       [
-        "--install",
+        "install",
         "--target",
         "opencode",
         "--yes",
@@ -344,7 +345,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       command,
     };
     // Installation may start the daemon. Close it before the independent index build.
-    await runCandidate(candidate, ["--server", "off"], {
+    await runCandidate(candidate, ["server", "off"], {
       env,
       cwd: root,
     });
@@ -355,7 +356,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       const indexed = await runCandidate(
         candidate,
         [
-          "--index",
+          "index",
           root,
           "--mode",
           "direct",
@@ -547,6 +548,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       );
       responses.push(record);
     }
+    await captureRankingDiagnostics(candidate, { tasks, modes, root, env, output });
     await writeFile(join(output, "mcp-stderr.log"), mcpStderr);
   } catch (error) {
     manifest.preparation_status = `${phase}_failed`;
@@ -558,7 +560,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
     if (client) await client.close().catch(() => undefined);
     if (env) {
       try {
-        await runCandidate(candidate, ["--server", "off"], {
+        await runCandidate(candidate, ["server", "off"], {
           env,
           cwd: root,
           timeout: 60_000,

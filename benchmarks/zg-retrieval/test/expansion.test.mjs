@@ -14,14 +14,14 @@ import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
 
-test("expanded runner uses the flag-style Rust management interface", async () => {
+test("expanded runner uses the historical Rust subcommand interface", async () => {
   const source = await readFile(
     new URL("../expansion/run.mjs", import.meta.url),
     "utf8",
   );
   for (const command of ["install", "server", "index"])
-    assert.match(source, new RegExp(`"--${command}"`));
-  assert.doesNotMatch(source, /\[\s*"(?:install|server|index)"/);
+    assert.match(source, new RegExp(`"${command}"`));
+  assert.doesNotMatch(source, /"--(?:install|server|index)"/);
 });
 
 test("expanded locks preserve the original ten questions and cover new datasets and languages", async () => {

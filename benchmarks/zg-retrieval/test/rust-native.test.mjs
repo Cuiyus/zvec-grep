@@ -189,7 +189,7 @@ test("successful status retains its existing snapshot identity", async (t) => {
     runStatus: async (cli, args) => {
       assert.equal(cli, "zg");
       assert.deepEqual(args, [
-        "--status",
+        "status",
         "/tmp/corpus",
         "--mode",
         "direct",

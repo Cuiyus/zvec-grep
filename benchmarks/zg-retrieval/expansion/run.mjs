@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fileHash, run, writeJson } from "../core/io.mjs";
 import { embeddingRuntime } from "../core/embedding.mjs";
+import { captureRankingDiagnostics } from "../core/ranking-diagnostics.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
@@ -295,7 +296,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     const install = await run(
       candidate.cli,
       [
-        "--install",
+        "install",
         "--target",
         "opencode",
         "--yes",
@@ -313,13 +314,13 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
         command.length >= 3 &&
         command.every((part) => typeof part === "string"),
     );
-    await run(candidate.cli, ["--server", "off"], { cwd: root, env });
+    await run(candidate.cli, ["server", "off"], { cwd: root, env });
     const indexStart = performance.now();
     try {
       const indexed = await run(
         candidate.cli,
         [
-          "--index",
+          "index",
           root,
           "--mode",
           "direct",
@@ -467,6 +468,9 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           row.quality_mean = summarizeRepeatedQuality(row.calls, task.targets);
       }
     }
+    await captureRankingDiagnostics(candidate, {
+      tasks: group.tasks, modes: pilot.modes, root, env, output: evidence,
+    });
     const after = await snapshotIndex({
       cli: candidate.cli,
       root,
@@ -487,7 +491,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     throw error;
   } finally {
     if (client) await client.close().catch(() => undefined);
-    await run(candidate.cli, ["--server", "off"], { cwd: root, env }).catch(
+    await run(candidate.cli, ["server", "off"], { cwd: root, env }).catch(
       () => undefined,
     );
   }
