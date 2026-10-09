@@ -142,6 +142,8 @@ def run(args):
             "zg_bench/swe_qa/data/index.ignore", "uv.lock", "ci-config.json",
         )}, "execution": [],
     }
+    if args.continue_after_failure:
+        meta["execution_policy"] = "attempt_all_five_pairs_and_retain_failures_before_collection"
     if args.collect_only:
         recovered = json.loads((output / "provenance.json").read_text())
         for key in ("model", "embedding", "task", "repetitions", "provenance", "locked_input_sha256"):
@@ -174,7 +176,14 @@ def run(args):
                 "wall_seconds_including_setup_and_retries": time.monotonic() - started,
                 "returncode": result.returncode})
             write_json(output / "provenance.json", meta)
-            result.check_returncode()
+            if not args.continue_after_failure:
+                result.check_returncode()
+    failed_executions = [row for row in meta["execution"] if row["returncode"] != 0]
+    if failed_executions:
+        raise RuntimeError(
+            f"{len(failed_executions)} of {len(meta['execution'])} frozen executions failed; "
+            "all attempted executions are retained and no incomplete quality aggregate is published"
+        )
     pair = collect(output, args.task, identities, expected_model=args.model, expected_embedding=embedding)
     write_json(output / "pair.json", pair)
     cached_report = output / "report/report.json"
@@ -209,4 +218,5 @@ if __name__ == "__main__":
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--collect-only", action="store_true", help="Validate and judge existing completed trials without executing an agent")
+    parser.add_argument("--continue-after-failure", action="store_true", help="Attempt all five pairs in an isolated retry, retaining failures without publishing incomplete scores")
     run(parser.parse_args())

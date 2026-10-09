@@ -38,6 +38,16 @@ The retrieval workflow also accepts a single-suite scope for infrastructure
 retries. Keep the original failed report and repeat the unchanged suite at most
 once per provider-error attempt; retain both attempts in the comparison evidence.
 
+For an E2e setup failure, `task_scope` and `model_scope` select one unchanged
+task/model for a full five-pair retry after the active remote workload finishes.
+Keep the original failed evidence, including setup retries and any extra completed
+agent trial. A scoped retry attempts all ten version/repetition executions even
+after a failure, and publishes judged scores only if every execution succeeds.
+It retains complete index stdout/stderr before Harbor truncates exception output;
+the product packages, index command, models and scoring protocol are unchanged.
+Full-group aggregates combine original successful task reports with the explicit
+scoped retry and retain original failed attempts separately.
+
 The registered Actions paths are reused on this isolated experiment branch.
 Historical workflow contract tests read the legacy fixtures; the active workflow
 guards and complete runtime matrix are checked by test_version_e2e.py.

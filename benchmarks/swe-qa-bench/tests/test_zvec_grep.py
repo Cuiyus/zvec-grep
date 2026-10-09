@@ -8,7 +8,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from zg_bench.agents.zvec_grep import ZvecGrepMixin
 from zg_bench.settings import ZVEC_GREP_INDEX_SEED_ENV
@@ -501,6 +501,30 @@ class InstallZvecGrepTests(unittest.IsolatedAsyncioTestCase):
                 retry_harness.agent_commands + retry_harness.root_commands
             )
             self.assertNotIn(str(seed_root), container_commands)
+
+
+    async def test_index_failure_keeps_complete_output_before_exception_truncation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            harness=_SetupHarness(root/'seeds')
+            harness._index_seed_root=None
+            harness.logs_dir=root/'logs'
+            harness._classify_exec_error=lambda command,result:RuntimeError('index failed')
+            stdout='progress\n'*4000+'final provider error: 429 quota\n'
+            environment=_FakeEnvironment(root/'container')
+            environment.exec=AsyncMock(return_value=_Result(
+                stdout=stdout,stderr='end of failure\n',return_code=1))
+            with patch.dict(os.environ,{'ZG_BENCH_CAPTURE_INDEX_OUTPUT':'1'}):
+                with self.assertRaisesRegex(RuntimeError,'index failed'):
+                    await harness.setup(environment)
+            self.assertEqual((harness.logs_dir/'zvec-grep-index.stdout').read_text(),stdout)
+            self.assertEqual((harness.logs_dir/'zvec-grep-index.stderr').read_text(),'end of failure\n')
+            self.assertEqual(harness.setup_metadata['status'],'failed')
+            self.assertEqual(harness.setup_metadata['index_returncode'],1)
+            call=environment.exec.await_args.kwargs
+            self.assertEqual(call['command'],'set -o pipefail; zg --index --embedding local/potion-code-16m-v2')
+            self.assertIsNone(call['user'])
+            self.assertIsNone(call['env'])
 
 
 if __name__ == "__main__":

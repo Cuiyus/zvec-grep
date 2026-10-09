@@ -250,23 +250,42 @@ class ZvecGrepMixin:
                 metadata["index_stderr"] = ""
             else:
                 index_started = time.monotonic()
-                index_result = await self.exec_as_agent(
-                    environment,
-                    command=self._index_command(
-                        self._embedding_model,
-                        ignore_file=(
-                            _INDEX_IGNORE_TARGET
-                            if self._index_ignore_file is not None
-                            else None
-                        ),
+                index_command = self._index_command(
+                    self._embedding_model,
+                    ignore_file=(
+                        _INDEX_IGNORE_TARGET
+                        if self._index_ignore_file is not None
+                        else None
                     ),
-                    cwd=workdir,
                 )
+                if os.environ.get("ZG_BENCH_CAPTURE_INDEX_OUTPUT") == "1":
+                    # Match Harbor's default-user exec exactly, while retaining
+                    # output before its exception formatter truncates the tail.
+                    index_result = await environment.exec(
+                        command=f"set -o pipefail; {index_command}",
+                        user=None, env=None, cwd=workdir, timeout_sec=None,
+                    )
+                    logs = Path(self.logs_dir)
+                    logs.mkdir(parents=True, exist_ok=True)
+                    for stream in ("stdout", "stderr"):
+                        (logs / f"zvec-grep-index.{stream}").write_text(
+                            getattr(index_result, stream) or ""
+                        )
+                    metadata["index_returncode"] = index_result.return_code
+                else:
+                    index_result = await self.exec_as_agent(
+                        environment, command=index_command, cwd=workdir,
+                    )
                 metadata["index_duration_seconds"] = round(
                     time.monotonic() - index_started, 3
                 )
                 metadata["index_stdout"] = self._bounded_output(index_result.stdout)
                 metadata["index_stderr"] = self._bounded_output(index_result.stderr)
+                if (
+                    os.environ.get("ZG_BENCH_CAPTURE_INDEX_OUTPUT") == "1"
+                    and index_result.return_code != 0
+                ):
+                    raise self._classify_exec_error(index_command, index_result)
 
                 status_result = await self.exec_as_agent(
                     environment,
