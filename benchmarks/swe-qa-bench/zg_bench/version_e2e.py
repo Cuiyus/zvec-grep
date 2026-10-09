@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import tomllib
 
 from zg_bench.metrics.usage import compatible_usage_scope
 from zg_bench.swe_qa.collect import (
@@ -71,6 +72,45 @@ def version_order(task, repetition):
     tasks = json.loads((DATA / "selection.json").read_text())["tasks"]
     position = next(i for i, item in enumerate(tasks) if item["task_slug"] == task)
     return ("node", "rust") if (position + repetition) % 2 else ("rust", "node")
+
+
+def prebuild_task_image(task_dir, output):
+    """Build the unchanged task once; reuse its local image for every fresh container."""
+    config_path = task_dir / "task.toml"
+    original = config_path.read_text()
+    config = tomllib.loads(original)
+    if config["environment"].get("docker_image"):
+        raise ValueError("Expected the original task without a prebuilt image override")
+    dockerfile = task_dir / "environment/Dockerfile"
+    digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()
+    image = f"zg-bench-task:{task_dir.name}-{digest[:16]}"
+    result = subprocess.run([
+        "docker", "build", "--pull=false", "--tag", image, str(dockerfile.parent),
+    ], capture_output=True, text=True)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "task-image-build.stdout").write_text(result.stdout)
+    (output / "task-image-build.stderr").write_text(result.stderr)
+    result.check_returncode()
+    inspection = json.loads(subprocess.check_output(["docker", "image", "inspect", image], text=True))[0]
+    actual_commit = subprocess.check_output([
+        "docker", "run", "--rm", "--entrypoint", "git", image, "-C", "/app", "rev-parse", "HEAD",
+    ], text=True).strip()
+    if actual_commit != config["metadata"]["repository_commit"]:
+        raise ValueError("Prebuilt task repository differs from the frozen corpus")
+    # Harbor's supported prebuilt-image field skips repeated Docker Hub metadata
+    # requests. It still creates a fresh container for every trial and retry.
+    patched = original.replace("[environment]\n", f"[environment]\ndocker_image = {json.dumps(image)}\n", 1)
+    expected = {**config, "environment": {**config["environment"], "docker_image": image}}
+    if tomllib.loads(patched) != expected:
+        raise ValueError("Task image override changed unrelated task settings")
+    config_path.write_text(patched)
+    receipt = dict(image=image, image_id=inspection["Id"], rootfs=inspection["RootFS"],
+        repository_commit=actual_commit, dockerfile_sha256=digest,
+        original_task_config_sha256=hashlib.sha256(original.encode()).hexdigest(),
+        runtime_task_config_sha256=hashlib.sha256(patched.encode()).hexdigest(),
+        policy="Build original Dockerfile once; only add environment.docker_image; fresh containers and unchanged product setup for every execution")
+    write_json(output / "task-image.json", receipt)
+    return receipt
 
 
 def collect(root, task, identities, repetitions=REPETITIONS, expected_model=None, expected_embedding=None):
@@ -153,6 +193,9 @@ def run(args):
         meta["collector_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         meta["evidence_run"] = os.environ.get("VERSION_EVIDENCE_RUN")
     write_json(output / "provenance.json", meta)
+    if getattr(args, "prebuild_task_image", False) and not args.collect_only:
+        meta["task_image"] = prebuild_task_image(ROOT / "datasets" / args.task, output)
+        write_json(output / "provenance.json", meta)
     for rep in ([] if args.collect_only else range(1, REPETITIONS + 1)):
         for variant in version_order(args.task, rep):
             env = dict(os.environ, ZG_BENCH_EXPECTED_CLI_SHA256=identities[variant]["cli_sha256"], ZG_BENCH_CLI_RUNTIME=variant)
@@ -221,4 +264,5 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--collect-only", action="store_true", help="Validate and judge existing completed trials without executing an agent")
     parser.add_argument("--continue-after-failure", action="store_true", help="Attempt all five pairs in an isolated retry, retaining failures without publishing incomplete scores")
+    parser.add_argument("--prebuild-task-image", action="store_true", help="Build the original task image once and reuse it in fresh trial containers")
     run(parser.parse_args())

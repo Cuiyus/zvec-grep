@@ -49,6 +49,54 @@ class VersionComparisonTests(unittest.TestCase):
             self.assertEqual(sum(r['returncode']!=0 for r in meta['execution']),1)
             self.assertFalse((args.output/'report/report.json').exists())
 
+    def test_prebuilt_image_preserves_task_settings_and_frozen_repository(self):
+        import tomllib
+        from harbor.environments.definition import should_use_prebuilt_docker_image
+        with tempfile.TemporaryDirectory() as temp:
+            task=Path(temp)/'task';(task/'environment').mkdir(parents=True)
+            original='[metadata]\nrepository_commit = "frozen-repo"\n[agent]\ntimeout_sec = 1800\n[environment]\nbuild_timeout_sec = 1200\n'
+            (task/'task.toml').write_text(original)
+            (task/'environment/Dockerfile').write_text('FROM ubuntu:24.04\n')
+            inspected=json.dumps([dict(Id='sha256:task-image',RootFS=dict(Type='layers',Layers=['sha256:layer']))])
+            with patch.object(runner.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'built','')) as build, \
+                 patch.object(runner.subprocess,'check_output',side_effect=[inspected,'frozen-repo\n']):
+                receipt=runner.prebuild_task_image(task,Path(temp)/'evidence')
+            self.assertEqual(build.call_count,1)
+            self.assertIn(str(task/'environment'),build.call_args.args[0])
+            config=tomllib.loads((task/'task.toml').read_text())
+            image=config['environment'].pop('docker_image')
+            self.assertEqual(config,tomllib.loads(original))
+            self.assertEqual(receipt['repository_commit'],'frozen-repo')
+            self.assertEqual(receipt['image_id'],'sha256:task-image')
+            self.assertTrue(should_use_prebuilt_docker_image(task/'environment',docker_image=image,force_build=False))
+            self.assertEqual((task/'environment/Dockerfile').read_text(),'FROM ubuntu:24.04\n')
+
+    def test_failed_image_build_cannot_patch_task_or_start_trials(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task=Path(temp)/'task';(task/'environment').mkdir(parents=True)
+            original='[metadata]\nrepository_commit = "frozen-repo"\n[environment]\n'
+            (task/'task.toml').write_text(original)
+            (task/'environment/Dockerfile').write_text('FROM ubuntu:24.04\n')
+            with patch.object(runner.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','registry 429')), \
+                 patch.object(runner.subprocess,'check_output') as inspect:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    runner.prebuild_task_image(task,Path(temp)/'evidence')
+            inspect.assert_not_called()
+            self.assertEqual((task/'task.toml').read_text(),original)
+            self.assertEqual((Path(temp)/'evidence/task-image-build.stderr').read_text(),'registry 429')
+
+    def test_prebuilt_image_rejects_another_repository_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            task=Path(temp)/'task';(task/'environment').mkdir(parents=True)
+            original='[metadata]\nrepository_commit = "frozen-repo"\n[environment]\n'
+            (task/'task.toml').write_text(original)
+            (task/'environment/Dockerfile').write_text('FROM ubuntu:24.04\n')
+            with patch.object(runner.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'','')), \
+                 patch.object(runner.subprocess,'check_output',side_effect=['[{"Id":"image","RootFS":{}}]','wrong-repo\n']):
+                with self.assertRaisesRegex(ValueError,'frozen corpus'):
+                    runner.prebuild_task_image(task,Path(temp)/'evidence')
+            self.assertEqual((task/'task.toml').read_text(),original)
+
 if __name__ == '__main__':
     unittest.main()
 
