@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fileHash, run, writeJson } from "../core/io.mjs";
 import { embeddingRuntime } from "../core/embedding.mjs";
+import { captureRankingDiagnostics } from "../core/ranking-diagnostics.mjs";
 import { scoreFileRetrieval } from "../metrics/files.mjs";
 import { scoreNdcg } from "../metrics/ndcg.mjs";
 import { summarizeRepeatedQuality } from "../metrics/repetitions.mjs";
@@ -467,6 +468,9 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
           row.quality_mean = summarizeRepeatedQuality(row.calls, task.targets);
       }
     }
+    await captureRankingDiagnostics(candidate, {
+      tasks: group.tasks, modes: pilot.modes, root, env, output: evidence,
+    });
     const after = await snapshotIndex({
       cli: candidate.cli,
       root,

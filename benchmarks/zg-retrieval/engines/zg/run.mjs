@@ -28,6 +28,7 @@ import {
   inside,
 } from "../../core/lib.mjs";
 import { embeddingRuntime } from "../../core/embedding.mjs";
+import { captureRankingDiagnostics } from "../../core/ranking-diagnostics.mjs";
 import { aggregate } from "./report.mjs";
 import { NativeIndexProductError, snapshotIndex } from "./snapshot.mjs";
 
@@ -161,7 +162,7 @@ export async function packageCandidate(packagePath, output) {
   console.log("Installing the packed candidate in an isolated consumer...");
   const installed = await run(
     "npm",
-    ["install", "--no-audit", "--no-fund", tarball, MCP_CLIENT_PACKAGE],
+    ["--install", "--no-audit", "--no-fund", tarball, MCP_CLIENT_PACKAGE],
     { cwd: consumer },
   );
   await writeJson(join(output, "package-install.json"), installed);
@@ -547,6 +548,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
       );
       responses.push(record);
     }
+    await captureRankingDiagnostics(candidate, { tasks, modes, root, env, output });
     await writeFile(join(output, "mcp-stderr.log"), mcpStderr);
   } catch (error) {
     manifest.preparation_status = `${phase}_failed`;
