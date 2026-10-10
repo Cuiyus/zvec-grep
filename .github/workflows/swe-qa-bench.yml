@@ -2,6 +2,28 @@ name: SWE-QA Bench
 run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}
 
 on:
+  workflow_call:
+    inputs:
+      candidate_ref:
+        required: true
+        type: string
+      candidate_repository:
+        required: true
+        type: string
+      scope:
+        default: all-full
+        type: string
+      model:
+        default: glm-5.2
+        type: string
+      embedding:
+        default: local
+        type: string
+    secrets:
+      GLM_API_KEY:
+        required: true
+      QWEN_EMBEDDING_API_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -61,19 +83,20 @@ jobs:
     steps:
       # Repeat authorization in every job so individual job re-runs cannot bypass it.
       - &authorize-benchmark
-        name: Authorize manual benchmark run
+        name: Authorize benchmark run
         id: authorize
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           BENCH_REPOSITORY: ${{ github.repository }}
           BENCH_EVENT_NAME: ${{ github.event_name }}
+          BENCH_IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request != null }}
           BENCH_ACTOR: ${{ github.actor }}
           BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-            echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
+          if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" && "$BENCH_IS_PR_COMMENT" != "true" ]]; then
+            echo "::error::SWE-QA Bench requires workflow_dispatch or a PR comment caller."
             exit 1
           fi
           if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
@@ -198,7 +221,7 @@ jobs:
         id: rust-candidate
         uses: ./.github/actions/rust-candidate-package
         with:
-          candidate_repository: ${{ github.repository }}
+          candidate_repository: ${{ inputs.candidate_repository || github.repository }}
           candidate_ref: ${{ inputs.candidate_ref }}
           cache_namespace: swe-qa-rust
       - uses: actions/upload-artifact@v7

@@ -11,6 +11,58 @@ artifacts from source, and documents its protocol in a dedicated README.
 
 See benchmark-specific README for setup and execution instructions.
 
+## Automatic PR retrieval checks
+
+[Retrieval-only PR](../.github/workflows/retrieval-pr.yml) automatically runs when
+a PR is opened, reopened, or updated with new commits, including PRs from forks.
+It tests the PR's exact head SHA through the existing SWE-QA20, BEIR, DuRetrieval
+and Quarry retrieval suites. A newer push cancels that PR's previous automatic
+run. Results are published in the Actions job summaries and the
+`retrieval-results` artifact.
+
+Automatic PR runs use local embedding and a read-only token; no model secrets
+are forwarded and no admin/maintain role is required. They run Retrieval-only.
+Use the comment command below to request both Retrieval and e2e.
+
+## Run from a PR comment
+
+A repository admin or maintainer can post a new PR **Conversation** comment with
+`@zg-bench` on its own line. [ZG Bench](../.github/workflows/zg-bench.yml) freezes
+that PR's head SHA, then runs both existing protocols:
+
+- **Retrieval:** SWE-QA20, BEIR, DuRetrieval and Quarry, with local embedding.
+- **e2e:** all 20 SWE-QA tasks, OpenCode + GLM-5.2, baseline and zvec-grep,
+  five trials per task and profile, with local embedding.
+
+`github-actions[bot]` posts a queued status and updates the same comment with
+both reports, the candidate SHA, and the run/artifact link. The reports retain
+the existing retrieval metrics and e2e Judge, input-token, tool-call and time
+comparisons. Failed or missing results are marked incomplete. A push during a
+run does not change its candidate; post a new command to test the newer commit.
+Re-running failed jobs updates the original bot comment. Commands in quoted
+text or fenced code, bot comments, edited comments, ordinary Issues, and inline
+review comments do not start a run.
+
+Enable this by merging the workflow and reusable-workflow changes into the
+repository's **default branch**, configuring the existing `GLM_API_KEY` Actions
+secret, and allowing the workflow's `issues: write` and `pull-requests: write` permissions. `workflow_dispatch`
+with `pr_number` provides the same operation for manual testing. Keep development
+validation in `Cuiyus/zvec-grep`; installation in an upstream repository is a
+separate deployment step.
+
+Only the comment jobs have a write token. The benchmark harness comes from the
+trusted workflow revision; candidate code is checked out separately at the
+frozen SHA on GitHub-hosted runners. Starting a run authorizes that candidate to
+execute with the existing benchmark's model credentials. Review fork changes
+before issuing the command. Both the original actor's and rerunner's current
+admin/maintain roles are checked again in each benchmark job.
+
+`@zg-bench` is a command keyword and does not require a registered account.
+For a dedicated `zg-bench[bot]` identity, register and install a GitHub App with
+Issues read/write and Pull requests read/write, then adapt the comment jobs to use its
+installation token and bot login. The initial implementation uses `GITHUB_TOKEN`
+and `github-actions[bot]`.
+
 ## Benchmark suites
 
 | Benchmark | Description | Agent | Study scope |

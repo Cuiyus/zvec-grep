@@ -3,6 +3,20 @@ name: Retrieval-only
 run-name: Retrieval-only · ${{ inputs.embedding }} embedding · harness ${{ github.ref_name }} · candidate ${{ inputs.candidate_ref }}
 
 on:
+  workflow_call:
+    inputs:
+      candidate_ref:
+        required: true
+        type: string
+      candidate_repository:
+        required: true
+        type: string
+      embedding:
+        default: local
+        type: string
+    secrets:
+      QWEN_EMBEDDING_API_KEY:
+        required: false
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -22,13 +36,16 @@ on:
 permissions:
   contents: read
 
+env:
+  RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.candidate_ref }}-${{ inputs.embedding }}
+  group: retrieval-only-${{ github.ref }}-${{ inputs.candidate_ref }}-${{ inputs.embedding }}
   cancel-in-progress: true
 
 jobs:
   authorize:
-    name: Check maintainer permission
+    name: Check benchmark access
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -87,7 +104,7 @@ jobs:
         id: rust-candidate
         uses: ./.github/actions/rust-candidate-package
         with:
-          candidate_repository: ${{ inputs.candidate_ref == 'main' && 'zvec-ai/zvec-grep' || github.repository }}
+          candidate_repository: ${{ inputs.candidate_repository || (inputs.candidate_ref == 'main' && 'zvec-ai/zvec-grep' || github.repository) }}
           candidate_ref: ${{ inputs.candidate_ref }}
           cache_namespace: retrieval-rust
       - uses: actions/upload-artifact@v7
