@@ -47,20 +47,25 @@ def prepare(packages, output):
  save(output/'identities.json',identities)
 
 
+def parse_rpc_body(body, message_id):
+ if not body.strip():return None
+ if body.lstrip().startswith('data:') or 'event:' in body:
+  for block in body.replace('\r\n','\n').split('\n\n'):
+   payload='\n'.join(line[5:].lstrip() for line in block.splitlines() if line.startswith('data:')).strip()
+   if not payload or payload=='[DONE]':continue
+   data=json.loads(payload)
+   if isinstance(data,dict) and data.get('id')==message_id:return data
+  raise ValueError('Missing JSON-RPC response in SSE')
+ return json.loads(body)
+
+
 def rpc(url,message,session=None):
  headers={'Content-Type':'application/json','Accept':'application/json, text/event-stream'}
  if session:headers.update({'Mcp-Session-Id':session,'MCP-Protocol-Version':'2025-11-25'})
  req=urllib.request.Request(url,json.dumps(message).encode(),headers)
  with urllib.request.urlopen(req,timeout=25) as r:
   body=r.read().decode();sid=r.headers.get('mcp-session-id',session)
- if not body.strip():return None,sid
- if body.lstrip().startswith('data:') or 'event:' in body:
-  for line in body.splitlines():
-   if line.startswith('data:'):
-    data=json.loads(line[5:].strip())
-    if data.get('id')==message.get('id'):return data,sid
-  raise ValueError('Missing JSON-RPC response in SSE')
- return json.loads(body),sid
+ return parse_rpc_body(body,message.get('id')),sid
 
 
 def capture(packages,output):

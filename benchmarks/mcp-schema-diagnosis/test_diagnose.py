@@ -3,10 +3,15 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from diagnose import build_arms,request_body,wrong_types
+from diagnose import build_arms,request_body,wrong_types,parse_rpc_body
 
 
 class DiagnosticTest(unittest.TestCase):
+ def test_streamable_http_empty_priming_event(self):
+  body='event: message\r\ndata: \r\n\r\nevent: message\r\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\r\n\r\n'
+  self.assertEqual(parse_rpc_body(body,1)['result'],{'ok':True})
+  self.assertIsNone(parse_rpc_body('',None))
+
  def test_only_two_type_keywords_change(self):
   originals={}
   with tempfile.TemporaryDirectory() as directory:
