@@ -39,10 +39,16 @@ def capture(binary, output, toolset):
                 args = {'root':str(output),'query':'needle','autoUpdate':False,**patch}
                 result, _ = d.rpc(url, {'jsonrpc':'2.0','id':i+3,'method':'tools/call','params':{'name':'zvec_grep_search','arguments':args}}, session)
                 checks.append({'arguments':args,'response':result})
+                d.save(output / (toolset + '-parsing.json'), checks)
+                text = '\n'.join(c.get('text','') for c in result.get('result',{}).get('content',[]))
                 if i < 2:
-                    assert result['error']['code'] == -32602, result
+                    assert result['result']['isError'] is True, result
+                    assert 'failed to deserialize parameters: invalid type: string' in text, result
+                    assert ('expected usize' if i == 0 else 'expected a boolean') in text, result
                 else:
                     assert 'error' not in result and 'result' in result, result
+                    assert 'failed to deserialize parameters' not in text, result
+                    assert 'NOT_FOUND' in text, result
             d.save(output / (toolset + '-parsing.json'), checks)
             return tools
         finally:
