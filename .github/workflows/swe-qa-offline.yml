@@ -1,54 +1,60 @@
-name: SWE-QA Offline
-
+name: Qwen MCP schema diagnosis
+run-name: Qwen MCP schema diagnosis / ${{ inputs.repetitions }} repetitions
 on:
-  pull_request:
-    paths:
-      - .github/workflows/swe-qa-bench.yml
-      - .github/workflows/swe-qa-offline.yml
-      - benchmarks/swe-qa-bench/**
-      - benchmarks/shared/rust-package-cache.mjs
-      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/swe-qa-bench.yml
-      - .github/workflows/swe-qa-offline.yml
-      - benchmarks/swe-qa-bench/**
-      - benchmarks/shared/rust-package-cache.mjs
-      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
   workflow_dispatch:
-
+    inputs:
+      repetitions:
+        description: Repetitions per schema arm (1 to 5)
+        required: true
+        default: '5'
 permissions: {}
-
-concurrency:
-  group: swe-qa-offline-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  test:
-    name: Offline benchmark checks
+  diagnose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Require development fork
+        run: test "$GITHUB_REPOSITORY" = Cuiyus/zvec-grep
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
-      - name: Install locked benchmark environment
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          name: version-package-rust
+          run-id: '37933144986'
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/schema-packages/rust
+      - uses: actions/download-artifact@v8
+        with:
+          name: version-package-node
+          run-id: '37933144986'
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/schema-packages/node
+      - name: Offline diagnostic tests
+        run: python3 -m unittest discover -s benchmarks/mcp-schema-diagnosis -p 'test_*.py' -v
+      - name: Verify frozen packages and install Node dependencies
         run: |
-          python -m pip install --disable-pip-version-check uv==0.9.17
-          uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Run offline benchmark tests
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m unittest discover
-          -s benchmarks/swe-qa-bench/tests -v
-      - name: Test shared Rust package identity helper
-        run: node --test benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
+          python3 benchmarks/mcp-schema-diagnosis/diagnose.py prepare "$RUNNER_TEMP/schema-packages" "$RUNNER_TEMP/schema-evidence"
+          npm install --global --prefix "$RUNNER_TEMP/node-cli" --omit=optional "$RUNNER_TEMP/schema-packages/node/candidate.tgz" @zvec/bindings-linux-x64@0.5.0
+      - name: Capture actual MCP schemas and strict parsing behavior
+        run: |
+          node benchmarks/mcp-schema-diagnosis/capture-node.mjs "$RUNNER_TEMP/node-cli/lib/node_modules/@zvec/zvec-grep" "$RUNNER_TEMP/schema-evidence"
+          python3 benchmarks/mcp-schema-diagnosis/diagnose.py capture "$RUNNER_TEMP/schema-packages" "$RUNNER_TEMP/schema-evidence"
+      - name: Qwen calls with only schema types exchanged
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          DIAG_REPETITIONS: ${{ inputs.repetitions }}
+        run: python3 benchmarks/mcp-schema-diagnosis/diagnose.py model "$RUNNER_TEMP/schema-packages" "$RUNNER_TEMP/schema-evidence"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: qwen-mcp-schema-evidence
+          path: ${{ runner.temp }}/schema-evidence
+          if-no-files-found: error
+          retention-days: 30

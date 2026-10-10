@@ -1,0 +1,37 @@
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from diagnose import build_arms,request_body,wrong_types
+
+
+class DiagnosticTest(unittest.TestCase):
+ def test_only_two_type_keywords_change(self):
+  originals={}
+  with tempfile.TemporaryDirectory() as directory:
+   p=Path(directory)
+   for runtime in ['node','rust']:
+    t={'name':'zvec_grep_search','description':runtime,'inputSchema':{'type':'object','required':['root'],'properties':{'root':{'type':'string'},'limit':{'type':'integer','maximum':50},'fuse':{'type':'boolean','description':'original field text'}}}}
+    if runtime=='rust':
+     for k in ['limit','fuse']:t['inputSchema']['properties'][k]['type']=[t['inputSchema']['properties'][k]['type'],'null']
+    originals[runtime]=copy.deepcopy(t)
+    (p/f'{runtime}-tools.json').write_text(json.dumps({'tools':[t]}))
+   arms=build_arms(p)
+   for runtime,donor,label in [('node','rust','node-rust-types'),('rust','node','rust-node-types')]:
+    expected=copy.deepcopy(originals[runtime])
+    for k in ['limit','fuse']:expected['inputSchema']['properties'][k]['type']=originals[donor]['inputSchema']['properties'][k]['type']
+    self.assertEqual(expected,arms[label]);self.assertEqual(originals[runtime],arms[f'{runtime}-original'])
+   bodies=[request_body(v,1) for v in arms.values()]
+   for b in bodies:b.pop('tools')
+   self.assertTrue(all(b==bodies[0] for b in bodies))
+
+ def test_type_detection_does_not_coerce(self):
+  self.assertEqual(wrong_types({'limit':'15','fuse':'true'}),{'limit':'str','fuse':'str'})
+  self.assertEqual(wrong_types({'limit':15,'fuse':True}),{})
+  self.assertEqual(wrong_types({'limit':True}),{'limit':'bool'})
+  self.assertEqual(wrong_types({'limit':None,'fuse':None}),{})
+  self.assertEqual(wrong_types({}),{})
+
+
+if __name__=='__main__':unittest.main()
