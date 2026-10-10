@@ -1,54 +1,56 @@
-name: SWE-QA Offline
-
+name: Qwen MCP schema fix verification
 on:
-  pull_request:
-    paths:
-      - .github/workflows/swe-qa-bench.yml
-      - .github/workflows/swe-qa-offline.yml
-      - benchmarks/swe-qa-bench/**
-      - benchmarks/shared/rust-package-cache.mjs
-      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/swe-qa-bench.yml
-      - .github/workflows/swe-qa-offline.yml
-      - benchmarks/swe-qa-bench/**
-      - benchmarks/shared/rust-package-cache.mjs
-      - benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
   workflow_dispatch:
-
+    inputs:
+      fix_sha:
+        description: Exact production fix commit to build
+        required: true
+        default: '9423a254856dd59c6c7ad6a499e1981007c19b92'
 permissions: {}
-
-concurrency:
-  group: swe-qa-offline-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  test:
-    name: Offline benchmark checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - name: Require development fork
+        run: test "$GITHUB_REPOSITORY" = Cuiyus/zvec-grep
+      - uses: actions/checkout@v6
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v6
+          ref: ${{ inputs.fix_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Install pinned toolchain
+        working-directory: candidate/rust
+        run: rustup show active-toolchain
+      - uses: actions/cache@v5
         with:
-          node-version: "24"
-      - name: Install locked benchmark environment
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            candidate/rust/target/
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-cargo-v1-${{ hashFiles('candidate/rust/Cargo.lock', 'candidate/rust/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rust-cargo-v1-
+      - name: Build exact candidate and test MCP adapter
+        working-directory: candidate/rust
         run: |
-          python -m pip install --disable-pip-version-check uv==0.9.17
-          uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Run offline benchmark tests
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m unittest discover
-          -s benchmarks/swe-qa-bench/tests -v
-      - name: Test shared Rust package identity helper
-        run: node --test benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
+          cargo test --locked -p zg-transport-mcp
+          cargo build --locked -p zg
+      - name: Capture wire schema and verify Qwen JSON and SSE arguments
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          FIX_SHA: ${{ inputs.fix_sha }}
+        run: python3 benchmarks/mcp-schema-fix-validation/verify.py candidate/rust/target/debug/zg "$RUNNER_TEMP/schema-fix-evidence"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: qwen-schema-fix-evidence
+          path: ${{ runner.temp }}/schema-fix-evidence
+          if-no-files-found: error
+          retention-days: 30

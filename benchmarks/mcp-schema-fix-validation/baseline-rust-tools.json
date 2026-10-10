@@ -1,0 +1,354 @@
+{
+  "instructions": "Use zvec-grep with these workspace retrieval rules:\n- Use the current workspace as the evidence source when the user asks about local material, prior context establishes it as relevant, or the question concerns how the current project works—even if the workspace is not mentioned explicitly.\n- A workspace may contain any mix of code, documents, configuration, and data.\n- Do not use workspace retrieval for unrelated open-world questions, current external facts, or web content that does not depend on local evidence.\n- Use native Grep or rg first only when exact lookup alone is sufficient, such as locating one definition, literal, filename, configuration key, error message, regex match, or exhaustive occurrence list.\n- Use zvec_grep_search first when wording or location is unknown, or when the answer requires architecture, lifecycle, call relationships, dependencies, data or control flow, design rationale, comparison, or synthesis across files or components.\n- When user-provided or verified exact symbols are present but the answer spans multiple files, components, stages, implementations, or relationships, treat the task as mixed: call zvec_grep_search with the semantic intent and those anchors, then use Read, Grep, or rg for focused verification.\n- For a semantic or mixed workspace task, start discovery with focused zvec_grep_search before broad file discovery.\n- Preserve the question's concepts, relationships, and constraints from the user request and established context in semantic queries. Treat inferred names as supplemental hypotheses, not replacements for or constraints on the stated intent.\n- `query` creates one primary hybrid FTS-plus-vector group; `queries` creates one or more primary hybrid groups; `fts` and `vector` add supplemental lexical-only or semantic-only route groups. These are retrieval routes, not hard constraints. Without `fuse`, the response is one deduplicated and reranked list with query-group metadata; set `fuse: true` to collapse every group into one ranked search plan.\n- For a fused mixed search, use arguments such as {\"root\":\"/absolute/workspace\",\"query\":\"how are results ranked and fused\",\"fts\":[\"RRF\",\"score\"],\"fuse\":true}.\n- Search results include bounded source snippets by default. Set preview: \"full\" for all available content of each retrieved item; this does not retrieve the entire file or change ranking. Treat sufficient returned content as already-read evidence, and open only the cited file or range when a required detail falls outside it.\n- If semantic retrieval remains irrelevant, fall back to native Grep or rg.\n- Stop searching once the available evidence is sufficient for the requested task. Continue only to resolve a material gap or ambiguity; do not repeat similar searches or broaden the investigation merely to reconfirm what is already established.\n- Do not launch a sub-agent solely to locate workspace material.\n- Every workspace operation requires an absolute root path visible to the daemon.\n- Read freshness and background_refresh directly from zvec_grep_search responses without a status preflight.\n- When results are served_from_current_index, use them immediately when they are sufficient; do not perform extra diagnostics merely because a background refresh is active.\n- When an index is missing and literal or regex search can answer the task, use native Grep or rg. Creating or rebuilding a persistent index requires explicit user authorization.",
+  "ttlMs": 3600000,
+  "cacheScope": "private",
+  "tools": [
+    {
+      "name": "zvec_grep_search",
+      "description": "Search an existing workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. Results include bounded source snippets by default and query-group metadata; set preview: \"full\" to return all available content of each retrieved item without changing retrieval or ranking. Treat sufficient returned content as already-read evidence. Use native Grep or rg instead when exact lookup alone is sufficient. Read freshness and background_refresh from the response without a status preflight; when results are served_from_current_index, use them if sufficient.",
+      "inputSchema": {
+        "$defs": {
+          "FreshnessInput": {
+            "enum": [
+              "eventual",
+              "wait_for_fresh"
+            ],
+            "type": "string"
+          },
+          "GlobInput": {
+            "additionalProperties": false,
+            "properties": {
+              "caseInsensitive": {
+                "default": false,
+                "type": "boolean"
+              },
+              "pattern": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "type": "object"
+          },
+          "GlobListInput": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/GlobInput"
+                },
+                "type": "array"
+              }
+            ],
+            "description": "Public string/list globs plus the existing typed-rule extension."
+          },
+          "PathListInput": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "items": {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "type": "array"
+              }
+            ]
+          },
+          "QueryListInput": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "items": {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              }
+            ]
+          },
+          "SymbolTypeInput": {
+            "enum": [
+              "alias",
+              "class",
+              "enum",
+              "function",
+              "interface",
+              "module",
+              "value"
+            ],
+            "type": "string"
+          },
+          "TimeInput": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "maxLength": 128,
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "autoUpdate": {
+            "default": true,
+            "description": "Allow eventual search to schedule a background index update.",
+            "type": "boolean"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Categories inferred from indexed file names, such as code or document."
+          },
+          "embeddingConcurrency": {
+            "description": "Embedding requests processed concurrently during updates.",
+            "format": "uint",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "excludedCategories": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclude matching file-name categories, taking precedence over categories."
+          },
+          "excludedFileTypes": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "excludedFormats": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclude matching file-name formats, taking precedence over formats."
+          },
+          "fileTypes": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ripgrep type names, such as ts, py, h or cpp."
+          },
+          "formats": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Formats inferred from indexed file names, such as rust or markdown; source contents are not inspected."
+          },
+          "freshness": {
+            "$ref": "#/$defs/FreshnessInput",
+            "description": "Search now or wait for delivered workspace changes to be indexed.\nResident servers cover watcher notifications received before the refresh\nbarrier; OS notifications delivered later require a subsequent refresh."
+          },
+          "fts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QueryListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Supplemental lexical-route groups."
+          },
+          "fuse": {
+            "description": "Collapse all query groups into one ranked plan.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "globs": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ordered path glob rules; later matching rules take precedence."
+          },
+          "insensitiveGlobs": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ordered case-insensitive rg glob rules, applied after globs."
+          },
+          "limit": {
+            "description": "Maximum returned items per query group or fused plan.",
+            "format": "uint",
+            "maximum": 50,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "modifiedAfter": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimeInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only query files modified after this time."
+          },
+          "modifiedBefore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimeInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only query files modified before this time."
+          },
+          "preferSymbol": {
+            "description": "Prefer exact indexed symbols.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "preview": {
+            "default": "short",
+            "description": "Source display only: short bounds snippets; full preserves all available retrieved content and outline without changing retrieval or ranking.",
+            "enum": [
+              "short",
+              "full"
+            ],
+            "type": "string"
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QueryListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One or more primary hybrid-search groups."
+          },
+          "query": {
+            "description": "One primary hybrid-search group.",
+            "maxLength": 4000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "description": "Absolute workspace root visible to the daemon.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "symbolTypes": {
+            "description": "Restrict indexed results to symbol types.",
+            "items": {
+              "$ref": "#/$defs/SymbolTypeInput"
+            },
+            "maxItems": 7,
+            "type": "array"
+          },
+          "trace": {
+            "description": "Include per-hit search trace.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "vector": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QueryListInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Supplemental semantic/vector-route groups."
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "title": "Search with zvec-grep",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  ]
+}
