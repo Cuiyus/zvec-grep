@@ -28,11 +28,12 @@ cargo test --manifest-path rust/Cargo.toml -p zg-transport-mcp
 ```
 
 Configure the native library path as for the other Rust workspace tests.
+
 Optional numeric and boolean tool inputs advertise scalar JSON Schema types,
 matching Node.js, with optionality expressed by omission from `required`.
-Some Qwen-compatible providers return string arguments when these types are
-expressed as nullable type arrays (including singleton arrays and `anyOf`
-alternatives). Runtime parsing remains strict and still accepts explicit null
+The tested Qwen-compatible provider returns string arguments when these types
+are expressed as type arrays or `anyOf` alternatives, even for valid schemas.
+Runtime parsing remains strict and still accepts explicit null
 as absence for these fields. The `maxDepth` and `maxFileSizeBytes` index inputs
 retain nullable schemas because null explicitly clears their saved settings.
 Regression tests cover the actual tool catalog, HTTP discovery and calls,

@@ -111,20 +111,7 @@ fn modern_http_discovery_tools_errors_and_remote_continuation() -> Result<(), Bo
             "",
         )?);
         assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
-        for patch in [json!({"limit": "15"}), json!({"fuse": "true"})] {
-            let mut arguments = json!({"root": workspace.path(), "query": "x"});
-            arguments
-                .as_object_mut()
-                .expect("arguments")
-                .extend(patch.as_object().expect("patch").clone());
-            let invalid = rpc(&modern_post(
-                port,
-                "tools/call",
-                json!({"name": "zvec_grep_search", "arguments": arguments}),
-                "",
-            )?);
-            assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
-        }
+        check_search_scalar_types(port, workspace.path())?;
         check_protocol_versions(port)?;
         if toolset == "full" {
             let arguments = json!({"root": workspace.path(), "embedding":"qwen/text-embedding-v4", "endpoint":format!("http://{}/embeddings", embedding.address), "wait":true});
@@ -156,6 +143,24 @@ fn modern_http_discovery_tools_errors_and_remote_continuation() -> Result<(), Bo
             assert_eq!(embedding.requests.load(Ordering::SeqCst), count);
         }
         assert_command_success(&guard.stop()?);
+    }
+    Ok(())
+}
+
+fn check_search_scalar_types(port: u16, root: &Path) -> Result<(), Box<dyn Error>> {
+    for patch in [json!({"limit": "15"}), json!({"fuse": "true"})] {
+        let mut arguments = json!({"root": root, "query": "x"});
+        arguments
+            .as_object_mut()
+            .expect("arguments")
+            .extend(patch.as_object().expect("patch").clone());
+        let invalid = rpc(&modern_post(
+            port,
+            "tools/call",
+            json!({"name": "zvec_grep_search", "arguments": arguments}),
+            "",
+        )?);
+        assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
     }
     Ok(())
 }
