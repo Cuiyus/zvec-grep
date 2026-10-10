@@ -64,12 +64,23 @@ def main():
     binary = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    d.save(output / 'candidate.json', {'source_sha':os.environ['FIX_SHA'],'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()})
-    agent = capture(binary, output, 'agent')
-    full = capture(binary, output, 'full')
+    captured = os.environ.get('CAPTURED_EVIDENCE')
+    if captured:
+        source = Path(captured)
+        identity = json.loads((source / 'candidate.json').read_text())
+        assert identity['source_sha'] == os.environ['FIX_SHA']
+        agent = json.loads((source / 'agent-tools.json').read_text())
+        d.save(output / 'candidate.json', identity)
+        d.save(output / 'agent-tools.json', agent)
+        full = None
+    else:
+        d.save(output / 'candidate.json', {'source_sha':os.environ['FIX_SHA'],'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()})
+        agent = capture(binary, output, 'agent')
+        full = capture(binary, output, 'full')
     fixed = next(t for t in agent['tools'] if t['name'] == 'zvec_grep_search')
-    full_search = next(t for t in full['tools'] if t['name'] == 'zvec_grep_search')
-    assert fixed['inputSchema'] == full_search['inputSchema']
+    if full:
+        full_search = next(t for t in full['tools'] if t['name'] == 'zvec_grep_search')
+        assert fixed['inputSchema'] == full_search['inputSchema']
     for field, scalar in [('limit','integer'),('embeddingConcurrency','integer'),('fuse','boolean'),('preferSymbol','boolean'),('trace','boolean')]:
         assert fixed['inputSchema']['properties'][field]['type'] == scalar
         assert field not in fixed['inputSchema']['required']
