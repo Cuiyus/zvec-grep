@@ -119,6 +119,22 @@ def wrong_types(args):
  return errors
 
 
+def representation_arms(output):
+ original=next(t for t in json.loads((output/'rust-tools.json').read_text())['tools'] if t['name']=='zvec_grep_search')
+ arms={}
+ for label in ['rust-nullable-array','rust-scalar','rust-singleton-array','rust-nullable-anyof']:
+  tool=copy.deepcopy(original)
+  for field,scalar in [('limit','integer'),('fuse','boolean')]:
+   prop=tool['inputSchema']['properties'][field]
+   if label=='rust-scalar':prop['type']=scalar
+   elif label=='rust-singleton-array':prop['type']=[scalar]
+   elif label=='rust-nullable-anyof':
+    prop.pop('type');prop['anyOf']=[{'type':scalar},{'type':'null'}]
+  arms[label]=tool
+ save(output/'representation-arms.json',arms)
+ return arms
+
+
 def request_body(tool,repetition):
  # Description and all other schema keywords stay unchanged within each pair.
  return {
@@ -159,7 +175,8 @@ def call_model(label,repetition,tool,output,credential):
 def model(output):
  credential=os.environ.get('GLM_API_KEY');assert credential,'GLM_API_KEY missing'
  count=int(os.environ.get('DIAG_REPETITIONS','5'));assert 1<=count<=5
- arms=build_arms(output);rows=[]
+ arms=representation_arms(output) if os.environ.get('DIAG_SCHEMA_SET')=='representations' else build_arms(output)
+ rows=[]
  # At most four concurrent requests, no automatic retries or extra samples.
  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
   for repetition in range(1,count+1):

@@ -3,10 +3,21 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from diagnose import build_arms,request_body,wrong_types,parse_rpc_body
+from diagnose import build_arms,request_body,wrong_types,parse_rpc_body,representation_arms
 
 
 class DiagnosticTest(unittest.TestCase):
+ def test_nullable_and_array_not_confounded(self):
+  original={'name':'zvec_grep_search','inputSchema':{'properties':{'limit':{'type':['integer','null'],'minimum':1},'fuse':{'type':['boolean','null']}}}}
+  with tempfile.TemporaryDirectory() as directory:
+   p=Path(directory);(p/'rust-tools.json').write_text(json.dumps({'tools':[original]}))
+   arms=representation_arms(p)
+   self.assertEqual(arms['rust-nullable-array'],original)
+   self.assertEqual(arms['rust-singleton-array']['inputSchema']['properties']['limit']['type'],['integer'])
+   anyof=arms['rust-nullable-anyof']['inputSchema']['properties']['limit']
+   self.assertEqual(anyof,{'minimum':1,'anyOf':[{'type':'integer'},{'type':'null'}]})
+   self.assertEqual(arms['rust-scalar']['inputSchema']['properties']['limit']['type'],'integer')
+
  def test_streamable_http_empty_priming_event(self):
   body='event: message\r\ndata: \r\n\r\nevent: message\r\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\r\n\r\n'
   self.assertEqual(parse_rpc_body(body,1)['result'],{'ok':True})

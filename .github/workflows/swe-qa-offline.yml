@@ -7,6 +7,11 @@ on:
         description: Repetitions per schema arm (1 to 5)
         required: true
         default: '5'
+      schema_set:
+        description: Controlled schema variants
+        type: choice
+        options: [primary, representations]
+        default: primary
 permissions: {}
 jobs:
   diagnose:
@@ -50,6 +55,7 @@ jobs:
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           DIAG_REPETITIONS: ${{ inputs.repetitions }}
+          DIAG_SCHEMA_SET: ${{ inputs.schema_set }}
         run: python3 benchmarks/mcp-schema-diagnosis/diagnose.py model "$RUNNER_TEMP/schema-packages" "$RUNNER_TEMP/schema-evidence"
       - uses: actions/upload-artifact@v7
         if: always()
