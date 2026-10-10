@@ -3,10 +3,21 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from diagnose import build_arms,request_body,wrong_types,parse_rpc_body,representation_arms
+from diagnose import build_arms,request_body,wrong_types,parse_rpc_body,representation_arms,assemble_stream
 
 
 class DiagnosticTest(unittest.TestCase):
+ def test_streamed_argument_fragments_preserve_types(self):
+  chunks=[{'model':'qwen3.8-max','choices':[{'index':0,'delta':{'tool_calls':[{'index':0,'id':'call_1','function':{'name':'search','arguments':'{"limit":'}}]}}]},
+          {'choices':[{'index':0,'delta':{'tool_calls':[{'index':0,'function':{'arguments':'15,"fuse":true}'}}]},'finish_reason':'tool_calls'}]},
+          {'choices':[],'usage':{'prompt_tokens':10,'completion_tokens':20}}]
+  raw=''.join('data: '+json.dumps(c)+'\n\n' for c in chunks)+'data: [DONE]\n\n'
+  result=assemble_stream(raw);c=result['choices'][0]
+  self.assertEqual(c['message']['tool_calls'][0]['function']['name'],'search')
+  self.assertEqual(json.loads(c['message']['tool_calls'][0]['function']['arguments']),{'limit':15,'fuse':True})
+  self.assertEqual(result['usage']['completion_tokens'],20)
+  self.assertEqual(c['finish_reason'],'tool_calls')
+
  def test_nullable_and_array_not_confounded(self):
   original={'name':'zvec_grep_search','inputSchema':{'properties':{'limit':{'type':['integer','null'],'minimum':1},'fuse':{'type':['boolean','null']}}}}
   with tempfile.TemporaryDirectory() as directory:

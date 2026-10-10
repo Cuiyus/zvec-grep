@@ -150,6 +150,8 @@ def request_body(tool,repetition):
 
 def call_model(label,repetition,tool,output,credential):
  stem=f'{repetition:02d}-{label}';body=request_body(tool,repetition)
+ streaming=os.environ.get('DIAG_TRANSPORT')=='sse'
+ if streaming:body.update({'stream':True,'stream_options':{'include_usage':True}})
  save(output/'requests'/f'{stem}.json',body)
  started=time.monotonic()
  req=urllib.request.Request(ENDPOINT,json.dumps(body).encode(),{'Content-Type':'application/json','Authorization':'Bearer '+credential})
@@ -161,7 +163,12 @@ def call_model(label,repetition,tool,output,credential):
  except Exception as e:
   save(output/'responses'/f'{stem}.json',{'exception':type(e).__name__})
   return {'arm':label,'repetition':repetition,'completed':False,'exception':type(e).__name__}
- data=json.loads(raw.replace(credential,'REDACTED'));save(output/'responses'/f'{stem}.json',data)
+ raw=raw.replace(credential,'REDACTED')
+ if streaming:
+  raw_path=output/'responses'/f'{stem}.sse';raw_path.parent.mkdir(parents=True,exist_ok=True);raw_path.write_text(raw)
+  data=assemble_stream(raw)
+ else:data=json.loads(raw)
+ save(output/'responses'/f'{stem}.json',data)
  calls=[]
  for choice in data.get('choices',[]):
   for call in choice.get('message',{}).get('tool_calls',[]):
@@ -170,6 +177,32 @@ def call_model(label,repetition,tool,output,credential):
    except ValueError:calls.append({'arguments_raw':argument_string,'invalid_json':True});continue
    calls.append({'arguments_raw':argument_string,'arguments':args,'wrong_types':wrong_types(args),'target_fields_present':all(k in args for k in ['limit','fuse'])})
  return {'arm':label,'repetition':repetition,'completed':True,'http_status':status,'seconds':time.monotonic()-started,'calls':calls,'usage':data.get('usage'),'response_model':data.get('model'),'finish_reasons':[c.get('finish_reason') for c in data.get('choices',[])]}
+
+
+def assemble_stream(raw):
+ choices={};calls={};result={'choices':[]}
+ for block in raw.replace('\r\n','\n').split('\n\n'):
+  text='\n'.join(line[5:].lstrip() for line in block.splitlines() if line.startswith('data:')).strip()
+  if not text or text=='[DONE]':continue
+  chunk=json.loads(text)
+  if chunk.get('model'):result['model']=chunk['model']
+  if chunk.get('usage'):result['usage']=chunk['usage']
+  for c in chunk.get('choices',[]):
+   i=c.get('index',0)
+   choice=choices.setdefault(i,{'index':i,'message':{'role':'assistant','content':'','reasoning_content':'','tool_calls':[]},'finish_reason':None})
+   if c.get('finish_reason'):choice['finish_reason']=c['finish_reason']
+   delta=c.get('delta',{})
+   for field in ['content','reasoning_content']:
+    if delta.get(field):choice['message'][field]+=delta[field]
+   for part in delta.get('tool_calls',[]):
+    call=calls.setdefault((i,part['index']),{'id':'','type':'function','function':{'name':'','arguments':''}})
+    if part.get('id'):call['id']=part['id']
+    f=part.get('function',{})
+    for field in ['name','arguments']:
+     if f.get(field):call['function'][field]+=f[field]
+ for (i,j),call in sorted(calls.items()):choices[i]['message']['tool_calls'].append(call)
+ result['choices']=[choices[i] for i in sorted(choices)]
+ return result
 
 
 def model(output):
