@@ -11,6 +11,19 @@ artifacts from source, and documents its protocol in a dedicated README.
 
 See benchmark-specific README for setup and execution instructions.
 
+## Automatic PR retrieval checks
+
+[Retrieval-only PR](../.github/workflows/retrieval-pr.yml) automatically runs when
+a PR is opened, reopened, or updated with new commits, including PRs from forks.
+It tests the PR's exact head SHA through the existing SWE-QA20, BEIR, DuRetrieval
+and Quarry retrieval suites. A newer push cancels that PR's previous automatic
+run. Results are published in the Actions job summaries and the
+`retrieval-results` artifact.
+
+Automatic PR runs use local embedding and a read-only token; no model secrets
+are forwarded and no admin/maintain role is required. They run Retrieval-only.
+Use the comment command below to request both Retrieval and e2e.
+
 ## Run from a PR comment
 
 A repository admin or maintainer can post a new PR **Conversation** comment with

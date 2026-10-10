@@ -1,0 +1,23 @@
+name: Retrieval-only PR
+run-name: "Retrieval-only · PR #${{ github.event.pull_request.number }} · ${{ github.event.pull_request.head.sha }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: retrieval-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  retrieval:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/retrieval-only.yml
+    with:
+      candidate_ref: ${{ github.event.pull_request.head.sha }}
+      candidate_repository: ${{ github.event.pull_request.head.repo.full_name }}
+      embedding: local
+    # Model secrets are intentionally not forwarded to automatic PR runs.

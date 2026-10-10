@@ -8,6 +8,12 @@
 
 配置方法和运行命令参见各 benchmark 的 README。
 
+## PR 自动检索评测
+
+[Retrieval-only PR](../.github/workflows/retrieval-pr.yml) 会在 PR 创建、重新打开或推送新提交时自动启动，包括来自 fork 的 PR。它锁定 PR 的 head SHA，复用现有 SWE-QA20、BEIR、DuRetrieval、Quarry 四套 Retrieval 评测。同一个 PR 推送新提交时会取消上一次自动评测，结果发布到 Actions job summary 和 `retrieval-results` artifact。
+
+自动 PR 评测使用 local embedding 和只读 token，不传递模型密钥，也不要求 admin/maintain 角色。它只运行 Retrieval；需要同时运行 Retrieval + e2e 时，使用下面的评论命令。
+
 ## 从 PR 评论触发
 
 仓库的 admin/maintain 角色可以在 PR 的 **Conversation** 评论区新建评论，单独写一行 `@zg-bench`。[ZG Bench](../.github/workflows/zg-bench.yml) 会锁定该 PR 的 head SHA，同时运行现有的两套协议：

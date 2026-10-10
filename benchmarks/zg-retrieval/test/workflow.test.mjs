@@ -7,6 +7,10 @@ const workflow = await readFile(
   new URL(".github/workflows/retrieval-only.yml", repository),
   "utf8",
 );
+const prWorkflow = await readFile(
+  new URL(".github/workflows/retrieval-pr.yml", repository),
+  "utf8",
+);
 const action = await readFile(
   new URL(".github/actions/retrieval-authorize/action.yml", repository),
   "utf8",
@@ -45,7 +49,7 @@ function steps(job) {
   );
 }
 
-test("Retrieval-only is one manual workflow with candidate and embedding inputs", async () => {
+test("Retrieval-only retains its reusable and manual candidate/embedding inputs", async () => {
   assert.deepEqual(
     [...block(workflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
@@ -64,8 +68,8 @@ test("Retrieval-only is one manual workflow with candidate and embedding inputs"
   assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 2);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
-    files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)),
-    ["retrieval-only.yml"],
+    files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)).sort(),
+    ["retrieval-only.yml", "retrieval-pr.yml"],
   );
   assert.deepEqual(Object.keys(jobs), [
     "authorize",
@@ -78,6 +82,55 @@ test("Retrieval-only is one manual workflow with candidate and embedding inputs"
     "results",
   ]);
   assert.doesNotMatch(workflow, /setup-node|node-version|NODE_VERSION/);
+});
+
+test("PR updates run Retrieval-only at the fork head SHA with local embedding and no forwarded secrets", () => {
+  assert.deepEqual(
+    [...block(prWorkflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
+      (match) => match[1],
+    ),
+    ["pull_request"],
+  );
+  assert.match(
+    block(prWorkflow, "pull_request", 2),
+    /types: \[opened, synchronize, reopened\]/,
+  );
+  assert.match(prWorkflow, /^permissions: \{\}$/m);
+  const job = block(prWorkflow, "retrieval", 2);
+  assert.equal(
+    [...block(prWorkflow, "jobs", 0).matchAll(/^ {2}([\w-]+):$/gm)].length,
+    1,
+  );
+  assert.match(job, /uses: \.\/\.github\/workflows\/retrieval-only\.yml/);
+  assert.equal(block(prWorkflow, "permissions", 4).trim(), "contents: read");
+  assert.match(
+    job,
+    /candidate_ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/,
+  );
+  assert.match(
+    job,
+    /candidate_repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/,
+  );
+  assert.match(job, /^ {6}embedding: local$/m);
+  assert.doesNotMatch(
+    prWorkflow,
+    /secrets:|secrets\.|inherit|: write|swe-qa-bench\.yml/,
+  );
+  assert.match(
+    block(workflow, "env", 0),
+    /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
+  );
+});
+
+test("automatic PR concurrency cancels older commits without cancelling manual benchmark runs", () => {
+  const concurrency = block(prWorkflow, "concurrency", 0);
+  assert.match(
+    concurrency,
+    /group: retrieval-pr-\$\{\{ github\.event\.pull_request\.number \}\}/,
+  );
+  assert.match(concurrency, /cancel-in-progress: true/);
+  assert.doesNotMatch(concurrency, /head\.sha/);
+  assert.match(block(workflow, "concurrency", 0), /group: retrieval-only-/);
 });
 
 test("local embedding is the default and remote Qwen credentials stay scoped to execution", () => {
@@ -225,7 +278,7 @@ test("the selected source is built from rust/ and exact-commit package caching b
   }
 });
 
-test("every independently rerunnable job checks both actors before doing benchmark work", () => {
+test("every independently rerunnable job checks benchmark access before doing work", () => {
   assert.equal(Object.keys(jobs).length, 8);
   assert.ok(jobs.results && jobs.sweqa && jobs.authorize);
   for (const [name, job] of Object.entries(jobs)) {
@@ -354,6 +407,7 @@ function attempt({
   roles = { maintainer: maintain },
   apiError,
   payload = {},
+  embedding = "local",
 } = {}) {
   const calls = [],
     messages = [],
@@ -400,7 +454,13 @@ function attempt({
         github,
         { info: (message) => messages.push(message), summary },
         { eventName, payload, repo: { owner: "owner", repo: "repo" } },
-        { env: { DISPATCH_ACTOR: dispatch, RERUN_ACTOR: rerun } },
+        {
+          env: {
+            DISPATCH_ACTOR: dispatch,
+            RERUN_ACTOR: rerun,
+            RETRIEVAL_EMBEDDING: embedding,
+          },
+        },
       ),
   };
 }
@@ -482,11 +542,11 @@ test("missing actors, nonmanual events and permission API failures are denied ra
     await assert.rejects(result.run(), /Missing workflow actor/);
     assertDeniedSummary(result);
   }
-  for (const eventName of ["push", "pull_request", "workflow_run"]) {
+  for (const eventName of ["push", "workflow_run", "pull_request_target"]) {
     const result = attempt({ eventName });
     await assert.rejects(
       result.run(),
-      /workflow_dispatch or a PR comment caller/,
+      /pull_request, workflow_dispatch or a PR comment caller/,
     );
     assert.equal(result.calls.length, 0);
     assertDeniedSummary(result);
@@ -495,6 +555,49 @@ test("missing actors, nonmanual events and permission API failures are denied ra
   const result = attempt({ apiError });
   await assert.rejects(result.run(), (error) => error === apiError);
   assertDeniedSummary(result);
+});
+
+test("automatic local PR runs and partial reruns do not require collaborator permissions", async () => {
+  for (const action of ["opened", "synchronize", "reopened"]) {
+    const result = attempt({
+      eventName: "pull_request",
+      dispatch: "contributor",
+      rerun: "writer",
+      apiError: new Error("fork token cannot read collaborator permissions"),
+      payload: { action, pull_request: { head: { sha: "a".repeat(40) } } },
+    });
+    await result.run();
+    assert.equal(result.calls.length, 0);
+    assert.match(
+      result.messages[0],
+      /automatic PR retrieval with local embedding/,
+    );
+    assert.deepEqual(result.summaryCalls, []);
+  }
+});
+
+test("PR authorization rejects remote or missing embedding and unsupported PR events", async () => {
+  for (const embedding of ["remote", "", undefined]) {
+    const result = attempt({
+      eventName: "pull_request",
+      embedding: embedding ?? "",
+      payload: { action: "opened", pull_request: {} },
+    });
+    await assert.rejects(result.run(), /requires local embedding/);
+    assert.equal(result.calls.length, 0);
+    assertDeniedSummary(result);
+  }
+  for (const payload of [
+    {},
+    { action: "opened" },
+    { action: "edited", pull_request: {} },
+    { action: "closed", pull_request: {} },
+  ]) {
+    const result = attempt({ eventName: "pull_request", payload });
+    await assert.rejects(result.run(), /Unsupported pull_request event/);
+    assert.equal(result.calls.length, 0);
+    assertDeniedSummary(result);
+  }
 });
 
 test("reusable retrieval accepts created PR comments with maintainer permission", async () => {
