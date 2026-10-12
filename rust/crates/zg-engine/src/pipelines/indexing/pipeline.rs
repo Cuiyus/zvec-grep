@@ -182,7 +182,7 @@ pub(crate) async fn index_workspace(
         },
     );
     let finalize_started = Instant::now();
-    context.storage.checkpoint().map_err(|error| {
+    context.storage.finalize_writes().map_err(|error| {
         EngineError::storage_failure(format!("failed to finalize index storage: {error}"))
     })?;
     timings.record("index_optimize", finalize_started.elapsed(), 1);
@@ -2538,7 +2538,7 @@ mod tests {
             Ok(())
         }
 
-        fn checkpoint(&self) -> EngineResult<()> {
+        fn finalize_writes(&self) -> EngineResult<()> {
             self.finalized.fetch_add(1, Ordering::AcqRel);
             Ok(())
         }

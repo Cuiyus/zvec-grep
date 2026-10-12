@@ -45,6 +45,7 @@ struct StoreState {
     directories: Directories,
     entities: Entities,
     fragments: Fragments,
+    needs_optimize: bool,
     closed: bool,
 }
 
@@ -167,6 +168,7 @@ impl IndexStore {
                 directories,
                 entities,
                 fragments,
+                needs_optimize: false,
                 closed: false,
             }),
             schema,
@@ -336,6 +338,7 @@ impl IndexStore {
 
     pub(crate) fn delete_file(&self, file_id: FileId) -> EngineResult<()> {
         self.write(|state| {
+            state.needs_optimize = true;
             state.files.mark_deleting(file_id)?;
             state.fragments.delete_file(file_id)?;
             state.entities.delete_file(file_id)?;
@@ -349,6 +352,25 @@ impl IndexStore {
             return Ok(());
         }
         self.write(|state| flush(state))
+    }
+
+    /// Persist retry state before building indexes and compacting accepted writes.
+    pub(crate) fn finalize_writes(&self) -> EngineResult<()> {
+        self.checkpoint()?;
+        if self.read_only {
+            return Ok(());
+        }
+        self.write(|state| {
+            // Also finish indexes created by versions that only flushed writes.
+            if state.needs_optimize || state.fragments.needs_optimize()? {
+                state.directories.optimize()?;
+                state.entities.optimize()?;
+                state.files.optimize()?;
+                state.fragments.optimize()?;
+                state.needs_optimize = false;
+            }
+            Ok(())
+        })
     }
 
     pub(crate) fn close(&self) -> EngineResult<()> {
@@ -382,6 +404,7 @@ fn replace_file(
     state.files.validate(file)?;
     state.entities.validate_ownership(entities, file.id)?;
     state.fragments.validate_ownership(entries, file.id)?;
+    state.needs_optimize = true;
     let directories = state.directories.ensure(&file.relative_path)?;
     // Encode every projection before removing any of the previous file's data.
     let entity_docs = Entities::prepare(entities)?;

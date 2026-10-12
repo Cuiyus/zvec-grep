@@ -20,7 +20,7 @@ pub(crate) trait IndexStorage: Send + Sync {
     ) -> EngineResult<()>;
     fn mark_file_failed(&self, file: &FileRecord, error: &str) -> EngineResult<()>;
     fn delete_file(&self, file_id: FileId) -> EngineResult<()>;
-    fn checkpoint(&self) -> EngineResult<()>;
+    fn finalize_writes(&self) -> EngineResult<()>;
 }
 
 impl IndexStorage for IndexStore {
@@ -53,7 +53,7 @@ impl IndexStorage for IndexStore {
         self.delete_file(file_id)
     }
 
-    fn checkpoint(&self) -> EngineResult<()> {
-        self.checkpoint()
+    fn finalize_writes(&self) -> EngineResult<()> {
+        self.finalize_writes()
     }
 }

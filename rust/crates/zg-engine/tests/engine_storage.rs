@@ -74,6 +74,7 @@ async fn one_text_model_indexes_text_and_skips_images_without_embedding_them() -
     );
     let collections = model_collections(&info.index_path)?;
     assert_eq!(collections.len(), 1);
+    assert_vector_indexes_complete(&info.index_path)?;
     assert_eq!(native_documents(&collections[0])?.len(), 1);
     assert_eq!(
         native_documents(&info.index_path.join("entities"))?.len(),
@@ -113,6 +114,7 @@ async fn one_text_model_indexes_text_and_skips_images_without_embedding_them() -
     assert_eq!((unchanged.files_unchanged, unchanged.files_failed), (1, 0));
     assert_eq!(server.inputs.load(Ordering::Acquire), 2);
     assert_eq!(server.multimodal_inputs.load(Ordering::Acquire), 0);
+    assert_vector_indexes_complete(&info.index_path)?;
     engine.drop_index(info_options(root)).await?;
     engine.close();
     Ok(())
@@ -1143,4 +1145,26 @@ fn model_collections(index_path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::err
         })
         .map(|entry| entry.path())
         .collect())
+}
+
+fn assert_vector_indexes_complete(index_path: &Path) -> TestResult {
+    for path in model_collections(index_path)? {
+        #[cfg(windows)]
+        let path = dunce::simplified(&path);
+        let mut options = zvec_rust::CollectionOptions::new()?;
+        options.set_read_only(true)?;
+        let collection = zvec_rust::Collection::open(
+            path.to_str().expect("UTF-8 collection path"),
+            Some(&options),
+        )?;
+        let stats = collection.stats()?;
+        assert!(stats.doc_count > 0);
+        assert_eq!(stats.indexes.len(), 1);
+        assert!(
+            stats.indexes[0].completeness >= 1.0,
+            "default indexing must finish the vector index: {stats:?}"
+        );
+        collection.close()?;
+    }
+    Ok(())
 }

@@ -87,6 +87,10 @@ impl Entities {
     pub(super) fn flush(&self) -> EngineResult<()> {
         native(self.collection.flush(), "flush entities")
     }
+
+    pub(super) fn optimize(&self) -> EngineResult<()> {
+        native(self.collection.optimize(), "optimize entities")
+    }
 }
 
 fn schema() -> EngineResult<CollectionSchema> {

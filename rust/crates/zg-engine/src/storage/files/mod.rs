@@ -174,6 +174,11 @@ impl Files {
         native(self.collection.flush(), "flush source files")
     }
 
+    pub(super) fn optimize(&self) -> EngineResult<()> {
+        self.assert_writable()?;
+        native(self.collection.optimize(), "optimize source files")
+    }
+
     fn assert_writable(&self) -> EngineResult<()> {
         self.ids.as_ref().map(|_| ()).ok_or_else(read_only_error)
     }
