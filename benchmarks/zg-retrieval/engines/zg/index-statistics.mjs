@@ -1,5 +1,6 @@
 // Supplementary storage audit. Native inspection uses a disposable copy only.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { cp, lstat, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
@@ -57,16 +58,17 @@ async function discover(root, activePath) {
 }
 
 export async function captureIndexStatistics({ status, output, sdkPath }) {
-  assert.ok(sdkPath, "INDEX_STATS_SDK must resolve to the pinned reader SDK");
+  const rustReader = process.env.INDEX_STATS_RUST_READER;
+  assert.ok(sdkPath || rustReader, "a pinned native reader is required");
   const home = join(status.root, ".zvec-grep");
   const activePath = resolve(status.index_path);
   assert.ok(activePath.startsWith(`${home}/`), "index is outside the workspace metadata home");
   const entries = await inventory(home);
   const paths = await discover(home, activePath);
   assert.ok(paths.length >= 2, "index collections were not discovered");
-  const { ZVecInitialize, ZVecLogLevel, ZVecOpen } = await import(pathToFileURL(sdkPath).href);
-  if (!initialized) {
-    ZVecInitialize({ logLevel: ZVecLogLevel.WARN });
+  const sdk = rustReader ? null : await import(pathToFileURL(sdkPath).href);
+  if (sdk && !initialized) {
+    sdk.ZVecInitialize({ logLevel: sdk.ZVecLogLevel.WARN });
     initialized = true;
   }
   const copy = await mkdtemp(join(tmpdir(), "zg-index-reader-"));
@@ -74,12 +76,32 @@ export async function captureIndexStatistics({ status, output, sdkPath }) {
   const files = [];
   let sdkVersion;
   try {
-    sdkVersion = JSON.parse(await readFile(resolve(sdkPath, "../../package.json"), "utf8")).version;
+    sdkVersion = rustReader ? "zvec-rust@0.7.2" : JSON.parse(await readFile(resolve(sdkPath, "../../package.json"), "utf8")).version;
     for (let i = 0; i < paths.length; i++) {
       const path = paths[i];
       const destination = join(copy, String(i));
       await cp(path, destination, { recursive: true });
-      const collection = ZVecOpen(destination, { readOnly: true });
+      if (rustReader) {
+        const result = spawnSync(rustReader, [destination, role(basename(path))], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+        await writeFile(join(output, `native-reader-${i}.json`), JSON.stringify({ code: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }));
+        assert.equal(result.status, 0, `Rust native reader failed: ${result.stderr}`);
+        const line = result.stdout.split("\n").find(s => s.startsWith("ZG_INDEX_STATS_JSON:"));
+        assert.ok(line, "Rust reader omitted JSON statistics");
+        const native = JSON.parse(line.slice("ZG_INDEX_STATS_JSON:".length));
+        const fragment = role(basename(path)) === "fragments";
+        const descriptor = fragment ? JSON.parse(await readFile(join(path, "../schema.json"), "utf8")) : null;
+        collections.push({ path: relative(home, path), role: role(basename(path)),
+          schema_name: native.schema_name, doc_count: native.doc_count,
+          index_completeness: native.index_completeness,
+          vectors: descriptor ? descriptor.embeddings.map(e => ({ name: "embedding", dimension: e.dimension,
+            data_type: "VectorFp32", metric: e.metric, index_params: { index_type: "HNSW", m: 16, ef_construction: 200 },
+            parameter_source: "pinned Rust fragments_schema; dimension/metric from persisted schema.json" })) : [],
+          footprint: footprint(subtree(entries, relative(home, path))) });
+        files.push(...native.files);
+        await rm(destination, { recursive: true, force: true });
+        continue;
+      }
+      const collection = sdk.ZVecOpen(destination, { readOnly: true });
       try {
         const fields = collection.schema.fields();
         const vectors = collection.schema.vectors();
@@ -135,7 +157,7 @@ export async function captureIndexStatistics({ status, output, sdkPath }) {
       logical: "sum of regular-file st_size; not archive size",
       allocated: "sum of st_blocks * 512 for files, directories and links (filesystem allocation)",
       fragment_definition: "persisted retrieval projection rows in index.zvec (Node) or fragments_* model collections (Rust)",
-      inspection: "pinned @zvec/zvec reader, readOnly=true, disposable collection copies; original index never opened by reader",
+      inspection: "runtime-matched native reader, readOnly=true, disposable collection copies; original index never opened by reader",
       sdk_version: sdkVersion,
     },
     totals: { ...total, indexed_files: indexedFiles.length, entities, fragments,
