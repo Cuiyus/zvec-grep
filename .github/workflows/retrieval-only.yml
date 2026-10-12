@@ -1,5 +1,5 @@
 name: "Node 0.2.2 vs Rust main \xB7 Retrieval-only"
-run-name: Version Retrieval-only / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding / ${{ inputs.suite || 'all' }}
+run-name: Index storage audit / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding / ${{ inputs.suite || 'all' }}
 'on':
   workflow_dispatch:
     inputs:
@@ -34,6 +34,7 @@ permissions:
   contents: read
 env:
   RETRIEVAL_RANK_DIAGNOSTICS: '1'
+  INDEX_STATISTICS: '1'
 concurrency:
   group: version-retrieval-${{ github.run_id }}
   cancel-in-progress: false
@@ -170,6 +171,7 @@ jobs:
       with:
         path: ${{ runner.temp }}/model-cache
         key: retrieval-sweqa-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+    - uses: ./.github/actions/index-statistics-sdk
     - name: Run all SWE-QA20 repositories through the official MCP server
       env:
         ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
@@ -260,6 +262,7 @@ jobs:
       with:
         path: ${{ runner.temp }}/beir-model-cache
         key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
+    - uses: ./.github/actions/index-statistics-sdk
     - name: Run BEIR retrieval suite
       env:
         ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
@@ -340,6 +343,7 @@ jobs:
       with:
         path: ${{ runner.temp }}/duretrieval-model-cache
         key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
+    - uses: ./.github/actions/index-statistics-sdk
     - name: Run DuRetrieval pilot
       env:
         ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
@@ -413,6 +417,7 @@ jobs:
       with:
         path: ${{ runner.temp }}/quarry-model-cache
         key: retrieval-quarry-potion-code-16m-v2-v1-${{ runner.os }}-${{ runner.arch }}
+    - uses: ./.github/actions/index-statistics-sdk
     - name: Run Quarry retrieval suite
       env:
         ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}

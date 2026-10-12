@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileHash, objectHash, run, writeJson } from "../../core/lib.mjs";
+import { captureIndexStatistics } from "./index-statistics.mjs";
 
 function required(pattern, text, label) {
   const match = pattern.exec(text);
@@ -138,6 +139,8 @@ export async function snapshotIndex({
     indexed_source_bytes: status.indexed_source_bytes,
   };
   await writeJson(join(output, "status.json"), status);
+  if (process.env.INDEX_STATISTICS === "1")
+    await captureIndexStatistics({ status, output, sdkPath: process.env.INDEX_STATS_SDK });
   const summary = {
     schema_version: 2,
     kind: /Workspace index is /.test(result.stdout) ? "node-public-status" : "rust-public-status",
