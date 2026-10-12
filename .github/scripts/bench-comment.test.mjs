@@ -396,6 +396,42 @@ test("a single e2e artifact extracted directly into its target directory is load
   assert.equal((await loadReports(root, 123, sha)).e2e, null);
 });
 
+test("a completed rerun aggregate replaces the earlier partial e2e comment", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "bench-comment-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [attempt, json] of [
+    [
+      1,
+      {
+        ...e2e.json,
+        cases: e2e.json.cases.slice(0, 19),
+        gate: { passed: false, missing_tasks: ["19"] },
+      },
+    ],
+    [2, e2e.json],
+  ]) {
+    const directory = join(root, `e2e/swe-qa-aggregate-report-123-${attempt}`);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "report.json"), JSON.stringify(json));
+    await writeFile(join(directory, "report.md"), e2e.markdown);
+    await writeFile(
+      join(directory, "candidate-manifest.json"),
+      JSON.stringify(e2e.identity),
+    );
+  }
+  const reports = await loadReports(root, 123, sha);
+  assert.equal(reports.e2e.artifact_attempt, 2);
+  const result = resultComment({
+    context: fixture().context,
+    request: { ...request, run_e2e: "true" },
+    results: { retrieval: "success", e2e: "success" },
+    ...reports,
+    retrieval,
+  });
+  assert.equal(result.complete, true);
+  assert.match(result.body, /e2e · ✅ Complete/);
+});
+
 test("final reply uses a matching earlier-attempt e2e artifact and updates the status comment", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "bench-comment-"));
   t.after(() => rm(root, { recursive: true, force: true }));
