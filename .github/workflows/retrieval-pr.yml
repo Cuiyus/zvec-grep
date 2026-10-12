@@ -1,0 +1,42 @@
+name: Retrieval-only PR
+run-name: "Retrieval-only · ${{ github.event.pull_request.number && format('PR #{0}', github.event.pull_request.number) || 'manual comparison' }} · ${{ inputs.candidate_sha || github.event.pull_request.head.sha }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Full baseline commit SHA
+        required: true
+        type: string
+      baseline_repository:
+        description: Baseline repository (owner/name)
+        required: true
+        type: string
+      candidate_sha:
+        description: Full candidate commit SHA
+        required: true
+        type: string
+      candidate_repository:
+        description: Candidate repository (owner/name)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: retrieval-pr-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  retrieval:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/retrieval-comparison.yml
+    with:
+      baseline_ref: ${{ inputs.baseline_sha || github.event.pull_request.base.sha }}
+      baseline_repository: ${{ inputs.baseline_repository || github.event.pull_request.base.repo.full_name }}
+      candidate_ref: ${{ inputs.candidate_sha || github.event.pull_request.head.sha }}
+      candidate_repository: ${{ inputs.candidate_repository || github.event.pull_request.head.repo.full_name }}
+    # Model secrets are intentionally not forwarded to automatic PR runs.
