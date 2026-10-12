@@ -10,6 +10,10 @@ on:
         description: Open PR number in this repository
         required: true
         type: string
+      run_e2e:
+        description: Also run e2e (disabled by default)
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -30,6 +34,9 @@ jobs:
       accepted: ${{ steps.request.outputs.accepted }}
       candidate_sha: ${{ steps.request.outputs.candidate_sha }}
       candidate_repository: ${{ steps.request.outputs.candidate_repository }}
+      baseline_sha: ${{ steps.request.outputs.baseline_sha }}
+      baseline_repository: ${{ steps.request.outputs.baseline_repository }}
+      run_e2e: ${{ steps.request.outputs.run_e2e }}
       pr_number: ${{ steps.request.outputs.pr_number }}
       comment_id: ${{ steps.request.outputs.comment_id }}
     steps:
@@ -42,6 +49,7 @@ jobs:
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_E2E: ${{ inputs.run_e2e }}
         with:
           script: |
             const { pathToFileURL } = require('node:url');
@@ -53,15 +61,16 @@ jobs:
     if: needs.request.outputs.accepted == 'true'
     permissions:
       contents: read
-    uses: ./.github/workflows/retrieval-only.yml
+    uses: ./.github/workflows/retrieval-comparison.yml
     with:
+      baseline_ref: ${{ needs.request.outputs.baseline_sha }}
+      baseline_repository: ${{ needs.request.outputs.baseline_repository }}
       candidate_ref: ${{ needs.request.outputs.candidate_sha }}
       candidate_repository: ${{ needs.request.outputs.candidate_repository }}
-      embedding: local
 
   e2e:
     needs: request
-    if: needs.request.outputs.accepted == 'true'
+    if: needs.request.outputs.accepted == 'true' && needs.request.outputs.run_e2e == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/swe-qa-bench.yml
@@ -93,9 +102,10 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: retrieval-results
+          name: retrieval-comparison
           path: ${{ runner.temp }}/bench-reports/retrieval
       - name: Download e2e results, including successful jobs from earlier attempts
+        if: needs.request.outputs.run_e2e == 'true'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:

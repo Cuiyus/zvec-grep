@@ -15,6 +15,10 @@ const action = await readFile(
   new URL(".github/actions/retrieval-authorize/action.yml", repository),
   "utf8",
 );
+const comparisonWorkflow = await readFile(
+  new URL(".github/workflows/retrieval-comparison.yml", repository),
+  "utf8",
+);
 const rustAction = await readFile(
   new URL(".github/actions/rust-candidate-package/action.yml", repository),
   "utf8",
@@ -69,7 +73,7 @@ test("Retrieval-only retains its reusable and manual candidate/embedding inputs"
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)).sort(),
-    ["retrieval-only.yml", "retrieval-pr.yml"],
+    ["retrieval-comparison.yml", "retrieval-only.yml", "retrieval-pr.yml"],
   );
   assert.deepEqual(Object.keys(jobs), [
     "authorize",
@@ -101,7 +105,7 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
     [...block(prWorkflow, "jobs", 0).matchAll(/^ {2}([\w-]+):$/gm)].length,
     1,
   );
-  assert.match(job, /uses: \.\/\.github\/workflows\/retrieval-only\.yml/);
+  assert.match(job, /uses: \.\/\.github\/workflows\/retrieval-comparison\.yml/);
   assert.equal(block(prWorkflow, "permissions", 4).trim(), "contents: read");
   assert.match(
     job,
@@ -111,7 +115,14 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
     job,
     /candidate_repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/,
   );
-  assert.match(job, /^ {6}embedding: local$/m);
+  assert.match(
+    job,
+    /baseline_ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/,
+  );
+  assert.match(
+    job,
+    /baseline_repository: \$\{\{ github\.event\.pull_request\.base\.repo\.full_name \}\}/,
+  );
   assert.doesNotMatch(
     prWorkflow,
     /secrets:|secrets\.|inherit|: write|swe-qa-bench\.yml/,
@@ -131,6 +142,28 @@ test("automatic PR concurrency cancels older commits without cancelling manual b
   assert.match(concurrency, /cancel-in-progress: true/);
   assert.doesNotMatch(concurrency, /head\.sha/);
   assert.match(block(workflow, "concurrency", 0), /group: retrieval-only-/);
+});
+
+test("version comparison keeps artifact namespaces separate and uses local models without secrets", () => {
+  for (const [job, prefix] of [
+    ["baseline", "retrieval-base"],
+    ["candidate", "retrieval-head"],
+  ]) {
+    const source = block(comparisonWorkflow, job, 2);
+    assert.match(source, /uses: \.\/\.github\/workflows\/retrieval-only\.yml/);
+    assert.match(source, /embedding: local/);
+    assert.ok(source.includes(`artifact_prefix: ${prefix}`));
+  }
+  assert.doesNotMatch(
+    comparisonWorkflow,
+    /secrets:|secrets\.|: write|swe-qa-bench/,
+  );
+  const compare = block(comparisonWorkflow, "compare", 2);
+  assert.match(compare, /if: always\(\) && !cancelled\(\)/);
+  assert.match(compare, /name: retrieval-base-results/);
+  assert.match(compare, /name: retrieval-head-results/);
+  assert.match(compare, /name: retrieval-comparison/);
+  assert.match(workflow, /retrieval-results\/reports\//);
 });
 
 test("local embedding is the default and remote Qwen credentials stay scoped to execution", () => {
@@ -193,12 +226,12 @@ test("the four suites run in independent jobs using one candidate package", asyn
   assert.match(jobs["quality-contract"], /uses: actions\/setup-python@/);
   assert.match(jobs.sweqa, /needs: \[authorize, package-candidate\]/);
   assert.match(jobs.sweqa, /ci-report\.mjs/);
-  assert.match(jobs.sweqa, /retrieval-zg-report/);
+  assert.match(jobs.sweqa, /name:.*-zg-report/);
   assert.match(jobs.sweqa, /\$GITHUB_STEP_SUMMARY/);
   for (const suite of ["beir", "duretrieval", "quarry"]) {
     assert.match(jobs[suite], /needs: \[authorize, package-candidate\]/);
     assert.match(jobs[suite], new RegExp(`--suite ${suite}`));
-    assert.match(jobs[suite], new RegExp(`retrieval-${suite}-report`));
+    assert.match(jobs[suite], new RegExp(`name:.*-${suite}-report`));
     assert.match(jobs[suite], /\$GITHUB_STEP_SUMMARY/);
   }
   assert.match(
@@ -335,11 +368,11 @@ test("one final page combines all suite reports after successful or failed jobs"
     entry.includes("uses: actions/download-artifact@"),
   );
   assert.equal(downloads.length, 4);
-  assert.match(downloads[0], /name: retrieval-zg-report/);
+  assert.match(downloads[0], /name:.*-zg-report/);
   assert.match(downloads[0], /continue-on-error: true/);
-  assert.match(downloads[1], /name: retrieval-beir-report/);
-  assert.match(downloads[2], /name: retrieval-duretrieval-report/);
-  assert.match(downloads[3], /name: retrieval-quarry-report/);
+  assert.match(downloads[1], /name:.*-beir-report/);
+  assert.match(downloads[2], /name:.*-duretrieval-report/);
+  assert.match(downloads[3], /name:.*-quarry-report/);
   const builder = finalSteps.find((entry) =>
     entry.includes("expansion/combined.mjs"),
   );
@@ -351,8 +384,10 @@ test("one final page combines all suite reports after successful or failed jobs"
     ["zg", "beir", "duretrieval", "quarry", "output"],
   );
   assert.doesNotMatch(builder, /comparison|baseline|preview|modes/);
-  const overviewArtifact = finalSteps.find((entry) =>
-    entry.includes("name: retrieval-results"),
+  const overviewArtifact = finalSteps.find(
+    (entry) =>
+      entry.includes("-results") &&
+      entry.includes("uses: actions/upload-artifact@"),
   );
   assert.ok(overviewArtifact);
   assert.match(overviewArtifact, /retrieval-results\/summary\.md/);

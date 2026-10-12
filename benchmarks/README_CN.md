@@ -10,22 +10,22 @@
 
 ## PR 自动检索评测
 
-[Retrieval-only PR](../.github/workflows/retrieval-pr.yml) 会在 PR 创建、重新打开或推送新提交时自动启动，包括来自 fork 的 PR。它锁定 PR 的 head SHA，复用现有 SWE-QA20、BEIR、DuRetrieval、Quarry 四套 Retrieval 评测。同一个 PR 推送新提交时会取消上一次自动评测，结果发布到 Actions job summary 和 `retrieval-results` artifact。
+[Retrieval-only PR](../.github/workflows/retrieval-pr.yml) 会在 PR 创建、重新打开或推送新提交时自动启动，包括来自 fork 的 PR。它锁定 PR 的 base/head SHA，用同一份 harness、本地模型和数据分别运行 SWE-QA20、BEIR、DuRetrieval、Quarry 四套评测，展示每种模式五项指标的 base / head / delta。同一个 PR 推送新提交时会取消上一次自动评测，结果发布到 Actions job summary 和 `retrieval-comparison` artifact；`retrieval-base-*`、`retrieval-head-*` 保留各版本的报告与证据。
 
-自动 PR 评测使用 local embedding 和只读 token，不传递模型密钥，也不要求 admin/maintain 角色。它只运行 Retrieval；需要同时运行 Retrieval + e2e 时，使用下面的评论命令。
+自动 PR 评测使用 local embedding 和只读 token，不传递模型密钥，也不要求 admin/maintain 角色。下面的评论命令运行同样的版本对比；e2e 默认关闭。
 
 ## 从 PR 评论触发
 
-仓库的 admin/maintain 角色可以在 PR 的 **Conversation** 评论区新建评论，单独写一行 `@zg-bench`。[ZG Bench](../.github/workflows/zg-bench.yml) 会锁定该 PR 的 head SHA，同时运行现有的两套协议：
+仓库的 admin/maintain 角色可以在 PR 的 **Conversation** 评论区新建评论，单独写一行 `@zg-bench`。[ZG Bench](../.github/workflows/zg-bench.yml) 会锁定该 PR 的 base/head SHA，并运行 Retrieval 版本对比：
 
-- **Retrieval：** SWE-QA20、BEIR、DuRetrieval、Quarry，使用 local embedding。
-- **e2e：** 完整 20 道 SWE-QA 题，OpenCode + GLM-5.2，baseline 和 zvec-grep 每题每组各运行 5 次，使用 local embedding。
+- **Retrieval：** SWE-QA20、BEIR、DuRetrieval、Quarry，两个版本使用 local embedding，各自重建索引，每项指标展示 base / head / delta。
+- **e2e：** 跳过。只有手动启动时明确设置 `run_e2e: true`，才会运行现有的完整 SWE-QA20 协议（OpenCode + GLM-5.2，每题每组 5 次）；评论命令不会启用 e2e。
 
-`github-actions[bot]` 先回复排队状态，再更新同一条评论，输出两份报告、候选提交 SHA 和 Actions/artifact 链接。报告保留现有 Retrieval 指标以及 e2e 的 Judge、input token、tool call、耗时比较。失败或缺失结果明确标记为未完成。运行期间推送新代码不会改变本次候选提交，需要再次评论才能测试新提交；重跑失败任务会更新原机器人评论。引用文字、代码块中的命令、机器人评论、编辑旧评论、普通 Issue 和代码行 review 评论均不会启动评测。
+`github-actions[bot]` 先回复排队状态，再更新同一条评论，输出版本对比、两个固定 commit 的链接和 Actions/artifact 链接。失败、缺失、模型不同或协议不兼容的报告不会生成差值。运行期间推送新代码不会改变本次两个版本，需要再次评论才能测试当前 base/head；重跑失败任务会更新原机器人评论。引用文字、代码块中的命令、机器人评论、编辑旧评论、普通 Issue 和代码行 review 评论均不会启动评测。
 
-启用前需要把入口和可复用工作流的改动合入仓库的**默认分支**，配置现有的 `GLM_API_KEY` Actions secret，并允许工作流使用 `issues: write` 和 `pull-requests: write`。也可以通过 `workflow_dispatch` 的 `pr_number` 手动启动同样的流程。开发验证使用 `Cuiyus/zvec-grep`，在上游仓库启用是单独的部署步骤。
+启用前需要把入口和可复用工作流的改动合入仓库的**默认分支**，并允许工作流使用 `issues: write` 和 `pull-requests: write`。只有明确启用 e2e 时才需要 `GLM_API_KEY`。也可以通过 `workflow_dispatch` 的 `pr_number` 手动启动同样的流程。开发验证使用 `Cuiyus/zvec-grep`，在上游仓库启用是单独的部署步骤。
 
-只有评论任务持有写权限 token。评测 harness 使用受信任的工作流版本，候选代码在 GitHub 托管 runner 上单独检出为固定 SHA。发出命令意味着允许这份候选代码使用现有 Benchmark 的模型凭证执行，应先检查 fork 的改动。每个 Benchmark job 都会重新检查原始触发者和重跑者当前的 admin/maintain 权限。
+只有评论任务持有写权限 token。评测 harness 使用受信任的工作流版本，候选代码在 GitHub 托管 runner 上单独检出为固定 SHA。Retrieval 对比不接收模型密钥；可选 e2e 会接收现有模型凭证，启用前应先检查 fork 的改动。各执行任务会重新检查原始触发者和重跑者当前的 admin/maintain 权限。
 
 `@zg-bench` 是命令关键字，无需注册同名账号。如果希望回复者显示为专属的 `zg-bench[bot]`，可以注册并安装 GitHub App，授予 Issues 和 Pull requests 读写权限，再让评论任务使用其 installation token 和 bot login。初版使用 `GITHUB_TOKEN` 和 `github-actions[bot]`。
 

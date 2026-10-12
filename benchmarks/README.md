@@ -15,37 +15,43 @@ See benchmark-specific README for setup and execution instructions.
 
 [Retrieval-only PR](../.github/workflows/retrieval-pr.yml) automatically runs when
 a PR is opened, reopened, or updated with new commits, including PRs from forks.
-It tests the PR's exact head SHA through the existing SWE-QA20, BEIR, DuRetrieval
-and Quarry retrieval suites. A newer push cancels that PR's previous automatic
-run. Results are published in the Actions job summaries and the
-`retrieval-results` artifact.
+It freezes the PR's base and head SHAs and tests both through the existing
+SWE-QA20, BEIR, DuRetrieval and Quarry suites with the same harness and local
+models. The comparison shows base / head / delta for all five metrics in each
+mode. A newer push cancels that PR's previous automatic run. Results are
+published in Actions job summaries and the `retrieval-comparison` artifact;
+`retrieval-base-*` and `retrieval-head-*` retain each version's reports and evidence.
 
 Automatic PR runs use local embedding and a read-only token; no model secrets
 are forwarded and no admin/maintain role is required. They run Retrieval-only.
-Use the comment command below to request both Retrieval and e2e.
+The comment command below requests the same version comparison. e2e is disabled
+by default.
 
 ## Run from a PR comment
 
 A repository admin or maintainer can post a new PR **Conversation** comment with
 `@zg-bench` on its own line. [ZG Bench](../.github/workflows/zg-bench.yml) freezes
-that PR's head SHA, then runs both existing protocols:
+that PR's base and head SHAs, then runs the Retrieval version comparison:
 
-- **Retrieval:** SWE-QA20, BEIR, DuRetrieval and Quarry, with local embedding.
-- **e2e:** all 20 SWE-QA tasks, OpenCode + GLM-5.2, baseline and zvec-grep,
-  five trials per task and profile, with local embedding.
+- **Retrieval:** SWE-QA20, BEIR, DuRetrieval and Quarry on both versions, with
+  local embedding and fresh indexes. Each metric shows base / head / delta.
+- **e2e:** skipped. An explicit manual dispatch with `run_e2e: true` can still
+  request the existing full SWE-QA20 protocol (OpenCode + GLM-5.2, five trials
+  per task and profile); comment commands never enable it.
 
 `github-actions[bot]` posts a queued status and updates the same comment with
-both reports, the candidate SHA, and the run/artifact link. The reports retain
-the existing retrieval metrics and e2e Judge, input-token, tool-call and time
-comparisons. Failed or missing results are marked incomplete. A push during a
-run does not change its candidate; post a new command to test the newer commit.
+the comparison, links to both exact commits, and the run/artifact link. Failed,
+missing, mixed-model or incompatible reports never produce comparison deltas.
+A push during a run does not change either version; post a new command to test
+the current PR base and head.
 Re-running failed jobs updates the original bot comment. Commands in quoted
 text or fenced code, bot comments, edited comments, ordinary Issues, and inline
 review comments do not start a run.
 
 Enable this by merging the workflow and reusable-workflow changes into the
-repository's **default branch**, configuring the existing `GLM_API_KEY` Actions
-secret, and allowing the workflow's `issues: write` and `pull-requests: write` permissions. `workflow_dispatch`
+repository's **default branch** and allowing the workflow's `issues: write` and
+`pull-requests: write` permissions. `GLM_API_KEY` is only needed if e2e is
+explicitly enabled. `workflow_dispatch`
 with `pr_number` provides the same operation for manual testing. Keep development
 validation in `Cuiyus/zvec-grep`; installation in an upstream repository is a
 separate deployment step.
@@ -53,8 +59,9 @@ separate deployment step.
 Only the comment jobs have a write token. The benchmark harness comes from the
 trusted workflow revision; candidate code is checked out separately at the
 frozen SHA on GitHub-hosted runners. Starting a run authorizes that candidate to
-execute with the existing benchmark's model credentials. Review fork changes
-before issuing the command. Both the original actor's and rerunner's current
+execute in the benchmark runner. Retrieval comparison receives no model secrets;
+optional e2e receives its existing model credentials. Review fork changes before
+enabling it. Both the original actor's and rerunner's current
 admin/maintain roles are checked again in each benchmark job.
 
 `@zg-bench` is a command keyword and does not require a registered account.

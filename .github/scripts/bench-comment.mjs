@@ -42,6 +42,8 @@ export async function authorize({ github, context, env }) {
 const marker = (context) => `<!-- zg-bench:run:${context.runId} -->`;
 const runUrl = (context) =>
   `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+const commitLink = (context, repository, sha) =>
+  `[${repository}@${sha}](${context.serverUrl}/${repository}/commit/${sha})`;
 
 async function upsert({ github, context, prNumber, commentId, body }) {
   // Locate our own marker on reruns. A user's copied marker cannot be updated.
@@ -104,30 +106,40 @@ export async function prepare({ github, context, core, env }) {
     "PR belongs to another repository",
   );
   assert.match(pr.head.sha, /^[a-f0-9]{40}$/, "Invalid PR head SHA");
+  assert.match(pr.base.sha, /^[a-f0-9]{40}$/, "Invalid PR base SHA");
   assert.match(
     pr.head.repo?.full_name ?? "",
     /^[\w.-]+\/[\w.-]+$/,
     "PR source repository is unavailable",
   );
+  const runE2e =
+    context.eventName === "workflow_dispatch" && env.RUN_E2E === "true";
   const body = [
     marker(context),
     "## ZG Benchmark · running",
     "",
-    `Candidate: \`${pr.head.repo.full_name}@${pr.head.sha}\``,
+    `Base: ${commitLink(context, pr.base.repo.full_name, pr.base.sha)}`,
+    "",
+    `Head: ${commitLink(context, pr.head.repo.full_name, pr.head.sha)}`,
     "",
     "| Benchmark | Status | Configuration |",
     "| --- | --- | --- |",
-    "| Retrieval | Queued | SWE-QA20 + BEIR + DuRetrieval + Quarry; local embedding |",
-    "| e2e | Queued | SWE-QA20; OpenCode + GLM-5.2; baseline / zvec-grep; 5 trials per profile |",
+    "| Retrieval | Queued | PR base vs head; SWE-QA20 + BEIR + DuRetrieval + Quarry; local embedding |",
+    runE2e
+      ? "| e2e | Queued | SWE-QA20; OpenCode + GLM-5.2; baseline / zvec-grep; 5 trials per profile |"
+      : "| e2e | Skipped | Disabled by default |",
     "",
     `[View run and artifacts](${runUrl(context)})`,
     "",
-    "This comment will be updated with both reports. A later push does not change the candidate for this run.",
+    "This comment will be updated with the results. Both commits are pinned for this run; a later push does not change either version.",
   ].join("\n");
   const commentId = await upsert({ github, context, prNumber, body });
   for (const [name, value] of Object.entries({
     candidate_sha: pr.head.sha,
     candidate_repository: pr.head.repo.full_name,
+    baseline_sha: pr.base.sha,
+    baseline_repository: pr.base.repo.full_name,
+    run_e2e: String(runE2e),
     pr_number: prNumber,
     comment_id: commentId,
     accepted: "true",
@@ -241,7 +253,16 @@ export function resultComment({
   retrieval,
   e2e,
   currentSha,
+  currentBaseSha,
 }) {
+  if (
+    request.baseline_sha &&
+    (retrieval?.json?.kind !== "retrieval-version-comparison" ||
+      retrieval?.json?.baseline?.commit !== request.baseline_sha ||
+      retrieval?.json?.baseline?.repository !== request.baseline_repository ||
+      retrieval?.json?.candidate?.repository !== request.candidate_repository)
+  )
+    retrieval = null;
   const sections = [
     reportSection(
       "Retrieval",
@@ -249,7 +270,9 @@ export function resultComment({
       retrieval,
       request.candidate_sha,
     ),
-    reportSection("e2e", results.e2e, e2e, request.candidate_sha),
+    request.run_e2e === "false"
+      ? { complete: true, body: "### e2e · Skipped\n\nDisabled for this run." }
+      : reportSection("e2e", results.e2e, e2e, request.candidate_sha),
   ];
   const complete = sections.every((section) => section.complete);
   return {
@@ -258,11 +281,18 @@ export function resultComment({
       marker(context),
       `## ZG Benchmark · ${complete ? "✅ Complete" : "❌ Failed / incomplete"}`,
       "",
-      `Candidate: \`${request.candidate_repository}@${request.candidate_sha}\``,
-      "",
-      ...(currentSha && currentSha !== request.candidate_sha
+      ...(request.baseline_sha
         ? [
-            "⚠️ The PR has newer commits. These results apply only to the candidate above; comment `@zg-bench` again to test the new head.",
+            `Base: ${commitLink(context, request.baseline_repository, request.baseline_sha)}`,
+            "",
+          ]
+        : []),
+      `Head: ${commitLink(context, request.candidate_repository, request.candidate_sha)}`,
+      "",
+      ...((currentSha && currentSha !== request.candidate_sha) ||
+      (currentBaseSha && currentBaseSha !== request.baseline_sha)
+        ? [
+            "⚠️ The PR has newer commits. These results apply only to the pinned versions above; comment `@zg-bench` again to test the current base and head.",
             "",
           ]
         : []),
@@ -294,6 +324,7 @@ export async function finish({ github, context, core, env }) {
     results: { retrieval: needs.retrieval.result, e2e: needs.e2e.result },
     ...reports,
     currentSha: pr.head.sha,
+    currentBaseSha: pr.base.sha,
   });
   await upsert({
     github,

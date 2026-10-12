@@ -14,6 +14,7 @@ import {
 
 const sha = "a".repeat(40);
 const newerSha = "b".repeat(40);
+const baseSha = "c".repeat(40);
 
 test("PR comment jobs have write permission and the run title retains its PR number", async () => {
   const workflow = await readFile(
@@ -39,11 +40,19 @@ const request = {
   accepted: "true",
   candidate_sha: sha,
   candidate_repository: "contributor/zg",
+  baseline_sha: baseSha,
+  baseline_repository: "Cuiyus/zvec-grep",
+  run_e2e: "false",
   pr_number: "7",
   comment_id: "42",
 };
 const retrieval = {
-  json: { candidate: { commit: sha }, status: "success" },
+  json: {
+    kind: "retrieval-version-comparison",
+    baseline: { repository: request.baseline_repository, commit: baseSha },
+    candidate: { repository: request.candidate_repository, commit: sha },
+    status: "success",
+  },
   markdown: "| Suite | Hit@5 |\n| SWE-QA20 | 0.8 |",
 };
 const e2e = {
@@ -80,7 +89,7 @@ function fixture() {
   };
   const pr = {
     state: "open",
-    base: { repo: { full_name: "Cuiyus/zvec-grep" } },
+    base: { sha: baseSha, repo: { full_name: "Cuiyus/zvec-grep" } },
     head: { sha, repo: { full_name: "contributor/zg" } },
   };
   const github = {
@@ -230,7 +239,9 @@ test("a maintainer command freezes the fork's SHA and creates one status comment
   assert.match(body, /<!-- zg-bench:run:123 -->/);
   assert.ok(body.includes(sha));
   assert.match(body, /Retrieval.*Queued/);
-  assert.match(body, /e2e.*Queued/);
+  assert.match(body, /e2e.*Skipped/);
+  assert.match(body, new RegExp(`Cuiyus/zvec-grep/commit/${baseSha}`));
+  assert.match(body, new RegExp(`contributor/zg/commit/${sha}`));
   assert.match(body, /actions\/runs\/123/);
   await prepare(x);
   assert.equal(x.calls.filter(([name]) => name === "create").length, 1);
@@ -281,11 +292,32 @@ test("a user's copied bot marker is never edited", async () => {
   assert.equal(x.calls.filter(([name]) => name === "create").length, 1);
 });
 
+test("e2e is skipped by default and only explicit manual dispatch can enable it", async () => {
+  const x = fixture();
+  x.env.RUN_E2E = "true";
+  await prepare(x);
+  assert.equal(x.outputs.run_e2e, "false");
+  x.context.eventName = "workflow_dispatch";
+  await prepare(x);
+  assert.equal(x.outputs.run_e2e, "true");
+  const result = resultComment({
+    context: x.context,
+    request,
+    results: { retrieval: "success", e2e: "skipped" },
+    retrieval,
+    e2e: null,
+    currentBaseSha: newerSha,
+  });
+  assert.equal(result.complete, true);
+  assert.match(result.body, /e2e · Skipped/);
+  assert.match(result.body, /PR has newer commits/);
+});
+
 test("both benchmark tables are included and newer PR commits are called out", () => {
   const x = fixture();
   const result = resultComment({
     context: x.context,
-    request,
+    request: { ...request, run_e2e: "true" },
     results: { retrieval: "success", e2e: "success" },
     retrieval,
     e2e,
@@ -302,7 +334,7 @@ test("missing, partial, cancelled, and wrong-commit reports never appear success
   const x = fixture();
   const base = {
     context: x.context,
-    request,
+    request: { ...request, run_e2e: "true" },
     results: { retrieval: "success", e2e: "success" },
     retrieval,
     e2e,
@@ -317,6 +349,15 @@ test("missing, partial, cancelled, and wrong-commit reports never appear success
       },
     },
     { retrieval: { ...retrieval, json: { candidate: { commit: newerSha } } } },
+    {
+      retrieval: {
+        ...retrieval,
+        json: {
+          ...retrieval.json,
+          baseline: { ...retrieval.json.baseline, commit: newerSha },
+        },
+      },
+    },
     { e2e: { ...e2e, identity: { candidate_commit: newerSha } } },
     { e2e: { ...e2e, json: { cases: [], gate: { missing_tasks: ["task"] } } } },
     { results: { retrieval: "cancelled", e2e: "failure" } },
@@ -331,7 +372,7 @@ test("oversize reports are bounded and raw mentions are neutralized", () => {
   const x = fixture();
   const result = resultComment({
     context: x.context,
-    request,
+    request: { ...request, run_e2e: "true" },
     results: { retrieval: "success", e2e: "success" },
     retrieval: { ...retrieval, markdown: "@someone\n" + "x".repeat(70000) },
     e2e: { ...e2e, markdown: "y".repeat(70000) },
@@ -394,7 +435,7 @@ test("final reply uses a matching earlier-attempt e2e artifact and updates the s
   await prepare(x);
   x.env.BENCH_REPORTS = root;
   x.env.BENCH_NEEDS = JSON.stringify({
-    request: { outputs: request },
+    request: { outputs: { ...request, run_e2e: "true" } },
     retrieval: { result: "success" },
     e2e: { result: "success" },
   });
