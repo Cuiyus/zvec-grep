@@ -93,7 +93,7 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
     [...block(prWorkflow, "on", 0).matchAll(/^ {2}([\w-]+):$/gm)].map(
       (match) => match[1],
     ),
-    ["pull_request"],
+    ["pull_request", "workflow_dispatch"],
   );
   assert.match(
     block(prWorkflow, "pull_request", 2),
@@ -109,19 +109,19 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
   assert.equal(block(prWorkflow, "permissions", 4).trim(), "contents: read");
   assert.match(
     job,
-    /candidate_ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/,
+    /candidate_ref: \$\{\{ inputs\.candidate_sha \|\| github\.event\.pull_request\.head\.sha \}\}/,
   );
   assert.match(
     job,
-    /candidate_repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/,
+    /candidate_repository: \$\{\{ inputs\.candidate_repository \|\| github\.event\.pull_request\.head\.repo\.full_name \}\}/,
   );
   assert.match(
     job,
-    /baseline_ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/,
+    /baseline_ref: \$\{\{ inputs\.baseline_sha \|\| github\.event\.pull_request\.base\.sha \}\}/,
   );
   assert.match(
     job,
-    /baseline_repository: \$\{\{ github\.event\.pull_request\.base\.repo\.full_name \}\}/,
+    /baseline_repository: \$\{\{ inputs\.baseline_repository \|\| github\.event\.pull_request\.base\.repo\.full_name \}\}/,
   );
   assert.doesNotMatch(
     prWorkflow,
@@ -137,7 +137,7 @@ test("automatic PR concurrency cancels older commits without cancelling manual b
   const concurrency = block(prWorkflow, "concurrency", 0);
   assert.match(
     concurrency,
-    /group: retrieval-pr-\$\{\{ github\.event\.pull_request\.number \}\}/,
+    /group: retrieval-pr-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/,
   );
   assert.match(concurrency, /cancel-in-progress: true/);
   assert.doesNotMatch(concurrency, /head\.sha/);
