@@ -168,7 +168,7 @@ def collect(root, task, identities, repetitions=REPETITIONS, expected_model=None
         "profiles": profiles,
         "usage_scope": compatible_usage_scope([t for p in profiles.values() for t in p["trials"]]),
         "comparison_kind": "node022-vs-rust-main",
-        "comparison_labels": {"baseline": "Node 0.2.2+zg", "zvec-grep": "Rust a09cd1236eee+zg"},
+        "comparison_labels": {"baseline": "Node 0.2.2+zg", "zvec-grep": f"Rust {COMMITS['rust'][:12]}+zg"},
         "provenance": identities,
     }
 

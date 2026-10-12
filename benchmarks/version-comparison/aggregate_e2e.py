@@ -12,7 +12,7 @@ expected = [t['task_id'] for t in json.loads((DATA / 'selection.json').read_text
 report = aggregate_reports(reports_root=reports, output_dir=output, expected=expected, allow_missing=True)
 report = include_all_cases(report)
 report['comparison_kind'] = 'node022-vs-rust-main'
-report['comparison_labels'] = {'baseline': 'Node 0.2.2+zg', 'zvec-grep': 'Rust a09cd1236eee+zg'}
+report['comparison_labels'] = {'baseline': 'Node 0.2.2+zg', 'zvec-grep': f"Rust {EXPERIMENT['rust']['source_commit'][:12]}+zg"}
 report['experiment'] = EXPERIMENT
 report['model'] = os.environ['BENCH_MODEL']
 report['embedding'] = os.environ['BENCH_EMBEDDING']

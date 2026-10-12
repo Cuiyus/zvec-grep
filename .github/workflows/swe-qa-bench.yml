@@ -1,5 +1,5 @@
 name: "Node 0.2.2 vs Rust main \xB7 E2e"
-run-name: Version E2e / Node 0.2.2 vs Rust a09cd123 / ${{ inputs.embedding_scope }} / 5 repetitions
+run-name: Schema-fixed E2e / Node 0.2.2 vs Rust 87368eaa / ${{ inputs.embedding_scope }} / 5 repetitions
 'on':
   workflow_dispatch:
     inputs:
@@ -13,7 +13,7 @@ run-name: Version E2e / Node 0.2.2 vs Rust a09cd123 / ${{ inputs.embedding_scope
         - local
         - remote
       package_run:
-        description: Reuse the verified Rust package artifact from this fork run (empty builds the frozen source)
+        description: Reuse version-package-rust from this fork run (empty builds the frozen source)
         required: false
         default: ''
         type: string
@@ -160,7 +160,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: ${{ inputs.embedding_scope == 'remote' && 2 || 4 }}
       matrix: ${{ fromJSON(needs.validate.outputs.canary) }}
     steps:
     - name: Authorize manual benchmark run
@@ -230,11 +230,10 @@ jobs:
         BENCH_EMBEDDING: ${{ matrix.embedding }}
         ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/version-index-seeds
       run: |
-        continue_args=()
-        if [[ -n "$BENCH_TASK_SCOPE" ]]; then continue_args+=(--continue-after-failure --prebuild-task-image); fi
         uv run --project benchmarks/swe-qa-bench python -m zg_bench.version_e2e \
           --task "$BENCH_TASK" --model "$BENCH_MODEL" --embedding "$BENCH_EMBEDDING" \
-          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" "${continue_args[@]}"
+          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" \
+          --continue-after-failure --prebuild-task-image
     - name: Scan all evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
@@ -275,7 +274,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: ${{ inputs.embedding_scope == 'remote' && 2 || 8 }}
       matrix: ${{ fromJSON(needs.validate.outputs.remaining) }}
     steps:
     - name: Authorize manual benchmark run
@@ -345,11 +344,10 @@ jobs:
         BENCH_EMBEDDING: ${{ matrix.embedding }}
         ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/version-index-seeds
       run: |
-        continue_args=()
-        if [[ -n "$BENCH_TASK_SCOPE" ]]; then continue_args+=(--continue-after-failure --prebuild-task-image); fi
         uv run --project benchmarks/swe-qa-bench python -m zg_bench.version_e2e \
           --task "$BENCH_TASK" --model "$BENCH_MODEL" --embedding "$BENCH_EMBEDDING" \
-          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" "${continue_args[@]}"
+          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" \
+          --continue-after-failure --prebuild-task-image
     - name: Scan all evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
@@ -428,7 +426,7 @@ jobs:
         if-no-files-found: error
         retention-days: 30
   package-rust:
-    name: Build frozen Rust main a09cd123
+    name: Build schema-fixed Rust main 87368eaa
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -478,20 +476,20 @@ jobs:
     - uses: ./.github/actions/rust-candidate-package
       with:
         candidate_repository: zvec-ai/zvec-grep
-        candidate_ref: a09cd1236eee003feb699a17c5bf63d76f83f06c
+        candidate_ref: 87368eaadcc39157d97ccae60434cbe128fa158d
         cache_namespace: retrieval-rust
       if: inputs.package_run == ''
     - name: Reuse the canonical Rust package
       if: inputs.package_run != ''
       uses: actions/download-artifact@v8
       with:
-        name: package-retrieval-candidate
+        name: version-package-rust
         run-id: ${{ inputs.package_run }}
         github-token: ${{ github.token }}
         path: ${{ runner.temp }}/rust-package-cache
     - name: Verify reused package against frozen upstream main
       if: inputs.package_run != ''
-      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit a09cd1236eee003feb699a17c5bf63d76f83f06c
+      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit 87368eaadcc39157d97ccae60434cbe128fa158d
     - uses: actions/upload-artifact@v7
       with:
         name: version-package-rust

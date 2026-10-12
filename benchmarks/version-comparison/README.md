@@ -1,7 +1,8 @@
 # Node 0.2.2 versus Rust main
 
 This experiment compares the unmodified npm release `@zvec/zvec-grep@0.2.2`
-against upstream Rust `a09cd1236eee003feb699a17c5bf63d76f83f06c`.
+against upstream Rust `87368eaadcc39157d97ccae60434cbe128fa158d`, including
+the Qwen MCP schema fix merged in PR #240. This branch reruns E2e only.
 `experiment.json` freezes the identities, registry integrity, models and five
 E2e repetitions. All Actions run in `Cuiyus/zvec-grep`.
 
@@ -41,7 +42,7 @@ once per provider-error attempt; retain both attempts in the comparison evidence
 For an E2e setup failure, `task_scope` and `model_scope` select one unchanged
 task/model for a full five-pair retry after the active remote workload finishes.
 Keep the original failed evidence, including setup retries and any extra completed
-agent trial. A scoped retry attempts all ten version/repetition executions even
+agent trial. Each task attempts all ten version/repetition executions even
 after a failure, and publishes judged scores only if every execution succeeds.
 It retains complete index stdout/stderr before Harbor truncates exception output;
 the product packages, index command, models and scoring protocol are unchanged.
@@ -53,3 +54,11 @@ Historical workflow contract tests read the legacy fixtures; the active workflow
 guards and complete runtime matrix are checked by test_version_e2e.py.
 `upstream-swe-qa-bench.yml` preserves the Rust-only contract at the frozen
 upstream commit; `legacy-swe-qa-bench.yml` preserves the preceding PR179 matrix.
+
+For this rerun, every task image is built once from the original Dockerfile and
+verified repository commit, using the previously verified Ubuntu ECR manifest.
+Each trial still runs in a fresh container. Index output and failed attempts are
+retained for all tasks. Local jobs use at most eight workers and remote jobs two
+to reduce simultaneous embedding demand; prompts, task inputs, model settings,
+five repetitions, setup commands and blind scoring remain unchanged.
+Both embedding runs reuse the same verified Rust package artifact.
