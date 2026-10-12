@@ -66,3 +66,62 @@ jobs:
         run: node --test benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
       - name: Test Benchmark comments and reusable Retrieval authorization
         run: node --test .github/scripts/bench-comment.test.mjs benchmarks/zg-retrieval/test/workflow.test.mjs
+
+  retry-fixture:
+    if: github.event_name == 'workflow_dispatch'
+    name: Synthetic task reports / ${{ matrix.group }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [first, last]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Seed reports without model calls
+        env:
+          PYTHONPATH: benchmarks/swe-qa-bench
+          FIXTURE_GROUP: ${{ matrix.group }}
+        run: python benchmarks/swe-qa-bench/tests/ci_attempt_repro.py seed
+      - uses: actions/upload-artifact@v7
+        with:
+          name: swe-qa-task-report-fixture-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fixture-reports/
+          if-no-files-found: error
+
+  retry-aggregate:
+    if: always() && github.event_name == 'workflow_dispatch'
+    needs: retry-fixture
+    name: Validate real cross-attempt artifact reuse (synthetic data)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: swe-qa-task-report-*-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/task-reports
+      - name: Select reports and aggregate without model calls
+        env:
+          PYTHONPATH: benchmarks/swe-qa-bench
+        run: python benchmarks/swe-qa-bench/tests/ci_attempt_repro.py aggregate
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-retry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate/
+          if-no-files-found: error
