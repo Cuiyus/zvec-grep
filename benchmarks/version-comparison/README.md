@@ -1,8 +1,9 @@
 # Node 0.2.2 versus Rust main
 
 This experiment compares the unmodified npm release `@zvec/zvec-grep@0.2.2`
-against upstream Rust `87368eaadcc39157d97ccae60434cbe128fa158d`, including
-the Qwen MCP schema fix merged in PR #240. This branch reruns E2e only.
+against upstream Rust `49e11642f0fd8817407102fdb5696b1a48283412`, including
+the Qwen MCP schema fix in PR #240 and indexing failure reporting in PR #214.
+This branch reruns Retrieval-only and E2e with local embedding only.
 `experiment.json` freezes the identities, registry integrity, models and five
 E2e repetitions. All Actions run in `Cuiyus/zvec-grep`.
 
@@ -62,3 +63,8 @@ retained for all tasks. Local jobs use at most eight workers and remote jobs two
 to reduce simultaneous embedding demand; prompts, task inputs, model settings,
 five repetitions, setup commands and blind scoring remain unchanged.
 Both embedding runs reuse the same verified Rust package artifact.
+
+The local-only run uses fresh query and Agent executions: 2,100 planned retrieval
+calls and 400 planned Agent trials. E2e uses at most eight task workers.
+Rust Retrieval reuses `version-package-rust` from the new E2e run and verifies
+the frozen source commit; no prior benchmark scores or trajectories are reused.
