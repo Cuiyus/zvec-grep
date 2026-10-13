@@ -313,7 +313,8 @@ fn fragments_schema(dimension: u32, metric: MetricType) -> EngineResult<Collecti
     )?;
     native(
         vector.set_index_params(&native(
-            IndexParams::hnsw(metric, 16, 200),
+            // Match the native HNSW defaults used by Node 0.2.2.
+            IndexParams::hnsw(metric, 50, 500),
             "define vector index",
         )?),
         "attach vector index",
