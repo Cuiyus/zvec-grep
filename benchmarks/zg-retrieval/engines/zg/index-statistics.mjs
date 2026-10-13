@@ -88,14 +88,18 @@ export async function captureIndexStatistics({ status, output, sdkPath }) {
         const line = result.stdout.split("\n").find(s => s.startsWith("ZG_INDEX_STATS_JSON:"));
         assert.ok(line, "Rust reader omitted JSON statistics");
         const native = JSON.parse(line.slice("ZG_INDEX_STATS_JSON:".length));
-        const fragment = role(basename(path)) === "fragments";
-        const descriptor = fragment ? JSON.parse(await readFile(join(path, "../schema.json"), "utf8")) : null;
+        if (role(basename(path)) === "fragments") {
+          assert.equal(native.vectors.length, 1, "expected one embedding vector field");
+          const params = native.vectors[0].index_params;
+          assert.equal(params.index_type, 1, "embedding index is not HNSW");
+          assert.equal(params.m, 50, "persisted HNSW M differs from the merged defaults");
+          assert.equal(params.ef_construction, 500, "persisted efConstruction differs from the merged defaults");
+          assert.equal(native.index_completeness.embedding, 1, "vector indexing did not finish");
+        }
         collections.push({ path: relative(home, path), role: role(basename(path)),
           schema_name: native.schema_name, doc_count: native.doc_count,
           index_completeness: native.index_completeness,
-          vectors: descriptor ? descriptor.embeddings.map(e => ({ name: "embedding", dimension: e.dimension,
-            data_type: "VectorFp32", metric: e.metric, index_params: { index_type: "HNSW", m: 16, ef_construction: 200 },
-            parameter_source: "pinned Rust fragments_schema; dimension/metric from persisted schema.json" })) : [],
+          vectors: native.vectors,
           footprint: footprint(subtree(entries, relative(home, path))) });
         files.push(...native.files);
         await rm(destination, { recursive: true, force: true });

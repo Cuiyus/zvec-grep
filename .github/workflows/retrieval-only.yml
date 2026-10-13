@@ -1,5 +1,5 @@
 name: "Node 0.2.2 vs Rust main \xB7 Retrieval-only"
-run-name: Index storage audit / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding / ${{ inputs.suite || 'all' }}
+run-name: Post-optimize HNSW retrieval / ${{ inputs.runtime }} / ${{ inputs.embedding }} embedding / ${{ inputs.suite || 'all' }}
 'on':
   workflow_dispatch:
     inputs:
@@ -112,7 +112,7 @@ jobs:
       uses: ./.github/actions/rust-candidate-package
       with:
         candidate_repository: zvec-ai/zvec-grep
-        candidate_ref: 49e11642f0fd8817407102fdb5696b1a48283412
+        candidate_ref: 165b75aaf196fb9b5a021e0b7606c18d584d0897
         cache_namespace: retrieval-rust
     - name: Reuse the canonical Rust package
       if: inputs.runtime == 'rust' && inputs.package_run != ''
@@ -124,7 +124,7 @@ jobs:
         path: ${{ runner.temp }}/rust-package-cache
     - name: Verify reused package against frozen upstream main
       if: inputs.runtime == 'rust' && inputs.package_run != ''
-      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit 49e11642f0fd8817407102fdb5696b1a48283412
+      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit 165b75aaf196fb9b5a021e0b7606c18d584d0897
     - name: Record immutable package identity
       id: source
       run: node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/rust-package-cache/manifest.json"));fs.appendFileSync(process.env.GITHUB_OUTPUT,"commit="+m.candidate_commit+"\n")'
