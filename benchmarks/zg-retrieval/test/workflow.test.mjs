@@ -73,7 +73,12 @@ test("Retrieval-only retains its reusable and manual candidate/embedding inputs"
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)).sort(),
-    ["retrieval-comparison.yml", "retrieval-only.yml", "retrieval-pr.yml"],
+    [
+      "retrieval-comparison.yml",
+      "retrieval-only.yml",
+      "retrieval-pr-comment.yml",
+      "retrieval-pr.yml",
+    ],
   );
   assert.deepEqual(Object.keys(jobs), [
     "authorize",
@@ -103,7 +108,7 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
   const job = block(prWorkflow, "retrieval", 2);
   assert.equal(
     [...block(prWorkflow, "jobs", 0).matchAll(/^ {2}([\w-]+):$/gm)].length,
-    1,
+    2,
   );
   assert.match(job, /uses: \.\/\.github\/workflows\/retrieval-comparison\.yml/);
   assert.equal(block(prWorkflow, "permissions", 4).trim(), "contents: read");

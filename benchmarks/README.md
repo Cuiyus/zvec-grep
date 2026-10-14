@@ -35,7 +35,7 @@ Remote embedding also requires its own key and endpoint; see
 
 | Trigger | Runs | Results |
 | --- | --- | --- |
-| PR opened, reopened or updated, including fork PRs | Retrieval-only on the exact PR base and head; local embedding | Actions summaries and `retrieval-comparison` artifact |
+| PR opened, reopened or updated, including fork PRs | Retrieval-only on the exact PR base and head; local embedding | Updated PR bot comment, Actions summaries and `retrieval-comparison` artifact |
 | New PR Conversation comment with `@zg-bench` on its own line | The same Retrieval version comparison | One bot comment, updated from queued status to results |
 | Manual **ZG Bench** dispatch with `pr_number` | Retrieval comparison; e2e only with explicit `run_e2e: true` | The same bot comment and run artifacts |
 | Manual **SWE-QA Bench** dispatch | Selected e2e scope, model and embedding runtime | Task evidence and aggregate report |
@@ -45,6 +45,15 @@ Automatic PR checks require no maintainer role or model secrets. A new push
 cancels the previous automatic run for that PR. All version comparisons show
 **base / head / delta** for File Hit@1/5/10, MRR@10 and nDCG@10, with links to both
 commits. `retrieval-base-*` and `retrieval-head-*` retain per-version evidence.
+
+[Retrieval PR comment](../.github/workflows/retrieval-pr-comment.yml) publishes
+the completed automatic run through a separate `workflow_run` job. It creates
+one English result comment per PR and updates it on later runs and reruns,
+including for fork contributions. It links both commits and the source run,
+shows all twelve suite/mode rows with base / head / delta, and marks missing or
+invalid results as incomplete. Cancelled runs and results for outdated base/head
+commits are skipped. Manual comparison dispatches do not post this automatic
+comment; `@zg-bench` retains its own per-request comment.
 
 Comment and model-backed manual runs require the exact repository `admin` or
 `maintain` role. Jobs recheck the current roles of both the original actor and
@@ -61,6 +70,13 @@ Only those jobs have write tokens. Benchmark execution uses read-only tokens,
 a trusted harness checkout and a separately built candidate. Local Retrieval
 receives no model credentials. Optional e2e needs `GLM_API_KEY`; review candidate
 code before authorizing it to run with those credentials.
+
+The automatic result publisher also needs the default-branch workflow and
+Issues/Pull requests write permissions. Its trusted default-branch code checks
+the source workflow, run, PR and commit identities through GitHub's API before
+publishing. It reads only JSON artifacts, validates the expected metric table,
+and renders its own Markdown. PR code and artifact scripts are never executed
+by this job; the read-only benchmark jobs receive no write token.
 
 `@zg-bench` is a command keyword, so it needs no registered account. Replies use
 `github-actions[bot]`. A dedicated bot identity requires a GitHub App and changes
@@ -103,7 +119,7 @@ reusable workflows and updates status through [bench-comment.mjs](../.github/scr
 From the repository root, run offline checks before a model-backed experiment:
 
 ```sh
-node --test benchmarks/zg-retrieval/test/*.test.mjs .github/scripts/bench-comment.test.mjs
+node --test benchmarks/zg-retrieval/test/*.test.mjs .github/scripts/*comment.test.mjs
 uv sync --project benchmarks/swe-qa-bench --frozen
 uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -v
 ```
