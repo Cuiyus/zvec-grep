@@ -33,7 +33,7 @@ COMMITS = {v: EXPERIMENT[v]["source_commit"] for v in SLOTS}
 REPETITIONS = EXPERIMENT["e2e_repetitions"]
 # Docker Hub and the Docker Official Images ECR copy were independently
 # verified to serve this identical linux/amd64 Ubuntu 24.04 manifest.
-UBUNTU_BASE_IMAGE = "public.ecr.aws/docker/library/ubuntu@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b"
+UBUNTU_BASE_IMAGE = "docker.io/library/ubuntu@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b"
 
 
 def write_json(path, value):
