@@ -70,3 +70,72 @@ jobs:
         run: node --test benchmarks/zg-retrieval/test/rust-package-cache.test.mjs
       - name: Test Benchmark comments and reusable Retrieval authorization
         run: node --test .github/scripts/bench-comment.test.mjs .github/scripts/retrieval-pr-comment.test.mjs benchmarks/zg-retrieval/test/workflow.test.mjs
+
+  publish-history:
+    if: github.event_name == 'workflow_dispatch'
+    name: Verify real PR comment creation and update using historical measured results
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: retrieval-comparison
+          run-id: 38232586635
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publisher-validation/comparison
+      - uses: actions/github-script@v8
+        env:
+          VALIDATION_REPORTS: ${{ runner.temp }}/publisher-validation
+        with:
+          script: |
+            const assert = require('node:assert/strict');
+            const { mkdir, writeFile, readFile } = require('node:fs/promises');
+            const { join } = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const { publish } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/.github/scripts/retrieval-pr-comment.mjs`));
+            const { data: run } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: 38232586635 });
+            const associated = run.pull_requests.find((pr) => pr.number === 2);
+            assert.ok(associated);
+            const directory = process.env.VALIDATION_REPORTS;
+            await mkdir(join(directory, 'context'), { recursive: true });
+            await writeFile(join(directory, 'context/request.json'), JSON.stringify({
+              schema_version: 1,
+              run_id: run.id,
+              run_attempt: run.run_attempt,
+              pr_number: associated.number,
+              baseline: { repository: `${context.repo.owner}/${context.repo.repo}`, commit: associated.base.sha, ref: associated.base.ref },
+              candidate: { repository: run.head_repository.full_name, commit: associated.head.sha, ref: associated.head.ref },
+            }));
+            // This manually invoked API integration test reconstructs the old run's
+            // missing context artifact from GitHub's recorded PR association.
+            // The comparison artifact contains real historical measurements.
+            const sourceContext = { ...context, eventName: 'workflow_run', payload: { workflow_run: { id: run.id, run_attempt: run.run_attempt } } };
+            const options = { github, context: sourceContext, core, directory };
+            const list = async () => (await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: 2, per_page: 100 })).filter((c) => c.user?.login === 'github-actions[bot]' && c.body?.startsWith('<!-- zg-retrieval-pr -->'));
+            const before = await list();
+            await publish(options);
+            const first = await list();
+            assert.equal(first.length, 1);
+            assert.match(first[0].body, /✅ Complete/);
+            assert.equal(first[0].body.split('\n').filter((line) => /^\| (SWE-QA20|BEIR|DuRetrieval|Quarry)/.test(line)).length, 12);
+            await publish(options);
+            const second = await list();
+            assert.equal(second.length, 1);
+            assert.equal(first[0].id, second[0].id);
+            assert.equal(first[0].body, second[0].body);
+            const verification = { source_run: run.html_url, comment_url: second[0].html_url, initial_comment_count: before.length, final_comment_count: second.length, updated_same_comment: true, measured_scores: true, new_model_calls: false };
+            core.info(JSON.stringify(verification));
+            await writeFile(join(directory, 'verification.json'), JSON.stringify(verification, null, 2));
+      - uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-comment-live-validation
+          path: ${{ runner.temp }}/publisher-validation/verification.json
+          if-no-files-found: error
