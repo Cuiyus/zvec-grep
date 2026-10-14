@@ -1,10 +1,10 @@
-name: Native OpenCode baseline · E2E
-run-name: Native OpenCode without zg / 20 tasks × 5 repetitions / GLM and Qwen
+name: Node Rust timeout attribution
+run-name: Timeout attribution / Node 0.2.2 vs Rust f95fc49e / local / five pairs per case
 'on':
   workflow_dispatch:
     inputs:
       task_scope:
-        description: One frozen task for isolated recovery; empty runs all 20
+        description: Historical timeout task for infrastructure recovery; empty runs all eight task/model cases
         required: false
         default: ''
         type: string
@@ -20,22 +20,19 @@ run-name: Native OpenCode without zg / 20 tasks × 5 repetitions / GLM and Qwen
 permissions: {}
 env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
-  BENCH_TASK_SCOPE: ${{ inputs.task_scope }}
 concurrency:
-  group: native-baseline-${{ github.run_id }}
+  group: timeout-attribution-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   validate:
-    name: Validate frozen control experiment
+    name: Validate frozen evidence and tracing
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       actions: read
     outputs:
-      canary: ${{ steps.matrix.outputs.canary }}
-      remaining: ${{ steps.matrix.outputs.remaining }}
-      has_remaining: ${{ steps.matrix.outputs.has_remaining }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -83,132 +80,35 @@ jobs:
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Validate frozen corpus and baseline isolation
-      run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json --dataset benchmarks/swe-qa-bench/datasets
-        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_native_baseline_e2e.py
-    - name: Build frozen 20-task two-model control matrix
+    - name: Validate frozen inputs and real loopback instrumentation
+      run: |-
+        uv run --project benchmarks/swe-qa-bench python - <<'PYCODE'
+        import sys,unittest
+        from zg_bench.native_baseline_e2e import validate_inputs
+        validate_inputs()
+        sys.path.insert(0,'benchmarks/swe-qa-bench/tests')
+        # The dedicated 8-case workflow has its own matrix contract in test_wire_trace.
+        names=['test_wire_trace','test_version_e2e.VersionComparisonTests','test_opencode','test_opencode_usage']
+        suite=unittest.defaultTestLoader.loadTestsFromNames(names)
+        assert unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+        PYCODE
+    - name: Build the eight historical timeout task-model cases
       id: matrix
       env:
         TASK_SCOPE: ${{ inputs.task_scope }}
         MODEL_SCOPE: ${{ inputs.model_scope }}
-      run: |
+      run: |-
         python - <<'PYCODE'
-        import itertools,json,os
-        from pathlib import Path
-        tasks=[t['task_slug'] for t in json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())['tasks']]
-        assert len(tasks)==len(set(tasks))==20 and tasks[0]=='reflex-6'
-        if os.environ['TASK_SCOPE']:
-            assert os.environ['TASK_SCOPE'] in tasks
-            tasks=[os.environ['TASK_SCOPE']]
-        models=['glm-5.2','qwen3.8-max'] if os.environ['MODEL_SCOPE']=='all' else [os.environ['MODEL_SCOPE']]
-        rows=[dict(task=t,model=m) for t,m in itertools.product(tasks,models)]
-        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-            print('has_remaining='+str(len(rows)>len(models)).lower(),file=f)
-            for key,items in [('canary',rows[:len(models)]),('remaining',rows[len(models):])]:
-                print(key+'='+json.dumps({'include':items},separators=(',',':')),file=f)
+        import json,os
+        cases=[{'task': 'conan-19', 'model': 'glm-5.2'}, {'task': 'matplotlib-37', 'model': 'glm-5.2'}, {'task': 'requests-16', 'model': 'glm-5.2'}, {'task': 'conan-19', 'model': 'qwen3.8-max'}, {'task': 'conan-39', 'model': 'qwen3.8-max'}, {'task': 'requests-16', 'model': 'qwen3.8-max'}, {'task': 'streamlink-14', 'model': 'qwen3.8-max'}, {'task': 'xarray-46', 'model': 'qwen3.8-max'}]
+        if os.environ['TASK_SCOPE']: cases=[r for r in cases if r['task']==os.environ['TASK_SCOPE']]
+        if os.environ['MODEL_SCOPE']!='all': cases=[r for r in cases if r['model']==os.environ['MODEL_SCOPE']]
+        assert cases, 'Scope must match a historical timeout task/model'
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f: print('matrix='+json.dumps({'include':cases},separators=(',',':')),file=f)
         PYCODE
-    - name: Require configured model credential
-      env:
-        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-      run: test -n "$GLM_API_KEY"
-  canary:
-    name: Native / ${{ matrix.task }} / ${{ matrix.model }}
-    needs:
-    - validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    permissions:
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix: ${{ fromJSON(needs.validate.outputs.canary) }}
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-    - uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-    - name: Install frozen harness dependencies
-      run: |
-        python -m pip install --disable-pip-version-check uv==0.9.17
-        uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Run five native OpenCode trials and unchanged self-judge
-      env:
-        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        SWE_QA_MODEL: ${{ matrix.model }}
-        BENCH_TASK: ${{ matrix.task }}
-        BENCH_MODEL: ${{ matrix.model }}
-      run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.native_baseline_e2e \
-          --task "$BENCH_TASK" --model "$BENCH_MODEL" --output "$RUNNER_TEMP/baseline-evidence"
-    - name: Scan evidence for credential leakage
-      id: secret-scan
-      if: always() && steps.authorize.outcome == 'success'
-      env:
-        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root "$RUNNER_TEMP/baseline-evidence"
-    - name: Preserve all attempts including failures
-      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
-      uses: actions/upload-artifact@v7
-      with:
-        name: native-baseline-evidence-${{ matrix.model }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/baseline-evidence/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 30
-    - name: Preserve judged report
-      if: success()
-      uses: actions/upload-artifact@v7
-      with:
-        name: native-baseline-report-${{ matrix.model }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/baseline-evidence/report/report.json
-        if-no-files-found: error
-        retention-days: 90
-  remaining:
-    name: Native / ${{ matrix.task }} / ${{ matrix.model }}
-    needs:
-    - validate
-    - canary
+  trace:
+    name: Trace / ${{ matrix.task }} / ${{ matrix.model }}
+    needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -217,7 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 8
-      matrix: ${{ fromJSON(needs.validate.outputs.remaining) }}
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -261,40 +161,57 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
+    - name: Reuse original frozen node package
+      uses: actions/download-artifact@v8
+      with:
+        name: version-package-node
+        run-id: 38413351617
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/packages/node
+    - name: Reuse original frozen rust package
+      uses: actions/download-artifact@v8
+      with:
+        name: version-package-rust
+        run-id: 38413351617
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/packages/rust
     - name: Install frozen harness dependencies
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Run five native OpenCode trials and unchanged self-judge
+    - name: Run five traced Node/Rust pairs and unchanged blind judge
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         SWE_QA_MODEL: ${{ matrix.model }}
         BENCH_TASK: ${{ matrix.task }}
         BENCH_MODEL: ${{ matrix.model }}
-      run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.native_baseline_e2e \
-          --task "$BENCH_TASK" --model "$BENCH_MODEL" --output "$RUNNER_TEMP/baseline-evidence"
-    - name: Scan evidence for credential leakage
+        ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/trace-index-seeds
+      run: |-
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.version_e2e \
+          --task "$BENCH_TASK" --model "$BENCH_MODEL" --embedding local \
+          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/trace-evidence" \
+          --continue-after-failure --prebuild-task-image --wire-trace
+    - name: Scan all raw trace evidence for configured credentials
       id: secret-scan
-      if: always() && steps.authorize.outcome == 'success'
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root "$RUNNER_TEMP/baseline-evidence"
-    - name: Preserve all attempts including failures
-      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root
+        "$RUNNER_TEMP/trace-evidence"
+      if: always() && steps.authorize.outcome == 'success'
+    - name: Preserve every attempt, wire trace and process snapshot
       uses: actions/upload-artifact@v7
+      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       with:
-        name: native-baseline-evidence-${{ matrix.model }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/baseline-evidence/
+        name: timeout-trace-evidence-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/trace-evidence/
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 30
-    - name: Preserve judged report
-      if: success()
+    - name: Preserve paired judged report
       uses: actions/upload-artifact@v7
+      if: success()
       with:
-        name: native-baseline-report-${{ matrix.model }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/baseline-evidence/report/report.json
+        name: timeout-trace-report-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/trace-evidence/report/report.json
         if-no-files-found: error
         retention-days: 90
-    if: needs.validate.outputs.has_remaining == 'true'

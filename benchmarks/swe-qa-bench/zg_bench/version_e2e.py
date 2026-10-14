@@ -177,6 +177,14 @@ def run(args):
     output = args.output.resolve()
     packages = args.packages.resolve()
     identities = {v: identity(packages / v, v) for v in SLOTS}
+    if getattr(args, "wire_trace", False):
+        frozen = {
+            "node": ("a958bb24f161c6d092fe555ddeeb44989f933354d9e21392d89af4bc75bd4393", "4188836385121590e3813e9da7efcabf2310266afcad9df613cc23f2abaaac78"),
+            "rust": ("94731c68b6878895042d8a3a21a99dfdf6aec25cc75c5afd7b8401ac0cd786eb", "d58d0c70ee55ee15a3ba54f453ddb9db2b93108606e2aece6afc130409c6eccc"),
+        }
+        for variant, (package_sha, cli_sha) in frozen.items():
+            if (identities[variant]["package_sha256"], identities[variant]["cli_sha256"]) != (package_sha, cli_sha):
+                raise ValueError("Timeout reproduction must use the original frozen package and CLI bytes")
     if identities["node"]["cli_sha256"] == identities["rust"]["cli_sha256"]:
         raise ValueError("Before and after binaries are identical")
     config = json.loads((ROOT / "ci-config.json").read_text())
@@ -192,6 +200,9 @@ def run(args):
     }
     if args.continue_after_failure:
         meta["execution_policy"] = "attempt_all_five_pairs_and_retain_failures_before_collection"
+    if getattr(args, "wire_trace", False):
+        meta["wire_trace"] = dict(enabled=True, model_proxy_port=17997, rpc_proxy_port=17998,
+            added_deadline=False, added_retries=False, product_binaries_modified=False)
     if args.collect_only:
         recovered = json.loads((output / "provenance.json").read_text())
         for key in ("model", "embedding", "task", "repetitions", "provenance", "locked_input_sha256"):
@@ -218,6 +229,8 @@ def run(args):
                 "--jobs-dir", str(output / "runs" / variant / f"r{rep}"),
                 "--job-name", f"node-rust-{args.task}-{variant}-r{rep}",
             ]
+            if getattr(args, "wire_trace", False):
+                command[:1] = [sys.executable, "-m", "zg_bench.traced_cli"]
             if args.embedding == "remote":
                 endpoint = os.environ.get("ZVEC_GREP_ENDPOINT")
                 if not endpoint or not os.environ.get("ZVEC_GREP_API_KEY"):
@@ -273,4 +286,5 @@ if __name__ == "__main__":
     parser.add_argument("--collect-only", action="store_true", help="Validate and judge existing completed trials without executing an agent")
     parser.add_argument("--continue-after-failure", action="store_true", help="Attempt all five pairs in an isolated retry, retaining failures without publishing incomplete scores")
     parser.add_argument("--prebuild-task-image", action="store_true", help="Build the original task image once and reuse it in fresh trial containers")
+    parser.add_argument("--wire-trace", action="store_true", help="Observe model and MCP HTTP with the diagnostic adapter; keep original model/retry deadlines")
     run(parser.parse_args())
