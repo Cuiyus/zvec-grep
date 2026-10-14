@@ -30,6 +30,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  comment-context:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Save the event's pinned PR identity for the result publisher
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const { pull_request: pr } = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const directory = join(process.env.RUNNER_TEMP, 'retrieval-pr-context');
+          await mkdir(directory, { recursive: true });
+          await writeFile(join(directory, 'request.json'), JSON.stringify({
+            schema_version: 1,
+            run_id: Number(process.env.GITHUB_RUN_ID),
+            run_attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            pr_number: pr.number,
+            baseline: { repository: pr.base.repo.full_name, commit: pr.base.sha, ref: pr.base.ref },
+            candidate: { repository: pr.head.repo.full_name, commit: pr.head.sha, ref: pr.head.ref },
+          }));
+          JS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-pr-context
+          path: ${{ runner.temp }}/retrieval-pr-context/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
   retrieval:
     permissions:
       contents: read
