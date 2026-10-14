@@ -1,29 +1,15 @@
-name: "Node 0.2.2 vs Rust main \xB7 E2e"
-run-name: Local E2e / Node 0.2.2 vs Rust f95fc49e / ${{ inputs.embedding_scope }} / 5 repetitions
+name: Native OpenCode baseline · E2E
+run-name: Native OpenCode without zg / 20 tasks × 5 repetitions / GLM and Qwen
 'on':
   workflow_dispatch:
     inputs:
-      embedding_scope:
-        description: Split the same experiment by embedding runtime without changing tasks or protocol
-        required: true
-        default: all
-        type: choice
-        options:
-        - all
-        - local
-        - remote
-      package_run:
-        description: Reuse version-package-rust from this fork run (empty builds the frozen source)
-        required: false
-        default: ''
-        type: string
       task_scope:
-        description: One frozen task slug for an isolated full five-pair retry; empty runs all 20 tasks
+        description: One frozen task for isolated recovery; empty runs all 20
         required: false
         default: ''
         type: string
       model_scope:
-        description: Model for the selected frozen task scope
+        description: Model scope
         required: true
         default: all
         type: choice
@@ -36,11 +22,11 @@ env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
   BENCH_TASK_SCOPE: ${{ inputs.task_scope }}
 concurrency:
-  group: version-e2e-${{ github.run_id }}
+  group: native-baseline-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   validate:
-    name: Validate frozen experiment and packages
+    name: Validate frozen control experiment
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -49,7 +35,6 @@ jobs:
     outputs:
       canary: ${{ steps.matrix.outputs.canary }}
       remaining: ${{ steps.matrix.outputs.remaining }}
-      aggregate: ${{ steps.matrix.outputs.aggregate }}
       has_remaining: ${{ steps.matrix.outputs.has_remaining }}
     steps:
     - name: Authorize manual benchmark run
@@ -85,8 +70,6 @@ jobs:
               ;;
           esac
         done
-    - name: Require the development fork
-      run: test "$GITHUB_REPOSITORY" = Cuiyus/zvec-grep
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -100,59 +83,39 @@ jobs:
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Validate locked tasks and reference isolation
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json
-        --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json --dataset benchmarks/swe-qa-bench/datasets
-    - name: Run agent, scoring, accounting, and version identity tests
+    - name: Validate frozen corpus and baseline isolation
       run: |
-        # Two existing workflow test modules target the original no-zg/zg
-        # workflow; test_pr179_e2e covers this adoption workflow instead.
-        uv run --project benchmarks/swe-qa-bench python - <<'PYCODE'
-        import sys, unittest
-        from pathlib import Path
-        tests=Path('benchmarks/swe-qa-bench/tests')
-        sys.path.insert(0,str(tests))
-        modules=[p.stem for p in tests.glob('test_*.py') if p.stem not in ('test_ci_workflow','test_swe_qa_workflow')]
-        suite=unittest.TestLoader().loadTestsFromNames(sorted(modules))
-        sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
-        PYCODE
-    - name: Build the four-configuration frozen task matrix
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json --dataset benchmarks/swe-qa-bench/datasets
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_native_baseline_e2e.py
+    - name: Build frozen 20-task two-model control matrix
       id: matrix
       env:
-        EMBEDDING_SCOPE: ${{ inputs.embedding_scope }}
         TASK_SCOPE: ${{ inputs.task_scope }}
         MODEL_SCOPE: ${{ inputs.model_scope }}
       run: |
         python - <<'PYCODE'
-        import itertools, json, os
+        import itertools,json,os
         from pathlib import Path
-        selection=json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())
-        tasks=[t['task_slug'] for t in selection['tasks']]
+        tasks=[t['task_slug'] for t in json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())['tasks']]
         assert len(tasks)==len(set(tasks))==20 and tasks[0]=='reflex-6'
         if os.environ['TASK_SCOPE']:
-            assert os.environ['TASK_SCOPE'] in tasks, 'Retry task must belong to the frozen 20-task selection'
+            assert os.environ['TASK_SCOPE'] in tasks
             tasks=[os.environ['TASK_SCOPE']]
         models=['glm-5.2','qwen3.8-max'] if os.environ['MODEL_SCOPE']=='all' else [os.environ['MODEL_SCOPE']]
-        embeddings=['local','remote'] if os.environ['EMBEDDING_SCOPE']=='all' else [os.environ['EMBEDDING_SCOPE']]
-        rows=[dict(task=t,model=m,embedding=e) for t,m,e in itertools.product(tasks,models,embeddings)]
-        canary_count=len(models)*len(embeddings)
+        rows=[dict(task=t,model=m) for t,m in itertools.product(tasks,models)]
         with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-            print('has_remaining='+str(len(rows)>canary_count).lower(),file=f)
-            for key,items in [('canary',rows[:canary_count]),('remaining',rows[canary_count:]),('aggregate',[dict(model=m,embedding=e) for m,e in itertools.product(models,embeddings)])]:
+            print('has_remaining='+str(len(rows)>len(models)).lower(),file=f)
+            for key,items in [('canary',rows[:len(models)]),('remaining',rows[len(models):])]:
                 print(key+'='+json.dumps({'include':items},separators=(',',':')),file=f)
         PYCODE
-    - name: Validate remote configuration presence
+    - name: Require configured model credential
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-        ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
-      run: test -n "$GLM_API_KEY" && test -n "$ZVEC_GREP_API_KEY" && test -n "$ZVEC_GREP_ENDPOINT"
+      run: test -n "$GLM_API_KEY"
   canary:
-    name: First task / ${{ matrix.model }} / ${{ matrix.embedding }}
+    name: Native / ${{ matrix.task }} / ${{ matrix.model }}
     needs:
     - validate
-    - package-node
-    - package-rust
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -160,7 +123,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.embedding_scope == 'remote' && 2 || 4 }}
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.validate.outputs.canary) }}
     steps:
     - name: Authorize manual benchmark run
@@ -205,68 +168,47 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
-    - name: Download verified Node release
-      uses: actions/download-artifact@v8
-      with:
-        name: version-package-node
-        path: ${{ runner.temp }}/packages/node
-    - name: Download verified Rust package
-      uses: actions/download-artifact@v8
-      with:
-        name: version-package-rust
-        path: ${{ runner.temp }}/packages/rust
     - name: Install frozen harness dependencies
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Run five Node/Rust pairs with zg and blind judge
+    - name: Run five native OpenCode trials and unchanged self-judge
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        ZVEC_GREP_API_KEY: ${{ matrix.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
-        ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         SWE_QA_MODEL: ${{ matrix.model }}
         BENCH_TASK: ${{ matrix.task }}
         BENCH_MODEL: ${{ matrix.model }}
-        BENCH_EMBEDDING: ${{ matrix.embedding }}
-        ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/version-index-seeds
       run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.version_e2e \
-          --task "$BENCH_TASK" --model "$BENCH_MODEL" --embedding "$BENCH_EMBEDDING" \
-          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" \
-          --continue-after-failure --prebuild-task-image
-    - name: Scan all evidence for credential leakage
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.native_baseline_e2e \
+          --task "$BENCH_TASK" --model "$BENCH_MODEL" --output "$RUNNER_TEMP/baseline-evidence"
+    - name: Scan evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --secret-env
-        ZVEC_GREP_API_KEY --root "$RUNNER_TEMP/version-evidence"
-    - name: Preserve full evidence including failed retry history
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root "$RUNNER_TEMP/baseline-evidence"
+    - name: Preserve all attempts including failures
       if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       uses: actions/upload-artifact@v7
       with:
-        name: version-evidence-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/version-evidence/
+        name: native-baseline-evidence-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/baseline-evidence/
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 30
-    - name: Preserve compact judged report
+    - name: Preserve judged report
       if: success()
       uses: actions/upload-artifact@v7
       with:
-        name: version-report-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/version-evidence/report/report.json
+        name: native-baseline-report-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/baseline-evidence/report/report.json
         if-no-files-found: error
         retention-days: 90
   remaining:
-    name: Pair / ${{ matrix.task }} / ${{ matrix.model }} / ${{ matrix.embedding }}
+    name: Native / ${{ matrix.task }} / ${{ matrix.model }}
     needs:
     - validate
-    - package-node
-    - package-rust
     - canary
-    if: needs.validate.outputs.has_remaining == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -274,7 +216,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.embedding_scope == 'remote' && 2 || 8 }}
+      max-parallel: 8
       matrix: ${{ fromJSON(needs.validate.outputs.remaining) }}
     steps:
     - name: Authorize manual benchmark run
@@ -319,255 +261,40 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
-    - name: Download verified Node release
-      uses: actions/download-artifact@v8
-      with:
-        name: version-package-node
-        path: ${{ runner.temp }}/packages/node
-    - name: Download verified Rust package
-      uses: actions/download-artifact@v8
-      with:
-        name: version-package-rust
-        path: ${{ runner.temp }}/packages/rust
     - name: Install frozen harness dependencies
       run: |
         python -m pip install --disable-pip-version-check uv==0.9.17
         uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Run five Node/Rust pairs with zg and blind judge
+    - name: Run five native OpenCode trials and unchanged self-judge
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        ZVEC_GREP_API_KEY: ${{ matrix.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
-        ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         SWE_QA_MODEL: ${{ matrix.model }}
         BENCH_TASK: ${{ matrix.task }}
         BENCH_MODEL: ${{ matrix.model }}
-        BENCH_EMBEDDING: ${{ matrix.embedding }}
-        ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/version-index-seeds
       run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.version_e2e \
-          --task "$BENCH_TASK" --model "$BENCH_MODEL" --embedding "$BENCH_EMBEDDING" \
-          --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/version-evidence" \
-          --continue-after-failure --prebuild-task-image
-    - name: Scan all evidence for credential leakage
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.native_baseline_e2e \
+          --task "$BENCH_TASK" --model "$BENCH_MODEL" --output "$RUNNER_TEMP/baseline-evidence"
+    - name: Scan evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --secret-env
-        ZVEC_GREP_API_KEY --root "$RUNNER_TEMP/version-evidence"
-    - name: Preserve full evidence including failed retry history
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root "$RUNNER_TEMP/baseline-evidence"
+    - name: Preserve all attempts including failures
       if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       uses: actions/upload-artifact@v7
       with:
-        name: version-evidence-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/version-evidence/
+        name: native-baseline-evidence-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/baseline-evidence/
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 30
-    - name: Preserve compact judged report
+    - name: Preserve judged report
       if: success()
       uses: actions/upload-artifact@v7
       with:
-        name: version-report-${{ matrix.model }}-${{ matrix.embedding }}-${{ matrix.task }}
-        path: ${{ runner.temp }}/version-evidence/report/report.json
+        name: native-baseline-report-${{ matrix.model }}-${{ matrix.task }}
+        path: ${{ runner.temp }}/baseline-evidence/report/report.json
         if-no-files-found: error
         retention-days: 90
-  package-node:
-    name: Verify published Node 0.2.2
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - run: python3 benchmarks/version-comparison/package_node.py "$RUNNER_TEMP/version-node"
-    - uses: actions/upload-artifact@v7
-      with:
-        name: version-package-node
-        path: ${{ runner.temp }}/version-node/
-        if-no-files-found: error
-        retention-days: 30
-  package-rust:
-    name: Build frozen Rust main f95fc49e
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      actions: read
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-    - uses: ./.github/actions/rust-candidate-package
-      with:
-        candidate_repository: zvec-ai/zvec-grep
-        candidate_ref: f95fc49ef793ee47e697ded6ac5fb6d7ecbf4d0f
-        cache_namespace: retrieval-rust
-      if: inputs.package_run == ''
-    - name: Reuse the canonical Rust package
-      if: inputs.package_run != ''
-      uses: actions/download-artifact@v8
-      with:
-        name: version-package-rust
-        run-id: ${{ inputs.package_run }}
-        github-token: ${{ github.token }}
-        path: ${{ runner.temp }}/rust-package-cache
-    - name: Verify reused package against frozen upstream main
-      if: inputs.package_run != ''
-      run: node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/rust-package-cache" --commit f95fc49ef793ee47e697ded6ac5fb6d7ecbf4d0f
-    - uses: actions/upload-artifact@v7
-      with:
-        name: version-package-rust
-        path: ${{ runner.temp }}/rust-package-cache/
-        if-no-files-found: error
-        retention-days: 30
-  aggregate:
-    name: Aggregate / ${{ matrix.model }} / ${{ matrix.embedding }}
-    needs:
-    - validate
-    - canary
-    - remaining
-    if: ${{ always() && needs.validate.result == 'success' && inputs.task_scope == '' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate.outputs.aggregate) }}
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-    - uses: actions/download-artifact@v8
-      with:
-        pattern: version-report-${{ matrix.model }}-${{ matrix.embedding }}-*
-        path: ${{ runner.temp }}/reports
-    - name: Install frozen dependencies
-      run: |-
-        python -m pip install uv==0.9.17
-        uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Build labeled comparison and publish summary
-      env:
-        BENCH_MODEL: ${{ matrix.model }}
-        BENCH_EMBEDDING: ${{ matrix.embedding }}
-      run: uv run --project benchmarks/swe-qa-bench python benchmarks/version-comparison/aggregate_e2e.py "$RUNNER_TEMP/reports"
-        "$RUNNER_TEMP/aggregate"
-    - uses: actions/upload-artifact@v7
-      with:
-        name: version-aggregate-${{ matrix.model }}-${{ matrix.embedding }}
-        path: ${{ runner.temp }}/aggregate/
-        if-no-files-found: error
-        retention-days: 90
+    if: needs.validate.outputs.has_remaining == 'true'
