@@ -1,486 +1,322 @@
-name: SWE-QA Bench
-run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}
-
-on:
-  workflow_call:
-    inputs:
-      candidate_ref:
-        required: true
-        type: string
-      candidate_repository:
-        required: true
-        type: string
-      scope:
-        default: all-full
-        type: string
-      model:
-        default: glm-5.2
-        type: string
-      embedding:
-        default: local
-        type: string
-    secrets:
-      GLM_API_KEY:
-        required: true
-      QWEN_EMBEDDING_API_KEY:
-        required: false
+name: GLM local E2E · baseline / Node / Rust · IQR
+run-name: GLM-5.2 local · main 20 tasks × 3 groups × 10 repetitions
+'on':
   workflow_dispatch:
     inputs:
-      candidate_ref:
-        description: Rust source branch, tag, or commit to benchmark
-        required: true
-        default: main
+      task_scope:
+        description: One main task for isolated recovery; empty runs all 20
+        required: false
+        default: ''
         type: string
-      scope:
-        description: Run the low/medium/high variability trio, all 20 tasks, or smoke
-        required: true
-        default: repro-3
-        type: choice
-        options:
-          - repro-3
-          - all-full
-          - smoke
-      model:
-        description: Use this model for both execution and self-judging
-        required: true
-        default: glm-5.2
-        type: choice
-        options:
-          - glm-5.2
-          - qwen3.8-max
-      embedding:
-        description: Embedding runtime (local uses Potion; remote uses Qwen3.7 Text Embedding)
-        required: true
-        default: local
-        type: choice
-        options:
-          - local
-          - remote
-
 permissions: {}
-
 env:
-  SWE_QA_MODEL: ${{ inputs.model || 'glm-5.2' }}
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
-
 concurrency:
-  group: swe-qa-bench-${{ github.run_id }}-${{ github.run_attempt }}
+  group: three-arm-e2e-${{ github.run_id }}
   cancel-in-progress: false
-
 jobs:
   validate:
-    name: Validate locked selection
-    needs: package-candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      contents: read
     outputs:
-      task-matrix: ${{ steps.task-matrix.outputs.tasks }}
-      task-count: ${{ steps.task-matrix.outputs.count }}
-      task_ids_json: ${{ steps.task-matrix.outputs.task_ids_json }}
-      embedding-model: ${{ steps.embedding.outputs.model }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
+        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
+        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
+        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
+        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
+        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
+        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
+        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
+        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Install locked harness
+      run: 'python -m pip install --disable-pip-version-check uv==0.9.17
+
+        uv sync --project benchmarks/swe-qa-bench --frozen
+
+        '
+    - name: Validate unchanged main corpus and PR statistics
+      run: 'uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json
+        --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json --dataset benchmarks/swe-qa-bench/datasets
+
+        uv run --project benchmarks/swe-qa-bench python - <<''PYCODE''
+
+        from zg_bench.native_baseline_e2e import validate_inputs
+
+        print(validate_inputs())
+
+        PYCODE
+
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p
+        test_three_arm_e2e.py -v
+
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p
+        test_iqr_statistics.py -v
+
+        '
+    - name: Build exact main task matrix
+      id: matrix
+      env:
+        TASK_SCOPE: ${{ inputs.task_scope }}
+      run: "python - <<'PYCODE'\nimport json,os\nfrom pathlib import Path\ntasks=[t['task_slug'] for t in json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())['tasks']]\n\
+        assert len(tasks)==len(set(tasks))==20\nif os.environ['TASK_SCOPE']:\n    assert os.environ['TASK_SCOPE']\
+        \ in tasks\n    tasks=[os.environ['TASK_SCOPE']]\nwith open(os.environ['GITHUB_OUTPUT'],'a') as f:\n   \
+        \ print('matrix='+json.dumps({'task':tasks}),file=f)\nPYCODE\n"
+    - name: Require configured GLM credential
+      env:
+        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      run: test -n "$GLM_API_KEY"
+  package-node:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      # Repeat authorization in every job so individual job re-runs cannot bypass it.
-      - &authorize-benchmark
-        name: Authorize benchmark run
-        id: authorize
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BENCH_REPOSITORY: ${{ github.repository }}
-          BENCH_EVENT_NAME: ${{ github.event_name }}
-          BENCH_IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request != null }}
-          BENCH_ACTOR: ${{ github.actor }}
-          BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" && "$BENCH_IS_PR_COMMENT" != "true" ]]; then
-            echo "::error::SWE-QA Bench requires workflow_dispatch or a PR comment caller."
-            exit 1
-          fi
-          if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-            echo "::error::Both the original actor and the current triggering actor are required."
-            exit 1
-          fi
-          for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-            # The legacy permission field maps maintain to write; use role_name.
-            role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-            case "$role" in
-              admin|maintain)
-                echo "Authorized $actor with repository role $role."
-                ;;
-              *)
-                echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-                exit 1
-                ;;
-            esac
-          done
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-      - name: Install locked benchmark environment
-        run: |
-          python -m pip install --disable-pip-version-check uv==0.9.17
-          uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Validate tasks, hashes, commits, and reference isolation
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate
-          --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json
-          --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json
-          --dataset benchmarks/swe-qa-bench/datasets
-      - name: Build this run's task matrix from the locked selection
-        id: task-matrix
-        env:
-          SCOPE: ${{ inputs.scope }}
-        run: |
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa matrix \
-            --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json \
-            --scope "$SCOPE" >> "$GITHUB_OUTPUT"
-      - name: Resolve and validate the embedding runtime
-        id: embedding
-        env:
-          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
-          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          config=benchmarks/swe-qa-bench/ci-config.json
-          model="$(jq -er --arg runtime "$EMBEDDING_RUNTIME" '.embedding_models[$runtime]' "$config")"
-          echo "model=$model" >> "$GITHUB_OUTPUT"
-          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
-            test -n "$ZVEC_GREP_API_KEY" || { echo 'QWEN_EMBEDDING_API_KEY secret is missing'; exit 1; }
-            test -n "$ZVEC_GREP_ENDPOINT" || { echo 'QWEN_EMBEDDING_ENDPOINT variable is missing'; exit 1; }
-          fi
-      - name: Install pinned OpenCode for local request verification
-        run: npm install --global opencode-ai@1.18.4
-      - name: Run benchmark tests and verify sampling and web-tool restrictions
-        env:
-          OPENCODE_BENCHMARK_TEST_BINARY: opencode
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m unittest discover
-          -s benchmarks/swe-qa-bench/tests -v
-      - name: Download the selected Rust package for preflight
-        uses: actions/download-artifact@v8
-        with:
-          name: swe-qa-rust-candidate-${{ github.run_id }}
-          path: ${{ runner.temp }}/package
-      - name: Verify the preflight candidate identity
-        run: |
-          node benchmarks/shared/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/package" \
-            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Verify the Harbor command without credentials
-        env:
-          EMBEDDING_MODEL: ${{ steps.embedding.outputs.model }}
-          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          config=benchmarks/swe-qa-bench/ci-config.json
-          embedding_args=(--embedding-model "$EMBEDDING_MODEL")
-          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
-            embedding_args+=(--embedding-endpoint "$ZVEC_GREP_ENDPOINT")
-          fi
-          uv run --project benchmarks/swe-qa-bench zg-bench run \
-            swe-qa-bench \
-            --tier full \
-            --agent opencode \
-            --model "custom-openai/$SWE_QA_MODEL" \
-            --profile all \
-            --n-attempts "$(jq -r '.trials_per_profile' "$config")" \
-            --max-retries "$(jq -r '.max_retries' "$config")" \
-            "${embedding_args[@]}" \
-            --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
-            --job-name preflight \
-            --dry-run
-
-  package-candidate:
-    name: Build selected Rust candidate
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
+        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
+        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
+        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
+        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
+        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
+        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
+        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
+        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Verify published Node 0.2.2 package
+      run: python benchmarks/version-comparison/package_node.py "$RUNNER_TEMP/package-node"
+    - uses: actions/upload-artifact@v7
+      with:
+        name: three-arm-package-node
+        path: ${{ runner.temp }}/package-node/
+        if-no-files-found: error
+        retention-days: 30
+  package-rust:
+    needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    outputs:
-      candidate-commit: ${{ steps.rust-candidate.outputs.commit }}
     permissions:
       contents: read
     steps:
-      - *authorize-benchmark
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-      - name: Build and verify the selected Rust package
-        id: rust-candidate
-        uses: ./.github/actions/rust-candidate-package
-        with:
-          candidate_repository: ${{ inputs.candidate_repository || github.repository }}
-          candidate_ref: ${{ inputs.candidate_ref }}
-          cache_namespace: swe-qa-rust
-      - uses: actions/upload-artifact@v7
-        with:
-          name: swe-qa-rust-candidate-${{ github.run_id }}
-          path: ${{ runner.temp }}/rust-package-cache/
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
-
-  run-pair:
-    name: Pair + judge / ${{ matrix.task }}
-    needs: [validate, package-candidate]
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
+        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
+        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
+        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
+        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
+        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
+        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
+        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
+        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Build pinned Rust main
+      uses: ./.github/actions/rust-candidate-package
+      with:
+        candidate_repository: zvec-ai/zvec-grep
+        candidate_ref: 732a44014654c7acf08553716af67865bcfb8430
+        cache_namespace: swe-qa-rust
+    - uses: actions/upload-artifact@v7
+      with:
+        name: three-arm-package-rust
+        path: ${{ runner.temp }}/rust-package-cache/
+        if-no-files-found: error
+        retention-days: 30
+  task:
+    name: Three arms / ${{ matrix.task }}
+    needs:
+    - validate
+    - package-node
+    - package-rust
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 5
-      matrix:
-        task: ${{ fromJSON(needs.validate.outputs.task-matrix) }}
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
     steps:
-      - *authorize-benchmark
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-      - name: Download the selected Rust package
-        uses: actions/download-artifact@v8
-        with:
-          name: swe-qa-rust-candidate-${{ github.run_id }}
-          path: ${{ runner.temp }}/package
-      - name: Verify the candidate package identity
-        run: |
-          node benchmarks/shared/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/package" \
-            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - name: Restore this task's zvec index seed
-        if: inputs.embedding == 'local'
-        id: zvec-index-seed-restore
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ runner.temp }}/swe-qa-index-seed
-          key: swe-qa-zvec-index-seed-v3-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-embedding-${{ inputs.embedding }}-rust-${{ needs.package-candidate.outputs.candidate-commit }}-bench-${{ hashFiles('benchmarks/swe-qa-bench/ci-config.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore', format('benchmarks/swe-qa-bench/datasets/{0}/environment/Dockerfile', matrix.task), 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/suites/swe-qa-bench.yaml', 'benchmarks/swe-qa-bench/zg_bench/**/*.py') }}
-      - name: Install locked dependencies
-        run: |
-          python -m pip install --disable-pip-version-check uv==0.9.17
-          uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Run baseline and zvec-grep on the same runner
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
-          EMBEDDING_MODEL: ${{ needs.validate.outputs.embedding-model }}
-          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
-          TASK_NAME: ${{ matrix.task }}
-          ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
-        run: |
-          set -euo pipefail
-          if [[ -z "${GLM_API_KEY:-}" ]]; then
-            echo "GLM_API_KEY Actions secret is not configured" >&2
-            exit 2
-          fi
-          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
-            test -n "$ZVEC_GREP_API_KEY" || { echo 'QWEN_EMBEDDING_API_KEY secret is missing'; exit 2; }
-            test -n "$ZVEC_GREP_ENDPOINT" || { echo 'QWEN_EMBEDDING_ENDPOINT variable is missing'; exit 2; }
-          fi
-          runs_dir="$RUNNER_TEMP/swe-qa-runs/$TASK_NAME"
-          config=benchmarks/swe-qa-bench/ci-config.json
-          trials="$(jq -r '.trials_per_profile' "$config")"
-          embedding_args=(--embedding-model "$EMBEDDING_MODEL")
-          if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
-            embedding_args+=(--embedding-endpoint "$ZVEC_GREP_ENDPOINT")
-          fi
-          uv run --project benchmarks/swe-qa-bench zg-bench run \
-            swe-qa-bench \
-            --tier full \
-            --task "$TASK_NAME" \
-            --agent opencode \
-            --model "custom-openai/$SWE_QA_MODEL" \
-            --profile all \
-            --n-attempts "$trials" \
-            --max-retries "$(jq -r '.max_retries' "$config")" \
-            "${embedding_args[@]}" \
-            --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
-            --jobs-dir "$runs_dir" \
-            --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa collect \
-            --runs-dir "$runs_dir" \
-            --task "$TASK_NAME" \
-            --expected-trials "$trials" \
-            --output "$RUNNER_TEMP/pair-${TASK_NAME}.json"
-      - name: Judge this pair and write its independent report
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          TASK_NAME: ${{ matrix.task }}
-        run: |
-          set -euo pipefail
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa judge \
-            --pairs-root "$RUNNER_TEMP/pair-${TASK_NAME}.json" \
-            --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json \
-            --model "$SWE_QA_MODEL" \
-            --output-dir "$RUNNER_TEMP/swe-qa-task-report/${TASK_NAME}" \
-            --expected "$TASK_NAME"
-      - name: Bind the task report to this candidate and evaluation configuration
-        env: &task-report-identity
-          BENCH_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
-          BENCH_CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository || github.repository }}
-          BENCH_HARNESS_COMMIT: ${{ github.workflow_sha }}
-          BENCH_PROTOCOL_HASH: ${{ hashFiles('.github/workflows/swe-qa-bench.yml', 'benchmarks/swe-qa-bench/ci-config.json', 'benchmarks/swe-qa-bench/pyproject.toml', 'benchmarks/swe-qa-bench/uv.lock', 'benchmarks/swe-qa-bench/zg_bench/**/*.py', 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/*', 'benchmarks/swe-qa-bench/suites/*', 'benchmarks/swe-qa-bench/datasets/**') }}
-          BENCH_SCOPE: ${{ inputs.scope }}
-          BENCH_EMBEDDING_RUNTIME: ${{ inputs.embedding }}
-          BENCH_EMBEDDING_MODEL: ${{ needs.validate.outputs.embedding-model }}
-          BENCH_EMBEDDING_ENDPOINT: ${{ inputs.embedding == 'remote' && vars.QWEN_EMBEDDING_ENDPOINT || '' }}
-          EXPECTED_TASKS_JSON: ${{ needs.validate.outputs.task_ids_json }}
-        run: >-
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.task_reports stamp
-          --report-dir "$RUNNER_TEMP/swe-qa-task-report/${{ matrix.task }}"
-      - name: Summarize trial retries
-        if: always() && steps.authorize.outcome == 'success'
-        env:
-          TASK_NAME: ${{ matrix.task }}
-        run: |
-          uv run --project benchmarks/swe-qa-bench \
-            python -m zg_bench.reports.retries \
-            --runs-dir "$RUNNER_TEMP/swe-qa-runs/$TASK_NAME" \
-            --config benchmarks/swe-qa-bench/ci-config.json \
-            --output "$GITHUB_STEP_SUMMARY" \
-            --append
-      - name: Reject secret leakage in artifacts
-        id: secret-scan
-        if: always() && steps.authorize.outcome == 'success'
-        env:
-          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-          ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
-          TASK_NAME: ${{ matrix.task }}
-          ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/swe-qa-index-seed
-        run: |
-          uv run --project benchmarks/swe-qa-bench \
-            python -m zg_bench.ci.secret_scan \
-            --secret-env GLM_API_KEY \
-            --secret-env ZVEC_GREP_API_KEY \
-            --root "$RUNNER_TEMP/swe-qa-runs/$TASK_NAME" \
-            --root "$RUNNER_TEMP/pair-$TASK_NAME.json" \
-            --root "$RUNNER_TEMP/swe-qa-task-report/$TASK_NAME" \
-            --root "$ZG_BENCH_INDEX_SEED_DIR"
-      - name: Upload paired Harbor evidence
-        if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: swe-qa-pair-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: |
-            ${{ runner.temp }}/pair-${{ matrix.task }}.json
-            ${{ runner.temp }}/swe-qa-runs/${{ matrix.task }}/
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Upload independent task report
-        if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: swe-qa-task-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/swe-qa-task-report/${{ matrix.task }}/
-          if-no-files-found: warn
-          retention-days: 90
-      - name: Save this task's populated zvec index seed
-        if: inputs.embedding == 'local' && success() && steps.zvec-index-seed-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ runner.temp }}/swe-qa-index-seed
-          key: ${{ steps.zvec-index-seed-restore.outputs.cache-primary-key }}
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
+        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
+        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
+        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
+        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
+        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
+        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
+        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
+        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - uses: actions/download-artifact@v8
+      with:
+        name: three-arm-package-node
+        path: ${{ runner.temp }}/packages/node
+    - uses: actions/download-artifact@v8
+      with:
+        name: three-arm-package-rust
+        path: ${{ runner.temp }}/packages/rust
+    - name: Install locked harness
+      run: 'python -m pip install --disable-pip-version-check uv==0.9.17
 
-  aggregate-report:
-    name: Aggregate completed task reports
-    needs: [validate, package-candidate, run-pair]
-    if: >-
-      always() &&
-      needs.validate.result == 'success' &&
-      needs.run-pair.result != 'skipped'
+        uv sync --project benchmarks/swe-qa-bench --frozen
+
+        '
+    - name: Run 10 fresh trials per group, rotating execution order
+      env:
+        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        BENCH_TASK: ${{ matrix.task }}
+        ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/three-arm-index-seeds
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e run --task "$BENCH_TASK" --packages
+        "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/three-arm-evidence"
+    - name: Scan evidence for credential leakage
+      id: secret-scan
+      if: always() && steps.authorize.outcome == 'success'
+      env:
+        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root
+        "$RUNNER_TEMP/three-arm-evidence"
+    - name: Preserve all trials and failed attempts
+      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
+      uses: actions/upload-artifact@v7
+      with:
+        name: three-arm-evidence-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/three-arm-evidence/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 30
+    - name: Preserve compact report
+      if: success()
+      uses: actions/upload-artifact@v7
+      with:
+        name: three-arm-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/three-arm-evidence/report/
+        if-no-files-found: error
+        retention-days: 90
+  aggregate:
+    name: Three-arm raw and IQR report
+    needs:
+    - validate
+    - task
+    if: always() && needs.validate.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - *authorize-benchmark
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Record the selected Rust candidate
-        env:
-          CANDIDATE_REF: ${{ inputs.candidate_ref }}
-          CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
-          EMBEDDING_RUNTIME: ${{ inputs.embedding }}
-          EMBEDDING_MODEL: ${{ needs.validate.outputs.embedding-model }}
-        run: |
-          {
-            echo "## Rust candidate"
-            echo
-            echo "- Requested ref: \`$CANDIDATE_REF\`"
-            echo "- Resolved commit: \`$CANDIDATE_COMMIT\`"
-            echo "- Embedding runtime: \`$EMBEDDING_RUNTIME\`"
-            echo "- Embedding model: \`$EMBEDDING_MODEL\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install locked report environment
-        run: |
-          python -m pip install --disable-pip-version-check uv==0.9.17
-          uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Download independent task reports from all attempts of this run
-        uses: actions/download-artifact@v8
-        with:
-          pattern: swe-qa-task-report-*-${{ github.run_id }}-*
-          path: ${{ runner.temp }}/task-reports
-      - name: Combine reports without re-judging
-        env: *task-report-identity
-        run: |
-          set -euo pipefail
-          mapfile -t expected_tasks < <(
-            python -c 'import json, os; print(*json.loads(os.environ["EXPECTED_TASKS_JSON"]), sep="\n")'
-          )
-          if (( ${#expected_tasks[@]} == 0 )); then
-            echo "::error::Locked selection produced no expected task IDs."
-            exit 1
-          fi
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.task_reports select \
-            --reports-root "$RUNNER_TEMP/task-reports" \
-            --output-dir "$RUNNER_TEMP/selected-task-reports" \
-            --expected "${expected_tasks[@]}"
-          uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa aggregate \
-            --reports-root "$RUNNER_TEMP/selected-task-reports" \
-            --output-dir "$RUNNER_TEMP/swe-qa-aggregate-report" \
-            --allow-missing \
-            --expected "${expected_tasks[@]}"
-          cp "$RUNNER_TEMP/selected-task-reports/selection.json" \
-            "$RUNNER_TEMP/swe-qa-aggregate-report/task-report-selection.json"
-      - name: Keep the Rust package manifest with the aggregate report
-        uses: actions/download-artifact@v8
-        with:
-          name: swe-qa-rust-candidate-${{ github.run_id }}
-          path: ${{ runner.temp }}/aggregate-candidate
-      - name: Verify and archive the candidate identity
-        run: |
-          node benchmarks/shared/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/aggregate-candidate" \
-            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-          cp "$RUNNER_TEMP/aggregate-candidate/manifest.json" \
-            "$RUNNER_TEMP/swe-qa-aggregate-report/candidate-manifest.json"
-      - name: Upload aggregate report
-        uses: actions/upload-artifact@v7
-        with:
-          name: swe-qa-aggregate-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/swe-qa-aggregate-report/
-          if-no-files-found: warn
-          retention-days: 90
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
+        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
+        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
+        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
+        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
+        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
+        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
+        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
+        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Install locked harness
+      run: 'python -m pip install --disable-pip-version-check uv==0.9.17
+
+        uv sync --project benchmarks/swe-qa-bench --frozen
+
+        '
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: three-arm-report-*
+        path: ${{ runner.temp }}/task-reports
+    - name: Recompute all task-weighted statistics without model calls
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e aggregate --reports "$RUNNER_TEMP/task-reports"
+        --output "$RUNNER_TEMP/three-arm-comparison"
+    - uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: three-arm-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/three-arm-comparison/
+        if-no-files-found: error
+        retention-days: 90

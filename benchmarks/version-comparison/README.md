@@ -1,0 +1,9 @@
+# GLM local three-arm experiment
+
+Fork-only execution branch based on PR #261 (`eaf58aa`). Run the unchanged main 20-task corpus with OpenCode 1.18.4 and GLM-5.2: native baseline, published Node 0.2.2 + zg, and Rust main `732a440` + zg. Each group has ten fresh trials per task (600 total), with local `potion-code-16m-v2` embedding (256 dimensions) for both zg groups.
+
+The PR's IQR implementation, score rubric, model settings, question/reference files and usage accounting remain unchanged and are checksum-verified. This branch adds three-arm orchestration and reuses the previously validated Node command-spelling, binding 0.7.1 and installed-binary verification adapter. Task images are built once from their original Dockerfiles using the previously verified immutable Ubuntu image; every trial uses a fresh container. Index seeds remain keyed by source/package/model. Eight task jobs run concurrently, with one Agent at a time inside each job. Group order rotates by task and repetition.
+
+Agent failures retain Harbor's maximum two retries and complete retry evidence. A failed execution slot prevents a complete task report; successful low-scoring answers are never rerun. Every physical answer is self-judged once, checkpointed by input digest. Baseline judgments are reused only for the two statistical comparisons. `--collect-only` can finish collection/judging of intact completed execution evidence without rerunning Agents.
+
+`experiment.json` pins product identities, corpus/statistics hashes and supplemental operations. Artifact names include workflow run and attempt IDs. Per-task `report.json` stores all three raw profiles; `comparison.json` and `report.md` show raw/filtered means and retained/excluded counts using PR #261. Model and corpus changes must use a new experiment identity. No Retrieval benchmark is dispatched.

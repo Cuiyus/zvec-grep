@@ -35,7 +35,7 @@ OPENCODE_ALIYUN_QWEN_MODEL_ID = DASHSCOPE_QWEN_3_7_MAX_MODEL
 OPENCODE_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 OPENCODE_OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 ZVEC_GREP_PACKAGE = "@zvec/zvec-grep@0.1.6-alpha.3"
-ZVEC_GREP_BINDING_PACKAGE = "@zvec/bindings-linux-x64@0.5.0"
+ZVEC_GREP_BINDING_PACKAGE = "@zvec/bindings-linux-x64@0.7.1"
 ZVEC_GREP_EMBEDDING = "qwen/qwen3.7-text-embedding"
 ZVEC_GREP_EMBEDDING_ENDPOINT = (
     "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/"
