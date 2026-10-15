@@ -248,7 +248,7 @@ class JudgeTests(unittest.TestCase):
             )
             self.assertIn("not an average of task percentages", markdown)
             self.assertLess(
-                markdown.index("| **Aggregate (1.5×IQR)** |"),
+                markdown.index("| **Aggregate (trim min/max)** |"),
                 markdown.index("| reflex:6 |"),
             )
             self.assertNotIn("| cost", markdown.lower())
@@ -785,7 +785,7 @@ class JudgeTests(unittest.TestCase):
                 aggregate = report["aggregate"]
                 self.assertEqual(aggregate["filter"]["task_count"], 1)
                 self.assertEqual(
-                    aggregate["filter"]["profiles"]["zvec-grep"]["excluded_count"], 0
+                    aggregate["filter"]["profiles"]["zvec-grep"]["excluded_count"], 2
                 )
                 self.assertEqual(
                     aggregate["profiles"]["zvec-grep"]["input_tokens"], 10000
@@ -793,7 +793,7 @@ class JudgeTests(unittest.TestCase):
             for directory in ("source", "combined"):
                 markdown = (root / directory / "report.md").read_text()
                 self.assertIn("| reflex:6 |", markdown)
-                self.assertIn("No trials were excluded", markdown)
+                self.assertIn("Excluded trials (4)", markdown)
 
     def test_large_score_difference_keeps_task_and_can_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -850,12 +850,12 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual(aggregate["filter"]["task_count"], 1)
                 self.assertEqual(aggregate["comparison"]["judge_delta"], 25)
                 self.assertEqual(
-                    aggregate["filter"]["profiles"]["zvec-grep"]["excluded_count"], 0
+                    aggregate["filter"]["profiles"]["zvec-grep"]["excluded_count"], 2
                 )
             for directory in ("source", "combined"):
                 markdown = (root / directory / "report.md").read_text()
                 self.assertIn("| reflex:6 | 50.00 / 75.00 / +25.00", markdown)
-                self.assertIn("No trials were excluded", markdown)
+                self.assertIn("Excluded trials (4)", markdown)
 
     def test_missing_expected_pair_fails_before_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

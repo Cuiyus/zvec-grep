@@ -134,7 +134,7 @@ export async function prepare({ github, context, core, env }) {
     "| --- | --- | --- |",
     "| Retrieval | Queued | PR base vs head; SWE-QA20 + BEIR + DuRetrieval + Quarry; local embedding |",
     runE2e
-      ? `| e2e | Queued | SWE-QA20; OpenCode + GLM-5.2; baseline / zvec-grep; ${trialsPerProfile} trials per profile; score-based 1.5×IQR |`
+      ? `| e2e | Queued | SWE-QA20; OpenCode + GLM-5.2; baseline / zvec-grep; ${trialsPerProfile} trials per profile; trim one lowest and one highest score per task/profile |`
       : "| e2e | Skipped | Disabled by default |",
     "",
     `[View run and artifacts](${runUrl(context)})`,

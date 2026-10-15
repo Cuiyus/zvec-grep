@@ -418,7 +418,7 @@ class AggregateReportTests(unittest.TestCase):
             aggregate = report["aggregate"]
             self.assertAlmostEqual(
                 aggregate["comparison"]["input_token_reduction_pct"],
-                40.0,
+                250 / 950 * 100,
             )
             self.assertEqual(
                 aggregate["comparison_samples"]["input_token_reduction_pct"],
@@ -426,9 +426,9 @@ class AggregateReportTests(unittest.TestCase):
             )
             self.assertAlmostEqual(
                 aggregate["profiles"]["baseline"]["input_tokens"],
-                (1100 / 3 + 1000) / 2,
+                (900 + 1000) / 2,
             )
-            self.assertEqual(aggregate["profiles"]["zvec-grep"]["input_tokens"], 410.0)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["input_tokens"], 700.0)
             grand_totals_ratio = (
                 (
                     aggregate["profiles"]["baseline"]["input_tokens"]
@@ -437,13 +437,14 @@ class AggregateReportTests(unittest.TestCase):
                 / aggregate["profiles"]["baseline"]["input_tokens"]
                 * 100
             )
-            self.assertAlmostEqual(grand_totals_ratio, 40.0)
+            self.assertAlmostEqual(grand_totals_ratio, 250 / 950 * 100)
             self.assertAlmostEqual(
                 aggregate["comparison"]["input_token_reduction_pct"],
                 grand_totals_ratio,
             )
             markdown = (root / "combined" / "report.md").read_text()
             self.assertIn("683.33 / 410.00 / -40.00%", markdown)
+            self.assertIn("950.00 / 700.00 / -26.32%", markdown)
 
     def test_zero_baseline_metric_still_contributes_to_aggregate_totals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -482,7 +483,14 @@ class AggregateReportTests(unittest.TestCase):
                 report["aggregate"]["comparison"]["toolcall_reduction_pct"],
                 55.0,
             )
-            self.assertIsNone(report["aggregate"]["comparison"]["cost_reduction_pct"])
+            # Trial 3 has unknown cost but is trimmed by score/order. The retained
+            # trial 2 costs are complete, while the raw aggregate remains unknown.
+            self.assertEqual(
+                report["aggregate"]["comparison"]["cost_reduction_pct"], 50.0
+            )
+            self.assertIsNone(
+                report["aggregate"]["raw"]["comparison"]["cost_reduction_pct"]
+            )
             self.assertEqual(
                 report["aggregate"]["profiles"]["baseline"]["tool_calls"],
                 10.0,
@@ -493,14 +501,14 @@ class AggregateReportTests(unittest.TestCase):
             )
             self.assertEqual(
                 report["aggregate"]["comparison_samples"]["cost_reduction_pct"],
-                0,
+                2,
             )
             markdown = (root / "combined" / "report.md").read_text()
             self.assertIn("0.00 / 1.00 / N/A", markdown)
             self.assertIn("10.00 / 4.50 / -55.00%", markdown)
             self.assertIn("toolcall n=2/2", markdown)
 
-    def test_iqr_keeps_all_twenty_tasks_and_all_four_hundred_judge_calls(self):
+    def test_trim_keeps_all_twenty_tasks_and_all_four_hundred_judge_calls(self):
         tasks = list(EXPECTED_TASK_IDS)
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -530,6 +538,13 @@ class AggregateReportTests(unittest.TestCase):
             self.assertEqual(report["judge"]["usage"]["input_tokens"], 210000)
             aggregate = report["aggregate"]
             self.assertEqual(aggregate["filter"]["task_count"], 20)
+            self.assertEqual(
+                sum(
+                    row["retained_count"]
+                    for row in aggregate["filter"]["profiles"].values()
+                ),
+                320,
+            )
             counts = aggregate["filter"]["profiles"]["zvec-grep"]
             self.assertEqual(
                 (
@@ -537,7 +552,7 @@ class AggregateReportTests(unittest.TestCase):
                     counts["retained_count"],
                     counts["excluded_count"],
                 ),
-                (200, 199, 1),
+                (200, 160, 40),
             )
             self.assertEqual(aggregate["profiles"]["zvec-grep"]["judge"], 95)
             self.assertEqual(aggregate["profiles"]["zvec-grep"]["input_tokens"], 1000)
@@ -550,16 +565,69 @@ class AggregateReportTests(unittest.TestCase):
             markdown = (root / "combined" / "report.md").read_text()
             for task_id in tasks:
                 self.assertIn(f"| {task_id} |", markdown)
-            self.assertIn("| zvec-grep | 20 | 200 | 199 | 1 |", markdown)
-            self.assertIn("Excluded trials (1)", markdown)
+            self.assertIn("| zvec-grep | 20 | 200 | 160 | 40 |", markdown)
+            self.assertIn("| baseline | 20 | 200 | 160 | 40 |", markdown)
+            self.assertIn("Excluded trials (80)", markdown)
             self.assertIn("| reflex:6 | zvec-grep | 10 | 5.00 |", markdown)
             self.assertNotIn("Notable task differences", markdown)
-            rows = markdown.split("### Per-task results after IQR screening", 1)[
+            rows = markdown.split("### Per-task results: After score trimming", 1)[
                 1
             ].split("<details>", 1)[0]
             for row in rows.splitlines():
                 if row.startswith("|"):
                     self.assertEqual(row.count("|"), 7, row)
+
+    def test_legacy_schema_recomputes_trim_from_raw_evidence(self) -> None:
+        for schema_version in (1, 2, 3):
+            with (
+                self.subTest(schema_version=schema_version),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                source = _judged_task_report("reflex:6")
+                _set_report_trial_judgements(
+                    source,
+                    baseline=[90] * 10,
+                    zvec=[20, 75, 80, 85, 90, 90, 91, 92, 95, 100],
+                )
+                source["schema_version"] = schema_version
+                # A stale serialized IQR summary must not override raw trial evidence.
+                source["aggregate"] = {
+                    "filter": {"method": "score_iqr_1.5"},
+                    "profiles": {"baseline": {"judge": 0}, "zvec-grep": {"judge": 0}},
+                }
+                before = copy.deepcopy(source)
+                report_path = root / "source" / "report.json"
+                _write_json(report_path, source)
+                combined = aggregate_reports(
+                    reports_root=report_path, output_dir=root / "combined"
+                )
+                aggregate = combined["aggregate"]
+                self.assertEqual(
+                    aggregate["filter"]["method"], "score_trim_min_max_once"
+                )
+                self.assertEqual(aggregate["profiles"]["zvec-grep"]["judge"], 87.25)
+                self.assertEqual(
+                    aggregate["raw"]["profiles"]["zvec-grep"]["judge"], 81.8
+                )
+                self.assertEqual(
+                    aggregate["filter"]["profiles"]["baseline"]["retained_count"], 8
+                )
+                self.assertEqual(
+                    aggregate["filter"]["profiles"]["zvec-grep"]["retained_count"], 8
+                )
+                self.assertEqual(combined["judge"]["usage"], source["judge"]["usage"])
+                self.assertEqual(combined["gate"]["successful_judgements"], 20)
+                expected_trials = copy.deepcopy(
+                    source["cases"][0]["profiles"]["zvec-grep"]["trials"]
+                )
+                for trial in expected_trials:
+                    trial["metrics"]["usage_scope"] = "legacy-root"
+                self.assertEqual(
+                    combined["cases"][0]["profiles"]["zvec-grep"]["trials"],
+                    expected_trials,
+                )
+                self.assertEqual(json.loads(report_path.read_text()), before)
 
     def test_aggregate_rejects_missing_expected_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

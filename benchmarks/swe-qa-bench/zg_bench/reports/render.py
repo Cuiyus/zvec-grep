@@ -91,7 +91,7 @@ def render_report(report: dict[str, Any]) -> str:
                 "Raw", aggregate["raw"]["profiles"], aggregate["raw"]["comparison"]
             ),
             table_row(
-                "**Aggregate (1.5×IQR)**",
+                "**Aggregate (trim min/max)**",
                 aggregate["profiles"],
                 aggregate["comparison"],
             ),
@@ -111,18 +111,19 @@ def render_report(report: dict[str, Any]) -> str:
     lines.extend(
         (
             "",
-            "The score-based **1.5×IQR** rule is applied separately within each model × task × profile. "
-            "Q1/Q3 use inclusive linear interpolation (type 7). Retain scores within "
-            "`[Q1 - 1.5×IQR, Q3 + 1.5×IQR]`, including both boundaries. "
-            "Screen once, in both directions, with no minimum score gap. When IQR is zero, only scores equal to Q1/Q3 remain.",
+            "**Trim one minimum and one maximum score** separately within each model × task × profile. "
+            "Sort once by `(judge.total, trial_index)` and remove the first and last trials; "
+            "use the original position when `trial_index` is missing. "
+            "Score ties use trial order, never time or tokens. Ten trials therefore retain eight, even when all scores tie. "
+            "Groups with fewer than three trials retain all samples and are marked as insufficient for trimming.",
             "",
             "An excluded trial's score, time, tokens, cost and tool calls are removed together from statistical means; "
             "time and token values are not screened independently. "
             "Each task is first averaged over its retained trials, then **all completed tasks receive equal weight**. "
             "Aggregate resources are means, not sums. Every Aggregate change is calculated directly from the displayed Aggregate values, not an average of task percentages. "
-            "Raw trials, actual judge usage and completion failures are preserved. Filtered results are a sensitivity analysis, not evidence that a run was invalid.",
+            "Raw trials, actual judge usage and completion failures are preserved. Trimming reduces tail influence; it does not establish that an excluded run was invalid.",
             "",
-            "### Per-task results after IQR screening",
+            "### Per-task results: After score trimming",
             "",
             "| Case | Judge mean | Input token mean | Tool call mean | Agent time mean (s) | Retained/original (baseline / zvec-grep) |",
             "|---|---:|---:|---:|---:|---|",
@@ -136,7 +137,7 @@ def render_report(report: dict[str, Any]) -> str:
             f = row["filter"]
             counts.append(
                 f"{f['retained_count']}/{f['original_count']}"
-                if f["status"] == "applied"
+                if f["original_count"] is not None
                 else "N/A (unscreened)"
             )
             for excluded in f["excluded_trials"]:
@@ -148,13 +149,34 @@ def render_report(report: dict[str, Any]) -> str:
             + " |"
         )
     lines.append("")
-    for name, counts in filtering["profiles"].items():
-        if counts["unscreened_task_ids"]:
+    for name in filtering["profiles"]:
+        legacy_tasks = [
+            task["task_id"]
+            for task in aggregate["task_statistics"]
+            if task["profiles"][name]["filter"]["status"]
+            == "unavailable_no_trial_evidence"
+        ]
+        insufficient_tasks = [
+            task["task_id"]
+            for task in aggregate["task_statistics"]
+            if task["profiles"][name]["filter"]["status"]
+            == "unavailable_insufficient_trials"
+        ]
+        if legacy_tasks:
             lines.extend(
                 (
                     f"**Unscreened legacy evidence ({name}):** "
-                    + ", ".join(counts["unscreened_task_ids"])
+                    + ", ".join(legacy_tasks)
                     + ". Raw repetitions are unavailable; these tasks retain their supplied means. Sample counts are N/A.",
+                    "",
+                )
+            )
+        if insufficient_tasks:
+            lines.extend(
+                (
+                    f"**Insufficient trials for trimming ({name}):** "
+                    + ", ".join(insufficient_tasks)
+                    + ". Fewer than three trials are available; all samples are retained and their counts remain visible.",
                     "",
                 )
             )
@@ -164,24 +186,20 @@ def render_report(report: dict[str, Any]) -> str:
                 "<details>",
                 f"<summary>Excluded trials ({len(exclusions)})</summary>",
                 "",
-                "Trial indices refer to the original profile evidence in report.json. Bounds are computed before any exclusion.",
+                "Trial indices refer to the original profile evidence in report.json. The low and high tails are selected once from the original score ordering.",
                 "",
-                "| Task | Profile | Trial | Score | Q1 | Q3 | IQR | Lower | Upper | Direction |",
-                "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+                "| Task | Profile | Trial | Score | Tail |",
+                "|---|---|---:|---:|---|",
             )
         )
-        for task_id, name, f, trial in exclusions:
+        for task_id, name, _, trial in exclusions:
             lines.append(
                 f"| {task_id} | {name} | {trial['trial_index']} | {trial['score']:.2f} | "
-                + " | ".join(
-                    f"{f[key]:.2f}"
-                    for key in ("q1", "q3", "iqr", "lower_bound", "upper_bound")
-                )
-                + f" | {trial['direction']} |"
+                + f"{trial['direction']} |"
             )
         lines.extend(("", "</details>", ""))
     else:
-        lines.extend(("No trials were excluded by IQR screening.", ""))
+        lines.extend(("No trials were excluded by score trimming.", ""))
     samples = aggregate["comparison_samples"]
     task_count = len(report["cases"])
     lines.extend(
@@ -198,7 +216,7 @@ def render_report(report: dict[str, Any]) -> str:
         "The completion gate failed because one or more expected tasks did not produce a valid judged pair. "
         "The displayed Aggregate covers completed tasks only."
         if missing_tasks
-        else "The hard gate requires every expected trial and every judge call to succeed, including IQR-excluded trials."
+        else "The hard gate requires every expected trial and every judge call to succeed, including trimmed trials."
     )
     judge_metadata = report["judge"]
     generation_description = (
