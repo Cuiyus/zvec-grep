@@ -1,5 +1,5 @@
-name: GLM local E2E · baseline / Node / Rust · IQR
-run-name: GLM-5.2 local · main 20 tasks × 3 groups × 10 repetitions
+name: "GLM local E2E \xB7 baseline / Node / Rust \xB7 trimmed repeat"
+run-name: "GLM-5.2 local \xB7 stability round 2 \xB7 main 20 tasks \xD7 3 groups \xD7 10 repetitions"
 'on':
   workflow_dispatch:
     inputs:
@@ -32,15 +32,16 @@ jobs:
         BENCH_EVENT_NAME: ${{ github.event_name }}
         BENCH_ACTOR: ${{ github.actor }}
         BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
-        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
-        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
-        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
-        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
-        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
-        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
-        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
-        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\"\
+        \ != \"workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch\
+        \ runs.\"\n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n\
+        \  echo \"::error::Both the original actor and the current triggering actor are required.\"\n\
+        \  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission\
+        \ field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor\
+        \ with repository role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires\
+        \ the admin or maintain repository role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\n\
+        done\n"
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -68,21 +69,25 @@ jobs:
 
         PYCODE
 
-        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p
-        test_three_arm_e2e.py -v
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests
+        -p test_three_arm_e2e.py -v
 
-        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p
-        test_iqr_statistics.py -v
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests
+        -p test_trim_statistics.py -v
+
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests
+        -p test_stability.py -v
 
         '
     - name: Build exact main task matrix
       id: matrix
       env:
         TASK_SCOPE: ${{ inputs.task_scope }}
-      run: "python - <<'PYCODE'\nimport json,os\nfrom pathlib import Path\ntasks=[t['task_slug'] for t in json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())['tasks']]\n\
+      run: "python - <<'PYCODE'\nimport json,os\nfrom pathlib import Path\ntasks=[t['task_slug'] for t\
+        \ in json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())['tasks']]\n\
         assert len(tasks)==len(set(tasks))==20\nif os.environ['TASK_SCOPE']:\n    assert os.environ['TASK_SCOPE']\
-        \ in tasks\n    tasks=[os.environ['TASK_SCOPE']]\nwith open(os.environ['GITHUB_OUTPUT'],'a') as f:\n   \
-        \ print('matrix='+json.dumps({'task':tasks}),file=f)\nPYCODE\n"
+        \ in tasks\n    tasks=[os.environ['TASK_SCOPE']]\nwith open(os.environ['GITHUB_OUTPUT'],'a') as\
+        \ f:\n    print('matrix='+json.dumps({'task':tasks}),file=f)\nPYCODE\n"
     - name: Require configured GLM credential
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
@@ -93,6 +98,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -103,15 +109,16 @@ jobs:
         BENCH_EVENT_NAME: ${{ github.event_name }}
         BENCH_ACTOR: ${{ github.actor }}
         BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
-        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
-        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
-        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
-        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
-        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
-        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
-        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
-        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\"\
+        \ != \"workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch\
+        \ runs.\"\n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n\
+        \  echo \"::error::Both the original actor and the current triggering actor are required.\"\n\
+        \  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission\
+        \ field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor\
+        \ with repository role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires\
+        \ the admin or maintain repository role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\n\
+        done\n"
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -121,8 +128,17 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
-    - name: Verify published Node 0.2.2 package
-      run: python benchmarks/version-comparison/package_node.py "$RUNNER_TEMP/package-node"
+    - name: Reuse exact Node package from round 1
+      uses: actions/download-artifact@v8
+      with:
+        name: three-arm-package-node
+        run-id: 38679000248
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/package-node
+    - name: Verify Node manifest, package and CLI fingerprints
+      run: python benchmarks/version-comparison/verify_reused_package.py --directory "$RUNNER_TEMP/package-node"
+        --variant node
     - uses: actions/upload-artifact@v7
       with:
         name: three-arm-package-node
@@ -132,9 +148,10 @@ jobs:
   package-rust:
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -145,15 +162,16 @@ jobs:
         BENCH_EVENT_NAME: ${{ github.event_name }}
         BENCH_ACTOR: ${{ github.actor }}
         BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
-        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
-        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
-        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
-        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
-        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
-        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
-        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
-        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\"\
+        \ != \"workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch\
+        \ runs.\"\n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n\
+        \  echo \"::error::Both the original actor and the current triggering actor are required.\"\n\
+        \  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission\
+        \ field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor\
+        \ with repository role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires\
+        \ the admin or maintain repository role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\n\
+        done\n"
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -163,16 +181,21 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
-    - name: Build pinned Rust main
-      uses: ./.github/actions/rust-candidate-package
+    - name: Reuse exact Rust package from round 1
+      uses: actions/download-artifact@v8
       with:
-        candidate_repository: zvec-ai/zvec-grep
-        candidate_ref: 732a44014654c7acf08553716af67865bcfb8430
-        cache_namespace: swe-qa-rust
+        name: three-arm-package-rust
+        run-id: 38679000248
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/package-rust
+    - name: Verify Rust manifest, package and CLI fingerprints
+      run: python benchmarks/version-comparison/verify_reused_package.py --directory "$RUNNER_TEMP/package-rust"
+        --variant rust
     - uses: actions/upload-artifact@v7
       with:
         name: three-arm-package-rust
-        path: ${{ runner.temp }}/rust-package-cache/
+        path: ${{ runner.temp }}/package-rust/
         if-no-files-found: error
         retention-days: 30
   task:
@@ -199,15 +222,16 @@ jobs:
         BENCH_EVENT_NAME: ${{ github.event_name }}
         BENCH_ACTOR: ${{ github.actor }}
         BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
-        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
-        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
-        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
-        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
-        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
-        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
-        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
-        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\"\
+        \ != \"workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch\
+        \ runs.\"\n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n\
+        \  echo \"::error::Both the original actor and the current triggering actor are required.\"\n\
+        \  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission\
+        \ field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor\
+        \ with repository role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires\
+        \ the admin or maintain repository role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\n\
+        done\n"
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -236,15 +260,15 @@ jobs:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
         BENCH_TASK: ${{ matrix.task }}
         ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/three-arm-index-seeds
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e run --task "$BENCH_TASK" --packages
-        "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/three-arm-evidence"
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e run --task "$BENCH_TASK"
+        --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/three-arm-evidence"
     - name: Scan evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root
-        "$RUNNER_TEMP/three-arm-evidence"
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY
+        --root "$RUNNER_TEMP/three-arm-evidence"
     - name: Preserve all trials and failed attempts
       if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       uses: actions/upload-artifact@v7
@@ -263,7 +287,7 @@ jobs:
         if-no-files-found: error
         retention-days: 90
   aggregate:
-    name: Three-arm raw and IQR report
+    name: Three-arm raw and trimmed report
     needs:
     - validate
     - task
@@ -272,6 +296,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
     steps:
     - name: Authorize manual benchmark run
       id: authorize
@@ -282,15 +307,16 @@ jobs:
         BENCH_EVENT_NAME: ${{ github.event_name }}
         BENCH_ACTOR: ${{ github.actor }}
         BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\" != \"\
-        workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\
-        \n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both\
-        \ the original actor and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\"\
-        \ \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission field maps maintain to write; use role_name.\n\
-        \  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\" --jq '.role_name')\"\n  case\
-        \ \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository role $role.\"\n    \
-        \  ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository role; $actor\
-        \ has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+      run: "test \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nset -euo pipefail\nif [[ \"$BENCH_EVENT_NAME\"\
+        \ != \"workflow_dispatch\" ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch\
+        \ runs.\"\n  exit 1\nfi\nif [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n\
+        \  echo \"::error::Both the original actor and the current triggering actor are required.\"\n\
+        \  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"; do\n  # The legacy permission\
+        \ field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor\
+        \ with repository role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires\
+        \ the admin or maintain repository role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\n\
+        done\n"
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
@@ -311,8 +337,19 @@ jobs:
         pattern: three-arm-report-*
         path: ${{ runner.temp }}/task-reports
     - name: Recompute all task-weighted statistics without model calls
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e aggregate --reports "$RUNNER_TEMP/task-reports"
-        --output "$RUNNER_TEMP/three-arm-comparison"
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e aggregate --reports
+        "$RUNNER_TEMP/task-reports" --output "$RUNNER_TEMP/three-arm-comparison"
+    - name: Download completed first-round reports for stability comparison
+      uses: actions/download-artifact@v8
+      with:
+        pattern: three-arm-report-*
+        run-id: 38679000248
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/reference-reports
+    - name: Compare independent rounds with the same trimming rule
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.stability --reference-reports "$RUNNER_TEMP/reference-reports"
+        --repeat-reports "$RUNNER_TEMP/task-reports" --output "$RUNNER_TEMP/three-arm-comparison"
     - uses: actions/upload-artifact@v7
       if: always()
       with:

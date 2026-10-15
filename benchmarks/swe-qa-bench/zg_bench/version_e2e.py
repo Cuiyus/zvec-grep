@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import time
 import tomllib
 
@@ -42,29 +41,13 @@ def write_json(path, value):
 
 
 def identity(package_dir, variant):
-    package = package_dir / "candidate.tgz"
-    subprocess.run([
-        "node", str(ROOT.parent / "shared/rust-package-cache.mjs"),
-        "verify", "--directory", str(package_dir), "--commit", COMMITS[variant],
-    ], check=True)
-    with tarfile.open(package) as archive:
-        metadata = json.load(archive.extractfile("package/package.json"))
-        entrypoint = metadata["bin"]["zg"] if isinstance(metadata["bin"], dict) else metadata["bin"]
-        if variant == "node":
-            if metadata["version"] != "0.2.2" or entrypoint != "dist/cli/index.js":
-                raise ValueError("Wrong Node release")
-            if hashlib.sha256(package.read_bytes()).hexdigest() != EXPERIMENT["node"]["tarball_sha256"]:
-                raise ValueError("Published Node tarball mismatch")
-        elif entrypoint != "bin/zg":
-            raise ValueError("Rust package must expose bin/zg")
-        binary = archive.extractfile("package/" + entrypoint)
-        if binary is None:
-            raise ValueError("Pinned package has no native zg binary")
-        binary_sha = hashlib.file_digest(binary, "sha256").hexdigest()
+    # Verify both the tarball and executed CLI against the first round.
+    verified = json.loads(subprocess.check_output([
+        sys.executable, str(ROOT.parent / "version-comparison/verify_reused_package.py"),
+        "--directory", str(package_dir), "--variant", variant,
+    ], text=True))
     return {
-        "source_commit": COMMITS[variant],
-        "package_sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
-        "cli_sha256": binary_sha,
+        **verified,
         "actual_harness_profile": "zvec-grep",
         "comparison_slot": SLOTS[variant],
     }

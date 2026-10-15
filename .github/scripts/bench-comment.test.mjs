@@ -302,7 +302,7 @@ test("e2e is skipped by default and only explicit manual dispatch can enable it"
   assert.equal(x.outputs.run_e2e, "true");
   assert.match(
     x.calls.filter(([name]) => name === "create" || name === "update").at(-1)[1].body,
-    /10 trials per profile; score-based 1.5×IQR/,
+    /10 trials per profile; trim one lowest and one highest score per task\/profile/,
   );
   const result = resultComment({
     context: x.context,
@@ -334,7 +334,7 @@ test("both benchmark tables are included and newer PR commits are called out", (
   assert.ok(result.body.includes(sha));
 });
 
-test("legacy and IQR report schemas are accepted, unknown schemas are not", () => {
+test("legacy and current report schemas are accepted, unknown schemas are not", () => {
   for (const version of [2, 3, 99]) {
     const result = resultComment({
       context: fixture().context,

@@ -1,8 +1,7 @@
-"""Raw trial evidence and score-IQR sensitivity statistics."""
+"""Raw trial evidence and fixed-tail score statistics."""
 
 from __future__ import annotations
 
-from statistics import quantiles
 from typing import Any, Sequence
 
 from zg_bench.core.errors import SweQaError
@@ -68,14 +67,14 @@ def summarize_profile(trials: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-IQR_POLICY = {
-    "method": "score_iqr_1.5",
+TRIM_POLICY = {
+    "method": "score_trim_min_max_once",
     "group_by": ["model", "task_id", "profile"],
-    "quantiles": "inclusive-linear-type7",
-    "multiplier": 1.5,
+    "trim_count_per_tail": 1,
+    "minimum_samples": 3,
+    "insufficient_samples": "retain_all",
+    "tie_breaker": "trial_index_then_original_position",
     "passes": 1,
-    "bounds": "inclusive",
-    "zero_iqr": "retain_only_scores_equal_to_quartiles",
     "selection_metric": "judge.total",
     "aggregation": "equal_weight_task_means",
 }
@@ -117,19 +116,23 @@ def profile_statistics(profile: dict[str, Any]) -> dict[str, Any]:
                 "excluded_trials": [],
             },
         }
-    scores = [trial["judge"]["total"] for trial in trials]
-    if len(scores) == 1:
-        q1 = q3 = scores[0]
-    else:
-        q1, _, q3 = quantiles(scores, n=4, method="inclusive")
-    iqr = q3 - q1
-    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    ranked = sorted(
+        enumerate(trials, start=1),
+        key=lambda item: (
+            item[1]["judge"]["total"],
+            item[1].get("trial_index", item[0]),
+            item[0],
+        ),
+    )
+    trimmed_positions = (
+        {ranked[0][0]: "low", ranked[-1][0]: "high"} if len(trials) >= 3 else {}
+    )
     retained, excluded = [], []
     retained_indexes = []
     for position, trial in enumerate(trials, start=1):
         score = trial["judge"]["total"]
         trial_index = trial.get("trial_index", position)
-        if lower <= score <= upper:
+        if position not in trimmed_positions:
             retained.append(trial)
             retained_indexes.append(trial_index)
         else:
@@ -138,7 +141,7 @@ def profile_statistics(profile: dict[str, Any]) -> dict[str, Any]:
                     "trial_index": trial_index,
                     "trial_name": trial.get("trial_name"),
                     "score": score,
-                    "direction": "low" if score < lower else "high",
+                    "direction": trimmed_positions[position],
                 }
             )
 
@@ -152,15 +155,12 @@ def profile_statistics(profile: dict[str, Any]) -> dict[str, Any]:
         "raw": summarize(trials),
         "filtered": summarize(retained),
         "filter": {
-            "status": "applied",
+            "status": "applied"
+            if trimmed_positions
+            else "unavailable_insufficient_trials",
             "original_count": len(trials),
             "retained_count": len(retained),
             "excluded_count": len(excluded),
-            "q1": q1,
-            "q3": q3,
-            "iqr": iqr,
-            "lower_bound": lower,
-            "upper_bound": upper,
             "retained_trial_indexes": retained_indexes,
             "excluded_trials": excluded,
         },
@@ -233,5 +233,5 @@ def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "raw": aggregate("raw"),
         "comparison_basis": "ratio_of_aggregate_profile_means",
         "task_statistics": tasks,
-        "filter": {**IQR_POLICY, "task_count": len(tasks), "profiles": counts},
+        "filter": {**TRIM_POLICY, "task_count": len(tasks), "profiles": counts},
     }

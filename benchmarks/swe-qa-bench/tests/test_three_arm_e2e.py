@@ -1,8 +1,13 @@
 """Offline execution/provenance contracts for the six-hundred-trial experiment."""
+import base64
 import copy
+import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -72,14 +77,14 @@ class ThreeArmTests(unittest.TestCase):
             with patch.dict(os.environ,{'ZG_BENCH_CLI_RUNTIME':variant}):
                 self.assertEqual(_zg('index'),expected)
 
-    def test_iqr_does_not_erase_judge_calls_or_rejudge_shared_baseline(self):
+    def test_trimming_does_not_erase_judge_calls_or_rejudge_shared_baseline(self):
         report=self.make_report()
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ,{'GITHUB_STEP_SUMMARY':''}):
             summary=run.summarize([report],Path(temp))
             self.assertEqual(summary['judged_trials'],30)
             self.assertFalse(summary['complete'])
             self.assertEqual(len(summary['missing_tasks']),19)
-            self.assertEqual([r['retained_count'] for r in summary['rows']],[10,9,9])
+            self.assertEqual([r['retained_count'] for r in summary['rows']],[8,8,8])
             self.assertEqual([r['filtered']['judge'] for r in summary['rows']],[75,90,90])
             self.assertEqual(len(report['profiles']['rust']['trials']),10)
             markdown=(Path(temp)/'report.md').read_text()
@@ -124,8 +129,75 @@ class ThreeArmTests(unittest.TestCase):
             guard=job['steps'][0]['run']
             self.assertIn('Cuiyus/zvec-grep',guard)
             self.assertIn('BENCH_TRIGGERING_ACTOR',guard)
-        action=next(s for s in workflow['jobs']['package-rust']['steps'] if s.get('uses','').startswith('./.github/actions'))
-        self.assertEqual(action['with']['candidate_ref'],run.EXPERIMENT['rust']['source_commit'])
+        for arm in ('node', 'rust'):
+            job = workflow['jobs']['package-' + arm]
+            self.assertEqual(job['permissions']['actions'], 'read')
+            download = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/download-artifact@'))
+            self.assertEqual(download['with']['run-id'], 38679000248)
+            self.assertEqual(download['with']['repository'], 'Cuiyus/zvec-grep')
+            self.assertEqual(download['with']['name'], 'three-arm-package-' + arm)
+            self.assertEqual(download['with']['github-token'], '${{ github.token }}')
+            self.assertTrue(any('verify_reused_package.py' in s.get('run', '') and '--variant ' + arm in s['run'] for s in job['steps']))
+            self.assertFalse(any('rust-candidate-package' in s.get('uses', '') for s in job['steps']))
+        aggregate = workflow['jobs']['aggregate']
+        self.assertEqual(aggregate['permissions']['actions'], 'read')
+        reference = next(s for s in aggregate['steps'] if s.get('name') == 'Download completed first-round reports for stability comparison')
+        self.assertEqual(reference['with']['run-id'], 38679000248)
+        self.assertEqual(reference['with']['pattern'], 'three-arm-report-*')
+        self.assertEqual(reference['with']['path'], '${{ runner.temp }}/reference-reports')
+        comparison = next(s for s in aggregate['steps'] if s.get('name') == 'Compare independent rounds with the same trimming rule')
+        self.assertIn('--reference-reports "$RUNNER_TEMP/reference-reports"', comparison['run'])
+        self.assertIn('--repeat-reports "$RUNNER_TEMP/task-reports"', comparison['run'])
+        self.assertIn('--output "$RUNNER_TEMP/three-arm-comparison"', comparison['run'])
+        self.assertEqual(run.EXPERIMENT['round'], 2)
+        self.assertEqual(run.EXPERIMENT['reference_run_id'], 38679000248)
+        self.assertEqual(run.EXPERIMENT['kind'], 'three-arm-glm-local-trim-repeat')
+
+    def test_reused_package_verification_rejects_changed_package_and_cli(self):
+        helper = run.ROOT.parent / 'version-comparison/verify_reused_package.py'
+        spec = importlib.util.spec_from_file_location('verify_reused_package', helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for arm in ('node', 'rust'):
+            with self.subTest(arm=arm), tempfile.TemporaryDirectory() as temp:
+                directory = Path(temp)
+                entrypoint = 'dist/cli/index.js' if arm == 'node' else 'bin/zg'
+                cli = b'unchanged first-round CLI'
+                package = directory / 'candidate.tgz'
+                with tarfile.open(package, 'w:gz') as archive:
+                    metadata = json.dumps({'name':'@zvec/zvec-grep', 'version':'0.2.2' if arm == 'node' else '0.0.1', 'bin':{'zg':entrypoint}}).encode()
+                    for name, content in [('package/package.json', metadata), ('package/' + entrypoint, cli)]:
+                        member = tarfile.TarInfo(name)
+                        member.size = len(content)
+                        archive.addfile(member, io.BytesIO(content))
+                body = package.read_bytes()
+                config = {'source_commit':'a' * 40, 'tarball_sha256':hashlib.sha256(body).hexdigest(),
+                          'cli_sha256':hashlib.sha256(cli).hexdigest(),
+                          'registry_integrity':'sha512-' + base64.b64encode(hashlib.sha512(body).digest()).decode()}
+                manifest = {'schema_version':1, 'candidate_commit':config['source_commit'],
+                            'tarball':'candidate.tgz', 'tarball_sha256':config['tarball_sha256']}
+                manifest_path = directory / 'manifest.json'
+                manifest_path.write_text(json.dumps(manifest))
+                verified = module.verify(directory, arm, {arm:config})
+                self.assertEqual(verified['cli_sha256'], config['cli_sha256'])
+                self.assertEqual(verified['package_sha256'], config['tarball_sha256'])
+                # A matching, rewritten manifest cannot authorize a new tarball.
+                package.write_bytes(body + b'tampered')
+                manifest['tarball_sha256'] = hashlib.sha256(package.read_bytes()).hexdigest()
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, 'Package SHA256'):
+                    module.verify(directory, arm, {arm:config})
+                package.write_bytes(body)
+                manifest['tarball_sha256'] = config['tarball_sha256']
+                manifest_path.write_text(json.dumps(manifest))
+                wrong_cli = dict(config, cli_sha256='0' * 64)
+                with self.assertRaisesRegex(ValueError, 'CLI SHA256'):
+                    module.verify(directory, arm, {arm:wrong_cli})
+                manifest['candidate_commit'] = 'b' * 40
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, 'manifest'):
+                    module.verify(directory, arm, {arm:config})
+
 
 
 if __name__=='__main__':

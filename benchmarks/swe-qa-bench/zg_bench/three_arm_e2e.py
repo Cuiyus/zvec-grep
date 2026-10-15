@@ -49,7 +49,7 @@ def command(task, arm, output, packages, repetition):
         '--embedding-model', EXPERIMENT['embedding_model'],
         '--zvec-grep-package', str(packages / arm / 'candidate.tgz'),
         '--jobs-dir', str(output / 'runs' / arm / f'r{repetition}'),
-        '--job-name', f'iqr-{task}-{arm}-r{repetition}',
+        '--job-name', f'trim-{task}-{arm}-r{repetition}',
     ]
 
 
@@ -193,12 +193,12 @@ def summarize(reports, output):
     versions.write_json(output / 'comparison.json', data)
     lines = ['# GLM-5.2 · local embedding · E2E', '',
         f"Completed tasks: **{len(reports)}/20**; scored trials: **{data['judged_trials']}/600**.", '',
-        '| Group | Original | Retained | Excluded | Score raw → IQR | Agent seconds raw → IQR | Input tokens raw → IQR |',
+        '| Group | Original | Retained | Excluded | Score raw → trim | Agent seconds raw → trim | Input tokens raw → trim |',
         '|---|---:|---:|---:|---:|---:|---:|']
     for r in rows:
         cells = [f"{r['raw'][key]:,.2f} → {r['filtered'][key]:,.2f}" for key in ('judge','agent_wall_seconds','input_tokens')]
         lines.append(f"| {r['label']} | {r['original_count']} | {r['retained_count']} | {r['excluded_count']} | " + ' | '.join(cells) + ' |')
-    lines += ['', 'PR #261: one-pass, two-sided 1.5×IQR on score within each task/group; inclusive type-7 quartiles. '
+    lines += ['', 'PR #261: remove exactly one lowest and one highest score per task/group; ties use trial index. '
         'The same retained trials supply score, time and token means. All completed tasks are weighted equally. '
         'Raw results, failures, retry history and original judge usage remain archived.', '',
         f"Node: 0.2.2; Rust: {EXPERIMENT['rust']['source_commit']}; OpenCode: 1.18.4; local embedding: potion-code-16m-v2 (256D).",

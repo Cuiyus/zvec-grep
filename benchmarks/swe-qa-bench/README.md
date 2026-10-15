@@ -54,7 +54,8 @@ profiles.
 ## Metrics and reporting
 
 Job Summary cells use `baseline / zvec-grep / change`. Each task's baseline and
-zvec-grep values are profile means across its configured trials (ten in CI, before IQR screening).
+zvec-grep values are profile means across its configured trials (ten in CI,
+eight after trimming one minimum and one maximum score).
 
 | Metric | Change | Interpretation |
 | --- | --- | --- |
@@ -92,19 +93,21 @@ breakdown, so resource deltas must not be compared across these scopes as if
 their accounting were identical. Failed attempts remain archived separately
 under `.retry-history/` and are not included in final-success trial means.
 
-The summary compares **raw** and **1.5×IQR-filtered** results, with original,
+The summary compares **raw** and **score-trimmed** results, with original,
 retained and excluded sample counts for each profile. Per-task rows show the
 filtered means and retained/original counts. Exclusion details identify the
-original task/profile/trial, score, direction, quartiles and fences.
+original task/profile/trial, score and selected tail (`low` or `high`).
 
-- Screen judge total scores separately within each model × task × profile.
-  Compute Q1 and Q3 with inclusive linear interpolation (type 7), then
-  `IQR = Q3 - Q1`. Retain scores in
-  `[Q1 - 1.5×IQR, Q3 + 1.5×IQR]`, including both boundaries.
-- Apply this two-sided rule **once** to the original successful trials. There
-  is no minimum score-gap threshold. When IQR is zero, only scores equal to
-  Q1/Q3 remain. For example, `[90, 87, 87, 56, 88]` has fences `[85.5, 89.5]`
-  and excludes both 56 and 90.
+- Within each model × task × profile, sort the original successful trials by
+  `(judge.total, trial_index)` and remove the first and last entries **once**.
+  Missing trial indices fall back to the original one-based position. Ties use
+  trial order rather than resource usage: the minimum tied index is removed
+  from the low tail, and the maximum tied index from the high tail.
+- Ten trials retain eight. This is a fixed count, not a percentage or an
+  outlier threshold; even identical scores lose two distinct trials. For
+  example, `[90, 87, 87, 56, 88]` retains `[87, 87, 88]` after removing 56 and 90.
+  Groups with fewer than three trials retain all samples and are marked
+  `unavailable_insufficient_trials`, with their sample counts still reported.
 - An excluded trial's score, time, input/output tokens, tool calls, cost and
   session usage leave the statistical averages together. Do not screen time
   or tokens independently. Do not remove entire tasks for large between-profile
@@ -116,15 +119,17 @@ original task/profile/trial, score, direction, quartiles and fences.
 - Report schema 3 keeps original cases/trials and raw profile means unchanged.
   `aggregate.profiles` and `aggregate.comparison` hold filtered task-weighted
   results; `aggregate.raw` holds the unfiltered counterparts.
-  `aggregate.task_statistics` records each task's raw/filtered values and IQR
-  evidence; `aggregate.filter` records the policy and sample counts.
-  Reaggregating schema 1/2 evidence recalculates IQR from the original trials.
+  `aggregate.task_statistics` records each task's raw/filtered values, retained
+  trial indices and excluded tails; `aggregate.filter` records the
+  `score_trim_min_max_once` policy and sample counts.
+  Reaggregating schema 1/2/3 evidence recalculates trimming from the original trials.
   Summary-only legacy evidence remains explicitly unscreened, with unknown
   sample counts shown as `N/A`.
 
-This is a sensitivity analysis, not evidence that excluded data is invalid.
+Trimming reduces the influence of the two tails; it is not evidence that
+excluded data is invalid. The raw results remain available for comparison.
 Actual judge usage/cost and the completion gate still count every original
-trial. Failures, exhausted retries and missing tasks cannot be hidden by IQR.
+trial. Failures, exhausted retries and missing tasks cannot be hidden by trimming.
 `all-full` runs 20 tasks × 2 profiles × 10 trials = 400 independent trials per
 model/embedding configuration; filtering does not trigger replacement runs.
 

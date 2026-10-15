@@ -23,7 +23,7 @@ from zg_bench.swe_qa.pairs import load_references
 from zg_bench.version_e2e import DATA, ROOT, prebuild_task_image, write_json
 
 REPETITIONS = 10
-LOCKED_INPUTS = {'zg_bench/swe_qa/data/selection.json': '1e415bb4ddb54a037ccfd49815a9b61e3de792492468218dce9d0bf8269d1302', 'zg_bench/swe_qa/data/references.json': '9b9407d93c76ab7fd081effe2545921a47ed31db35e6cdd28f9120b7f632baab', 'zg_bench/swe_qa/data/index.ignore': '9e216b4ed9b3d6d3a16f846c563d872300c5d15d9bbb483a5997b661da2c0be2', 'uv.lock': '136fb8c5a3cc96828223968c572f39847f85476415bc59fa28f9765d37b7b751', 'ci-config.json': 'dc5a7af4b9a5a106acbdc451af3e8bcef1f54ce7c804b09e154eedf4db6fb5a5', 'zg_bench/metrics/summary.py': 'c5db597e3417409ae6e40e531de6569083a7fab7c6d153f3dc4b8ee6198e3888', 'zg_bench/reports/render.py': '880f5fdad007adfd59719272e6d183afcbe1dc03f166a02afdaedbf182e181a3'}
+LOCKED_INPUTS = {'zg_bench/swe_qa/data/selection.json': '1e415bb4ddb54a037ccfd49815a9b61e3de792492468218dce9d0bf8269d1302', 'zg_bench/swe_qa/data/references.json': '9b9407d93c76ab7fd081effe2545921a47ed31db35e6cdd28f9120b7f632baab', 'zg_bench/swe_qa/data/index.ignore': '9e216b4ed9b3d6d3a16f846c563d872300c5d15d9bbb483a5997b661da2c0be2', 'uv.lock': '136fb8c5a3cc96828223968c572f39847f85476415bc59fa28f9765d37b7b751', 'ci-config.json': 'dc5a7af4b9a5a106acbdc451af3e8bcef1f54ce7c804b09e154eedf4db6fb5a5', 'zg_bench/metrics/summary.py': 'b6ac79f2f145a375df90f6fa652cc8bd4e7913d8c9c1b9ee6c663ce96d4fe276', 'zg_bench/reports/render.py': '4590d1cd573d9fcbe3c606e057c363645325418d2f0cea3a80bf7c921bea638a'}
 
 
 def validate_inputs():

@@ -58,15 +58,15 @@ Job Summary 单元格使用 `baseline / zvec-grep / change`。每个任务的 ba
 
 没有会话导出的历史数据保留为 `legacy-root`，其子代理 token 和工具用量未知，可能漏计。采集和报告聚合均拒绝将它与新口径混用，包括没有标记统计口径的旧报告。旧版输入/输出 token 的组成也不同，不能把新旧资源差值当作同口径比较。失败尝试仍单独保存在 `.retry-history/`，不计入最终成功 trial 的均值。
 
-Aggregate 同时展示原始值和 **1.5×IQR 剔除后**的指标，以及每个 profile 的原始、保留、剔除样本数。逐题表展示剔除后的均值和保留/原始次数；剔除明细列出题目、profile、原始 trial 编号、得分、方向、四分位数和上下界。
+Aggregate 同时展示原始值和**各去掉一次最低分、最高分后**的指标，以及每个 profile 的原始、保留、剔除样本数。逐题表展示截尾后的均值和保留/原始次数；剔除明细列出题目、profile、原始 trial 编号、得分及所属尾部（`low` / `high`）。
 
-- 按「模型 × 题目 × profile」分别筛选 Judge 总分。采用 inclusive 线性插值（type 7）计算 Q1、Q3，令 `IQR = Q3 - Q1`，保留 `[Q1 - 1.5×IQR, Q3 + 1.5×IQR]` 内的得分，包含边界值。
-- 对原始成功样本做一次双向筛选，不迭代，不额外要求至少偏离 10 分。`IQR=0` 时仅保留等于 Q1/Q3 的分数。例如 `[90, 87, 87, 56, 88]` 的保留范围为 `[85.5, 89.5]`，56 和 90 都会剔除。
+- 按「模型 × 题目 × profile」分别处理原始成功样本。按 `(judge.total, trial_index)` 升序排列，一次性去掉首尾各一个 trial。缺少 `trial_index` 时使用从 1 开始的原始位置。同分按 trial 顺序处理：低分端去掉编号最小的一次，高分端去掉编号最大的一次，不根据时间或 token 挑选。
+- 每组 10 次保留 8 次。这是固定数量截尾，不是固定百分比或离群阈值；即使所有得分相同，也会去掉两次不同的执行。例如 `[90, 87, 87, 56, 88]` 去掉 56 和 90 后保留 `[87, 87, 88]`。少于 3 次时不截尾，全部保留，标记为 `unavailable_insufficient_trials`，并继续展示实际样本数。
 - 剔除某次 trial 时，其得分、时间、输入/输出 token、工具调用、成本及会话用量一起退出均值；不对时间或 token 单独筛选。移除原有按组间分差 ±10 分或 token 变化 ±100% 剔除整题的规则。
 - 先计算每题每组保留样本的均值，再对所有已完成题目等权平均。质量与资源指标都使用这一口径；Aggregate 资源值从总和改为均值。变化率由展示的聚合值计算。
-- 报告 schema 3 保留原始 `cases`、`trials` 及 profile 均值。`aggregate.profiles` / `comparison` 为剔除后结果，`aggregate.raw` 为原始结果；`aggregate.task_statistics` 保留逐题原始/筛选后数值和筛选证据，`aggregate.filter` 记录规则与样本数。合并 schema 1/2 历史报告时从原始 trial 重新筛选；缺少逐次证据的旧报告明确标记为未筛选，样本数显示 `N/A`。
+- 报告 schema 3 保留原始 `cases`、`trials` 及 profile 均值。`aggregate.profiles` / `comparison` 为截尾后结果，`aggregate.raw` 为原始结果；`aggregate.task_statistics` 保留逐题原始/截尾后数值、保留的 trial 编号和被去掉的尾部样本，`aggregate.filter` 记录 `score_trim_min_max_once` 规则与样本数。合并 schema 1/2/3 历史报告时从原始 trial 重新截尾；缺少逐次证据的旧报告明确标记为未筛选，样本数显示 `N/A`。
 
-筛选结果是敏感性分析，不意味着被剔除数据有误。实际 Judge 调用和费用、执行失败及完成性门槛仍保留全部原始记录。筛选不能掩盖超时、重试耗尽或缺失任务，也不会补跑替代样本。`all-full` 每个模型/embedding 配置运行 20 题 × 2 个 profile × 10 次 = 400 个 trial。
+截尾降低两端样本对均值的影响，不意味着被剔除数据有误；原始结果继续保留用于对照。实际 Judge 调用和费用、执行失败及完成性门槛仍保留全部原始记录。截尾不能掩盖超时、重试耗尽或缺失任务，也不会补跑替代样本。`all-full` 每个模型/embedding 配置运行 20 题 × 2 个 profile × 10 次 = 400 个 trial。
 
 ## GitHub Actions
 
