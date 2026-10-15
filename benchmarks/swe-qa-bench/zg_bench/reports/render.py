@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from zg_bench.core.errors import SweQaError
+from zg_bench.metrics.summary import aggregate_cases
 from zg_bench.metrics.usage import (
     LEGACY_USAGE_SCOPE,
     SESSION_USAGE_SCOPE,
@@ -47,28 +48,17 @@ def metric_cell(
 
 def render_report(report: dict[str, Any]) -> str:
     usage_scope = report.get("usage_scope", LEGACY_USAGE_SCOPE)
-    aggregate = report["aggregate"]
-    filtering = aggregate.get("filter", {})
-    included = set(
-        filtering.get(
-            "included_task_ids", [case["task_id"] for case in report["cases"]]
-        )
-    )
+    # Old artifacts may contain a different aggregate policy. Rebuild from the
+    # raw cases so the Markdown and current statistical method always agree.
+    aggregate = aggregate_cases(report["cases"])
+    filtering = aggregate["filter"]
 
-    def table_row(
-        label: str,
-        baseline: dict[str, Any],
-        zvec: dict[str, Any],
-        judge_b: float | None,
-        judge_z: float | None,
-        comparison: dict[str, Any],
-    ) -> str:
-        judge_cell = (
-            "N/A"
-            if judge_b is None or judge_z is None
-            else f"{judge_b:.2f} / {judge_z:.2f} / {_fmt_delta(comparison['judge_delta'])}"
-        )
-        cells = [label, judge_cell]
+    def table_row(label, profiles, comparison):
+        baseline, zvec = (profiles[name] for name in ("baseline", "zvec-grep"))
+        cells = [
+            label,
+            f"{baseline['judge']:.2f} / {zvec['judge']:.2f} / {_fmt_delta(comparison['judge_delta'])}",
+        ]
         for metric, change in (
             ("input_tokens", "input_token_reduction_pct"),
             ("tool_calls", "toolcall_reduction_pct"),
@@ -79,12 +69,7 @@ def render_report(report: dict[str, Any]) -> str:
             )
         return "| " + " | ".join(cells) + " |"
 
-    baseline = aggregate["profiles"]["baseline"]
-    zvec = aggregate["profiles"]["zvec-grep"]
-    lines = [
-        "# SWE-QA-Bench CI report",
-        "",
-    ]
+    lines = ["# SWE-QA-Bench CI report", ""]
     missing_tasks = report.get("gate", {}).get("missing_tasks", [])
     if missing_tasks:
         lines.extend(
@@ -98,160 +83,123 @@ def render_report(report: dict[str, Any]) -> str:
         )
     lines.extend(
         (
-            "All cells use `baseline / zvec-grep / change`. Resource savings are negative; Judge gains are positive.",
+            "All comparison cells use `baseline / zvec-grep / change`. Resource savings are negative; Judge gains are positive.",
             "",
-            "| Case | Judge self-judge | input_token | toolcall | time (s) |",
+            "| Summary | Judge mean | Input token mean | Tool call mean | Agent time mean (s) |",
             "|---|---:|---:|---:|---:|",
             table_row(
-                "**Aggregate**",
-                baseline,
-                zvec,
-                baseline["judge"],
-                zvec["judge"],
+                "Raw", aggregate["raw"]["profiles"], aggregate["raw"]["comparison"]
+            ),
+            table_row(
+                "**Aggregate (1.5×IQR)**",
+                aggregate["profiles"],
                 aggregate["comparison"],
             ),
+            "",
+            "| Profile | Tasks | Original samples | Retained | Excluded |",
+            "|---|---:|---:|---:|---:|",
         )
     )
-    for case in report["cases"]:
-        if case["task_id"] not in included:
-            continue
-        baseline = case["profiles"]["baseline"]
-        zvec = case["profiles"]["zvec-grep"]
+    for name, counts in filtering["profiles"].items():
+        values = [
+            str(counts[key]) if counts[key] is not None else "N/A"
+            for key in ("original_count", "retained_count", "excluded_count")
+        ]
         lines.append(
-            table_row(
-                str(case["task_id"]),
-                baseline["metrics"],
-                zvec["metrics"],
-                baseline["judge"]["total"],
-                zvec["judge"]["total"],
-                case["comparison"],
+            f"| {name} | {filtering['task_count']} | " + " | ".join(values) + " |"
+        )
+    lines.extend(
+        (
+            "",
+            "The score-based **1.5×IQR** rule is applied separately within each model × task × profile. "
+            "Q1/Q3 use inclusive linear interpolation (type 7). Retain scores within "
+            "`[Q1 - 1.5×IQR, Q3 + 1.5×IQR]`, including both boundaries. "
+            "Screen once, in both directions, with no minimum score gap. When IQR is zero, only scores equal to Q1/Q3 remain.",
+            "",
+            "An excluded trial's score, time, tokens, cost and tool calls are removed together from statistical means; "
+            "time and token values are not screened independently. "
+            "Each task is first averaged over its retained trials, then **all completed tasks receive equal weight**. "
+            "Aggregate resources are means, not sums. Every Aggregate change is calculated directly from the displayed Aggregate values, not an average of task percentages. "
+            "Raw trials, actual judge usage and completion failures are preserved. Filtered results are a sensitivity analysis, not evidence that a run was invalid.",
+            "",
+            "### Per-task results after IQR screening",
+            "",
+            "| Case | Judge mean | Input token mean | Tool call mean | Agent time mean (s) | Retained/original (baseline / zvec-grep) |",
+            "|---|---:|---:|---:|---:|---|",
+        )
+    )
+    exclusions = []
+    for task in aggregate["task_statistics"]:
+        profiles = {name: row["filtered"] for name, row in task["profiles"].items()}
+        counts = []
+        for name, row in task["profiles"].items():
+            f = row["filter"]
+            counts.append(
+                f"{f['retained_count']}/{f['original_count']}"
+                if f["status"] == "applied"
+                else "N/A (unscreened)"
             )
+            for excluded in f["excluded_trials"]:
+                exclusions.append((task["task_id"], name, f, excluded))
+        lines.append(
+            table_row(task["task_id"], profiles, task["comparison"])
+            + " "
+            + " / ".join(counts)
+            + " |"
         )
     lines.append("")
-    if filtering:
+    for name, counts in filtering["profiles"].items():
+        if counts["unscreened_task_ids"]:
+            lines.extend(
+                (
+                    f"**Unscreened legacy evidence ({name}):** "
+                    + ", ".join(counts["unscreened_task_ids"])
+                    + ". Raw repetitions are unavailable; these tasks retain their supplied means. Sample counts are N/A.",
+                    "",
+                )
+            )
+    if exclusions:
         lines.extend(
             (
-                f"Aggregate includes **{filtering['included_count']}/{filtering['total_count']} tasks**. "
-                "A task is excluded from every Aggregate metric and the table above if either its input-token change "
-                "`(zvec-grep mean - baseline mean) / baseline mean` is strictly outside **[-100%, +100%]**, "
-                "or its Judge difference `zvec-grep mean - baseline mean` is strictly outside **[-10, +10] score points**. "
-                "Exactly +/-10 Judge points and +/-100% input-token changes are retained. "
-                "Both filters use each profile's trial mean and are applied independently to each workflow run; "
-                "tasks matching both are excluded only once. "
-                "All tasks are still executed, judged, and retained in the JSON evidence.",
+                "<details>",
+                f"<summary>Excluded trials ({len(exclusions)})</summary>",
                 "",
+                "Trial indices refer to the original profile evidence in report.json. Bounds are computed before any exclusion.",
+                "",
+                "| Task | Profile | Trial | Score | Q1 | Q3 | IQR | Lower | Upper | Direction |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
             )
         )
-        excluded = filtering.get("excluded_tasks", [])
-        judge_excluded = [
-            row
-            for row in excluded
-            if "judge_delta_outside_range" in row.get("reasons", [])
-        ]
-        if judge_excluded:
-            lines.extend(
-                (
-                    "### Tasks excluded for Judge differences",
-                    "",
-                    "These are differences between the two profiles' mean scores, in points, not percentages. "
-                    "Positive values favor zvec-grep; negative values favor baseline. "
-                    "Every task below is excluded from all Aggregate metrics, including resource totals.",
-                    "",
-                    "| Task | Baseline Judge | zvec-grep Judge | Judge change (points) | Exclusion reason |",
-                    "|---|---:|---:|---:|---|",
+        for task_id, name, f, trial in exclusions:
+            lines.append(
+                f"| {task_id} | {name} | {trial['trial_index']} | {trial['score']:.2f} | "
+                + " | ".join(
+                    f"{f[key]:.2f}"
+                    for key in ("q1", "q3", "iqr", "lower_bound", "upper_bound")
                 )
+                + f" | {trial['direction']} |"
             )
-            for row in judge_excluded:
-                reason = (
-                    "Judge gain exceeds +10 points"
-                    if row["judge_delta"] > 0
-                    else "Judge decline exceeds -10 points"
-                )
-                if "undefined_baseline" in row["reasons"]:
-                    reason += "; input baseline is zero while zvec-grep is positive"
-                elif "input_token_change_outside_range" in row["reasons"]:
-                    reason += f"; input change {_fmt_delta(row['change_pct'], suffix='%')} is outside [-100%, +100%]"
-                lines.append(
-                    f"| {row['task_id']} | {row['baseline_judge']:.2f} | {row['zvec_grep_judge']:.2f} "
-                    f"| {_fmt_delta(row['judge_delta'])} | {reason} |"
-                )
-            lines.append("")
-        elif any(
-            rule.get("metric") == "judge" for rule in filtering.get("criteria", [])
-        ):
-            lines.extend(
-                (
-                    "No tasks were excluded for Judge differences outside [-10, +10] points.",
-                    "",
-                )
-            )
-        input_excluded = [
-            row
-            for row in excluded
-            if set(row.get("reasons", [row.get("reason")]))
-            & {"undefined_baseline", "input_token_change_outside_range"}
-        ]
-        if input_excluded:
-            descriptions = []
-            for row in input_excluded:
-                change = row["change_pct"]
-                descriptions.append(
-                    f"`{row['task_id']}` (input "
-                    + (
-                        "N/A: baseline is zero, zvec-grep is positive"
-                        if change is None
-                        else _fmt_delta(change, suffix="%")
-                    )
-                    + ")"
-                )
-            lines.extend(
-                (
-                    "Tasks excluded for input-token changes: "
-                    + "; ".join(descriptions)
-                    + ".",
-                    "",
-                )
-            )
-        if not included:
-            lines.extend(
-                (
-                    "No tasks remain after filtering; Aggregate is N/A. This does not invalidate completed trials.",
-                    "",
-                )
-            )
-
+        lines.extend(("", "</details>", ""))
+    else:
+        lines.extend(("No trials were excluded by IQR screening.", ""))
+    samples = aggregate["comparison_samples"]
+    task_count = len(report["cases"])
+    lines.extend(
+        (
+            "Aggregate comparison sample counts: "
+            f"Judge n={samples['judge_delta']}/{task_count}, "
+            f"input_token n={samples['input_token_reduction_pct']}/{task_count}, "
+            f"toolcall n={samples['toolcall_reduction_pct']}/{task_count}, "
+            f"time n={samples['time_reduction_pct']}/{task_count}.",
+            "",
+        )
+    )
     completion_statement = (
         "The completion gate failed because one or more expected tasks did not produce a valid judged pair. "
         "The displayed Aggregate covers completed tasks only."
         if missing_tasks
-        else "The hard gate requires every expected pair and every judge call to succeed, including excluded tasks."
+        else "The hard gate requires every expected trial and every judge call to succeed, including IQR-excluded trials."
     )
-    lines.extend(
-        (
-            "Each task's baseline and zvec-grep values are arithmetic means across its trials. "
-            "Aggregate resource values are sums of the included task means; Judge values are equal-weight means across included tasks. "
-            "Every Aggregate change is calculated directly from the displayed Aggregate values, not an average of task percentages. "
-            "A zero Aggregate baseline denominator produces N/A; zero-baseline tasks in other metrics still contribute to the sums. "
-            "For the input filter, two zero means are retained, while a zero baseline with positive zvec-grep is excluded.",
-            "",
-            "Nonnegative input tokens cannot decrease by more than 100%; this threshold therefore removes high-overhead tasks. "
-            "Filtered statistics are a sensitivity analysis and do not imply the excluded results are invalid.",
-            "",
-        )
-    )
-    samples = aggregate.get("comparison_samples")
-    if isinstance(samples, dict):
-        task_count = len(included)
-        lines.extend(
-            (
-                "Aggregate comparison sample counts: "
-                f"Judge n={samples.get('judge_delta', 0)}/{task_count}, "
-                f"input_token n={samples.get('input_token_reduction_pct', 0)}/{task_count}, "
-                f"toolcall n={samples.get('toolcall_reduction_pct', 0)}/{task_count}, "
-                f"time n={samples.get('time_reduction_pct', 0)}/{task_count}.",
-                "",
-            )
-        )
     judge_metadata = report["judge"]
     generation_description = (
         "Judge generation: "
