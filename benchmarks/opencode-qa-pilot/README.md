@@ -1,5 +1,12 @@
 # Native main OpenCode q001 pilot
 
+The repaired development pair is now complete and independently audited:
+**both answers passed at 9/10**, while zg used **48.29% less persisted-session
+input** and made one successful relevant MCP retrieval. This meets the frozen
+scoped-input candidate rule. It is one previously observed task, not evidence
+of stable benefit or a favorable benchmark set. The [v2 result archive](results/20261020-main-opencode-q001-v2/README.md)
+retains both answers, every tool call, original artifacts and independent audits.
+
 This independent development phase runs the **original q001** once with baseline
 tools and once with zg. It borrows the exact current-main Harbor/OpenCode runner
 at `a424e0ce06868dc9ad8f142f57de59b8f9b58699` and the Rust package from that
@@ -94,8 +101,11 @@ requires both process and container cleanup before the next slot.
 The separate [v2 fork workflow](../../.github/workflows/opencode-qa-pilot-v2.yml)
 runs controller preflight on push, including the Linux descendant cleanup test.
 Only an explicit `execute_pair=true` dispatch runs one fresh baseline then one
-fresh zg slot. No old answer is reused. Live execution remains pending at this
-freeze; failed attempts remain evidence and are not automatically retried.
+fresh zg slot. No old answer is reused. This sole dispatch completed in
+[run 39315776778](https://github.com/Cuiyus/zvec-grep/actions/runs/39315776778)
+at `cbf62676`, with one valid pair and 76/76 independent execution checks.
+The phase is closed; failed attempts remain evidence and are not retried.
+The positive scoped-input candidate permits only a separately frozen confirmation.
 
 ## Why this phase exists
 
@@ -141,7 +151,9 @@ Usage has the explicit scope `opencode-session-tree-v1`: persisted root and
 recursive child messages, including cached input and reasoning output. It
 excludes unpersisted title/background requests, other requests absent from the
 session database and embedding setup. Missing/zero provider dollar costs are
-unknown. Solver wall, evidence-export overhead and setup/cold wall are separate.
+unknown. Solver wall, evidence-export overhead and setup/outer wall are separate.
+The v2 pair used fresh containers, install volumes and index, but shared its
+Docker image/layer cache; outer wall is not an independently cleared-image comparison.
 
 The prospective candidate rules are in the plan. A quality candidate requires
 zg to pass the original gate while baseline fails, with no lower factual score.
@@ -156,7 +168,8 @@ complete the original favorable-set goal.
 
 ## Execution
 
-Use `.github/workflows/opencode-qa-pilot.yml` on **Cuiyus/zvec-grep**. The workflow
+The original and repaired workflows run only on **Cuiyus/zvec-grep**. Both
+development phases are closed; do not dispatch them again. Each workflow
 checks the current upstream main identity, exports its exact harness, installs
 locked dependencies, tests native requests against a local mock provider,
 validates the wrapper and exports q001 before exposing model credentials. It

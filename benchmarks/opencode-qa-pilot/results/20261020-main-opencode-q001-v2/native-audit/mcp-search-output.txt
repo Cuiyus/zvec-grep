@@ -1,0 +1,391 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (2):
+  Q1 [primary]: WAL replay recovery on collection open, replaying unflushed documents into segment after crash
+  Q2 [supplemental]: ["replay", "recover", "wal"]
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#1 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#2 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#3 (fts+vector), Q2#1 (fts)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#3 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:4303-4322
+groups: Q1#2 (fts+vector), Q2#5 (fts)
+source:
+4303	Status SegmentImpl::open_wal_file() {
+4304	  auto mem_block = segment_meta_->writing_forward_block().value();
+4305	  std::string wal_file_path =
+4306	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4307	  WalOptions wal_option;
+4308	  if (std::filesystem::exists(wal_file_path)) {
+4309	    wal_option.create_new = false;
+4310	  } else {
+4311	    wal_option.create_new = true;
+4312	  }
+...
+
+#4 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:4193-4301
+groups: Q1#9 (fts+vector), Q2#2 (fts)
+source:
+4193	Status SegmentImpl::recover() {
+4194	  // recover mem block meta
+4195	  auto &mem_block = segment_meta_->writing_forward_block().value();
+4196	  doc_id_allocator_.store(mem_block.min_doc_id());
+4197	
+4198	  std::string wal_file_path =
+4199	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4200	  if (!std::filesystem::exists(wal_file_path)) {
+4201	    LOG_INFO("WAL recovery skipped: no WAL file exists [%s]",
+4202	             wal_file_path.c_str());
+...
+
+#5 [global_fill] matchedBy=fts tests/db/index/storage/wal_file_test.cc:380-437
+groups: Q2#3 (fts)
+source:
+380	TEST_F(WalFileTest, TestFirstErrorCase) {
+381	  std::string dir_path = "./";
+382	  SegmentID segment_id = 0;
+383	  std::string wal_file_path =
+384	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+385	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+386	  ASSERT_TRUE(wal_file != nullptr);
+387	
+388	  WalOptions wal_option;
+389	  wal_option.create_new = true;
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#4 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#7 matchedBy=fts src/db/index/storage/wal/local_wal_file.cc:29-50
+groups: Q2#4 (fts)
+source:
+29	int LocalWalFile::append(std::string &&data) {
+30	  WalRecord record;
+31	  record.length_ = data.size();
+32	  record.crc_ = ailego::Crc32c::Hash(
+33	      reinterpret_cast<const void *>(data.data()), record.length_, 0);
+34	  record.content_ = std::forward<std::string>(data);
+35	
+36	  if (write_record(record) < 0) {
+37	    WLOG_ERROR("Wal write record error. record.length_[%zu]",
+38	               (size_t)record.length_);
+...
+
+#8 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#5 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...
+
+#9 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:67
+groups: Q1#6 (fts+vector)
+source:
+67	int open(const WalOptions &wal_option) override;
+
+#10 matchedBy=fts tests/ailego/algorithm/integer_quantizer_test.cc:246-291
+groups: Q2#6 (fts)
+source:
+246	TEST(IntegerQuantizer, INT4_Poisson_Distribution) {
+247	  const size_t COUNT = 100000u;
+248	
+249	  std::random_device rd;
+250	  std::mt19937 gen(rd());
+251	  std::vector<float> data;
+252	
+253	  std::poisson_distribution<int> dist(10000);
+254	  float max = -std::numeric_limits<float>::min();
+255	  float min = std::numeric_limits<float>::max();
+...
+
+#11 matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#7 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#12 matchedBy=fts pyproject.toml:1-294
+groups: Q2#7 (fts)
+source:
+1	######################################################################################################
+2	# Zvec: High-Performance Vector Database with PyBind11 & C++ Backend
+3	######################################################################################################
+4	[project]
+5	name = "zvec"
+6	dynamic = ["version"]
+7	description = "A high-performance vector database engine with native C++ backend and Python bindings"
+8	readme = "README.md"
+9	license = { text = "Apache-2.0" }
+10	authors = [
+...
+
+#13 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#8 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#14 matchedBy=fts src/db/common/file_helper.h:44-67
+groups: Q2#8 (fts)
+source:
+44	inline const char *GetFileName(FileID t) {
+45	  switch (t) {
+46	    case FileID::ID_FILE:
+47	      return "idmap";
+48	    case FileID::DELETE_FILE:
+49	      return "del";
+50	    case FileID::FORWARD_FILE:
+51	      return "data.fwd";
+52	    case FileID::PROXIMA_FILE:
+53	      return "data.pxa";
+...
+
+#15 matchedBy=fts tools/core/recall.cc:1632-1787
+groups: Q2#9 (fts)
+source:
+1632	int main(int argc, char *argv[]) {
+1633	  if (argc < 2) {
+1634	    usage();
+1635	    return -1;
+1636	  }
+1637	
+1638	  IndexPluginBroker broker;
+1639	  std::string error;
+1640	  for (int i = 2; i < argc; ++i) {
+1641	    if (!broker.emplace(argv[i], &error)) {
+...
+
+#16 matchedBy=fts+vector tests/db/index/storage/wal_file_test.cc:440-497
+groups: Q1#10 (fts+vector)
+source:
+440	TEST_F(WalFileTest, TestMiddleErrorCase) {
+441	  std::string dir_path = "./";
+442	  SegmentID segment_id = 0;
+443	  std::string wal_file_path =
+444	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+445	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+446	  ASSERT_TRUE(wal_file != nullptr);
+447	
+448	  WalOptions wal_option;
+449	  wal_option.create_new = true;
+...
+
+#17 matchedBy=fts tools/core/bench.cc:790-911
+groups: Q2#10 (fts)
+source:
+790	int main(int argc, char *argv[]) {
+791	  if (argc < 2) {
+792	    usage();
+793	    return -1;
+794	  }
+795	
+796	  IndexPluginBroker broker;
+797	  std::string error;
+798	  for (int i = 2; i < argc; ++i) {
+799	    if (!broker.emplace(argv[i], &error)) {
+...
+
+#18 matchedBy=fts+vector tests/db/collection_test.cc:5149-5200
+groups: Q1#11 (fts+vector)
+source:
+5149	TEST_F(CollectionTest, Feature_AddColumn_WithUnflushedData) {
+5150	  int doc_count = 1000;
+5151	  auto schema = TestHelper::CreateNormalSchema(
+5152	      false, "demo", nullptr, std::make_shared<HnswIndexParams>(MetricType::IP),
+5153	      doc_count);
+5154	  auto options = CollectionOptions{false, true, 64 * 1024 * 1024};
+5155	
+5156	  // Create collection with flushed data (segment 1)
+5157	  auto collection = TestHelper::CreateCollectionWithDoc(
+5158	      col_path, *schema, options, 0, doc_count, false);
+...
+
+#19 matchedBy=fts python/zvec/model/schema/field_schema.py:150-153
+groups: Q2#11 (fts)
+source:
+150	@property
+151	    def index_param(self) -> Optional[Union[InvertIndexParam, FtsIndexParam]]:
+152	        """Optional[Union[InvertIndexParam, FtsIndexParam]]: Index configuration, if any."""
+153	        return self._cpp_obj.index_param
+
+#20 matchedBy=fts+vector src/db/index/storage/wal/wal_file.cc:24-30
+groups: Q1#12 (fts+vector)
+source:
+24	int WalFile::CreateAndOpen(const std::string &wal_path,
+25	                           const WalOptions &wal_options,
+26	                           WalFilePtr *wal_file) {
+27	  *wal_file = std::make_shared<LocalWalFile>(wal_path);
+28	
+29	  return (*wal_file)->open(wal_options);
+30	}
+
+#21 matchedBy=fts src/db/index/segment/segment.cc:4324-4340
+groups: Q2#12 (fts)
+source:
+4324	Status SegmentImpl::append_wal(const Doc &doc) {
+4325	  std::vector<uint8_t> buf = doc.serialize();
+4326	
+4327	  if (!wal_file_) {
+4328	    auto s = open_wal_file();
+4329	    CHECK_RETURN_STATUS(s);
+4330	  }
+4331	
+4332	  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));
+4333	  if (ret != 0) {
+...
+
+#22 matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#13 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#23 matchedBy=fts tools/core/recall_original.cc:1847-2093
+groups: Q2#13 (fts)
+source:
+1847	int main(int argc, char *argv[]) {
+1848	  if (argc < 2) {
+1849	    usage();
+1850	    return -1;
+1851	  }
+1852	
+1853	  IndexPluginBroker broker;
+1854	  std::string error;
+1855	  for (int i = 2; i < argc; ++i) {
+1856	    if (!broker.emplace(argv[i], &error)) {
+...
+
+#24 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:362-415
+groups: Q1#14 (fts+vector)
+source:
+362	TEST_F(CrashRecoveryTest, CrashRecoveryDuringDelete) {
+363	  {
+364	    auto schema = CreateTestSchema(collection_name_);
+365	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+366	    ASSERT_TRUE(result.has_value()) << result.error().message();
+367	    auto collection = result.value();
+368	    collection.reset();
+369	  }
+370	
+371	  RunGenerator("0", "18000", "insert", "0");
+...
+
+#25 matchedBy=fts tests/db/index/segment/segment_test.cc:2086-2200
+groups: Q2#14 (fts)
+source:
+2086	TEST_P(SegmentTest, AlterColumn) {
+2087	  // create segment
+2088	  int doc_count = 1000;
+2089	  auto segment = test::TestHelper::CreateSegmentWithDoc(
+2090	      col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+2091	      0, doc_count);
+2092	  ASSERT_TRUE(segment != nullptr);
+2093	
+2094	  auto s = segment->alter_column(
+2095	      "alter_int32",
+...
+
+#26 matchedBy=fts+vector tests/db/index/common/version_manager_test.cc:118-161
+groups: Q1#15 (fts+vector)
+source:
+118	TEST_F(VersionManagerTest, VersionManagerCreateAndRecover) {
+119	  std::string version_path = test_path_ + "/version";
+120	
+121	  std::filesystem::create_directories(version_path);
+122	
+123	  // Create initial version
+124	  Version initial_version;
+125	  CollectionSchema schema;
+126	  schema.set_name("initial_collection");
+127	  initial_version.set_schema(schema);
+...
+
+#27 matchedBy=fts src/db/index/storage/wal/local_wal_file.cc:198-245
+groups: Q2#15 (fts)
+source:
+198	int LocalWalFile::read_record(WalRecord &record) {
+199	  CHECK_STATUS(opened_, true);
+200	
+201	  int read_size = 0;
+202	  std::string err_msg;
+203	  int ret = -1;
+204	
+205	  do {
+206	    read_size =
+207	        file_.read(reinterpret_cast<void *>(&record.length_), LENGTH_SIZE);
+...

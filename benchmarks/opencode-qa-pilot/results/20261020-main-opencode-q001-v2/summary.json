@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "protocol_id": "main-opencode-q001-v2",
+  "phase": "main-opencode-development-v2",
+  "run_id": 39315776778,
+  "run_url": "https://github.com/Cuiyus/zvec-grep/actions/runs/39315776778",
+  "head_sha": "cbf62676ff7a3cc4f815deaedf275f167107d061",
+  "plan_sha256": "dd48a9bcb813ca2ef679971419c7f02726e008791350202ed1c53c7728ddff60",
+  "artifact_id": 12219178940,
+  "artifact_sha256": "44b53635b494529059ac85fdfaebc0acbb8becd607b14aab5860283ff8c73815",
+  "valid_completed_pairs": 1,
+  "quality_candidate": false,
+  "scoped_efficiency_candidate": true,
+  "stable_benefit_established": false,
+  "goal_completed": false,
+  "rows": [
+    {
+      "profile": "baseline",
+      "completed": true,
+      "protocol_valid": true,
+      "quality_points": 9,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 1,
+        "C7": 0
+      },
+      "source_grounded_success": true,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim": "Minimal and complete: change only the flush entry guard to memory rows or writing-block doc_count_; this one edit repairs all paths.",
+          "classification": "recommended alternative does not establish required lifecycle invariants",
+          "evidence": [
+            "src/db/index/segment/segment.cc:897-900",
+            "src/db/index/segment/segment.cc:2266-2285",
+            "src/db/index/segment/segment.cc:2305-2315"
+          ],
+          "reason": "With wal_file_ still null, the old WAL is not removed. The suggested memory-only dirty predicates also miss delete-only modifications to already persisted data. The answer does not prove preservation of WAL cleanup and general flush invariants.",
+          "rubric_effect": "This design is not accepted under C6. C6 is nevertheless credited for the separately stated valid member-WAL retention/reopen alternative (a)."
+        },
+        {
+          "claim": "Assert meta()->doc_count() == doc_count() before promoting the segment; this establishes persisted SCALAR coverage and is violated after WAL recovery in the current code.",
+          "classification": "incorrect equivalence and ineffective proposed assertion",
+          "evidence": [
+            "src/db/index/common/meta.h:307-317",
+            "src/db/index/segment/segment.cc:874-878",
+            "src/db/collection.cc:1519-1538"
+          ],
+          "reason": "SegmentMeta::doc_count includes writing_forward_block.doc_count. Before removal, recovered writing metadata and doc_ids_ can agree even though there are no persisted SCALAR blocks. The proposed equality can pass after the no-op dump; persisted-only coverage must be checked separately."
+        },
+        {
+          "claim": "Every read path is served from those RAM structures and never consults disk.",
+          "classification": "overbroad claim",
+          "evidence": [
+            "src/db/index/segment/segment.cc:2526-2532",
+            "src/db/index/segment/segment.cc:2733-2755"
+          ],
+          "reason": "The cited code has explicit persisted-store fetch branches. Recovered memory rows can be initially readable, but the universal statement is not supported."
+        },
+        {
+          "claim": "Optimize returning OK for both FLAT and HNSW is established solely by the cited branches.",
+          "classification": "unconditional success insufficiently supported",
+          "evidence": [
+            "src/db/index/segment/segment.cc:1650-1665",
+            "src/db/index/column/vector_column/vector_column_indexer.cc:23-73",
+            "src/db/index/column/vector_column/vector_column_indexer.cc:103-113"
+          ],
+          "reason": "Empty Merge returns OK, but Open and a subsequent index Flush can fail and their statuses are propagated. The excerpts establish a possible successful path, not guaranteed success for every configuration or runtime. The question already assumes a successful optimize, so this does not invalidate C3."
+        },
+        {
+          "claim": "An extra write after recovery is the no-crash control.",
+          "classification": "incorrect test-control characterization",
+          "evidence": [
+            "src/db/index/segment/segment.cc:903-918",
+            "src/db/index/segment/segment.cc:4324-4338"
+          ],
+          "reason": "The extra-write control is useful for demonstrating lazy member-WAL attachment, but it still includes a crash/recovery and is not the required no-crash or already-flushed control.",
+          "rubric_effect": "C7 receives 0."
+        },
+        {
+          "claim": "The generator clean path explicitly flushes at data_generator.cc:245-248.",
+          "classification": "citation qualification",
+          "evidence": [
+            "tests/db/crash_recovery/data_generator.cc:242-248"
+          ],
+          "reason": "That explicit Flush call is inside the Android conditional. On other platforms clean teardown can flush through normal close. The crash test still needs to ensure termination occurs before any clean shutdown."
+        }
+      ],
+      "answer_sha256": "a6391941cda5656adf9fe9ea4087f77cbdf6c16ef1f5dfce2e1bf513508517c4",
+      "blinded_answer_id": "answer-B",
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 2694272,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 2824477,
+        "llm_calls": 49,
+        "output_tokens": 25602,
+        "reasoning_tokens": 16876,
+        "text_output_tokens": 8726,
+        "tool_calls": 67,
+        "uncached_input_tokens": 130205
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:fdf74914a17e6de7b61320eb5271d9172f3a884ca19af6f40e5dacd34ccb798a",
+        "native_agent_execution_raw_seconds": 826.739463,
+        "native_agent_setup_seconds": 17.396519,
+        "native_environment_setup_seconds": 19.372205,
+        "native_trial_wall_seconds": 875.245719,
+        "native_verifier_seconds": 0.252643,
+        "outer_slot_wall_seconds": 880.2025690078735,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 2635,
+          "signals": []
+        },
+        "session_export_seconds": 1.6029935110000224,
+        "solver_after_measured_collection_overhead_seconds": 820.9659101329999,
+        "source_runtime_audit_seconds": 3.0178502470000836,
+        "usage_collection_seconds": 1.1527091090000567
+      }
+    },
+    {
+      "profile": "zvec-grep",
+      "completed": true,
+      "protocol_valid": true,
+      "quality_points": 9,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 0,
+        "C5": 1,
+        "C6": 1,
+        "C7": 1
+      },
+      "source_grounded_success": true,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim": "Fetch/Query read the same RAM; nothing in-process observes the loss.",
+          "classification": "overstatement contradicted for Fetch after the metadata switch",
+          "evidence": [
+            "src/db/index/segment/segment.cc:1102-1105",
+            "src/db/index/segment/segment.cc:2483-2498",
+            "src/db/index/segment/segment.cc:2744-2756",
+            "src/db/index/common/meta.h:293-305"
+          ],
+          "reason": "Retained memory does not guarantee readable rows after writing metadata is removed. Fetch checks max_doc_id, and the memory-store routing also requires the writing block. The supported claim is that same-handle Stats can remain healthy.",
+          "rubric_effect": "Does not negate C1-C3 or assert that stats prove durability; recorded as a noncritical factual error."
+        },
+        {
+          "claim": "Optimize is merely the one that also removes the WAL recovery anchor.",
+          "classification": "misleading exclusivity",
+          "evidence": [
+            "src/db/collection.cc:1517-1552"
+          ],
+          "reason": "The metadata removal occurs in the shared segment-switch function, so any caller that reaches it has that consequence. The answer itself lists the other callers.",
+          "rubric_effect": "No additional criterion or deduction invented."
+        },
+        {
+          "claim": "Complement the lifecycle repair by driving the flush guard from memory_store_ or writing-block doc_count_.",
+          "classification": "unproven auxiliary repair",
+          "evidence": [
+            "src/db/index/segment/segment.cc:897-900",
+            "src/db/index/segment/segment.cc:2266-2285",
+            "src/db/index/segment/segment.cc:2305-2315"
+          ],
+          "reason": "Those predicates alone do not cover delete-only dirty state, and a null member WAL still prevents cleanup. C6 credit is for the explicitly preferred member-WAL lifecycle repair, not this optional guard."
+        },
+        {
+          "claim": "Unit companion: create segment with docs, close without flush, reopen and recover.",
+          "classification": "underspecified test setup",
+          "evidence": [
+            "src/db/index/segment/segment.cc:112-115",
+            "src/db/index/segment/segment.cc:551-552",
+            "tests/db/index/segment/segment_test.cc:366-410"
+          ],
+          "reason": "The normal segment close/destructor calls flush. A test must synthesize pending WAL like the existing unit test or bypass normal close. This does not invalidate the separate process-crash regression sequence."
+        }
+      ],
+      "answer_sha256": "c7e191c3a6b2ed03c24d3b94bb16673f462b8fee8606d468be18d6b6d528e28c",
+      "blinded_answer_id": "answer-A",
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 1384192,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 1460577,
+        "llm_calls": 36,
+        "output_tokens": 18657,
+        "reasoning_tokens": 12497,
+        "text_output_tokens": 6160,
+        "tool_calls": 59,
+        "uncached_input_tokens": 76385
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:fdf74914a17e6de7b61320eb5271d9172f3a884ca19af6f40e5dacd34ccb798a",
+        "native_agent_execution_raw_seconds": 587.926107,
+        "native_agent_setup_seconds": 173.968448,
+        "native_environment_setup_seconds": 2.104458,
+        "native_trial_wall_seconds": 775.718563,
+        "native_verifier_seconds": 0.256576,
+        "outer_slot_wall_seconds": 777.4596173763275,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 17748,
+          "signals": []
+        },
+        "session_export_seconds": 1.6049848279999424,
+        "solver_after_measured_collection_overhead_seconds": 581.5762076210001,
+        "source_runtime_audit_seconds": 3.597785079999994,
+        "usage_collection_seconds": 1.147129470999971,
+        "zg_setup": {
+          "authorization_duration_seconds": 0.107,
+          "finished_at": "2026-10-19T20:19:16.061535+00:00",
+          "index_duration_seconds": 150.637,
+          "install_duration_seconds": 4.097,
+          "mcp_setup_duration_seconds": 0.159,
+          "started_at": "2026-10-19T20:16:39.913533+00:00",
+          "total_duration_seconds": 156.148
+        }
+      }
+    }
+  ],
+  "treatment_relative_change_percent": {
+    "input_tokens": -48.288585816064355,
+    "uncached_input_tokens": -41.33481817134519,
+    "cache_read_tokens": -48.62463775001188,
+    "output_tokens": -27.12678696976799,
+    "reasoning_tokens": -25.948091964920593,
+    "llm_calls": -26.530612244897956,
+    "tool_calls": -11.940298507462687,
+    "solver_after_measured_collection_overhead_seconds": -29.159518021061025,
+    "native_trial_wall_seconds": -11.371338795431452,
+    "outer_slot_wall_seconds": -11.672648461745961
+  },
+  "relevant_mcp_retrieval": {
+    "successful_calls": 1,
+    "root": "/workspace",
+    "query": "WAL replay recovery on collection open, replaying unflushed documents into segment after crash",
+    "exact_nonblank_source_lines": 221
+  },
+  "execution_checks_passed": 76,
+  "review_identity": "Independent blinded Codex model source audit; not human review and not an official SWE-QA score.",
+  "classification": "Post-observation infrastructure-repaired whole-agent-stack development; one fresh original q001 pair, not held-out or stable-set evidence.",
+  "decision": "Close this development phase after its one pair. Only a separately frozen confirmation may follow; do not reuse or resample these slots.",
+  "limits": [
+    "One previously observed q001 development pair; not held-out or stable-set evidence.",
+    "Whole native OpenCode/Harbor stack; do not pool with the 22 Claude rows or infer an agent-name-only effect.",
+    "Input includes cached tokens, but excludes unpersisted/background requests and embedding/index usage. Dollar cost is unknown.",
+    "Fresh containers, installation volumes and index; Docker image/layer cache was shared within this job.",
+    "Audited source-only tools, not packet-level network isolation.",
+    "Native OpenCode losslessly wraps the user instruction in literal double quotes; source instruction and ATIF remain exact.",
+    "Both answers contain disclosed noncritical inaccuracies; 9/10 is not a flawless-answer claim."
+  ],
+  "evidence_sha256": {
+    "native-audit/final/audit.json": "c0f01070e65e93b3b2d5f79fa312780e0411bbfe2db6396ef11ecacccb120dcd",
+    "native-audit/tool-scope-review.json": "e84e7265ef8f426ae14ab37b0e75e638bf26cd6394baff504b423368d3b14de6",
+    "native-audit/mcp-relevance-review.json": "fb6b5d7ab9d409ceebe555ab62036d01a5e5d99d135b181492a569e9f7f570f0",
+    "execution-review/execution-review.json": "d06fa4e2ca3ea6977e4fa971ca21acf90b5938fddc5b326a8ab98c688a1a1fc5",
+    "blinded-review/review.json": "545f3200a12c1b8c2045607af0f37a55f307f25fcbe26fc1240b1fbe798f32e7",
+    "blind-key.json": "b55148e0a8a3d23a5809be5f22f3ab7adc3f82f32cb7c57a641227834a3dc9b3"
+  }
+}
