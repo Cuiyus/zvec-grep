@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "purpose": "exploratory paired read-only QA pilot",
+  "image": "zg-claude-qa-pilot:20261019",
+  "image_id": "sha256:ea631c8e9c06783e2b21edcaff6c54c0f0b8268a63779db8fab082e8ca4073bb",
+  "versions": {
+    "claude": "2.1.212 (Claude Code)",
+    "zg": "0.0.1"
+  },
+  "requested_model": "qwen3.8-max",
+  "source": "/home/runner/work/_temp/pilot-zvec-q004/source",
+  "embedding_model": "qwen/qwen3.7-text-embedding",
+  "source_sha256": "9a01a4219d9e1e4e18309f76a042ee4420890eaf2c64e41f8a5f4434044ffe08",
+  "source_file_count": 1597,
+  "prompt_sha256": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3",
+  "common_instructions": "Answer the user's repository question using the frozen source in /workspace. Use source evidence and cite file paths with line numbers for material claims. If the available source cannot establish a claim, state the uncertainty. This is a read-only QA task: do not edit files or execute programs. Only repository files are relevant; do not read credentials or runtime state. Your investigation budget is at most 24 repository tool calls or 600 elapsed seconds, whichever comes first. All repository tools share this budget. You may answer earlier. Once the requested explanation is supported, stop investigating and give your final answer. At the budget boundary further tool calls will be denied. Use the remaining time to answer from the available evidence and explicitly mark unverified points; do not repeat searches merely to reconfirm established evidence.",
+  "zg_tool": "mcp__zvec_grep__zvec_grep_search",
+  "workspace_root_guidance": false,
+  "protocol_version": "completion-v2",
+  "tool_budget": 24,
+  "research_seconds": 600,
+  "budget_hook_sha256": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761",
+  "mcp_server": {
+    "type": "stdio",
+    "command": "zg",
+    "args": [
+      "--server",
+      "--stdio",
+      "--mcp-toolset",
+      "agent"
+    ]
+  },
+  "repeats": 1,
+  "start_repeat": 1,
+  "planned_trials": [
+    {
+      "repeat": 1,
+      "profile": "baseline"
+    },
+    {
+      "repeat": 1,
+      "profile": "zg"
+    }
+  ],
+  "limits": {
+    "wall_seconds": 900,
+    "max_turns": 30,
+    "max_output_tokens": 8192,
+    "effort": "high",
+    "disable_adaptive_thinking": false
+  },
+  "isolation": {
+    "bare": false,
+    "disable_claude_mds": true,
+    "disable_auto_memory": true,
+    "setting_sources": [],
+    "disable_slash_commands": true,
+    "strict_mcp_config": true
+  },
+  "order": [
+    "baseline",
+    "zg"
+  ],
+  "index_setup_excluded": true,
+  "quality_judged": false,
+  "deviations": [
+    "standalone Docker runner, no Harbor",
+    "Read/Grep/Glob only plus zg search in treatment",
+    "fresh HOME, empty setting sources, disabled repository CLAUDE.md and auto-memory; bare mode is not used because it removes native Grep and Glob",
+    "Claude --effort high is not assumed equivalent to OpenCode provider-specific high/xhigh or temperature settings",
+    "wall includes container launch and MCP startup",
+    "turn/wall/output limits instead of unverifiable third-party USD budget",
+    "all planned trials retained; no trimming or task filtering"
+  ]
+}

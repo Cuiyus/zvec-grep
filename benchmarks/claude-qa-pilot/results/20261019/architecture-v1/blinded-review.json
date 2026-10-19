@@ -1,0 +1,1581 @@
+{
+  "task_id": "q004",
+  "inputs": {
+    "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/architecture-pilot/source-validation/final-source",
+    "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+    "prompt_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q004/instruction.md",
+    "prompt_sha256": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3",
+    "rubric_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q004.json",
+    "rubric_sha256": "2040e092818867e68aa63f953ecc6642ee65a3b3b73b715a3f5b4d611f286a07",
+    "answer_files": [
+      {
+        "blinded_answer_id": "S",
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/architecture-pilot/execution-v1/blind-answers/S.txt",
+        "sha256": "dde18e6a17b31307d2686d357c1db06f940d591d09e323db7199c06c412c934f"
+      },
+      {
+        "blinded_answer_id": "T",
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/architecture-pilot/execution-v1/blind-answers/T.txt",
+        "sha256": "4246ccebad432125cca8026a46158f21355cb7ad26a6aa7e16dd5ff9cfecd4fe"
+      }
+    ],
+    "source_validation": "All 21 rubric evidence file and span hashes previously matched this clean source; only allowed frozen source and the two specific anonymous answer files were consulted for judging.",
+    "citation_resolution_policy": "Unambiguous filename-plus-line shorthand is accepted as a resolvable source location, especially when a full path is established elsewhere. Every resolved location is recorded. The malformed leading /db path in S is not silently corrected and is not itself used as support. Existing correct code never supplies an absent answer citation.",
+    "blinding": "No arm mapping, metrics, summaries, streams, CI/run metadata, other answers/results, or history/threads were read. Tool/resource use is not scored."
+  },
+  "reviews": [
+    {
+      "blinded_answer_id": "S",
+      "answer_sha256": "dde18e6a17b31307d2686d357c1db06f940d591d09e323db7199c06c412c934f",
+      "final_answer_present": true,
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "max": 2,
+          "reason": "Both global identity and configured count are correct."
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "max": 2,
+          "reason": "Both per-merge local-two selection and no global mutation are correct."
+        },
+        {
+          "id": "C3",
+          "points": 0,
+          "max": 2,
+          "reason": "The answer stops at the reducer, explicitly denies the builder pool handoff, and substitutes earlier conversion preparation for the requested target stage."
+        },
+        {
+          "id": "C4",
+          "points": 1,
+          "max": 2,
+          "reason": "Separate outer-pool identity is correct; caller-bound sizing is absent and incorrectly described as independent."
+        },
+        {
+          "id": "C5",
+          "points": 2,
+          "max": 2,
+          "reason": "Both capacity/process-thread distinction and capacity/utilization distinction are correct."
+        }
+      ],
+      "point_unit_facts": [
+        {
+          "id": "C1.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "takes the `if` branch — the **shared global optimize pool**"
+          ],
+          "reason": "Correctly selects the existing global optimization pool for zero concurrency.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1560,
+              "end_line": 1567
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C1.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "4 workers, created from `optimize_threads=4`",
+            "write_concurrency = pool->count() = 4"
+          ],
+          "reason": "Correct configured count of four; it does not interpret zero as zero workers or a fresh hardware-sized pool.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/binding/python/model/common/python_config.cc",
+              "start_line": 153,
+              "end_line": 158
+            },
+            {
+              "path": "src/db/common/global_resource.cc",
+              "start_line": 21,
+              "end_line": 29
+            },
+            {
+              "path": "src/ailego/parallel/thread_pool.cc",
+              "start_line": 85,
+              "end_line": 108
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C2.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "`merge_options.pool` stays at its default `nullptr`",
+            "a **per-merge local `ailego::ThreadPool(2, false)`**",
+            "its lifetime covers `reduce()`"
+          ],
+          "reason": "Correct explicit count, null external pool, and per-core-merge local two-worker pool covering the reducer invocation.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/column/vector_column/vector_column_params.h",
+              "start_line": 72,
+              "end_line": 75
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1560,
+              "end_line": 1567
+            },
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1433,
+              "end_line": 1446
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C2.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**B does not change the configured global pool.**",
+            "each `Index::merge` creates and destroys its own local pool of exactly 2 workers"
+          ],
+          "reason": "Correctly distinguishes the merge-local override from global reconfiguration and does not claim one pool necessarily spans the entire optimize call.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1560,
+              "end_line": 1567
+            },
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1433,
+              "end_line": 1446
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C3.1",
+          "points": 0,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "The builder-facing interface itself carries no pool parameter",
+            "The handoff established above terminates at the reducer"
+          ],
+          "reason": "Although the answer reaches reducer->set_thread_pool, it explicitly denies the requested next handoff. index_build creates a borrowed adapter of that same pool and passes it to target builder train and build.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 768
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_threads.h",
+              "start_line": 169,
+              "end_line": 205
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C3.2",
+          "points": 0,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**Optional conversion-training call immediately before the builder-side stage (1457-1505)**",
+            "this call **takes no pool argument**"
+          ],
+          "reason": "The cited source call is earlier merge-source preparation, not the optional target-builder conversion call immediately before train/build. The requested call receives the same adapter through TrainAndTransform and the threaded converter train overload. A general passing-versus-consuming caution does not supply this missing and incorrectly replaced handoff.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1457,
+              "end_line": 1505
+            },
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 760
+            },
+            {
+              "path": "src/core/framework/index_converter.cc",
+              "start_line": 27,
+              "end_line": 35
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_converter.h",
+              "start_line": 184,
+              "end_line": 188
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C4.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**It is not the caller's pool reused in the §2 sense.**",
+            "the outer pool that dispatches PQ training work across chunks cannot be the caller-selected pool object"
+          ],
+          "reason": "The answer correctly asserts a separate outer PQ dispatch pool. Its incorrect rationale/location and missing implementation citation do not erase this independent factual unit; naming train_all_chunks verbatim is not required.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 340
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C4.2",
+          "points": 0,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "sized from the builder's own setting/internal logic (e.g., hardware concurrency or a builder thread parameter) rather than from the 4-worker global pool (A) or the 2-worker local pool (B).",
+            "the PQ chunk-dispatch pool is builder-internal and independent of `concurrency`"
+          ],
+          "reason": "It omits the actual max(1,min(builder setting,caller count)) formula and affirmatively describes sizing as independent of the caller concurrency. The count is capped by the supplied caller pool.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 389,
+              "end_line": 406
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 141,
+              "end_line": 145
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 340
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C5.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "These knobs bound only the specific pools above.",
+            "Total process thread count also includes the global *query* pool"
+          ],
+          "reason": "Correctly rejects a whole-process four/two OS-thread ceiling and recognizes other pools/work. The separate C4 sizing mistake is not duplicated as a C5 loss.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/common/global_resource.cc",
+              "start_line": 21,
+              "end_line": 29
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 199,
+              "end_line": 200
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 340
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C5.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "Pool size is capacity, not utilization",
+            "Nothing here proves actual core occupancy in either direction."
+          ],
+          "reason": "Correctly distinguishes configured capacity from active useful work and CPU utilization; no measurement guarantee is claimed.",
+          "judge_verification_source_locations": [],
+          "judge_locations_are_not_automatically_answer_citations": true
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1.1": [
+          "takes the `if` branch — the **shared global optimize pool**"
+        ],
+        "C1.2": [
+          "4 workers, created from `optimize_threads=4`",
+          "write_concurrency = pool->count() = 4"
+        ],
+        "C2.1": [
+          "`merge_options.pool` stays at its default `nullptr`",
+          "a **per-merge local `ailego::ThreadPool(2, false)`**",
+          "its lifetime covers `reduce()`"
+        ],
+        "C2.2": [
+          "**B does not change the configured global pool.**",
+          "each `Index::merge` creates and destroys its own local pool of exactly 2 workers"
+        ],
+        "C3.1": [
+          "The builder-facing interface itself carries no pool parameter",
+          "The handoff established above terminates at the reducer"
+        ],
+        "C3.2": [
+          "**Optional conversion-training call immediately before the builder-side stage (1457-1505)**",
+          "this call **takes no pool argument**"
+        ],
+        "C4.1": [
+          "**It is not the caller's pool reused in the §2 sense.**",
+          "the outer pool that dispatches PQ training work across chunks cannot be the caller-selected pool object"
+        ],
+        "C4.2": [
+          "sized from the builder's own setting/internal logic (e.g., hardware concurrency or a builder thread parameter) rather than from the 4-worker global pool (A) or the 2-worker local pool (B).",
+          "the PQ chunk-dispatch pool is builder-internal and independent of `concurrency`"
+        ],
+        "C5.1": [
+          "These knobs bound only the specific pools above.",
+          "Total process thread count also includes the global *query* pool"
+        ],
+        "C5.2": [
+          "Pool size is capacity, not utilization",
+          "Nothing here proves actual core occupancy in either direction."
+        ]
+      },
+      "citation_support_by_claim": [
+        {
+          "claim_id": "C1.1",
+          "support_status": "sufficient",
+          "reason": "The supplied repeated filename/line citations resolve uniquely and prove the zero branch. The malformed opening path is recorded but not repaired or relied upon.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "/db/index/segment/segment.cc:1549-1575",
+              "resolved_frozen_locations": [],
+              "support_status": "unresolvable",
+              "why": "This literal path is not a repository-relative frozen file; no missing src prefix is silently inserted."
+            },
+            {
+              "answer_citation_as_submitted": "segment.cc:1561-1564",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/segment/segment.cc",
+                  "start_line": 1561,
+                  "end_line": 1564
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Uniquely identifiable filename citation, additionally accompanied by the quoted branch. It assigns the global pool and copies its count."
+            }
+          ]
+        },
+        {
+          "claim_id": "C1.2",
+          "support_status": "sufficient",
+          "reason": "Global pool construction from the configured optimization count, combined with the fixed prompt value four and the selection/count branch, supports the stated count without requiring every configuration wrapper.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "global_resource.cc:27-29",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 27,
+                  "end_line": 29
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "The unique frozen filename constructs the optimization ThreadPool from GlobalConfig optimize_thread_count. The prompt supplies successful optimize_threads=4 initialization."
+            },
+            {
+              "answer_citation_as_submitted": "segment.cc:1561-1564",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/segment/segment.cc",
+                  "start_line": 1561,
+                  "end_line": 1564
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Selection uses the already configured pool count rather than interpreting operation zero as a new pool size."
+            }
+          ]
+        },
+        {
+          "claim_id": "C2.1",
+          "support_status": "sufficient",
+          "reason": "The submitted explicit-count branch, null default, and local core-merge constructor together establish per-merge local-two selection.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "segment.cc:1565-1567",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/segment/segment.cc",
+                  "start_line": 1565,
+                  "end_line": 1567
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "The explicit branch sets the operation count without supplying the global pool."
+            },
+            {
+              "answer_citation_as_submitted": "src/db/index/column/vector_column/vector_column_params.h:72-75",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/column/vector_column/vector_column_params.h",
+                  "start_line": 72,
+                  "end_line": 75
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "MergeOptions pool defaults to nullptr."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1441-1442",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1441,
+                  "end_line": 1442
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Constructs a new local ThreadPool from the explicit write_concurrency."
+            },
+            {
+              "answer_citation_as_submitted": "index.cc:1433-1434",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1433,
+                  "end_line": 1434
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "The local owner is scoped to cover reducer->reduce()."
+            }
+          ]
+        },
+        {
+          "claim_id": "C2.2",
+          "support_status": "sufficient",
+          "reason": "The submitted branch and core implementation distinguish local creation from the supplied shared-pool branch; no global resizing occurs there.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1416-1526",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1416,
+                  "end_line": 1526
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Broad but resolvable function span actually includes both pool branches and the reducer lifetime."
+            },
+            {
+              "answer_citation_as_submitted": "global_resource.cc:22-23",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 22,
+                  "end_line": 23
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Initialization uses call_once; corroborates the configured global resource remaining unchanged under the prompt conditions."
+            }
+          ]
+        },
+        {
+          "claim_id": "C3.1",
+          "support_status": "partial",
+          "reason": "The answer cites pool delivery to the reducer, but no supplied citation establishes the requested borrowed adapter and target train/build handoff. Its holder-only calls are from DiskAnnIndex::train, a different path.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/db/index/column/vector_column/vector_column_indexer.cc:128-130",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+                  "start_line": 128,
+                  "end_line": 130
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Carries the chosen pool/count to the core boundary."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1416-1526",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1416,
+                  "end_line": 1526
+                }
+              ],
+              "support_status": "partial",
+              "why": "Proves set_thread_pool and reduce, but does not show index_build adapter or target builder calls."
+            },
+            {
+              "answer_citation_as_submitted": "diskann_index.cc:231, 236",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 231,
+                  "end_line": 231
+                },
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 236,
+                  "end_line": 236
+                }
+              ],
+              "support_status": "unrelated_or_wrong_revision",
+              "why": "Correct frozen revision, but these are direct DiskAnnIndex::train calls, not the target-builder calls reached through the reducer in the requested merge."
+            }
+          ]
+        },
+        {
+          "claim_id": "C3.2",
+          "support_status": "unrelated_or_wrong_revision",
+          "reason": "The only identified converter call is earlier merge-source preparation. The target-builder conversion call and threaded forwarding are uncited.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1416-1526",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1416,
+                  "end_line": 1526
+                }
+              ],
+              "support_status": "unrelated_or_wrong_revision",
+              "why": "The contained line 1495 trains from merge sources before reducer execution; it does not support the requested optional target-builder TrainAndTransform call."
+            }
+          ]
+        },
+        {
+          "claim_id": "C4.1",
+          "support_status": "missing",
+          "reason": "The separate-pool assertion earns factual credit, but the answer supplies no source range proving actual PQ outer-pool creation.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/core/algorithm/diskann/diskann_builder.cc",
+              "resolved_frozen_locations": [],
+              "support_status": "missing",
+              "why": "Whole-file mention without line/range, accompanied by an explicit admission it was not inspected. Whole-file hits do not satisfy the citation gate."
+            },
+            {
+              "answer_citation_as_submitted": "src/include/zvec/core/framework/index_threads.h",
+              "resolved_frozen_locations": [],
+              "support_status": "missing",
+              "why": "Whole-file speculative helper reference is not a cited PQ constructor site."
+            },
+            {
+              "answer_citation_as_submitted": "diskann_index.cc:231, 236",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 231,
+                  "end_line": 231
+                },
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 236,
+                  "end_line": 236
+                }
+              ],
+              "support_status": "unrelated_or_wrong_revision",
+              "why": "The holder-only direct training path neither creates nor proves the PQ chunk pool."
+            }
+          ]
+        },
+        {
+          "claim_id": "C4.2",
+          "support_status": "missing",
+          "reason": "There is no submitted citation to the builder caller-count cap or the quantizer outer-pool count propagation; the answer admits the sizing formula is unknown.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "diskann_index.cc:101-107, 125",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 101,
+                  "end_line": 107
+                },
+                {
+                  "path": "src/core/interface/indexes/diskann_index.cc",
+                  "start_line": 125,
+                  "end_line": 125
+                }
+              ],
+              "support_status": "unrelated_or_wrong_revision",
+              "why": "Structural parameter initialization cannot establish that PQ sizing is independent of the caller pool."
+            }
+          ]
+        },
+        {
+          "claim_id": "C5",
+          "support_status": "sufficient",
+          "reason": "No separate C5 citation gate is required. The cited global query-pool construction corroborates additional process resources.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "global_resource.cc:24-26",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 24,
+                  "end_line": 26
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Shows a separate global query pool."
+            }
+          ]
+        }
+      ],
+      "core_citation_gate_results": [
+        {
+          "criterion_id": "C1",
+          "passed": true,
+          "support_status": "sufficient",
+          "reason": "The supplied zero-selection/count branch and global configured-count construction jointly support the core claim; unique filename citations are resolved, not replaced."
+        },
+        {
+          "criterion_id": "C2",
+          "passed": true,
+          "support_status": "sufficient",
+          "reason": "The supplied null default, explicit-count branch, and merge-local constructor/lifetime establish the local override versus shared branch."
+        },
+        {
+          "criterion_id": "C3",
+          "passed": false,
+          "support_status": "partial",
+          "reason": "Pool delivery to reducer is cited, but the requested borrowed adapter and target builder/converter call sites are not. Earlier/direct training calls do not substitute."
+        },
+        {
+          "criterion_id": "C4",
+          "passed": false,
+          "support_status": "missing",
+          "reason": "No actual separate PQ outer-pool creation range or caller-based cap range is supplied. Whole-file speculation is insufficient."
+        }
+      ],
+      "unsupported_claims": [
+        {
+          "answer_quote": "The builder-facing interface itself carries no pool parameter",
+          "reason": "Incorrect for the target-builder merge stage, which accepts the borrowed IndexThreads adapter.",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 768
+            }
+          ],
+          "scoring_effect": "C3.1=0 and D3."
+        },
+        {
+          "answer_quote": "this call **takes no pool argument**",
+          "reason": "True of the quoted earlier merge-source call, but it is used as the answer to the different requested target-builder converter stage.",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1457,
+              "end_line": 1505
+            },
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 760
+            },
+            {
+              "path": "src/core/framework/index_converter.cc",
+              "start_line": 27,
+              "end_line": 35
+            }
+          ],
+          "scoring_effect": "C3.2=0; wrong-stage citation does not support C3."
+        },
+        {
+          "answer_quote": "the PQ chunk-dispatch pool is builder-internal and independent of `concurrency`",
+          "reason": "The separate pool is constructed by the PQ quantizer, and its count depends on caller threads->count().",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 389,
+              "end_line": 406
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 343
+            }
+          ],
+          "scoring_effect": "C4.2=0 and C4 citation gate fails. No separate D4 is assigned: the answer does not explicitly assert a concrete above-caller count or direct pool sharing."
+        },
+        {
+          "answer_quote": "it must be constructed *inside* the DiskANN builder implementation",
+          "reason": "The actual outer-pool construction occurs in PqInt8Quantizer::train_all_chunks; no supplied exact constructor citation verifies the speculation.",
+          "frozen_source_evidence": [
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 343
+            }
+          ],
+          "scoring_effect": "Does not remove C4.1 credit for the correctly asserted distinct pool; citation support remains missing."
+        }
+      ],
+      "critical_contradictions": [
+        {
+          "contradiction_id": "D3",
+          "exact_answer_quote": "The builder-facing interface itself carries no pool parameter",
+          "additional_context_quote": "The handoff established above terminates at the reducer",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 768
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_threads.h",
+              "start_line": 169,
+              "end_line": 205
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_runner.h",
+              "start_line": 692,
+              "end_line": 695
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_runner.h",
+              "start_line": 719,
+              "end_line": 722
+            }
+          ],
+          "conflict": "The reducer creates BorrowedSingleQueueIndexThreads from its selected thread_pool_ and explicitly passes it to target_builder_->train and target_builder_->build. The interface has IndexThreads::Pointer overloads. The cited holder-only DiskAnnIndex::train calls do not describe this merge target stage.",
+          "effect_on_requested_conclusion": "Materially denies the selected-pool handoff that Q2 asks to explain; source-grounded success is disallowed independently of the point and citation failures."
+        }
+      ],
+      "total_points": 7,
+      "maximum_points": 10,
+      "failed_gates": [
+        {
+          "gate": "minimum_factual_points",
+          "required": 8,
+          "actual": 7
+        },
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C3",
+          "required": 2,
+          "actual": 0
+        },
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C4",
+          "required": 2,
+          "actual": 1
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C3",
+          "support_status": "partial",
+          "reason": "Pool delivery to reducer is cited, but the requested borrowed adapter and target builder/converter call sites are not. Earlier/direct training calls do not substitute."
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C4",
+          "support_status": "missing",
+          "reason": "No actual separate PQ outer-pool creation range or caller-based cap range is supplied. Whole-file speculation is insufficient."
+        },
+        {
+          "gate": "no_material_contradictions",
+          "contradiction_ids": [
+            "D3"
+          ]
+        }
+      ],
+      "source_grounded_success": false,
+      "reviewer_notes": [
+        "The answer is scored as the submitted text, including its opening malformed fragment; no missing prefix or earlier unseen answer content is assumed.",
+        "Factual credit is retained for the correctly asserted distinct PQ pool even though no supporting constructor citation was provided.",
+        "D3 is supported by an explicit denial, not merely omission. No D4 is assigned to the independent-sizing error without an explicit above-caller-count or same-pool assertion."
+      ]
+    },
+    {
+      "blinded_answer_id": "T",
+      "answer_sha256": "4246ccebad432125cca8026a46158f21355cb7ad26a6aa7e16dd5ff9cfecd4fe",
+      "final_answer_present": true,
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "max": 2,
+          "reason": "Both global identity and exactly four workers are correct."
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "max": 2,
+          "reason": "Both local-two per merge and unchanged global configuration are correct."
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "max": 2,
+          "reason": "Correct borrowed adapter delivery to builder train/build and optional converter training, with consumption caveat."
+        },
+        {
+          "id": "C4",
+          "points": 1,
+          "max": 2,
+          "reason": "Correct fresh outer pool and formula, but the explicit builder>=2 hardware inference conflicts with the required smaller-builder-setting case."
+        },
+        {
+          "id": "C5",
+          "points": 2,
+          "max": 2,
+          "reason": "Correct process-thread and utilization limitations."
+        }
+      ],
+      "point_unit_facts": [
+        {
+          "id": "C1.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**A (concurrency=0)**: `merge_options.pool = GlobalResource::Instance().optimize_thread_pool()`"
+          ],
+          "reason": "Correct shared global-pool selection for operation concurrency zero.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/segment/segment_helper.cc",
+              "start_line": 799,
+              "end_line": 811
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C1.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "the global pool has exactly **4 workers**"
+          ],
+          "reason": "Correct four-worker configured pool count under the hardware and initialization premises; recognizes the ThreadPool clamp and no subsequent change.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/binding/python/model/common/python_config.cc",
+              "start_line": 154,
+              "end_line": 157
+            },
+            {
+              "path": "src/db/common/global_resource.cc",
+              "start_line": 21,
+              "end_line": 29
+            },
+            {
+              "path": "src/ailego/parallel/thread_pool.cc",
+              "start_line": 93,
+              "end_line": 108
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C2.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**B (concurrency=2)**: `write_concurrency = 2`, `pool` stays `nullptr`",
+            "creates a **temporary local pool**",
+            "its lifetime is explicitly scoped to cover `reducer->reduce()`"
+          ],
+          "reason": "Correct explicit two, null supplied pool, and core-merge-local allocation/lifetime.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/segment/segment_helper.cc",
+              "start_line": 804,
+              "end_line": 811
+            },
+            {
+              "path": "src/db/index/column/vector_column/vector_column_params.h",
+              "start_line": 72,
+              "end_line": 75
+            },
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1433,
+              "end_line": 1446
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C2.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "**Does B change the global pool?** No.",
+            "the configured global optimization pool still has 4 workers."
+          ],
+          "reason": "Correctly preserves the shared global pool; the local pool is scoped to merge, not asserted to span the whole optimize invocation.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/index/segment/segment_helper.cc",
+              "start_line": 804,
+              "end_line": 811
+            },
+            {
+              "path": "src/core/interface/index.cc",
+              "start_line": 1433,
+              "end_line": 1446
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C3.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "`auto threads = std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_)`",
+            "`target_builder_->train(threads, target_holder)` and `target_builder_->build(std::move(threads), target_holder)`"
+          ],
+          "reason": "Correct same-pool borrowed adapter and meaningful reducer-to-builder train/build handoff.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 768
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_threads.h",
+              "start_line": 174,
+              "end_line": 205
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C3.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "`core::IndexConverter::TrainAndTransform(target_builder_converter_, target_holder, threads)`",
+            "`converter->train(two_pass_holder, std::move(threads))`",
+            "each implementation decides how (or whether) to use `threads`"
+          ],
+          "reason": "Correct optional target-builder conversion forwarding through the threaded overload, together with an explicit no-universal-consumption caveat. The exact base converter overload need not be quoted by name.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 760
+            },
+            {
+              "path": "src/core/framework/index_converter.cc",
+              "start_line": 27,
+              "end_line": 35
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_converter.h",
+              "start_line": 184,
+              "end_line": 188
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C4.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "the quantizer creates its **own fresh pool**",
+            "`train_all_chunks` does `std::make_shared<SingleQueueIndexThreads>(thread_count_, false)`"
+          ],
+          "reason": "Correctly identifies an actual distinct outer chunk-dispatch pool, not reuse of the caller pool object.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 343
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C4.2",
+          "points": 0,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "The worker count of that private pool is bounded by both the caller's pool and the builder's own setting",
+            "`max(1, min(build_thread_count_, caller threads->count()))`",
+            "(with `build_thread_count_ ≥ 2` under the stated hardware assumption)"
+          ],
+          "reason": "The formula and caller cap are correctly stated and cited, but the answer additionally asserts that the hardware premise guarantees builder setting >=2. It does not: an explicitly configured positive builder setting of 1 is retained by init, so B can have a one-worker outer pool. This directly conflicts with the unit's required builder-setting dependence and smaller-setting case, rather than merely omitting an exact rubric phrase. The binary factual unit therefore receives 0. This is not D4: the answer does not claim a shared PQ pool or an outer count above the caller count.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 49,
+              "end_line": 55
+            },
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 389,
+              "end_line": 394
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C5.1",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "these settings bound only individual pool capacities, not their sum or lifetime overlap."
+          ],
+          "reason": "Correctly rejects a four/two process-wide OS-thread ceiling and identifies separate resources.",
+          "judge_verification_source_locations": [
+            {
+              "path": "src/db/common/global_resource.cc",
+              "start_line": 21,
+              "end_line": 29
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 199,
+              "end_line": 200
+            },
+            {
+              "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+              "start_line": 319,
+              "end_line": 343
+            }
+          ],
+          "judge_locations_are_not_automatically_answer_citations": true
+        },
+        {
+          "id": "C5.2",
+          "points": 1,
+          "maximum_points": 1,
+          "supporting_answer_quotes": [
+            "pool size is capacity, not usage.",
+            "passing a pool does not prove consumption"
+          ],
+          "reason": "Correctly distinguishes capacity from actual useful work, CPU utilization, and speedup, recognizing scheduling/task availability/other work.",
+          "judge_verification_source_locations": [],
+          "judge_locations_are_not_automatically_answer_citations": true
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1.1": [
+          "**A (concurrency=0)**: `merge_options.pool = GlobalResource::Instance().optimize_thread_pool()`"
+        ],
+        "C1.2": [
+          "the global pool has exactly **4 workers**"
+        ],
+        "C2.1": [
+          "**B (concurrency=2)**: `write_concurrency = 2`, `pool` stays `nullptr`",
+          "creates a **temporary local pool**",
+          "its lifetime is explicitly scoped to cover `reducer->reduce()`"
+        ],
+        "C2.2": [
+          "**Does B change the global pool?** No.",
+          "the configured global optimization pool still has 4 workers."
+        ],
+        "C3.1": [
+          "`auto threads = std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_)`",
+          "`target_builder_->train(threads, target_holder)` and `target_builder_->build(std::move(threads), target_holder)`"
+        ],
+        "C3.2": [
+          "`core::IndexConverter::TrainAndTransform(target_builder_converter_, target_holder, threads)`",
+          "`converter->train(two_pass_holder, std::move(threads))`",
+          "each implementation decides how (or whether) to use `threads`"
+        ],
+        "C4.1": [
+          "the quantizer creates its **own fresh pool**",
+          "`train_all_chunks` does `std::make_shared<SingleQueueIndexThreads>(thread_count_, false)`"
+        ],
+        "C4.2": [
+          "The worker count of that private pool is bounded by both the caller's pool and the builder's own setting",
+          "`max(1, min(build_thread_count_, caller threads->count()))`",
+          "(with `build_thread_count_ ≥ 2` under the stated hardware assumption)"
+        ],
+        "C5.1": [
+          "these settings bound only individual pool capacities, not their sum or lifetime overlap."
+        ],
+        "C5.2": [
+          "pool size is capacity, not usage.",
+          "passing a pool does not prove consumption"
+        ]
+      },
+      "citation_support_by_claim": [
+        {
+          "claim_id": "C1.1",
+          "support_status": "sufficient",
+          "reason": "The helper zero branch and core supplied-pool branch directly establish the shared global selection.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/db/index/segment/segment_helper.cc:799-811",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/segment/segment_helper.cc",
+                  "start_line": 799,
+                  "end_line": 811
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Includes global pool selection and count for concurrency zero."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1436-1439",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1436,
+                  "end_line": 1439
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Supplied pool reaches reducer and bounds effective concurrency."
+            }
+          ]
+        },
+        {
+          "claim_id": "C1.2",
+          "support_status": "sufficient",
+          "reason": "The submitted config binding, global constructor, and clamp citations support exactly four under the premises.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "python/zvec/zvec.py:162-163",
+              "resolved_frozen_locations": [
+                {
+                  "path": "python/zvec/zvec.py",
+                  "start_line": 162,
+                  "end_line": 163
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Places optimize_threads into the configuration dictionary."
+            },
+            {
+              "answer_citation_as_submitted": "src/binding/python/model/common/python_config.cc:154-157",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/binding/python/model/common/python_config.cc",
+                  "start_line": 154,
+                  "end_line": 157
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Validates the value and stores the native optimization count."
+            },
+            {
+              "answer_citation_as_submitted": "src/db/common/global_resource.cc:21-29",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 21,
+                  "end_line": 29
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Constructs the optimization pool once from configured native count."
+            },
+            {
+              "answer_citation_as_submitted": "src/ailego/parallel/thread_pool.cc:93-101",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/ailego/parallel/thread_pool.cc",
+                  "start_line": 93,
+                  "end_line": 101
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Computes the clamp; four is unchanged under hardware >=4."
+            }
+          ]
+        },
+        {
+          "claim_id": "C2.1",
+          "support_status": "sufficient",
+          "reason": "Explicit count, null default, and local allocation are jointly supported by supplied citations.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "segment_helper.cc:809-811",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/segment/segment_helper.cc",
+                  "start_line": 809,
+                  "end_line": 811
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Sets explicit operation concurrency without a pool pointer."
+            },
+            {
+              "answer_citation_as_submitted": "src/db/index/column/vector_column/vector_column_params.h:72-75",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/index/column/vector_column/vector_column_params.h",
+                  "start_line": 72,
+                  "end_line": 75
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "The pool default is null."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1433-1446",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1433,
+                  "end_line": 1446
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Allocates and installs a merge-local pool with the supplied count and covers reducer lifetime."
+            }
+          ]
+        },
+        {
+          "claim_id": "C2.2",
+          "support_status": "sufficient",
+          "reason": "The local branch does not mutate global configuration, and the one-time global constructor is cited.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1433-1446",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1433,
+                  "end_line": 1446
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Distinguishes supplied shared pool from newly owned merge-local pool."
+            },
+            {
+              "answer_citation_as_submitted": "global_resource.cc:22-23",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 22,
+                  "end_line": 23
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Global initialization is guarded by call_once under the prompt conditions."
+            }
+          ]
+        },
+        {
+          "claim_id": "C3.1",
+          "support_status": "sufficient",
+          "reason": "The answer cites both selected pool arrival at the reducer and the borrowed adapter plus actual target train/build calls; no additional ordinary wrappers are demanded.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/core/interface/index.cc:1433-1446",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/interface/index.cc",
+                  "start_line": 1433,
+                  "end_line": 1446
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Delivers either selected pool to the reducer."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/mixed_reducer/mixed_streamer_reducer.cc:672-740, 742-777",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+                  "start_line": 672,
+                  "end_line": 740
+                },
+                {
+                  "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+                  "start_line": 742,
+                  "end_line": 777
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Broad but relevant spans lead to index_build and show adapter construction plus both builder calls."
+            },
+            {
+              "answer_citation_as_submitted": "src/include/zvec/core/framework/index_threads.h:174-225",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/include/zvec/core/framework/index_threads.h",
+                  "start_line": 174,
+                  "end_line": 225
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "The adapter retains a pool reference and forwards count/work without allocating a new worker pool."
+            }
+          ]
+        },
+        {
+          "claim_id": "C3.2",
+          "support_status": "sufficient",
+          "reason": "The supplied target-stage call and TrainAndTransform implementation prove same-adapter argument propagation. The answer expressly limits the inference to passing versus implementation use.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "mixed_streamer_reducer.cc:745-747",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+                  "start_line": 745,
+                  "end_line": 747
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Optional target-builder conversion gets the same threads local used by subsequent builder calls."
+            },
+            {
+              "answer_citation_as_submitted": "src/core/framework/index_converter.cc:27-36",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/framework/index_converter.cc",
+                  "start_line": 27,
+                  "end_line": 36
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Forwards that supplied IndexThreads argument to converter->train."
+            },
+            {
+              "answer_citation_as_submitted": "src/include/zvec/core/framework/index_converter.h:236-239",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/include/zvec/core/framework/index_converter.h",
+                  "start_line": 236,
+                  "end_line": 239
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Declares the caller-resource TrainAndTransform overload. It is not a guarantee of actual consumption."
+            },
+            {
+              "answer_citation_as_submitted": "src/include/zvec/core/framework/index_runner.h:692-695, 719-722",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/include/zvec/core/framework/index_runner.h",
+                  "start_line": 692,
+                  "end_line": 695
+                },
+                {
+                  "path": "src/include/zvec/core/framework/index_runner.h",
+                  "start_line": 719,
+                  "end_line": 722
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Builder interfaces accept resources but base methods do not perform work. No citation to every concrete implementation or to the curated converter base span is required."
+            }
+          ]
+        },
+        {
+          "claim_id": "C4.1",
+          "support_status": "sufficient",
+          "reason": "The answer supplies the actual fresh outer-pool construction and dispatch loop.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-343",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+                  "start_line": 319,
+                  "end_line": 343
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Constructs an owned SingleQueueIndexThreads from thread_count_ and distributes chunks over it."
+            }
+          ]
+        },
+        {
+          "claim_id": "C4.2",
+          "support_status": "partial",
+          "reason": "The exact caller-based formula, parameter transfer, and constructor semantics are fully cited. However the additional claimed hardware-derived builder lower bound is not supported and is contradicted by the cited initialization branch; therefore all of the answer's associated count claims are not jointly supported.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "diskann_builder.cc:391-394",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/algorithm/diskann/diskann_builder.cc",
+                  "start_line": 391,
+                  "end_line": 394
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Directly establishes max(1,min(build_thread_count_,threads->count())) and the quantizer parameter."
+            },
+            {
+              "answer_citation_as_submitted": "pq_int8_quantizer.cc:142",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+                  "start_line": 142,
+                  "end_line": 142
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Reads the passed thread_count parameter."
+            },
+            {
+              "answer_citation_as_submitted": "index_threads.h:113-116",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/include/zvec/core/framework/index_threads.h",
+                  "start_line": 113,
+                  "end_line": 116
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Positive size is passed to the owned pool; zero alone invokes hardware fallback."
+            },
+            {
+              "answer_citation_as_submitted": "diskann_builder.cc:51-55",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/core/algorithm/diskann/diskann_builder.cc",
+                  "start_line": 51,
+                  "end_line": 55
+                }
+              ],
+              "support_status": "partial",
+              "why": "Supports configurable builder count and hardware fallback only when it is zero. It does not support builder count >=2 merely from hardware >=4; positive 1 is preserved."
+            }
+          ]
+        },
+        {
+          "claim_id": "C5",
+          "support_status": "sufficient",
+          "reason": "No separate citation gate is imposed; supplied global and PQ pool locations corroborate other process resources.",
+          "citations": [
+            {
+              "answer_citation_as_submitted": "src/db/common/global_resource.cc:21-29",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/db/common/global_resource.cc",
+                  "start_line": 21,
+                  "end_line": 29
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Separate global query and optimize pools."
+            },
+            {
+              "answer_citation_as_submitted": "pq_int8_quantizer.cc:199-200",
+              "resolved_frozen_locations": [
+                {
+                  "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+                  "start_line": 199,
+                  "end_line": 200
+                }
+              ],
+              "support_status": "sufficient",
+              "why": "Additional per-chunk one-worker pool prevents treating the outer cap as a total PQ/process count."
+            }
+          ]
+        }
+      ],
+      "core_citation_gate_results": [
+        {
+          "criterion_id": "C1",
+          "passed": true,
+          "support_status": "sufficient",
+          "reason": "Submitted config/global/selection/clamp citations support global-four selection."
+        },
+        {
+          "criterion_id": "C2",
+          "passed": true,
+          "support_status": "sufficient",
+          "reason": "Submitted explicit count, null default, and core local allocation support local-two per merge without global change."
+        },
+        {
+          "criterion_id": "C3",
+          "passed": true,
+          "support_status": "sufficient",
+          "reason": "Submitted meaningful reducer/adapter/call-site and converter forwarding spans support all requested handoffs; every wrapper and curated span is not required."
+        },
+        {
+          "criterion_id": "C4",
+          "passed": false,
+          "support_status": "partial",
+          "reason": "The fresh-pool mechanism and correct max/min upper cap are fully supported by the actual submitted citations. The answer additionally asserts hardware implies builder count >=2; its cited init source only defaults zero and preserves positive 1, so the associated count claims are not all supported."
+        }
+      ],
+      "unsupported_claims": [
+        {
+          "answer_quote": "(with `build_thread_count_ ≥ 2` under the stated hardware assumption)",
+          "reason": "Hardware >=4 does not prevent an explicitly configured builder count of 1. The cited fallback runs only for builder count zero. For builder count 1, the cited formula gives an outer pool of 1 in both A and B.",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 49,
+              "end_line": 55
+            },
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 391,
+              "end_line": 394
+            }
+          ],
+          "scoring_effect": "C4.2=0; C4 count-claim support is partial. No D4: the asserted upper cap and separate-pool identity remain correct."
+        },
+        {
+          "answer_quote": "`build_internal`/`prune_internal`/`generate_quantized_data` submit exactly `threads->count()` tasks to it",
+          "reason": "The build/prune loops do submit that count, but generate_quantized_data can break early for an empty stripe and runs directly when thread_count <=1.",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 304,
+              "end_line": 315
+            },
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 341,
+              "end_line": 352
+            },
+            {
+              "path": "src/core/algorithm/diskann/diskann_builder.cc",
+              "start_line": 451,
+              "end_line": 494
+            }
+          ],
+          "scoring_effect": "Extra inaccurate implementation detail; no additional factual-unit loss or critical contradiction, since it does not negate the correctly stated pool handoff or capacity-versus-utilization caveat."
+        }
+      ],
+      "critical_contradictions": [],
+      "total_points": 9,
+      "maximum_points": 10,
+      "failed_gates": [
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C4",
+          "required": 2,
+          "actual": 1
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C4",
+          "support_status": "partial",
+          "reason": "The fresh-pool mechanism and correct max/min upper cap are fully supported by the actual submitted citations. The answer additionally asserts hardware implies builder count >=2; its cited init source only defaults zero and preserves positive 1, so the associated count claims are not all supported."
+        }
+      ],
+      "source_grounded_success": false,
+      "reviewer_notes": [
+        "C3 receives full credit despite not citing the curated converter base-overload span: the meaningful same-adapter call and forwarding are actually cited and the answer explicitly rejects universal consumption.",
+        "C4.2 is a narrow strict-unit loss for an explicit false lower bound, not for failure to use the reference answer wording. The correct max/min formula is recognized; it does not make the incompatible builder>=2 assertion true. A builder setting of 1 is source-permitted even when hardware>=4.",
+        "The C4 citation gate is partial only because the stated additional builder lower bound is unsupported; the pool construction and correct caller cap are fully cited. No D1-D5 critical contradiction is substantiated in T.",
+        "Extra task-submission overstatement is recorded without adding an unrelated penalty."
+      ]
+    }
+  ]
+}

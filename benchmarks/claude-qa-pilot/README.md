@@ -8,6 +8,12 @@ are mounted. The source is read-only and its content manifest is checked after
 every trial. Existing indexes are copied before each treatment; index preparation
 is outside the agent wall-time measurement.
 
+The latest [q004 architecture pair](results/20261019/README.md#新架构题-q004)
+scored 7/10 for baseline and 9/10 for zg, but neither passed its frozen
+source-grounded quality endpoint. zg used 29.91% more input while its agent wall
+fell 30.32%; including grant, indexing and preflight removes that time advantage.
+This pair does not meet the frozen efficiency signal rule.
+
 The image pins Claude Code 2.1.212 and the Rust zg binary built from upstream
 main `a424e0ce06868dc9ad8f142f57de59b8f9b58699` (package version 0.0.1).
 The native package, binary, and local potion-code model files are hash-verified.
@@ -126,6 +132,26 @@ rubric, dataset, protocol and retrieval identities match. The explicit inputs
 are `task=zvec-q004`, `architecture_pilot=true`, `completion_budget=true`, with
 all other phase flags false. There is no automatic repeat or outcome replacement.
 The q001-only remote phase and every older frozen phase retain their identities.
+
+This pair completed in [run 39297180874](https://github.com/Cuiyus/zvec-grep/actions/runs/39297180874)
+at `b986001e7bf658eaa0598b053d94f525e367a0cb`, with complete terminal usage and a
+successful [execution audit](results/20261019/architecture-v1/independent-audit.json).
+The [blind review](results/20261019/architecture-v1/blinded-review.json) scored
+baseline 7/10: C3 denies the target-builder pool handoff (critical contradiction
+D3), and C3/C4 citation gates fail. zg scored 9/10 but fails C4: hardware >=4 does
+not rule out an explicitly configured builder count of 1. The correct max/min
+formula does not support the added builder>=2 assertion. Neither answer passes;
+the rubric and older phase rules are unchanged.
+
+Baseline made 25 tool attempts: 24 admitted, two returning file-not-found errors,
+and a final budget-denied attempt. This is valid retained agent behavior, not an
+infrastructure failure. zg made 21 admitted attempts with two successful MCP
+calls using `/workspace` (four query strings). Agent wall was 410.16/285.79 s,
+but zg grant/index/preflight add 201.741 s, bringing setup plus agent to 487.53 s.
+This is not a cold setup-inclusive speedup and does not include installation or
+image-build time. See the [pair verdict](results/20261019/architecture-v1/pair-verdict.json),
+[trajectory audit](results/20261019/architecture-v1/trajectory-audit.json), and
+[review input verification](results/20261019/architecture-v1/review-input-verification.json).
 
 ```sh
 gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \

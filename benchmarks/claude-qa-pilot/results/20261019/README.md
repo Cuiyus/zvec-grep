@@ -1,8 +1,8 @@
 # Claude Code + Qwen3.8-max QA 开发验证
 
-本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case；随后在原 q001 上单独测试一对远端 Qwen embedding。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是各次冻结时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建。前序阶段配本地 `potion-code-16m-v2`，远端阶段配 `qwen/qwen3.7-text-embedding`，分别报告。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
+本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case；随后在原 q001 上单独测试一对远端 Qwen embedding，再沿用远端栈执行一对新架构题 q004。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是各次冻结时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建。前序阶段配本地 `potion-code-16m-v2`，远端阶段配 `qwen/qwen3.7-text-embedding`，分别报告。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
 
-**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。远端 Qwen 单题对照中，zg 8/10 且通过核心引用门槛，baseline 9/10 但未通过；zg input 和 wall 仍增加 25.7% / 48.6%。这反映引用、事实覆盖与资源之间的取舍。所有开发失败与不利结果保留。
+**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。远端 Qwen 单题对照中，zg 8/10 且通过核心引用门槛，baseline 9/10 但未通过；zg input 和 wall 仍增加 25.7% / 48.6%。新增 q004 事实分 7→9，两组仍未通过；zg input 增加 29.9%，预建索引下的 agent wall 减少 30.3%，计入授权、索引和预检后也没有冷启动耗时优势。这反映引用、事实覆盖与资源之间的取舍。所有开发失败与不利结果保留。
 
 ## 实验设计
 
@@ -123,6 +123,29 @@ q003 的 zg input 增加 36.28%、wall 增加 46.35%。总工具调用 24→23�
 
 这是同一已观察题目上的一个 baseline 先行 pair，历史 local 结果不是同期 embedding 对照。远端链路可用性已验证；稳定收益、模型替换的因果收益及新题泛化均未建立。[独立执行审计](remote-embedding-v1/independent-audit.json)完成 64 项核对，未发现执行失败；[匿名输入核验](remote-embedding-v1/review-input-verification.json)已确认原始、匿名和保存的答案字节一致。
 
+## 新架构题 q004
+
+[run 39297180874](https://github.com/Cuiyus/zvec-grep/actions/runs/39297180874) 在 commit `b986001e` 按[独立冻结计划](../../experiment-architecture-v1.json)执行一对 baseline→zg。题目解释全局优化线程、单次操作并发和后续 builder／训练线程池的关系，源码固定为 `alibaba/zvec@1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa`，共 1,596 个原始文件。它使用包含已实现修复的当前源码，不是历史故障复现。相对于远端 q001 阶段，只改变题目及其源码 corpus，沿用相同 Rust、Claude/Qwen、remote embedding、授权、真实索引预检和 completion-v2 预算；旧题的 rubric 和各阶段判定规则不变。
+
+| 组别 | 事实分 /10 | 达到源码质量门槛 | Input（含 cache） | Input（不含 cache read） | Output | 工具尝试 / 准入 / 拒绝 | Agent wall | zg 成功 / 尝试 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 7 | 否，C3/C4 与 D3 | 343,296 | 60,771 | 13,358 | 25 / 24 / 1 | 410.16 s | — |
+| zg | 9 | 否，C4 | 445,992 | 64,076 | 9,186 | 21 / 21 / 0 | 285.79 s | 2 / 2 |
+
+两次均交付最终答案，协议有效，最终 `result.usage` 的输入、输出及缓存字段完整，并与 `modelUsage` 对应字段一致。这说明执行与用量可审计，不代表答案通过。[独立盲审](architecture-v1/blinded-review.json)的 S/T 经[输入核验](architecture-v1/review-input-verification.json)解盲为 baseline/zg：C1–C5 分别为 `2/2/0/1/2` 与 `2/2/2/1/2`，冻结的 `source_grounded_success` 均为 false。
+
+baseline 否认所选 pool 会传给 target builder，把交接链止于 reducer，构成冻结规则 D3 的关键矛盾；它也没有给出 C3 的借用 adapter／目标阶段调用点，以及 C4 的独立 PQ 外层 pool 和 caller-based 数量上限的充分引用。zg 正确补出了 builder train/build 和可选 converter 的交接链，但在正确的 `max(1, min(build_thread_count_, threads->count()))` 公式之外，错误断言硬件线程数至少 4 就意味着 builder 数至少 2。源码允许显式配置 builder 数为 1，只有零值才走硬件默认分支，因此 C4 只得 1/2，关联数量论断的引用支持仍不完整。zg 没有已证实的 D1–D5 关键矛盾，但 9/10 仍未通过 C4 满分和引用门槛；额外错误保留在盲审，不修改 rubric。
+
+zg 的 input（含 cache）增加 **29.91%**，预建索引下的 agent wall 减少 **30.32%**。事实分增加 2 分、agent 阶段更快与两组均未通过、input 上升必须同时报告。[单题判定](architecture-v1/pair-verdict.json)不满足冻结的效率信号规则，不能称为质量通过或整体效率提升。
+
+[工具轨迹](architecture-v1/trajectory-audit.json)记录 2 次 MCP 调用、4 条查询字符串，均使用 `/workspace` 并成功返回；没有强制调用或失败后重跑。工具尝试 25→21，工具消息轮次 16→11，但 Read 返回文本 119,763→122,199 字符，全部工具返回文本 144,989→169,852 字符。更少的工具轮次没有转化为更少的输入，也不能单凭命中证明证据被正确使用。
+
+baseline 有两次 Read 使用 `/Users/luke/repos/proj/` 下的错误绝对路径，均返回文件不存在，随后第 25 次 Grep 尝试被 24 次准入上限拒绝。两次路径错误是保留的 agent 行为；预算拒绝符合冻结 hook，不是协议失效或新增的第 25 次准入。两组 init 的 cwd 均为 `/workspace`，HOME 独立且禁用仓库指导；现有证据不能确定错误路径前缀的来源，不据此声称外部上下文污染。zg 没有工具错误或预算拒绝。
+
+授权 **0.571 s**、索引及 readiness **196.597 s**、完整预检 **4.574 s**，合计 **201.741 s**，均在 agent wall 外。把这三项加到 zg agent wall 得 **487.53 s**，高于 baseline 的 **410.16 s**，因此这次 pair 没有计入检索准备后的冷启动耗时优势。该比较仍不含安装、下载和镜像构建，不能称为从安装到答案的总耗时；QA 内的远端查询等待已经计入 agent wall，不另行扣除。
+
+[独立执行审计](architecture-v1/independent-audit.json)核对 GitHub ZIP 摘要与 40 个 QA 文件、冻结来源、remote grant、索引身份、vector-only 预检、工具 ID、预算和隔离，未发现阻断执行问题。live QA 的 HTTP 请求体没有保存，8192 是配置的每请求输出上限；源码执行后完整性只有 runner 的重新哈希报告，私有 seed/config 按设计不上传。上述限制、原始结果和全部不利观察保留。单个有目的选择的新题不能支持稳定架构题收益、embedding 因果收益或总体泛化结论。
+
 ## 所有前置尝试
 
 | Run | 结果与处理 |
@@ -147,6 +170,7 @@ q003 的 zg input 增加 36.28%、wall 增加 46.35%。总工具调用 24→23�
 - [zvec 证据](zvec-q001/summary.json)、[完成性检查](zvec-q001/completion-review.json)、[检索统计](zvec-q001/tool-outcomes.rederived.json)、[轨迹审计](zvec-q001/trajectory-audit.json)、[setup](zvec-q001/setup.json)
 - [Completion V2 zvec 证据](zvec-q001-completion-v2/summary.json)、[盲审](zvec-q001-completion-v2/blinded-review.json)、[解盲](zvec-q001-completion-v2/review-mapping.json)、[独立完整性审计](zvec-q001-completion-v2/independent-audit.json)、[轨迹审计](zvec-q001-completion-v2/trajectory-audit.json)
 - [确认试验判定](zvec-q001-completion-confirmation/confirmation-verdict.json)、[盲审](zvec-q001-completion-confirmation/blinded-review.json)、[解盲](zvec-q001-completion-confirmation/review-mapping.json)、[独立完整性审计](zvec-q001-completion-confirmation/independent-audit.json)、[轨迹审计](zvec-q001-completion-confirmation/trajectory-audit.json)
+- [q004 判定](architecture-v1/pair-verdict.json)、[盲审](architecture-v1/blinded-review.json)、[匿名输入核验](architecture-v1/review-input-verification.json)、[独立执行审计](architecture-v1/independent-audit.json)、[轨迹审计](architecture-v1/trajectory-audit.json)
 
 Input tokens 包含普通输入、cache read 与 cache write；优先采用会话最终 `result.usage`。Wall time 包含容器和 MCP 启动，索引及预检单列。服务返回的美元金额未经账单验证，不用于成本结论。`zg_used` 只表示尝试过；真正成功、错误及无返回调用分别统计，成功返回也不自动代表取回了有用证据。
 

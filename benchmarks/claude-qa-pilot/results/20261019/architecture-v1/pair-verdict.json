@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "run_id": 39297180874,
+  "head_sha": "b986001e7bf658eaa0598b053d94f525e367a0cb",
+  "task_id": "zvec-q004",
+  "phase": "architecture-development",
+  "plan": {
+    "path": "../../../experiment-architecture-v1.json",
+    "sha256": "992ee9b4a04994d56d6c3ef73638cd02d4df37bcf09ea6d0c90873605be4940d"
+  },
+  "quality": {
+    "baseline": {
+      "factual_points": 7,
+      "maximum": 10,
+      "source_grounded_success": false,
+      "criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 0,
+        "C4": 1,
+        "C5": 2
+      },
+      "failed_gates": [
+        {
+          "gate": "minimum_factual_points",
+          "required": 8,
+          "actual": 7
+        },
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C3",
+          "required": 2,
+          "actual": 0
+        },
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C4",
+          "required": 2,
+          "actual": 1
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C3",
+          "support_status": "partial",
+          "reason": "Pool delivery to reducer is cited, but the requested borrowed adapter and target builder/converter call sites are not. Earlier/direct training calls do not substitute."
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C4",
+          "support_status": "missing",
+          "reason": "No actual separate PQ outer-pool creation range or caller-based cap range is supplied. Whole-file speculation is insufficient."
+        },
+        {
+          "gate": "no_material_contradictions",
+          "contradiction_ids": [
+            "D3"
+          ]
+        }
+      ],
+      "critical_contradictions": [
+        {
+          "contradiction_id": "D3",
+          "exact_answer_quote": "The builder-facing interface itself carries no pool parameter",
+          "additional_context_quote": "The handoff established above terminates at the reducer",
+          "frozen_source_evidence": [
+            {
+              "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "start_line": 742,
+              "end_line": 768
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_threads.h",
+              "start_line": 169,
+              "end_line": 205
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_runner.h",
+              "start_line": 692,
+              "end_line": 695
+            },
+            {
+              "path": "src/include/zvec/core/framework/index_runner.h",
+              "start_line": 719,
+              "end_line": 722
+            }
+          ],
+          "conflict": "The reducer creates BorrowedSingleQueueIndexThreads from its selected thread_pool_ and explicitly passes it to target_builder_->train and target_builder_->build. The interface has IndexThreads::Pointer overloads. The cited holder-only DiskAnnIndex::train calls do not describe this merge target stage.",
+          "effect_on_requested_conclusion": "Materially denies the selected-pool handoff that Q2 asks to explain; source-grounded success is disallowed independently of the point and citation failures."
+        }
+      ]
+    },
+    "zg": {
+      "factual_points": 9,
+      "maximum": 10,
+      "source_grounded_success": false,
+      "criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 2
+      },
+      "failed_gates": [
+        {
+          "gate": "required_full_factual_credit",
+          "criterion_id": "C4",
+          "required": 2,
+          "actual": 1
+        },
+        {
+          "gate": "core_citation_support",
+          "criterion_id": "C4",
+          "support_status": "partial",
+          "reason": "The fresh-pool mechanism and correct max/min upper cap are fully supported by the actual submitted citations. The answer additionally asserts hardware implies builder count >=2; its cited init source only defaults zero and preserves positive 1, so the associated count claims are not all supported."
+        }
+      ],
+      "critical_contradictions": []
+    }
+  },
+  "execution": {
+    "both_completed": true,
+    "both_protocol_valid": true,
+    "both_usage_complete": true,
+    "source_unchanged_reported": true,
+    "zg_correct_root_successes": 2,
+    "independent_audit": "independent-audit.json",
+    "independent_audit_sha256": "c30f5422b885b22a9e51c0ca259568e8a1f0dd45927bc773571814480fef13d7"
+  },
+  "frozen_efficiency_conditions": {
+    "both_source_grounded_success": false,
+    "zg_factual_points_not_lower": true,
+    "zg_input_including_cache_lower": false,
+    "protocol_and_usage_valid": true,
+    "correct_root_retrieval_succeeded": true
+  },
+  "efficiency_improvement": false,
+  "primary_source_grounded_success_gain": false,
+  "resources": {
+    "input_tokens_including_cache": {
+      "baseline": 343296,
+      "zg": 445992,
+      "change_percent": 29.914709172259514
+    },
+    "agent_wall_seconds": {
+      "baseline": 410.16164367899995,
+      "zg": 285.788474868,
+      "change_percent": -30.322964306320344
+    },
+    "output_tokens": {
+      "baseline": 13358,
+      "zg": 9186,
+      "change_percent": -31.23222039227429
+    },
+    "setup_seconds": {
+      "embedding_authorization_seconds": 0.5706517050000031,
+      "index_setup_seconds": 196.59650811699998,
+      "mcp_preflight_seconds": 4.573928147999993
+    },
+    "setup_seconds_sum": 201.74108796999997,
+    "zg_agent_plus_measured_setup_seconds": 487.52956283799995,
+    "setup_scope": "Grant, index/readiness and MCP preflight; excludes image/build/download and other orchestration, so not a full first-install measurement. Baseline uses none of this retrieval setup."
+  },
+  "interpretation": "Factual points improve 7 to 9 and agent wall falls, but both answers fail the fixed source-grounded endpoint and input rises. No efficiency improvement or stable favorable suite is established.",
+  "trajectory": {
+    "path": "trajectory-audit.json",
+    "sha256": "e236d47ab0b7d865ec8d00eeadc3c4ddfa24a48542ecdba0c9000366edda6c6c",
+    "tool_calls": [
+      25,
+      21
+    ],
+    "tool_message_rounds": [
+      16,
+      11
+    ],
+    "all_tool_return_characters": [
+      144989,
+      169852
+    ],
+    "mcp_tool_calls": 2,
+    "mcp_query_strings": 4,
+    "note": "Fewer rounds/output and more early context are compatible with wall down/input up, not causal proof. Native matchedBy annotations do not isolate embedding effects."
+  },
+  "limitations": [
+    "One purposively selected architecture case, baseline first, no random sampling or held-out generalization claim.",
+    "Both final answers delivered; low scores, native tool path errors and budget denial retained.",
+    "Index setup excluded from agent wall; measured setup plus zg agent exceeds baseline agent time.",
+    "No verified combined dollar costs, immutable provider weight identity or contamination-free claim.",
+    "Every older outcome and phase-specific rule is preserved; no automatic repeat or favorable-outcome replacement."
+  ]
+}

@@ -1,6 +1,6 @@
 # Zvec closed-issue QA
 
-The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration task is now frozen below. This is not a representative estimate of zg's overall benefit.
+The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration pair has also completed: factual points rose from 7/10 to 9/10 with zg, but neither answer passed its frozen quality endpoint and input increased. This is not a representative estimate of zg's overall benefit.
 
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
@@ -138,3 +138,27 @@ Older datasets, rubrics and phase-specific success rules remain unchanged.
 Independent source and execution reviews found no blocking issues. The exporter
 verified all 1,596 source files and 21 evidence spans; 93 offline checks passed.
 These checks validate preparation, not a solver-quality or performance result.
+
+The frozen pair subsequently completed in [run 39297180874](https://github.com/Cuiyus/zvec-grep/actions/runs/39297180874),
+with full terminal usage and a successful [execution audit](../claude-qa-pilot/results/20261019/architecture-v1/independent-audit.json).
+The [blind source review](../claude-qa-pilot/results/20261019/architecture-v1/blinded-review.json),
+checked against the [review inputs](../claude-qa-pilot/results/20261019/architecture-v1/review-input-verification.json),
+scored baseline/zg 7/9 out of 10. Baseline's C1–C5 scores are 2/2/0/1/2:
+it denies the selected pool's handoff to the target builder (D3), and its C3/C4
+citations do not support the required mechanisms. zg scores 2/2/2/1/2. It gives
+the correct caller-bound PQ sizing formula, but incorrectly infers builder>=2
+from hardware>=4; explicit builder=1 is permitted by source. This loses C4's
+required factual unit and leaves its associated count claim only partly supported.
+Both answers therefore fail the unchanged source-grounded quality endpoint.
+
+zg input including cache increased 29.91% (343,296→445,992), while agent wall
+fell 30.32% (410.16→285.79 s). Its grant/index/preflight add 201.741 s, making
+setup plus agent 487.53 s; there is no cold setup-inclusive speedup, and this
+comparison does not cover installation or image building. The two successful
+MCP calls used the correct root without forced adoption. Baseline's two wrong-path
+Read errors and one budget denial remain valid observed behavior: 25 attempts
+still mean only 24 admissions. See the [trajectory audit](../claude-qa-pilot/results/20261019/architecture-v1/trajectory-audit.json)
+and [pair verdict](../claude-qa-pilot/results/20261019/architecture-v1/pair-verdict.json).
+The two-point gain and lower warm agent wall are reported alongside both quality
+failures and higher input; they do not meet the frozen efficiency signal rule or
+establish a general architecture-task benefit.

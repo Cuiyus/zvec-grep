@@ -1,0 +1,50 @@
+`/db/index/segment/segment.cc:1549-1575`), where the selection happens:
+
+```cpp
+// segment.cc:1560-1567
+vector_column_params::MergeOptions merge_options;
+if (concurrency == 0) {
+  merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+  merge_options.write_concurrency =
+      static_cast<uint32_t>(merge_options.pool->count());
+} else {
+  merge_options.write_concurrency = concurrency;
+}
+```
+
+- **Invocation A (`concurrency=0`)**: takes the `if` branch — the **shared global optimize pool** (4 workers, created from `optimize_threads=4`) is attached, and `write_concurrency = pool->count() = 4` (`segment.cc:1561-1564`).
+- **Invocation B (`concurrency=2`)**: takes the `else` branch — `merge_options.pool` stays at its default `nullptr` (`src/db/index/column/vector_column/vector_column_params.h:72-75`) and `write_concurrency = 2` (`segment.cc:1565-1567`). The actual pool object for B is created later, inside `Index::merge` (see §2): a **per-merge local `ailego::ThreadPool(2, false)`** (`src/core/interface/index.cc:1441-1442`), owned by a `unique_ptr` declared so its lifetime covers `reduce()` (`index.cc:1433-1434`), and destroyed when the merge returns.
+
+**B does not change the configured global pool.** The `else` branch never touches `GlobalResource`, and even accesses through A cannot rebuild it: `GlobalResource::initialize()` is guarded by `std::call_once` (`global_resource.cc:22-23`), so the 4-worker optimize pool is fixed for the process lifetime under the stated "no later reconfiguration" condition. Each of A and B reaches the same `merge_vector_indexer` for every merge it performs (non-quantized target at `segment.cc:1618-1620`; quantized path's flat merge at 1684-1686 and quantize-target merge at 1761-1762).
+
+## 2. Handoff of the selected pool to the builder-side stage
+
+The chain, identical in shape for A and B:
+
+1. **Segment → column indexer**: `merge_vector_indexer` calls `vector_indexer->merge(source_indexers, nullptr, merge_options)` (`segment.cc:1569`).
+2. **Column indexer → core interface**: `VectorColumnIndexer::merge` forwards the pair verbatim: `index->merge(engine_indexers, *engine_filter, {merge_options.write_concurrency, merge_options.pool})` (`src/db/index/column/vector_column/vector_column_indexer.cc:128-130`).
+3. **DiskANN target (example)**: `DiskAnnIndex::merge` resets the builder, sets `build_stage_ = kCollecting`, then delegates to the generic `Index::merge(indexes, filter, options)` (`src/core/interface/indexes/diskann_index.cc:361-374`, delegation at 369).
+4. **`Index::merge` — the meaningful pool handoff** (`src/core/interface/index.cc:1416-1526`):
+   - Rejects `write_concurrency == 0` (1429-1432).
+   - **Pool selection (1434-1446)**: if `options.pool != nullptr` (case A), `reducer->set_thread_pool(options.pool)` with the global pool and `effective_write_concurrency = min(write_concurrency, pool->count())` = min(4, 4) = 4. If null (case B), a local `ailego::ThreadPool(options.write_concurrency, false)` is created, set on the reducer, and `effective_write_concurrency = local_thread_pool->count()` = 2 (1441-1445).
+   - The effective count is passed as `PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS` into `reducer->init(reducer_params)` (1448-1453).
+   - **Optional conversion-training call immediately before the builder-side stage (1457-1505)**: only when `converter_ != nullptr && reformer_ == nullptr` (a global quantizer needing full-dataset training), merge sources are wrapped in a `MergeSourceIndexHolder` (1488-1489) and `converter_->train(holder)` is called at line 1495. Note this call **takes no pool argument** — it runs synchronously on the calling thread; the selected pool has already been installed on the reducer at 1437/1443 but is not an input to `converter_->train`. A reformer is then created from the trained converter meta and merged into the streamer (1501-1504).
+   - **Builder-side stage**: the target builder is handed to the pool-owning reducer via `reducer->set_target_streamer_wiht_info(builder_, streamer_, converter_, reformer_, input_vector_meta_, turbo_quantizer_)` (1506-1508), and `reducer->reduce(filter)` (1520) drives the training/building work.
+
+**Passing vs. consuming**: what the cited sites prove is that the selected pool (global for A, local-2 for B) and the effective concurrency are *delivered* to the reducer via `set_thread_pool` + `NUM_OF_ADD_THREADS`, and that the builder is delivered to the same reducer. The builder-facing interface itself carries no pool parameter — `DiskAnnBuilder` is created and initialized with only `PARAM_DISKANN_BUILDER_MAX_DEGREE / LIST_SIZE / MAX_PQ_CHUNK_NUM` (`diskann_index.cc:100-107, 125-126`) and its train/build entry points take only the holder (`builder_->train(holder_)`, `builder_->build(holder_)` at `diskann_index.cc:231, 236`). Whether `MixedStreamerReducer` and each concrete builder actually *submit* their internal work to the installed pool is decided inside those implementations (`mixed_reducer`, per-algorithm builders), which these call sites cannot prove.
+
+## 3. DiskANN PQ-training outer pool
+
+**It is not the caller's pool reused in the §2 sense.** The handoff established above terminates at the reducer: no `ailego::ThreadPool*` derived from `OptimizeOption.concurrency` or from the global optimize pool is passed through any builder-facing call I verified — `DiskAnnBuilder::init(meta, params)` receives only the three DiskANN structural params (`diskann_index.cc:101-107, 125`), and `train(holder)` / `build(holder)` receive only the holder (`diskann_index.cc:231, 236`; same shape from `DiskAnnIndex::merge` via `Index::merge`). Therefore the outer pool that dispatches PQ training work across chunks cannot be the caller-selected pool object; it must be constructed *inside* the DiskANN builder implementation (`src/core/algorithm/diskann/diskann_builder.cc`, potentially via the framework helper `src/include/zvec/core/framework/index_threads.h`), sized from the builder's own setting/internal logic (e.g., hardware concurrency or a builder thread parameter) rather than from the 4-worker global pool (A) or the 2-worker local pool (B).
+
+**Explicit uncertainty**: my read budget was exhausted before I could open `diskann_builder.cc`/`diskann_builder.h`, so I cannot cite the exact line or sizing formula (hardware_concurrency vs. a DiskAnn param vs. a clamp) for that internal pool. The structural conclusion — caller pool not handed to the builder, so the PQ chunk-dispatch pool is builder-internal and independent of `concurrency` — is what the cited interface sites support.
+
+## 4. What the settings do and do not establish
+
+**Established (worker-pool capacity):**
+- A: the core merge uses the shared global optimize pool with exactly 4 workers (`global_resource.cc:27-29` + `segment.cc:1561-1564`), and the reducer's add-stage concurrency is `min(4, pool->count()) = 4` (`index.cc:1436-1439, 1451-1452`).
+- B: each `Index::merge` creates and destroys its own local pool of exactly 2 workers (`index.cc:1441-1445`); the global 4-worker pool is untouched and remains available unchanged (`global_resource.cc:22-23`).
+
+**Not established (process threads / CPU utilization):**
+- These knobs bound only the specific pools above. Total process thread count also includes the global *query* pool (`global_resource.cc:24-26`), builder-internal pools such as DiskANN's PQ-training pool (§3), threads inside third-party libraries (BLAS/OpenMP, I/O backends), and per-merge local pools if multiple merges occur (e.g., the two merges in the quantized path, `segment.cc:1684-1686, 1761-1762`).
+- Pool size is capacity, not utilization: 4 or 2 workers may idle (blocking on I/O, sequential stages like `converter_->train` at `index.cc:1495` which runs on the calling thread), and an implementation that receives the pool without consuming it (§2 caveat) would use fewer threads than configured — while nested internal pools could oversubscribe CPUs beyond the configured numbers. Nothing here proves actual core occupancy in either direction.
