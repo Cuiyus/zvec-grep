@@ -10,10 +10,24 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from .integration import build_command, fixture_environment, stop_process_group
+from .integration import (build_command, fixture_environment,
+                          installed_guidance_loaded_once, stop_process_group)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_guidance_all_body_required_after_exact_boundary_comment_removal(self):
+        body = '## zvec-grep\n\nFirst rule.\n- Second rule.'
+        installed = '<!-- ZVEC_GREP_START -->\n' + body + '\n<!-- ZVEC_GREP_END -->\n'
+        self.assertTrue(installed_guidance_loaded_once(installed, 'context\n' + body + '\nend'))
+        self.assertTrue(installed_guidance_loaded_once(installed, installed))
+        self.assertFalse(installed_guidance_loaded_once(installed, body + '\n' + body))
+        self.assertFalse(installed_guidance_loaded_once(installed, body.replace('Second rule.', 'Changed rule.')))
+        self.assertFalse(installed_guidance_loaded_once(installed, body.replace('\n\n', '\n')))
+        self.assertFalse(installed_guidance_loaded_once(installed, 'First rule.'))
+        self.assertFalse(installed_guidance_loaded_once('<!-- ZVEC_GREP_START -->\n<!-- ZVEC_GREP_END -->', ''))
+        internal = body + '\n<!-- internal -->'
+        self.assertFalse(installed_guidance_loaded_once(internal, body))
+
     def test_uninspectable_group_never_claims_cleanup(self):
         proc = Mock(pid=123456789, returncode=0)
         with patch('native_claude.integration.os.killpg', side_effect=PermissionError):

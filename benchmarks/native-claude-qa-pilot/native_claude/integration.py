@@ -28,6 +28,21 @@ MODEL = 'qwen3.8-max'
 PACKAGE_SHA = 'fbe4bd201c8a0520f2373f1039e1d0805a38781c6e2f3ce11b83310d23dc6522'
 
 
+def installed_guidance_loaded_once(installed, request_text):
+    """Compare all instructions after Claude's observed boundary-comment removal.
+
+    Only the installer's two exact outer markers may be removed. Do not
+    normalize internal comments, whitespace, wording, or missing instructions.
+    """
+    if not isinstance(installed, str) or not isinstance(request_text, str):
+        return False
+    body = installed.strip()
+    start, end = '<!-- ZVEC_GREP_START -->', '<!-- ZVEC_GREP_END -->'
+    if body.startswith(start) and body.endswith(end):
+        body = body[len(start):-len(end)].strip()
+    return bool(body) and request_text.count(body) == 1
+
+
 @contextmanager
 def fixture_environment(chat_url, embedding_url, main_root):
     saved = dict(os.environ)
@@ -285,7 +300,7 @@ def verify_slot(args, slot):
         check('baseline_no_installed_zg_guidance', 'Choose the evidence source before the retrieval mode.' not in first_request)
         check('baseline_no_zg_tool', not any('zvec_grep' in t.get('name', '') for r in roots for t in r['body'].get('tools', [])))
     else:
-        check('entire_installed_guidance_loaded_once', isinstance(guidance, str) and bool(guidance.strip()) and first_request.count(guidance.strip()) == 1)
+        check('entire_installed_guidance_loaded_once', installed_guidance_loaded_once(guidance, first_request))
         payloads = runtime.get('zg', {}).get('payloads', {})
         check('all_original_runtime_payloads', all(
             payloads.get(p.removeprefix('package/'), {}).get('sha256') == EXPECTED_MEMBERS[p][1]
