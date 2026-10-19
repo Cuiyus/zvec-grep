@@ -1,6 +1,6 @@
 # Zvec closed-issue QA
 
-This is one development QA task, selected before running either retrieval arm. It tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. It is not yet an independently validated benchmark or a representative estimate of zg's overall benefit.
+This is a three-task development QA set built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. This is not a representative estimate of zg's overall benefit.
 
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
@@ -36,6 +36,22 @@ The primary pilot endpoint is successful, source-grounded explanation (at least 
 
 Repository recency may reduce some memorization risk, but it does not prove absence from any model's training data. These are public issues and commits. This pilot relies on frozen pre-fix source, withheld issue text, citations and isolated execution; it makes no contamination-free claim.
 
+## Design references and outcome interpretation
+
+- [zg main's benchmark design](https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/README.md) distinguishes retrieval evaluation from agent e2e evaluation. This set follows the latter: fixed source and questions, paired tool exposure, separate setup accounting, and final-answer assessment.
+- [Semble's benchmark](https://github.com/MinishLab/semble/blob/8ee6463efbb1ff755c339e965c7298b7afd7db5b/benchmarks/README.md) supplies useful retrieval diagnostics and semantic/architecture/symbol categories. Its simulated search/read token results are not agent-QA outcomes. The present tasks cover causal debugging, not all of those categories.
+- [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph/blob/437b5c329fbdb8fe53a4440005168d463b1073e3/README.md), linked from Semble's methods discussion, is a relevant CodeGraph reference candidate; the user's intended same-name project is not confirmed. Its same-question MCP comparison and independent repeats inform the pairing design. The inspected README does not establish a blinded answer-quality rubric, so completion or lower tool usage alone cannot establish equivalent quality here.
+
+The dataset's primary endpoint remains source-grounded success. Report quality
+points, citation gates, input/output tokens and time separately. A higher score
+at higher cost is a quality/resource tradeoff; a failed core gate remains a
+failure even with a high score. Existing phases also freeze specific joint
+quality/efficiency signal rules: evaluate those rules unchanged, without making
+simultaneous improvement an unstated requirement for every future experiment.
+The [reference audit](evaluator/provenance/design-reference-audit-20261019.json)
+records source identities and limits; it neither changes frozen questions nor
+selects tasks based on favorable solver outcomes.
+
 ## Separately prepared issue expansion
 
 The original `dataset.json` and q001 question/rubric remain unchanged. A separate
@@ -54,14 +70,22 @@ critical-claim/citation gates, and independent static source reviews in their
 `evaluator/provenance/q002/` and `q003/` directories. Reporter explanations were
 checked against source; q003 preserves the later discussion's narrower trigger
 and controls. Fix-only evidence remains evaluator-only and is excluded from the
-pre-fix spans validated by the exporter. No engine reproduction or solver result
-is claimed for these two tasks.
+pre-fix spans validated by the exporter. Construction used static source review;
+it did not execute a native regression at either exact pre-fix commit.
 
 The [expansion plan](../claude-qa-pilot/experiment-issue-expansion-v1.json) is frozen
 for both tasks after the [q001 confirmation decision](../claude-qa-pilot/issue-expansion-decision-v1.json).
 The earlier efficiency signal did not repeat; this separate batch explores task
 dependence under unchanged completion-v2. It includes both tasks and keeps every
 outcome, without pooling q001 development or confirmation into a new-task claim.
+
+Both expansion pairs have now completed with full execution evidence and fresh
+blinded source reviews. q002 scored 10/10 in both arms and passed both quality
+gates; q003 improved from 6/10 to 9/10 with zg, but neither answer passed its core
+source-evidence gates. zg used more input tokens and time in both pairs. The
+[complete results](../claude-qa-pilot/results/20261019/README.md) retain every
+answer and failed gate. These observations establish that the harness and tasks
+can run end to end; they do not establish a stable quality or efficiency benefit.
 
 Export one task explicitly from a clone containing its exact Git object:
 
