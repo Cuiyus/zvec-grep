@@ -31,6 +31,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     ZVEC_GREP_MODEL_CACHE=/opt/qa/model-cache
 RUN python3 /opt/qa/prepare_model.py \
     && sh /opt/qa/smoke_local.sh \
+    && chmod -R a+rX /opt/qa/model-cache \
     && python3 /opt/qa/prepare_model.py --record-cache
 LABEL org.opencontainers.image.revision="a424e0ce06868dc9ad8f142f57de59b8f9b58699"
 WORKDIR /workspace
