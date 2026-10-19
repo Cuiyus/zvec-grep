@@ -58,6 +58,18 @@ def common_instructions(workspace_root_guidance: bool = False, tool_budget: int 
     return instructions
 
 
+def effective_instructions(args) -> str:
+    """Render once per run; keep every legacy instruction byte unchanged."""
+    if not hasattr(args, "effective_common_instructions"):
+        instructions = common_instructions(args.workspace_root_guidance, args.tool_budget, args.research_seconds)
+        if getattr(args, "answer_verification_pilot", False):
+            from answer_verification_phase import prepare_runner
+            here = Path(__file__).resolve().parent
+            instructions, args.answer_verification_metadata = prepare_runner(args, instructions, here.parents[1], here)
+        args.effective_common_instructions = instructions
+    return args.effective_common_instructions
+
+
 def audit_tool_budget(state: dict, stream: str, limit: int, research_seconds: int) -> dict:
     observed, results = {}, {}
     for line in stream.splitlines():
@@ -344,7 +356,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
         "--allowedTools", allowed, "--disable-slash-commands", "--no-session-persistence",
         "--setting-sources", "", "--settings", "/pilot-config/settings.json",
         "--strict-mcp-config", "--mcp-config", "/pilot-config/mcp.json",
-        "--append-system-prompt", common_instructions(args.workspace_root_guidance, args.tool_budget, args.research_seconds), "--", prompt]
+        "--append-system-prompt", effective_instructions(args), "--", prompt]
     write_json(trial_dir / "command.json", command)
     start = time.monotonic()
     timed_out = False
@@ -437,6 +449,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--tool-budget", type=int, help="Shared native PreToolUse cap; absent preserves V1")
     p.add_argument("--research-seconds", type=int, default=600,
                    help="With --tool-budget, deny additional retrieval after this elapsed time")
+    p.add_argument("--answer-verification-pilot", action="store_true",
+                   help="Separate frozen shared final-answer verification pair; default off")
     p.add_argument("--dry-run", action="store_true", help="Validate inputs and print manifest; no model calls")
     return p
 
@@ -477,6 +491,7 @@ def main() -> int:
             raise ValueError("MCP template must use stdio and inherit environment, not embed credentials")
         if not isinstance(args.mcp_server.get("command"), str) or not isinstance(args.mcp_server.get("args"), list):
             raise ValueError("MCP template needs command and args")
+    instructions = effective_instructions(args)
     prompt = args.prompt.read_text()
     frozen = source_manifest(args.source)
     image_result = subprocess.run(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True, capture_output=True, check=True)
@@ -492,7 +507,7 @@ def main() -> int:
         "embedding_model": args.embedding_model,
         "source_sha256": frozen["sha256"], "source_file_count": frozen["file_count"],
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-        "common_instructions": common_instructions(args.workspace_root_guidance, args.tool_budget, args.research_seconds), "zg_tool": args.zg_tool,
+        "common_instructions": instructions, "zg_tool": args.zg_tool,
         "workspace_root_guidance": args.workspace_root_guidance,
         "protocol_version": "completion-v2" if args.tool_budget is not None else "root-v2" if args.workspace_root_guidance else "v1",
         "tool_budget": args.tool_budget,
@@ -506,6 +521,10 @@ def main() -> int:
         "index_setup_excluded": True, "quality_judged": False,
         "deviations": ["standalone Docker runner, no Harbor", "Read/Grep/Glob only plus zg search in treatment", "fresh HOME, empty setting sources, disabled repository CLAUDE.md and auto-memory; bare mode is not used because it removes native Grep and Glob", "Claude --effort high is not assumed equivalent to OpenCode provider-specific high/xhigh or temperature settings", "wall includes container launch and MCP startup", "turn/wall/output limits instead of unverifiable third-party USD budget", "all planned trials retained; no trimming or task filtering"],
     }
+    if args.answer_verification_pilot:
+        from answer_verification_phase import PROTOCOL
+        manifest.update(protocol_version=PROTOCOL, answer_verification_plan=args.answer_verification_metadata,
+                        common_instructions_sha256=hashlib.sha256(instructions.encode()).hexdigest())
     if args.dry_run:
         print(json.dumps(manifest, indent=2))
         return 0

@@ -288,3 +288,40 @@ does not establish useful evidence or answer quality. Omit the three expected
 budget arguments when inspecting a protocol without a hook; admission-based
 counts then remain unavailable. This script was added after completion-v2 was
 dispatched and does not change that run's agent protocol.
+
+## Bounded final-answer verification development
+
+The separately named [answer-verification plan](experiment-answer-verification-v1.json)
+is frozen for exactly one additional q004 baseline/zg pair after 101 offline
+checks and an independent execution review. No new solver outcomes existed at
+freeze. It adds the same [generic final consistency instruction](answer-verification-instructions.txt)
+to both arms; the question, source, rubric, current-main Rust, native MCP schema,
+Claude/Qwen settings and completion budget remain unchanged. No additional model
+invocation or retrieval phase is introduced by the harness. Actual solver calls
+may still change in response to the instruction.
+
+The retrospective [diagnosis](provenance/answer-verification-diagnostic-20261019.json)
+found exact counterevidence in successful tool results before unsupported final
+claims in q004 and q002. Existing instructions already require citations and
+uncertainty. The [independent design review](provenance/answer-verification-design-review-20261019.json)
+permits testing only the small explicit pre-submit consistency step, with no
+expectation of improvement. The experiment does not establish whether internal
+self-checking occurred or isolate prompt effects from run-to-run variation.
+
+The unchanged source-grounded quality endpoint stays primary. A candidate quality
+signal requires zg to pass while baseline fails, with non-lower factual points,
+a valid complete pair and successful correct-root retrieval. If both pass,
+quality is tied; efficiency still requires lower complete input including cache
+and the existing joint conditions. Wall and setup remain separate. If neither
+signal appears, this q004 instruction branch stops: no further wording revisions,
+repeated runs to obtain a pass, or outcome-based replacement with an easier task.
+All earlier answers, failures, rules and resource comparisons remain available.
+
+```sh
+gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
+  --ref dev/claude-zvec-qa-pilot -f task=zvec-q004 \
+  -f workspace_root_guidance=false -f completion_budget=true \
+  -f completion_confirmation=false -f closed_issue_expansion=false \
+  -f remote_embedding_pilot=false -f architecture_pilot=false \
+  -f answer_verification_pilot=true
+```

@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-10-19T18:15:10.790441+00:00",
+  "kind": "conditional read-only implementation feasibility",
+  "head": "bcdb98e1140e718a15d841ab19f9192c4aa0c65e",
+  "workspace": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep",
+  "decision": "Feasible with a separately selected/frozen phase and one optional shared system-prompt suffix. Do not edit the legacy common_instructions function, existing plans or budget hook. No implementation or experimental authorization is implied.",
+  "performed": {
+    "repository_edits": false,
+    "instruction_text_selected": false,
+    "new_plan_created_or_frozen": false,
+    "dispatch": false,
+    "provider_or_model_calls": 0,
+    "new_test_execution": false,
+    "existing_architecture_plan_offline_validation": {
+      "path": "benchmarks/claude-qa-pilot/experiment-architecture-v1.json",
+      "sha256": "992ee9b4a04994d56d6c3ef73638cd02d4df37bcf09ea6d0c90873605be4940d",
+      "dataset_path": "benchmarks/zvec-issue-qa/dataset-architecture-v1.json",
+      "dataset_sha256": "71a94c3947f821642abc0fdf93a87cb076567cdb01e9433be7cb1d7bf3af5003"
+    }
+  },
+  "key_constraint": {
+    "evidence": [
+      "run.py:23-58 defines frozen base/root/completion prompt text",
+      "run.py:347 and :495 independently call the same common_instructions function for actual command and manifest",
+      "architecture_phase.py:48-68 checks the remote base and exact common-instruction/hook hashes",
+      "architecture_phase.py:69-101 binds q004 task/source/assets and one baseline-then-zg pair",
+      "ci_run.py:190-247 and workflow lines64-129 gate selection/plan before setup/provider",
+      "run.py:309-316 is the sole existing PreToolUse budget hook; :517-535 runs the pair and retains errors"
+    ],
+    "implication": "Directly appending new advice to COMMON_INSTRUCTIONS/common_instructions would change every legacy run and fail frozen remote/architecture gates. New final-answer verification must be an opt-in, separately hashed effective prompt. A new Stop hook or second critique/repair invocation is unnecessary and changes the call protocol."
+  },
+  "recommended_minimum_design": {
+    "selection": {
+      "workflow_input": "answer_verification_pilot: boolean, default false",
+      "ci_flag": "--answer-verification-pilot",
+      "runner_flag": "--shared-answer-verification (boolean, fixed policy asset/version, default false)",
+      "exact_new_selection": {
+        "task": "zvec-q004",
+        "completion_budget": true,
+        "workspace_root_guidance": false,
+        "completion_confirmation": false,
+        "closed_issue_expansion": false,
+        "remote_embedding_pilot": false,
+        "architecture_pilot": false,
+        "answer_verification_pilot": true
+      },
+      "legacy_selection": "All current combinations retain exact acceptance/task expansion when the new flag is false or absent. Original architecture_pilot=true remains the original architecture-v1 plan. Reject simultaneous old architecture and new verification flags, or new flag on any other task/phase."
+    },
+    "isolated_module": "Add answer_verification_phase.py with a pure selection validator, fixed suffix loader/composer and new-plan validator. A small architecture-family resolver returns a frozen execution spec for original q004 or the new q004 variant. Keep legacy architecture_phase.validate_plan unchanged and delegate original mode to it. No generic phase framework or migration of unrelated phases is needed.",
+    "execution_spec_fields": [
+      "phase identity",
+      "plan path and validated metadata",
+      "unchanged q004 dataset path",
+      "remote=true",
+      "plan-metadata key",
+      "optional runner arguments"
+    ],
+    "integration": "Resolve that spec once before provider/setup. ci_run uses its fields at the existing q004 source/remote-plan/metadata/runner-argument points instead of adding answer_verification_pilot checks to each branch. Workflow calls the same pure selection/plan gates and routes the existing embedding environment for the new mode. Preserve both fork guards and current provider/setup order.",
+    "prompt_composition": "Leave common_instructions signature/body/constants byte-identical. Add one effective-instructions helper that calls it and returns its exact bytes when off, or base + a documented fixed separator + the fixed generic suffix bytes when on. Use the same computed effective string for run_trial command and manifest. Use getattr(..., False) where existing fixture Namespaces may lack the new attribute. No arm name, model result, task-specific data or runtime state enters composition.",
+    "instruction_asset": "Add an immutable UTF-8 instructions/shared-answer-verification-v1.txt only after diagnosis selects exact generic wording. Read the known asset at controller side, not a user-supplied arbitrary file. Freeze both raw file SHA and effective composed prompt SHA, including separator/newline semantics. Do not rewrite the question prompt.txt or copy this asset into indexed source.",
+    "hooks": "No hook additions or modifications. tool_budget.py, PreToolUse matcher, 24 admissions/600-second deadline, 30-turn/900-second total limits and 2000-second outer runner timeout remain unchanged.",
+    "call_scope": "One baseline and one zg solver invocation, original provider probe/setup/preflight only; no appended validation chat, automatic repair, extra judge/model call or mandatory tool call. A changed prompt cannot guarantee identical realized tool/API call counts because model trajectories vary; the defensible invariant is unchanged caps, planned trial count and no harness-generated extra calls."
+  },
+  "production_file_scope": [
+    {
+      "path": ".github/workflows/claude-qa-pilot.yml",
+      "change": "Add default-off new input, route pure exclusive selection and new frozen-plan gate before provider, map existing embedding secret/endpoint env to the new phase, pass one new ci flag. Keep fork-only guards, job budget, original phase defaults and artifact retention unchanged."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/ci_run.py",
+      "change": "Parse new flag; resolve original/new q004 spec once; select new frozen plan/phase metadata and pass optional runner flag. Reuse existing corpus export, upstream hash checks, remote authorization/index/readiness/identity/seed scan, vector preflight, pair execution and collection. Original modes serialize exactly the same command/metadata fields when new flag is off."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/run.py",
+      "change": "Parse one default-off fixed-policy switch; compute effective shared instructions once and use it for both profile commands and manifest. Only enabled mode adds a policy provenance block. Keep base prompt function, task prompt, all tools/limits/loop/parser-accounting/error behavior unchanged."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/answer_verification_phase.py",
+      "change": "New isolated small module described above; delayed run.common_instructions import in validation avoids top-level import cycles. Accept base string in the pure composer."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/instructions/shared-answer-verification-v1.txt",
+      "change": "New generic suffix, exact text pending; do not create/freeze until cross-case diagnosis is complete."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/experiment-answer-verification-v1.json",
+      "change": "New standalone plan, separate phase/experiment identity and post-observation disclosure; initially unfrozen if/when authorized. Keep original architecture plan and outcomes intact."
+    },
+    {
+      "path": "benchmarks/claude-qa-pilot/test_answer_verification.py",
+      "change": "New bounded offline contract tests using existing mocked subprocess and temporary fixture patterns. No live model CI needed to prove wiring."
+    }
+  ],
+  "must_remain_byte_identical": [
+    "All older experiment JSON files including experiment-architecture-v1.json",
+    "dataset-architecture-v1.json, q004 instruction.md and evaluator/q004.json",
+    "architecture_phase.py legacy validator",
+    "remote_embedding.py",
+    "probe_mcp.py",
+    "tool_budget.py",
+    "Dockerfile and native artifact/model pins",
+    "common_instructions source function and COMMON_INSTRUCTIONS/WORKSPACE_ROOT_GUIDANCE constants",
+    "Old raw results, rubric rules and phase-specific success criteria"
+  ],
+  "new_plan_validation": {
+    "base_experiment": {
+      "path": "benchmarks/claude-qa-pilot/experiment-architecture-v1.json",
+      "sha256": "992ee9b4a04994d56d6c3ef73638cd02d4df37bcf09ea6d0c90873605be4940d"
+    },
+    "delegate_base_gate": "Call unchanged architecture_phase.validate_plan on the frozen base, then verify the new base reference points to that exact file and hash. This retains source/dataset/rubric/hook/common/runtime validation without weakening its hard-coded identity.",
+    "strict_inheritance": [
+      "task (including question/rubric identities and hashes)",
+      "dataset",
+      "agent (Claude2.1.212/model qwen3.8-max/high/8192/30/900)",
+      "retrieval (a424 Rust package/native MCP schema/model/endpoint/config source hashes)",
+      "completion_control and completion_hook",
+      "preflight and accounting",
+      "evaluation quality rubric/interpretation/retention rules"
+    ],
+    "allowed_changes_only": [
+      "new experiment_id/phase/status and preparation/freeze provenance",
+      "one new exact run-input vector and separate run/output identity",
+      "generic shared suffix policy reference and effective prompt hash",
+      "motivation/change-factor and disclosed post-q004-outcome selection"
+    ],
+    "new_prompt_hash_fields": {
+      "base_common_instructions_sha256": "220823c068789010a8f43aac840768b7d4ba7996d927ff58573f0b0641249325",
+      "shared_answer_verification_asset_sha256": "pending exact instruction bytes",
+      "common_instructions_sha256": "new effective complete system suffix, pending exact instruction bytes",
+      "separator": "freeze exact choice, e.g. two LF bytes; do not silently strip/normalize"
+    },
+    "fixed_unchanged_hashes": {
+      "dataset": "71a94c3947f821642abc0fdf93a87cb076567cdb01e9433be7cb1d7bf3af5003",
+      "task_question": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3",
+      "task_rubric": "2040e092818867e68aa63f953ecc6642ee65a3b3b73b715a3f5b4d611f286a07",
+      "completion_hook": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761",
+      "native_package": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d"
+    },
+    "run_plan": "Exact one pair, start_repeat=1, repeats=1, trial_count=2, order baseline→zg, no automatic repeat/task expansion/outcome replacement, same job/runner limits. Input choices must select only the new flag with the common q004+completion requirements.",
+    "failure_modes": "Reject missing/empty suffix, wrong UTF-8 or hash, asset path escape, malformed or unfrozen plan, inherited drift, wrong effective prompt hash, incorrect task/flags/repeats before provider calls/work creation. Frozen SHA plus independent text review provides genericity; a blacklist alone cannot prove no task-specific hints."
+  },
+  "evidence_and_artifact_contract": {
+    "manifest_when_off": "Exactly old common_instructions field and old manifest key set; no optional-null policy metadata added to historical modes.",
+    "manifest_when_on": "Actual effective instructions in common_instructions; a new optional policy block records version, asset path/hash, base hash, effective hash and applies_identically_to=[baseline,zg]. command.json must show identical actual appended strings in both arms.",
+    "reports": "Copy new plan plus unchanged dataset as already done. Optionally copy the frozen suffix directly into reports as answer-verification-instructions.txt only for this phase; existing collector already redacts/retains reports, so TOP_ARTIFACT_FILES need not change. Keep prompt.txt equal to the unchanged question bytes.",
+    "storage": "Separate workflow run and archive directory/phase identity, never overwrite architecture-v1. Keep both planned outcomes and partial artifacts. Do not call the new phase a confirmation or merge its outcome into the original pair.",
+    "provenance": "Record code SHA/diff and new policy/base/effective prompt hashes at freeze; no need to change Rust/native schema/tool descriptions or provider configuration."
+  },
+  "minimum_offline_tests": [
+    {
+      "test": "Legacy prompt bytes and frozen assets",
+      "proof": "Compare old snapshot and new code common_instructions for V1, root-v2 and completion-v2. Assert the existing known hashes below remain exact; all original frozen plans/assets and hook files remain byte-identical. Existing architecture/remote validators still accept original frozen plans."
+    },
+    {
+      "test": "Legacy selector and command equivalence",
+      "proof": "Differentially execute current workflow selector and ci wrapper snapshot versus modified code with the new flag absent/false across the complete old task×flag×repeat matrix, including original q004. Freeze/mock temp paths, UUID, time, UID and subprocess I/O; compare acceptance/task selection, old solver commands and old manifest/setup fields byte-for-byte. Do not normalize away prompt/env/tool/limit differences."
+    },
+    {
+      "test": "New exclusive selection before side effects",
+      "proof": "For new flag=true, accept only exact q004/completion/new-phase input vector and repeat1; reject old architecture plus new mode, wrong tasks/root/confirmation/remote/expansion/repeats. Mock provider/setup calls to fail if reached on invalid/unfrozen input, and assert no work directory is created."
+    },
+    {
+      "test": "New plan and policy drift fail closed",
+      "proof": "Mutate base plan/hash, task/question/rubric/dataset/source, any inherited runtime/agent/budget/preflight/evaluation field, suffix bytes/path/hash, effective prompt hash, order/count/repeats. Reject each before provider/setup. Accept one synthetic frozen fixture with generic placeholder suffix; the actual final text still needs independent review."
+    },
+    {
+      "test": "Symmetric actual runner command, unchanged question",
+      "proof": "Reuse test_remote_embedding.py:284-310 mocked Popen fixture for both profiles. Capture complete --append-system-prompt strings and assert both equal old completion text plus exactly one frozen suffix; question bytes unchanged; command differences outside intentional arm isolation match old snapshot. Manifest effective text/hash equals both commands."
+    },
+    {
+      "test": "No added calls or resource changes",
+      "proof": "Mock complete pair path and assert exactly two run_trial/Popen solver launches in baseline→zg order, original grant/index/probe call sequence, no critique/repair invocation, same max-turns/timeout/output/effort/24/600 flags and unchanged hook command/hash. Existing budget tests cover refusal and idempotency; no new hook behavior is introduced."
+    },
+    {
+      "test": "Isolation and retention",
+      "proof": "Same mocked fixture asserts baseline gets no embedding env/index/home seed/MCP; zg remains unchanged. Force partial/infrastructure failure and verify the new plan/policy/partial outputs are retained without private seeds, automatic replay or quality-dependent replacement."
+    }
+  ],
+  "optional_pre_freeze_runtime_check": "If useful after implementation, an offline fake-provider fixture may capture both arms system text using installed pinned Claude; it must perform zero external inference and add no required live run. Command-capture unit tests above are the minimum wiring proof, not proof that a model follows the instruction.",
+  "instruction_content_constraints": {
+    "allowed": "Generic final-answer claim/source alignment and explicit uncertainty based on available evidence; exact wording pending cross-case diagnosis.",
+    "disallowed": [
+      "q004/issue identifiers",
+      "code paths, source symbols, pool/adapter/builder/converter or count-specific hints",
+      "rubric criterion names, gold claims, prior error excerpts or preferred answer structure derived from q004",
+      "mandatory zg-first/minimum MCP calls",
+      "mandatory new searches, extra turns or separate model verification",
+      "instructions to bypass or extend the frozen tool budget"
+    ],
+    "qualification": "A same-session instruction can consume existing reasoning/output/time budget and can change actual tool choices; it cannot guarantee correctness, completion, equal actual call counts or lower cost."
+  },
+  "known_legacy_prompt_sha256": {
+    "v1": "b177abd3db1e889cc4ef47c33af93bd069ed9a2444c7efe81078789c71eda503",
+    "root_v2": "f2d6b8061dff1996eff1be5ed6b431d4b6a72bfa9e8d2f49319e7b2dad2be5f2",
+    "completion_v2": "220823c068789010a8f43aac840768b7d4ba7996d927ff58573f0b0641249325"
+  },
+  "inspected_file_sha256": {
+    ".github/workflows/claude-qa-pilot.yml": "e1cbae5966d5582f68de42a5db7460397e7fd4281e64b2a747fbc0f5a2f1cd19",
+    "benchmarks/claude-qa-pilot/ci_run.py": "9df25492b96784794cca5accb6e7f29bca177569af2d9b897177019450aee362",
+    "benchmarks/claude-qa-pilot/run.py": "60c7e3073bfd3693f2f0573252a781d68e4536844b370f8c2ad2405ff94206e5",
+    "benchmarks/claude-qa-pilot/architecture_phase.py": "ce10d66dfe1ae66481ae65cc615457926285b8649db858cb293027daed99d008",
+    "benchmarks/claude-qa-pilot/remote_embedding.py": "822825622b47c70042f84b245305b557c2a46acb3ac3337adf804e0356adbe44",
+    "benchmarks/claude-qa-pilot/probe_mcp.py": "393c67447de77a9f319e6d840b3d7b12f5773a39a3813abef8ee43894e3db27a",
+    "benchmarks/claude-qa-pilot/tool_budget.py": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761",
+    "benchmarks/claude-qa-pilot/experiment-architecture-v1.json": "992ee9b4a04994d56d6c3ef73638cd02d4df37bcf09ea6d0c90873605be4940d",
+    "benchmarks/zvec-issue-qa/dataset-architecture-v1.json": "71a94c3947f821642abc0fdf93a87cb076567cdb01e9433be7cb1d7bf3af5003",
+    "benchmarks/zvec-issue-qa/tasks/q004/instruction.md": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3",
+    "benchmarks/zvec-issue-qa/evaluator/q004.json": "2040e092818867e68aa63f953ecc6642ee65a3b3b73b715a3f5b4d611f286a07",
+    "benchmarks/claude-qa-pilot/test_architecture.py": "841fa71fda47d70a1bb0184768e9ab89fad6523c88182b4e32305041866539c9",
+    "benchmarks/claude-qa-pilot/test_remote_embedding.py": "53d4cbb999e1a4a65d85b4e49de6a94a067dec85771c16ba83f16d9920d8236f"
+  },
+  "limitations": [
+    "This report is feasibility only. No text is selected, no code/test implementation was made, no new plan exists or is frozen, and no run was dispatched.",
+    "Exact suffix validity and the research reason for using it depend on the ongoing cross-case diagnosis; implementation isolation alone does not establish scientific value.",
+    "No additional result/answer/grade inspection was needed for this implementation task."
+  ]
+}

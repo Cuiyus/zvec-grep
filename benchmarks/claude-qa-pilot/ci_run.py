@@ -13,6 +13,7 @@ import time
 
 import remote_embedding
 import architecture_phase
+import answer_verification_phase
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -170,6 +171,10 @@ def validate_architecture_plan():
     return architecture_phase.validate_plan(ROOT, HERE)
 
 
+def validate_answer_verification_plan():
+    return answer_verification_phase.validate_plan(ROOT, HERE)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--task', choices=['reflex-6', 'zvec-q001', 'zvec-q002', 'zvec-q003', 'zvec-q004'])
@@ -182,6 +187,7 @@ def main():
     parser.add_argument('--closed-issue-expansion', action='store_true')
     parser.add_argument('--remote-embedding-pilot', action='store_true')
     parser.add_argument('--architecture-pilot', action='store_true')
+    parser.add_argument('--answer-verification-pilot', action='store_true')
     parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
     if args.collect_only:
@@ -194,11 +200,21 @@ def main():
         parser.error(f'this phase is frozen to {expected_repeats} pair(s) per task')
     if args.workspace_root_guidance and args.task != 'reflex-6':
         parser.error('root-v2 is frozen to reflex-6 only')
+    try:
+        q004_phase = answer_verification_phase.select_phase(
+            enabled=args.answer_verification_pilot, task=args.task, budget=args.completion_budget,
+            root_guidance=args.workspace_root_guidance, confirmation=args.completion_confirmation,
+            expansion=args.closed_issue_expansion, remote=args.remote_embedding_pilot,
+            architecture=args.architecture_pilot)
+    except ValueError as error:
+        parser.error(str(error))
     if args.architecture_pilot:
+        q004_phase = {'plan_name': architecture_phase.PLAN_NAME, 'phase': 'architecture-development',
+                      'protocol': 'completion-v2', 'metadata_key': 'architecture_plan', 'runner_args': []}
         if (args.task != 'zvec-q004' or not args.completion_budget or args.workspace_root_guidance
                 or args.completion_confirmation or args.closed_issue_expansion or args.remote_embedding_pilot):
             parser.error('architecture phase requires one q004 completion-budget pair with no other phase')
-    elif args.task == 'zvec-q004':
+    elif args.task == 'zvec-q004' and not q004_phase:
         parser.error('q004 requires the separately frozen architecture phase')
     if args.remote_embedding_pilot and (args.task != 'zvec-q001' or not args.completion_budget
             or args.workspace_root_guidance or args.completion_confirmation or args.closed_issue_expansion):
@@ -210,7 +226,7 @@ def main():
     elif args.task in ('zvec-q002', 'zvec-q003'):
         parser.error('q002/q003 require the separately frozen issue expansion phase')
     if args.completion_budget and (args.workspace_root_guidance
-            or (args.task != 'zvec-q001' and not args.closed_issue_expansion and not args.architecture_pilot)):
+            or (args.task != 'zvec-q001' and not args.closed_issue_expansion and not q004_phase)):
         parser.error('completion-v2 requires zvec-q001 or a separate issue expansion/architecture phase')
     if args.completion_confirmation and (args.task != 'zvec-q001' or not args.completion_budget or args.workspace_root_guidance):
         parser.error('completion confirmation requires zvec-q001 with completion-budget and without workspace-root guidance')
@@ -239,23 +255,27 @@ def main():
             parser.error(str(error))
     architecture_plan = None
     architecture_dataset_path = ROOT / architecture_phase.DATASET_PATH
-    if args.architecture_pilot:
+    if q004_phase:
         try:
-            architecture_plan = validate_architecture_plan()
+            architecture_plan = (validate_answer_verification_plan() if args.answer_verification_pilot
+                                 else validate_architecture_plan())
             remote_embedding.validate_environment()
         except (ValueError, KeyError, OSError) as error:
             parser.error(str(error))
-    use_remote_embedding = args.remote_embedding_pilot or args.architecture_pilot
-    selected_remote_plan_path = HERE / (architecture_phase.PLAN_NAME if args.architecture_pilot else remote_embedding.PLAN_NAME)
+    use_remote_embedding = args.remote_embedding_pilot or bool(q004_phase)
+    selected_remote_plan_path = HERE / (q004_phase['plan_name'] if q004_phase else remote_embedding.PLAN_NAME)
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
     if args.closed_issue_expansion:
         shutil.copyfile(plan_path, reports / 'experiment-plan.json')
         shutil.copyfile(expansion_dataset_path, reports / 'dataset-manifest.json')
-    if args.architecture_pilot:
+    if q004_phase:
         shutil.copyfile(selected_remote_plan_path, reports / 'experiment-plan.json')
         shutil.copyfile(architecture_dataset_path, reports / 'dataset-manifest.json')
+        if args.answer_verification_pilot:
+            shutil.copyfile(HERE / answer_verification_phase.SUFFIX_NAME,
+                            reports / answer_verification_phase.SUFFIX_NAME)
         embedding, ignore_text, upstream = upstream_protocol(work, reports, remote=True,
                                                            remote_plan_path=selected_remote_plan_path)
     elif args.remote_embedding_pilot:
@@ -267,8 +287,8 @@ def main():
         repository = 'https://github.com/reflex-dev/reflex.git'
         revision = 'fe0f946dc0c240c6c1e513318c21db407e191c78'
         prompt = ROOT / 'benchmarks/swe-qa-bench/datasets/reflex-6/instruction.md'
-    elif args.closed_issue_expansion or args.architecture_pilot:
-        selected_dataset_path = architecture_dataset_path if args.architecture_pilot else expansion_dataset_path
+    elif args.closed_issue_expansion or q004_phase:
+        selected_dataset_path = architecture_dataset_path if q004_phase else expansion_dataset_path
         dataset = json.loads(selected_dataset_path.read_text())
         selected = [task for task in dataset['tasks'] if 'zvec-' + task['id'] == args.task]
         if len(selected) != 1:
@@ -289,7 +309,7 @@ def main():
              '--repo', str(repo), '--output', str(source),
              '--manifest', str(reports / 'corpus-validation.json')]
             + (['--dataset', str(selected_dataset_path), '--task', selected[0]['id']]
-               if args.closed_issue_expansion or args.architecture_pilot else []))
+               if args.closed_issue_expansion or q004_phase else []))
     else:
         archive = work / 'source.tar'
         run(['git', '-C', str(repo), 'archive', '--format=tar', '--output', str(archive), revision])
@@ -336,7 +356,7 @@ def main():
             seed_scan = remote_embedding.scan_seed_credentials([index, home], SECRETS)
             (reports / 'private-seed-secret-scan.json').write_text(json.dumps(seed_scan, indent=2) + '\n')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
-                    'phase': ('architecture-development' if args.architecture_pilot else
+                    'phase': (q004_phase['phase'] if q004_phase else
                               'remote-embedding-development' if args.remote_embedding_pilot else
                               'issue-expansion' if args.closed_issue_expansion else
                               'confirmation' if args.completion_confirmation else 'development'),
@@ -348,7 +368,7 @@ def main():
                         for repeat in range(start_repeat, start_repeat + args.repeats)
                         for profile in (('baseline', 'zg') if repeat % 2 else ('zg', 'baseline'))
                     ],
-                    'protocol_version': 'completion-v2' if args.completion_budget else ('root-v2' if args.workspace_root_guidance else 'v1'),
+                    'protocol_version': q004_phase['protocol'] if q004_phase else ('completion-v2' if args.completion_budget else ('root-v2' if args.workspace_root_guidance else 'v1')),
                     'workspace_root_guidance': args.workspace_root_guidance,
                     'completion_budget': args.completion_budget,
                     'tool_budget': 24 if args.completion_budget else None,
@@ -378,8 +398,8 @@ def main():
                         'explicit direct-mode index setup; startup included in measured agent wall',
                     ]}
         if use_remote_embedding:
-            metadata.update({'architecture_plan' if args.architecture_pilot else 'remote_embedding_plan':
-                                 architecture_plan if args.architecture_pilot else remote_plan,
+            metadata.update({q004_phase['metadata_key'] if q004_phase else 'remote_embedding_plan':
+                                 architecture_plan if q004_phase else remote_plan,
                              'embedding_authorization_seconds': authorization_seconds,
                              'embedding_index_identity': 'embedding-index-identity.json',
                              'embedding_accounting': json.loads(selected_remote_plan_path.read_text())['accounting'],
@@ -406,7 +426,8 @@ def main():
              '--max-output-tokens', '8192', '--effort', 'high']
             + (['--workspace-root-guidance'] if args.workspace_root_guidance else [])
             + (['--tool-budget', '24', '--research-seconds', '600'] if args.completion_budget else [])
-            + (['--start-repeat', '2'] if args.completion_confirmation else []),
+            + (['--start-repeat', '2'] if args.completion_confirmation else [])
+            + (q004_phase['runner_args'] if q004_phase else []),
             output=reports / 'runner.log', timeout=4500 if args.completion_confirmation else 2000, live=True)
     finally:
         collect_evidence(work, reports)
