@@ -11,7 +11,7 @@
 | SWE-QA | reflex-6：computed var 的 getter、依赖分析和失效重算 | `reflex-dev/reflex@fe0f946dc0c240c6c1e513318c21db407e191c78` | 验证切换 Claude Code + Qwen 后的行为 |
 | Closed-issue QA | zvec-q001：崩溃恢复后 optimize 的持久性问题 | `alibaba/zvec@ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` | 验证跨文件因果解释的新题型 |
 
-zvec-q001 来源于已关闭的 [issue #594](https://github.com/alibaba/zvec/issues/594) 和 [修复 PR #600](https://github.com/alibaba/zvec/pull/600)。只给 solver 修复前源码和中性问题；issue 正文、修复、gold、评分标准及 Git 历史均不挂载。新仓库并不能证明没有进入模型训练集。本题已做源码核验，未执行原生崩溃复现测试。
+zvec-q001 来源于已关闭的 [issue #594](https://github.com/alibaba/zvec/issues/594) 和 [修复 PR #600](https://github.com/alibaba/zvec/pull/600)。只给 solver 修复前源码和中性问题；issue 正文、修复、gold、评分标准及 Git 历史均不挂载。新仓库并不能证明没有进入模型训练集。本题已做源码核验；冻结的修复前版本尚未执行原生崩溃复现，另有修复后现成包的辅助检查，见下文。
 
 Baseline 允许 Read/Grep/Glob；zg 组额外提供当前 Rust 的原生 search MCP，包括原生工具说明。两组使用相同问题、源码、模型及限额，每组最多 30 turns / 900 秒 / 单次输出 8192 tokens，顺序 baseline → zg。源码只读，HOME、索引副本和会话独立。开始计时前构建索引并用真实容器权限执行 MCP 检索预检；索引时间单列。
 
@@ -51,7 +51,7 @@ zvec baseline 用尽 30 turns，zg 在 900 秒被终止；两个答案文件均�
 
 zg 的原始 metrics 保留了 fallback 的 `139,644 input / 0 output`，但缺少最终 result 和 cache usage，已有生成内容也说明 0 不是实际零输出。汇总将其标为不可比较，不计算相对 baseline 的 token 降幅。`summary.all_planned_trials_completed=true` 仅表示两个执行都结束，不表示任务完成。
 
-下一轮建议只保留这一个 zvec case，冻结相同 source/gold，给两组相同的调查预算与预留回答阶段，停止取证后必须用现有证据作答并标注缺口。作为新的协议保留 V1 失败，再看完成率、因果准确性与消耗。此建议尚未执行；本轮没有继续扩大样本或无限重跑。
+下一轮建议只保留这一个 zvec case，冻结相同 source/gold，给两组相同的调查预算与预留回答阶段，停止取证后必须用现有证据作答并标注缺口。作为新的协议保留 V1 失败，再看完成率、因果准确性与消耗。该迭代已按 [completion-v2 冻结计划](../../experiment-completion-v2.json) 提交到 [39278383394](https://github.com/Cuiyus/zvec-grep/actions/runs/39278383394)：两组共用 24 次调用／600 秒取证预算，总限额仍为 30 turns／900 秒。预算拒绝会要求作答，但不保证交付。2026-10-19 15:50:48 UTC 的[状态记录](zvec-q001-completion-v2/execution.json)显示 provider 成功，QA job 仍显示排队且无日志或产物；尚无该协议的质量结果，未加入上表。没有扩大题目或重复提交。
 
 ## 所有前置尝试
 
@@ -66,6 +66,8 @@ zg 的原始 metrics 保留了 fallback 的 `139,644 input / 0 output`，但缺�
 缓存权限已修复并增加非 root 离线检查；trial 与准备阶段统一 UID/GID，并在付费 QA 前增加同权限、真实索引的 MCP 预检。基础设施失败与 agent 自身工具参数错误分开记录：V1 reflex 的错误 root 属于有效实验内的 agent 行为，不剔除。
 
 ## 证据和解释边界
+
+另用本机已有的 `@zvec/zvec 0.7.0` / macOS ARM64 做了[原生辅助检查](zvec-q001-native-validation/README.md)：150 条记录经过 SIGKILL、恢复、optimize 和新进程重开后全部保留，无崩溃对照也通过。ID、标量精确一致，向量在统一 `1e-6` 容差内一致。第一次逐位向量比较的夹具因 FP32 舍入提前失败，原始证据保留，不算故障复现或有效重复。发布元数据指向包含 #600 的源码，但不是二进制构建证明。这项检查不验证冻结的修复前提交、不参与 QA 得分，也不证明 zg 收益；精确的修复前失败／仅加入 #600 后通过仍需独立构建。
 
 每组保存原始答案、metrics、匿名评分及解盲映射。完整 streams、命令、版本、source manifest、MCP 预检和密钥扫描在对应 workflow artifact；运行目录不上传 HOME 或 seed。原始 metrics 不回写，后补的 zg 成功调用统计另存并记录 stream/parser SHA。
 

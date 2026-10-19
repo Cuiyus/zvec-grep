@@ -1,0 +1,79 @@
+diff --git a/src/db/index/segment/segment.cc b/src/db/index/segment/segment.cc
+index 7f6f538..a0c31e3 100644
+--- a/src/db/index/segment/segment.cc
++++ b/src/db/index/segment/segment.cc
+@@ -4117,6 +4117,17 @@ VectorColumnIndexer::Ptr SegmentImpl::create_vector_indexer(
+ }
+ 
+ Status SegmentImpl::init_memory_components() {
++  // Roll back any partially-created components on failure so a failed init
++  // leaves memory_store_ null (the caller's `if (!memory_store_)` retry guard
++  // depends on it) and never gets flushed on close.
++  bool committed = false;
++  AILEGO_DEFER([&]() {
++    if (!committed) {
++      memory_store_.reset();
++      memory_vector_indexers_.clear();
++      quant_memory_vector_indexers_.clear();
++    }
++  });
+   // init memory block id
+   auto &mem_block = segment_meta_->writing_forward_block().value();
+ 
+@@ -4187,6 +4198,7 @@ Status SegmentImpl::init_memory_components() {
+     }
+   }
+ 
++  committed = true;
+   return Status::OK();
+ }
+ 
+diff --git a/src/db/index/storage/memory_forward_store.cc b/src/db/index/storage/memory_forward_store.cc
+index 94a6aa3..268a7c5 100644
+--- a/src/db/index/storage/memory_forward_store.cc
++++ b/src/db/index/storage/memory_forward_store.cc
+@@ -54,6 +54,10 @@ Status MemForwardStore::Open() {
+   physic_schema_ = arrow::schema(fields);
+   // Initialize file writer
+   writer_ = ChunkedFileWriter::Open(path_, physic_schema_, format_);
++  if (!writer_) {
++    return Status::InternalError("failed to open forward store writer at [",
++                                 path_, "]");
++  }
+   return Status::OK();
+ }
+ 
+@@ -216,6 +220,11 @@ Status MemForwardStore::flush() {
+     return Status::OK();
+   }
+ 
++  if (!writer_) {
++    return Status::InternalError(
++        "forward store writer not open, cannot flush [", path_, "]");
++  }
++
+   auto result = convertToRecordBatch();
+   if (!result.ok()) {
+     return Status::InternalError("failed to convert cache to RecordBatch: ",
+diff --git a/tests/db/index/storage/mem_store_test.cc b/tests/db/index/storage/mem_store_test.cc
+index da0bd64..d8ca52b 100644
+--- a/tests/db/index/storage/mem_store_test.cc
++++ b/tests/db/index/storage/mem_store_test.cc
+@@ -1156,3 +1156,17 @@ TEST_F(MemStoreTest, General) {
+ }
+ 
+ #endif
++
++// Regression: MemForwardStore::Open() used to ignore a failed
++// ChunkedFileWriter::Open (null writer_) and return OK, which then crashed on
++// flush(). Open() must report the failure instead.
++TEST(MemStoreOpenTest, OpenReportsErrorWhenWriterCreationFails) {
++  auto schema = GetCollectionSchema();
++  // Parent directory does not exist -> arrow FileOutputStream::Open fails ->
++  // ChunkedFileWriter::Open returns nullptr.
++  auto store = std::make_shared<MemForwardStore>(
++      schema, "/nonexistent_zvec_dir_xyz/scalar.block.0", FileFormat::IPC);
++  auto status = store->Open();
++  EXPECT_FALSE(status.ok());
++  EXPECT_EQ(store->writer_, nullptr);
++}

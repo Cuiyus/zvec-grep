@@ -139,3 +139,24 @@ Run parser and source-isolation checks with:
 ```sh
 python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py'
 ```
+
+After downloading the task artifact, independently audit its recorded stream,
+final answer, complete usage, source inventory, and hook decisions without
+changing the evidence or invoking a model:
+
+```sh
+python3 benchmarks/claude-qa-pilot/audit_artifacts.py \
+  --artifact-dir /absolute/download/qa-zvec-q001 \
+  --expected-limit 24 --expected-research-seconds 600 \
+  --expected-hook-sha256 8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761 \
+  > /absolute/download/completion-audit.json
+```
+
+Budget denials are error tool results in the raw stream and therefore appear
+in the runner's aggregate error counts. The independent audit joins unique
+tool IDs to the hook decisions and separates budget denials, admitted execution
+errors, successful returns, and unresolved calls. An admitted successful return
+does not establish useful evidence or answer quality. Omit the three expected
+budget arguments when inspecting a protocol without a hook; admission-based
+counts then remain unavailable. This script was added after completion-v2 was
+dispatched and does not change that run's agent protocol.

@@ -1,0 +1,32 @@
+diff --git a/src/db/index/segment/segment.cc b/src/db/index/segment/segment.cc
+index a0c31e3..a4f2e5a 100644
+--- a/src/db/index/segment/segment.cc
++++ b/src/db/index/segment/segment.cc
+@@ -4224,8 +4224,6 @@ Status SegmentImpl::recover() {
+               wal_file_path.c_str());
+     return Status::OK();
+   }
+-  AILEGO_DEFER([&]() { recover_wal_file->close(); });
+-
+   std::array<uint64_t, static_cast<size_t>(Operator::DELETE) + 1>
+       recovered_doc_count{};
+   uint64_t total_recovered_doc_count{0};
+@@ -4309,7 +4307,17 @@ Status SegmentImpl::recover() {
+       (size_t)recovered_doc_count[3]   // DELETE
+   );
+ 
+-  return Status::OK();
++  if (recover_wal_file->close() != 0) {
++    return Status::InternalError("Failed to close recovered wal file: ",
++                                 wal_file_path);
++  }
++  recover_wal_file.reset();
++
++  // Keep the recovered WAL attached to the segment. Operations such as
++  // optimize() flush the writing segment before sealing it; without an open
++  // member WAL, flush() treats the recovered memory components as empty and
++  // returns without persisting them.
++  return open_wal_file();
+ }
+ 
+ Status SegmentImpl::open_wal_file() {

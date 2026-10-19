@@ -1,0 +1,25 @@
+# q001 auxiliary native validation (development evidence)
+
+Ran the existing @zvec/zvec 0.7.0 and @zvec/bindings-darwin-arm64 0.7.0 package, Node v24.19.0, macOS arm64. No package installation or build; all database files are fresh under this directory. Frozen source, question, rubric, shared repositories and user data were not modified.
+
+Result: six child processes completed as intended in about 1.9 seconds total child runtime. Initial insertion: 150 docs, completeness 0; own process SIGKILL. A fresh process recovered and fetched all 150 docs, then SIGKILL again to avoid a clean-close flush. Another fresh process recovered and optimized without new writes: 150 docs, completeness 1. After close, a new process still saw all 150 docs. A no-crash insert/optimize/close/fresh-process control also retained all 150. All known IDs and INT32 scalar values matched exactly; all 64-d vectors matched within absolute tolerance 1e-6 (observed maximum error 1.4901161193847656e-8). No ranking test was performed.
+
+This is post-fix installed-package behavior, not a reproduction of the frozen pre-fix bug. Registry metadata links the native package to zvec-node gitHead 861fff328913071e5cad91f18dfae836d77a8879, whose declared src/zvec submodule is alibaba/zvec 8321c1314a559fd5f909e92498f43e5194bf9b99 (2026-08-24). Local Git confirms PR600 merge e89be98 is an ancestor and its open_wal_file repair is present. The wrapper has a different gitHead, 6c9d5710f52cb70a978b750292b0aac0340352b7. This source trace is declarative metadata, not binary build attestation. Exact installed native binary SHA-256 and npm integrities are in metadata.json.
+
+The first fixture attempt (../native-smoke-070-pbqbq7yx) stopped before the intended SIGKILL because bit-exact COSINE vector equality was too strict for small FP32 roundoff. It is retained, not counted as an independent bug/regression result. The fresh successful run uses the same 1e-6 tolerance at every stage; counts, IDs, and scalars remain exact.
+
+## Lowest-cost next path for exact frozen-source verification (not executed)
+
+The existing export and local checkout have no build directory; Arrow/gtest/protobuf submodule sources are empty; system Python and the existing benchmark Python venv have no zvec. No CMake, Ninja or Docker is on PATH. A full exact build is therefore not a cheap direct local execution. Current package smoke above is the zero-install option already completed. The issue reports PyPI zvec 0.5.1, but that wheel is not installed locally and would still not prove exact ec8a78e behavior.
+
+For exact proof, use a separate scratch checkout at ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d with its recorded recursive submodule revisions and a cached C++ build environment. Requires CMake >=3.26,<4, C++17 compiler, Make/Ninja, all native dependencies including Arrow, protobuf, gtest and other submodules; Python binding and npm/model dependencies are unnecessary. Build only write_recovery_test, whose CMake dependencies also build data_generator and collection_optimizer.
+
+Apply only pr600-regression.patch to the isolated frozen copy and run the selected test; expect the final reopen count assertion to fail while recovered count >0. Then apply only pr600-production.patch, incrementally rebuild the same target and rerun; expect pass. This keeps the engine delta to PR600 rather than including PR579. Example target selection after configuration: cmake --build <build> --target write_recovery_test --parallel <N>; then GTEST_FILTER=CrashRecoveryTest.OptimizeAfterCrashRecoveryPersistsReplayedData ctest --test-dir <build> -R '^write_recovery_test$' --output-on-failure. The CTest definition sets TEST_BINARY_DIR and an isolated test working directory. Do not run this suite from a user-data directory, since its fixture deletes a fixed write_recovery_test_db path.
+
+The original PR600 regression is useful but checks counts after close/reopen in the same OS process and uses a timed child kill. A stronger small harness should also use a fresh final OS process, assert known IDs/scalars/vectors and retain the no-crash control, as this auxiliary test does. Neither check needs a change to frozen QA inputs or gold.
+
+## Intervening change assessment
+
+PR600 merge parent a5dfec6 is 35 added lines beyond frozen ec8a78e, all from PR579: src/db/index/segment/segment.cc (+12, cleanup after failed memory-component initialization), src/db/index/storage/memory_forward_store.cc (+9, report null writer), tests/db/index/storage/mem_store_test.cc (+14, missing directory test). These error-path protections do not attach the member WAL, change the null-WAL flush guard, or change Optimize's seal/version flow under q001's successful recovery premise. They do not change the frozen gold causal chain; this conclusion is source inspection, not an exact-base runtime result.
+
+Evidence: results.json, metadata.json, registry-metadata.json, native-publish-git-tree.json, source-audit.json, smoke.cjs, all per-process stdout/stderr, and three source patches. No paid inference, CI trigger, installation or compilation was performed.

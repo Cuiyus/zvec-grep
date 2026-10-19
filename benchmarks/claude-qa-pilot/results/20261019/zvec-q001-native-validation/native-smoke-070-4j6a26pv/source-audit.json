@@ -1,0 +1,43 @@
+{
+  "frozenBase": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+  "fixMerge": "e89be98bb3da2d1105ad7108f7c6c0165e4931bb",
+  "fixMergeParent": "a5dfec6a65ac55d9cd23a1235bccdc056674ab87",
+  "interveningCommit": "a5dfec6a65ac55d9cd23a1235bccdc056674ab87 fix(segment): propagate forward-store writer open failure instead of crashing (#579)",
+  "changedPaths": [
+    {
+      "path": "src/db/index/segment/segment.cc",
+      "additions": 12,
+      "effect": "Rolls back partially initialized memory components on failure; successful init commits and does not clear components."
+    },
+    {
+      "path": "src/db/index/storage/memory_forward_store.cc",
+      "additions": 9,
+      "effect": "Returns error for null ChunkedFileWriter on Open/flush instead of ignoring or dereferencing it."
+    },
+    {
+      "path": "tests/db/index/storage/mem_store_test.cc",
+      "additions": 14,
+      "effect": "Adds missing-parent-directory writer-open-error test."
+    }
+  ],
+  "goldImpact": "No change to q001 successful recovery causal chain: no member WAL is attached during replay; flush skips persistence at null-member guard; Optimize seals/removes writing metadata. Intervening changes act on initialization failure paths, which q001 does not posit. Source inference, not exact-base runtime verification.",
+  "patchSha256": {
+    "pr600-production.patch": "2e18450b179896274b1b7dc7f402f11796640b097bd2fca8cb2ea47d43438f02",
+    "pr600-regression.patch": "a83d19d180934bd7535e3b2dc1201793f71174e15265f7db9d34ef05aa413def",
+    "intervening-pr579.patch": "c2bc2e644deebda1faf29b248f82b66dd48a904751c377700ae268d624215181"
+  },
+  "upstreamRegression": "CrashRecoveryTest.OptimizeAfterCrashRecoveryPersistsReplayedData",
+  "upstreamRegressionLimitations": [
+    "Timed SIGKILL after 1 second: requires at least one recovered document; zero docs would be setup/inconclusive.",
+    "Closes and reopens a new Collection handle in the same test process; not a separate final OS process.",
+    "Asserts counts only, not IDs, scalar/vector contents, or ranking."
+  ],
+  "localExactBuildAvailability": {
+    "sourceBuildDirectory": false,
+    "cmakeOnPath": false,
+    "ninjaOnPath": false,
+    "dockerOnPath": false,
+    "pythonZvecInstalled": false,
+    "keySubmodulesPopulated": false
+  }
+}
