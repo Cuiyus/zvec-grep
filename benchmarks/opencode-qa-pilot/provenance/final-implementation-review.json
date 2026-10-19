@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "reviewed_at_utc": "2026-10-19T19:05:24.487990+00:00",
+  "status": "final_narrow_review_no_remaining_must_fix_findings",
+  "scope": "Final read-only narrow review of the author-declared completed wrapper hashes and workflow connections; earlier focused exact-main/Harbor review retained. Parent froze the plan concurrently; the observed frozen metadata and all 17 harness pins were checked without mutation. No historical results re-review.",
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "id": "ci-source-fixture-path",
+      "priority": "P1",
+      "problem": "Wrapper tests called the real q001 export using default /Users/cc/workspace/zvec before workflow fetched source and without QA_ZVEC_REPO, deterministically failing on the Linux runner.",
+      "reported_to_parent": true,
+      "resolution_verified": "Workflow now fetches fixed source before offline tests and sets QA_ZVEC_REPO to runner.temp/qa-zvec-git. Later prepare reuses it.",
+      "evidence": [
+        ".github/workflows/opencode-qa-pilot.yml:66-80",
+        "benchmarks/opencode-qa-pilot/test_pilot.py ZVEC_REPO and test_real_q001_export_source_only_and_dry_run_both_slots"
+      ]
+    }
+  ],
+  "verified_paths": [
+    {
+      "name": "native_agent_inheritance",
+      "evidence": "QABaseline(IntegrityAuditMixin, ResilientOpenCode) and QAZvec(IntegrityAuditMixin, ZvecOpenCode); exact-main ZvecOpenCode inherits ZvecGrepMixin then ResilientOpenCode. Mixin delegates run through super without altering instruction/config; native setup/install/run/usage remain in MRO."
+    },
+    {
+      "name": "native_runtime_command",
+      "evidence": "build_command uses exact-main build_harbor_command with n_attempts=1, max_retries=0 and only replaces import path plus adds host manifest/profile kwargs. Exact-main native command supplies pinned model/version, collect_session_usage, profile-specific MCP, setup timeout multiplier and literal API environment placeholder."
+    },
+    {
+      "name": "credential_serialization_and_isolation",
+      "evidence": "Harbor 0.18 parse_env_vars preserves ${OPENAI_API_KEY} literally in configuration; AgentFactory resolves it only for instance extra_env. Exact-main execution_environment normalizes GLM_API_KEY to OPENAI_API_KEY. Baseline class has no embedding kwarg or MCP entry. ZvecGrepMixin strips embedding credential aliases from extra_env and uploads a container-only config file; it does not emit that secret as a command argument."
+    },
+    {
+      "name": "preparation_identity_and_no_overwrite",
+      "evidence": "validate_plan precedes prepare/run/collect; frozen flag, fixed experiment fields and all pinned file digests are checked. Prepared task inventory binds plan SHA and every prepared file. Candidate TGZ digest checked before slots; existing prepared/run/collection output is rejected. Source Docker build context contains Dockerfile plus frozen source, not host rubric or expected manifest."
+    },
+    {
+      "name": "root_terminal_schema",
+      "evidence": "final_answer requires terminal tool-free stop, same root/message IDs, completed non-error DB message, exact ATIF agreement and completed root export agreement. Verified by calling this pure function on existing native Qwen fake-provider fixture case-02: succeeded, usage complete, 3 linked sessions. No provider was invoked and answer content was not printed."
+    },
+    {
+      "name": "collection_scope",
+      "evidence": "Current collector requires exactly two ordered slots, exited/zero-returncode/confirmed cleanup; exact one trial per profile; upstream _profile_result and collect_pair validate completed jobs/trials/reward/usage components and context agreement. Root/child exports and snapshots are retained; current output uses structural_valid plus protocol_valid=null/pending_tool_audit, not a quality success."
+    },
+    {
+      "name": "wall_accounting",
+      "evidence": "Upstream _profile_result first subtracts measured native usage-collection wall; wrapper additionally subtracts measured inventory/runtime and session-export wall, rejects nonpositive remainder, retains setup separately. No query-embedding latency subtraction."
+    },
+    {
+      "name": "partial_retention",
+      "evidence": "Per-slot log/state and execution.json are written through ordinary failure paths; raw run output is independently in upload roots even if collect returns invalid. Workflow always finalizes and scans; unknown container cleanup prevents starting the subsequent slot."
+    },
+    {
+      "name": "docker_project_identity",
+      "evidence": "capture_slot_containers derives sanitized trial_name + __env. Verified against locked Harbor Trial initialization and Docker compose project sanitizer. Inspect format excludes Config.Env and only obtains id/name/image/mounts/state."
+    },
+    {
+      "name": "source_image_loader_smoke",
+      "evidence": "New pre-provider workflow step builds prepared source-only image then runs fixed package --version with --network none, read-only TGZ mount and --rm. It neither mounts rubric nor invokes provider."
+    },
+    {
+      "name": "host_container_runtime_hash_alignment",
+      "evidence": "Workflow host now records both entrypoint hash and binary hash, using the same adjacent opencode.exe preference as qa_agents.py; the earlier integration reminder is resolved."
+    },
+    {
+      "name": "prepared_tool_error_scope_clarification",
+      "evidence": "Unfrozen plan evaluation.validity now explicitly retains/counts terminal failed tool calls as native main does, while unfinished tools/messages and errored assistant messages remain invalid. This matches exact-main summarize_session_usage. Candidate still requires actual successful correct-root retrieval; source/no-web audit still required."
+    },
+    {
+      "name": "fixed_slot_stop_clarification",
+      "evidence": "Unfrozen stopping policy explicitly permits exactly one attempt of each of two scheduled slots in fixed order, retaining failures; unknown container stop state skips second slot. No automatic repair/retry/replacement."
+    }
+  ],
+  "pending_author_work_not_reported_as_defects": [],
+  "limitations": [
+    "Final root/child tool-content audit remains necessary for no-web/source-only scope and actual relevant correct-root retrieval. Complete terminal failed tools are retained and counted under the clarified unfrozen plan; they are not alone incomplete usage. protocol_valid remains null pending that independent audit.",
+    "No Docker build, real provider request, CI dispatch or full wrapper suite was run during this review. Native terminal schema check reused existing synthetic fixture bytes only.",
+    "Source snapshots prove observed before/after bytes, not OS-enforced read-only or absence of transient modifications. The plan already states audited integrity.",
+    "Partial artifact finalization remains best effort under hard runner/job termination; no durability claim is made.",
+    "This review binds the listed completed code/workflow hashes and observed frozen plan bytes. Integrated-test execution and any subsequent dispatch are separate parent actions; any later code changes require targeted recheck. No CI, provider or quality result is inferred."
+  ],
+  "reviewed_files": [
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/pilot.py",
+      "sha256": "3a27904041c3a93f7ee5d35740c6d85cbf1ad862fe19f02609821f0ad87991b8"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/qa_agents.py",
+      "sha256": "140b6512a3a9308c90e4b6006c2d73d5cf03920f500a586e8ff2db461b39d17c"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/test_pilot.py",
+      "sha256": "538c8eba66974d847148ce41ec63b86bd7f84788df50f0bf3d20b14616f247ec"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/.github/workflows/opencode-qa-pilot.yml",
+      "sha256": "064401c40d0e64d5cfbd44b6fbafb0e51ba2ad76809f2903033fc60a6db1f2c2"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/experiment.json",
+      "sha256": "76d1de50bc92f3ce58284a463d677b6e44394ee668b6b96033c2cca431db9a77"
+    }
+  ],
+  "exact_main_and_harbor_references": [
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/agents/opencode.py",
+      "sha256": "5e3e2bdbb6fed972bc0e73eb9bed9ad8782ef2d5b8829a8639c5dbf62953891b"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/agents/opencode_usage.py",
+      "sha256": "10e90d297ff933b0a1663f4fd0e3a6de17b9a41e4961c0ced6dbd6909312b399"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/agents/zvec_opencode.py",
+      "sha256": "f72f0ed054fc6e37bcb375634315adf7ccad5882d1a0206089195e51f3a3412a"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/agents/zvec_grep.py",
+      "sha256": "09653f8bb4f88bf36e3d383f403df44f90e071c4db6cfe78c424bdaedee7b1fc"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/runner.py",
+      "sha256": "543bbaea8621d5440010d8874a361d2a1381b1e5d300bec642c27824794d7951"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/engines/registry.py",
+      "sha256": "c3609a41e7e768de2095f0f395a32522108af329fe95ecdbbdbba3da31dceebb"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/metrics/usage.py",
+      "sha256": "fb1f80ce7d6213b63ed6b238d6adea16c2ce8196938f2e527658f33583d6661a"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/swe_qa/collect.py",
+      "sha256": "0f735fbd19c0659e7906e513629c414865c27547d594f45830f5625c1e5fc9af"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/agents/installed/opencode.py",
+      "sha256": "56400e2361622009a9255847902c9537f27c547913b66c9d1986eba078faf995"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/agents/installed/base.py",
+      "sha256": "fc715cbb5addf6088e370563f9b5ed11d16f30b76ca5185e702e62810312571b"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/agents/factory.py",
+      "sha256": "7f34f9c6d34cdab8dafea86a64dbd6e5796280cf93ce60d608e13c94878df46f"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/cli/utils.py",
+      "sha256": "7bef0c85077ed5dc015c8052ae6289edb7754ab0c057da5566b12794df7e8775"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/environments/docker/docker.py",
+      "sha256": "96bfc277c69735d5bda40359237b780dbb77d058a9b0c0342806c85bbcad75a4"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/environments/docker/docker_unix.py",
+      "sha256": "58b525e4e2fff1ab39997c82c971beba98f5a0dd80984778f493aec0191cb642"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/trial/trial.py",
+      "sha256": "15a40691a5aa03152de4f6878347272503aaa3f976cf3eb22a1ec0e5d62609c9"
+    }
+  ],
+  "activity": {
+    "repository_edits": 0,
+    "ci_dispatches": 0,
+    "provider_calls": 0,
+    "network_calls": 0,
+    "pure_offline_checks": 1,
+    "offline_byte_hash_fixture_checks": 7
+  },
+  "final_narrow_review": {
+    "expected_author_hashes_match": true,
+    "checks": [
+      {
+        "name": "credentials_and_endpoints_before_slots",
+        "result": "pass_static",
+        "evidence": [
+          "pilot.py:278-288 calls exact-main validate_profile_credentials for both profiles and resolves required QA credentials",
+          "pilot.py:285-288 compares resolved QA base URL and embedding endpoint environment with frozen plan",
+          "pilot.py:295-303 performs these checks before creating run output or starting any slot; dry-run remains credential-free",
+          "workflow live step supplies GLM_API_KEY, ZVEC_GREP_API_KEY and ZVEC_GREP_ENDPOINT, with SWE_QA_MODEL_BASE_URL inherited from job env",
+          "test_pilot.py tests missing embedding key, embedding endpoint mismatch and provider endpoint override with fake values"
+        ]
+      },
+      {
+        "name": "outer_slot_alarm_and_cleanup",
+        "result": "pass_static",
+        "evidence": [
+          "pilot.py:318-325 installs SIGALRM and arms ITIMER_REAL in parent after fork, covering polling/Docker-inspection time as well as child execution",
+          "pilot.py:336-352 records timeout, disarms alarm/restores handler, stops process group and performs bounded exact-slot container cleanup in finally",
+          "pilot.py:353-358 records later slot not_started on unconfirmed cleanup",
+          "Existing per-Docker-command timeout remains 20 seconds; cleanup is separate from the slot research/execution deadline"
+        ]
+      },
+      {
+        "name": "portable_native_fixture",
+        "result": "pass_static_and_byte_hash",
+        "evidence": [
+          "test_pilot.py uses repository fixtures/native-qwen rather than an optional local output directory",
+          "All seven fixture data files match retained provenance byte sizes and SHA256 values; one additional provenance.json file",
+          "Native terminal fixture test is unconditional; complete-pair collection fixture verifies structural_valid while protocol_valid stays null"
+        ]
+      },
+      {
+        "name": "final_workflow_connections",
+        "result": "pass_static",
+        "evidence": [
+          "Fork-only/run_attempt=1/default-off retained",
+          "Pinned source fetch precedes tests and QA_ZVEC_REPO is set",
+          "Both native request/usage tests and test_swe_qa_session_usage run before provider secrets",
+          "Source-only image and network-none fixed-Rust loader smoke precede native dry-run and live pair",
+          "Host runtime uses same entrypoint/adjacent-opencode.exe resolution as qa_agents.py",
+          "Always collection/raw upload and both-secret scan gate retained"
+        ]
+      },
+      {
+        "name": "identity_and_usage_collection",
+        "result": "pass_static",
+        "evidence": [
+          "Collector checks selected assistant provider/model identities, exact root/child export session sets and parent IDs, counted assistant/tool ID sets, distinct root IDs between arms and runtime binary equality",
+          "Terminal final answer still requires agreement among actual stream, ATIF, DB snapshot and root export",
+          "Native complete terminal tool errors are retained consistently with clarified plan; unfinished/error assistant messages and missing usage remain invalid; full protocol status awaits source/no-web/retrieval audit"
+        ]
+      }
+    ],
+    "test_execution_note": "Author reported 17 tests, zero skips; parent is independently rerunning them. This reviewer did not duplicate the full suite and does not represent that report as independently rerun. Earlier pure actual-native-fixture final_answer validation passed.",
+    "fixture_provenance_sha256": "716e243725c719a1000e7aaa69192c2e4603f1be6b964ec0c67842d38636e259",
+    "fixture_files_verified": 7,
+    "frozen_plan_observed": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/experiment.json",
+      "sha256": "76d1de50bc92f3ce58284a463d677b6e44394ee668b6b96033c2cca431db9a77",
+      "frozen": true,
+      "frozen_at_utc": "2026-10-19T19:05:01.046372+00:00",
+      "frozen_harness_files_checked": 17,
+      "all_match": true
+    }
+  }
+}

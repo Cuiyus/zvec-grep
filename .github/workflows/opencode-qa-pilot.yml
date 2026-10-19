@@ -1,0 +1,171 @@
+name: OpenCode Qwen zvec QA pilot
+run-name: OpenCode q001 / ${{ inputs.execute_pair && 'one development pair' || 'offline contracts' }}
+
+on:
+  push:
+    branches: [dev/claude-zvec-qa-pilot]
+    paths: ['benchmarks/opencode-qa-pilot/**', '.github/workflows/opencode-qa-pilot.yml']
+  workflow_dispatch:
+    inputs:
+      execute_pair:
+        description: Execute the frozen original q001 baseline then zg pair once
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: main-opencode-q001-v1-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    env:
+      MAIN_ROOT: ${{ runner.temp }}/qa-main/benchmarks/swe-qa-bench
+      PREPARED_ROOT: ${{ runner.temp }}/qa-prepared
+      RUN_ROOT: ${{ runner.temp }}/qa-run
+      REPORT_ROOT: ${{ runner.temp }}/qa-reports
+      SWE_QA_MODEL_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Export the exact upstream harness without running upstream CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=a424e0ce06868dc9ad8f142f57de59b8f9b58699
+          actual=$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)
+          test "$actual" = "$expected" || { echo 'Upstream main changed; freeze a new current-main decision before execution.'; exit 1; }
+          git init "$RUNNER_TEMP/qa-main-git"
+          git -C "$RUNNER_TEMP/qa-main-git" fetch --depth=1 https://github.com/zvec-ai/zvec-grep.git "$expected"
+          test "$(git -C "$RUNNER_TEMP/qa-main-git" rev-parse FETCH_HEAD)" = "$expected"
+          mkdir -p "$RUNNER_TEMP/qa-main" "$REPORT_ROOT"
+          git -C "$RUNNER_TEMP/qa-main-git" archive "$expected" benchmarks/swe-qa-bench benchmarks/shared/rust-package-cache.mjs | tar -x -C "$RUNNER_TEMP/qa-main"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project "$MAIN_ROOT" --frozen
+      - name: Validate the frozen plan before credentials or provider calls
+        run: >-
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py
+          --plan benchmarks/opencode-qa-pilot/experiment.json --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT"
+          validate
+      - name: Install pinned OpenCode for local mock-provider tests
+        run: npm install --global opencode-ai@1.18.4
+      - name: Fetch the fixed source for offline export tests
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/qa-zvec-git"
+          git -C "$RUNNER_TEMP/qa-zvec-git" fetch --depth=1 https://github.com/alibaba/zvec.git ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d
+      - name: Verify native requests, child-session usage and the QA wrapper offline
+        env:
+          OPENCODE_BENCHMARK_TEST_BINARY: opencode
+          QA_MAIN_ROOT: ${{ runner.temp }}/qa-main/benchmarks/swe-qa-bench
+          QA_ZVEC_REPO: ${{ runner.temp }}/qa-zvec-git
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$MAIN_ROOT:$GITHUB_WORKSPACE/benchmarks/opencode-qa-pilot"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s "$MAIN_ROOT/tests" -p 'test_opencode*.py' -v 2>&1 | tee "$REPORT_ROOT/native-contract-tests.txt"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s "$MAIN_ROOT/tests" -p 'test_swe_qa_session_usage.py' -v 2>&1 | tee -a "$REPORT_ROOT/native-contract-tests.txt"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/opencode-qa-pilot -p 'test_*.py' -v 2>&1 | tee "$REPORT_ROOT/pilot-tests.txt"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/zvec-issue-qa -p 'test_prepare_corpus.py' -v 2>&1 | tee "$REPORT_ROOT/corpus-tests.txt"
+          opencode --version > "$REPORT_ROOT/opencode-version.txt"
+          python - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          entrypoint = pathlib.Path(shutil.which('opencode')).resolve()
+          binary = entrypoint.with_name('opencode.exe') if entrypoint.with_name('opencode.exe').is_file() else entrypoint
+          result = {'version': subprocess.check_output([str(entrypoint), '--version'], text=True).strip(),
+                    'entrypoint_sha256': hashlib.sha256(entrypoint.read_bytes()).hexdigest(),
+                    'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    'binary_bytes': binary.stat().st_size, 'scope': 'GitHub host native mock-test executable'}
+          (pathlib.Path(os.environ['REPORT_ROOT']) / 'opencode-runtime.json').write_text(json.dumps(result, indent=2) + '\n')
+          PY
+      - name: Prepare the unchanged source-only q001 task
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py \
+            --plan benchmarks/opencode-qa-pilot/experiment.json --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT" \
+            prepare --zvec-repo "$RUNNER_TEMP/qa-zvec-git" --output "$PREPARED_ROOT"
+      - name: Read the existing main Rust binary artifact
+        uses: actions/download-artifact@v8
+        with:
+          repository: zvec-ai/zvec-grep
+          run-id: 39221698769
+          name: rust-native-linux-x64-gnu
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rust-native
+      - name: Verify exact Rust package checksums
+        run: >-
+          python benchmarks/claude-qa-pilot/prepare_rust_runtime.py
+          --artifact-dir "$RUNNER_TEMP/rust-native" --runtime-dir "$RUNNER_TEMP/qa-runtime"
+      - name: Verify the source-only image and Rust loader without provider access
+        run: |
+          set -euo pipefail
+          docker build --tag zg-q001-environment "$PREPARED_ROOT/tasks/zvec-q001/environment"
+          docker image inspect zg-q001-environment --format '{{.Id}}' > "$REPORT_ROOT/source-image-id.txt"
+          docker run --rm --network none \
+            --mount "type=bind,source=$RUNNER_TEMP/qa-runtime/zg-native.tgz,target=/tmp/zg-native.tgz,readonly" \
+            zg-q001-environment sh -c 'mkdir /tmp/rust-smoke && tar -xzf /tmp/zg-native.tgz -C /tmp/rust-smoke && /tmp/rust-smoke/package/bin/zg --version' \
+            > "$REPORT_ROOT/rust-loader-smoke.txt"
+      - name: Verify both native commands without provider credentials
+        run: >-
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py
+          --plan benchmarks/opencode-qa-pilot/experiment.json --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT"
+          run --prepared "$PREPARED_ROOT" --output "$RUNNER_TEMP/qa-dry-run"
+          --candidate-tgz "$RUNNER_TEMP/qa-runtime/zg-native.tgz" --dry-run
+      - name: Run exactly the two frozen slots without trial retries
+        if: github.event_name == 'workflow_dispatch' && inputs.execute_pair
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: >-
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py
+          --plan benchmarks/opencode-qa-pilot/experiment.json --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT"
+          run --prepared "$PREPARED_ROOT" --output "$RUN_ROOT"
+          --candidate-tgz "$RUNNER_TEMP/qa-runtime/zg-native.tgz"
+      - name: Preserve completed or partial execution evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_ROOT"
+          cp benchmarks/opencode-qa-pilot/experiment.json "$REPORT_ROOT/experiment.json"
+          if test -x "$MAIN_ROOT/.venv/bin/python" && test -d "$RUN_ROOT"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py \
+              --plan benchmarks/opencode-qa-pilot/experiment.json --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT" \
+              collect --run-dir "$RUN_ROOT" --output "$REPORT_ROOT/collection"
+          fi
+          if test -d "$RUNNER_TEMP/qa-dry-run"; then
+            cp -R "$RUNNER_TEMP/qa-dry-run" "$REPORT_ROOT/dry-run"
+          fi
+      - name: Reject secret leakage before artifact publication
+        id: secret-scan
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$MAIN_ROOT"
+          python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPORT_ROOT" --root "$RUN_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.secret-scan.outcome == 'success'
+        with:
+          name: main-opencode-q001-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/qa-reports/
+            ${{ runner.temp }}/qa-run/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
