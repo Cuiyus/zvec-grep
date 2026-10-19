@@ -39,6 +39,18 @@ def result():
 
 
 class MetricsTests(unittest.TestCase):
+    def test_trial_uses_host_identity_for_private_seed_permissions(self):
+        # Prepared/copy_seed files retain private host-owned modes. Root with
+        # all capabilities dropped cannot read those files or write this HOME.
+        args = pilot.argparse.Namespace(source=Path('/source'))
+        with patch.object(pilot.os, 'getuid', return_value=1001), \
+                patch.object(pilot.os, 'getgid', return_value=1002):
+            command = pilot.docker_base(args, 'trial', Path('/trial'), Path('/runtime'))
+        self.assertEqual(command[command.index('--user') + 1], '1001:1002')
+        self.assertIn('--read-only', command)
+        self.assertEqual(command[command.index('--cap-drop') + 1], 'ALL')
+        self.assertIn('type=bind,src=/runtime/home,dst=/root', command)
+
     def test_rust_index_command_and_model_defaults(self):
         command = pilot_ci.index_command('local/potion-code-16m-v2')
         self.assertIn('--index', command)

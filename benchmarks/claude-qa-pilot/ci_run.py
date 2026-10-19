@@ -222,6 +222,14 @@ def main():
         (reports / 'setup.json').write_text(json.dumps(metadata, indent=2) + '\n')
         home_seed = home / '.zvec-grep'
         home_seed.mkdir(exist_ok=True)
+        probe_started = time.monotonic()
+        run(['python3', str(HERE / 'probe_mcp.py'), '--source', str(source),
+             '--index-seed', str(index), '--home-seed', str(home_seed), '--image', IMAGE,
+             '--output', str(reports / 'mcp-preflight.json')],
+            output=reports / 'mcp-preflight-run.log', timeout=450, live=True)
+        metadata['mcp_preflight_seconds'] = time.monotonic() - probe_started
+        metadata['mcp_preflight'] = 'mcp-preflight.json; private seed clones; excluded from QA metrics'
+        (reports / 'setup.json').write_text(json.dumps(metadata, indent=2) + '\n')
         run(['python3', str(HERE / 'run.py'), '--source', str(source), '--prompt', str(prompt),
              '--output', str(work / 'trials'), '--image', IMAGE, '--model', 'qwen3.8-max',
              '--index-seed', str(index), '--home-seed', str(home_seed),

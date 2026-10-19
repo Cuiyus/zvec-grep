@@ -191,6 +191,7 @@ def cleanup_runtime(runtime_dir: Path, image: str) -> None:
 def docker_base(args: argparse.Namespace, name: str, trial_dir: Path, runtime_dir: Path) -> list[str]:
     return [
         "docker", "run", "--rm", "--name", name, "--init", "--read-only",
+        "--user", f"{os.getuid()}:{os.getgid()}",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--tmpfs", "/tmp:rw,exec,size=2g", "--tmpfs", "/run:rw,size=64m",
         "--mount", f"type=bind,src={args.source},dst=/workspace,readonly",

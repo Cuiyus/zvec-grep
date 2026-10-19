@@ -24,6 +24,12 @@ Claude version it suppresses Grep and Glob. The offline `probe_cli.py` verifies
 the actual native tool exposure, connected zg MCP and provider request settings
 before any paid task call. See `experiment.json` for the frozen two-route plan.
 
+Preparation and trials run as the host UID/GID so private index/config modes
+remain usable under dropped container capabilities. After corpus indexing, an
+additional MCP preflight checks initialize, tools/list and a fixed search using
+the same read-only container restrictions and separate copies of the real
+index/home seeds. Its work is setup validation, excluded from QA metrics.
+
 Prepare an exported source tree with `git archive`, without `.git`. Build its
 index at **`/workspace` inside this same image**, preserving that absolute path
 when running. Keep an empty `.zvec-grep` directory in the source export for the
