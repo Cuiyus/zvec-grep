@@ -57,10 +57,11 @@ and controls. Fix-only evidence remains evaluator-only and is excluded from the
 pre-fix spans validated by the exporter. No engine reproduction or solver result
 is claimed for these two tasks.
 
-The [expansion plan](../claude-qa-pilot/experiment-issue-expansion-v1.json) currently
-has `frozen: false`; the CI wrapper rejects execution until that plan is frozen.
-This does not change or extend the running q001 confirmation experiment. Any
-later batch includes both new tasks and keeps all outcomes.
+The [expansion plan](../claude-qa-pilot/experiment-issue-expansion-v1.json) is frozen
+for both tasks after the [q001 confirmation decision](../claude-qa-pilot/issue-expansion-decision-v1.json).
+The earlier efficiency signal did not repeat; this separate batch explores task
+dependence under unchanged completion-v2. It includes both tasks and keeps every
+outcome, without pooling q001 development or confirmation into a new-task claim.
 
 Export one task explicitly from a clone containing its exact Git object:
 
