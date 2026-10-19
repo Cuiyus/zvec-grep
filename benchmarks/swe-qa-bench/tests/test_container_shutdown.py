@@ -78,7 +78,7 @@ class ContainerShutdownTests(unittest.IsolatedAsyncioTestCase):
                 )
             )[0]
             self.assertEqual(inspect["Config"]["Cmd"], ["sh", "-c", "sleep infinity"])
-            self.assertEqual(bool(inspect["HostConfig"]["Init"]), not legacy)
+            self.assertEqual(bool(inspect["HostConfig"].get("Init")), not legacy)
             pid1 = await environment.exec(command="cat /proc/1/comm")
 
             # Exercise Harbor's actual transfer path before stopping its container.
