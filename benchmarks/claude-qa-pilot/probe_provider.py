@@ -8,13 +8,15 @@ import urllib.request
 base = os.environ['ANTHROPIC_BASE_URL'].rstrip('/')
 key = os.environ['ANTHROPIC_AUTH_TOKEN']
 model = os.environ.get('ANTHROPIC_MODEL', 'qwen3.8-max')
-payload = {'model': model, 'max_tokens': 64,
+payload = {'model': model, 'max_tokens': 8192,
+           'thinking': {'type': 'adaptive'}, 'output_config': {'effort': 'high'},
            'messages': [{'role': 'user', 'content': 'Reply with OK only.'}]}
 request = urllib.request.Request(base + '/v1/messages',
     data=json.dumps(payload).encode(), headers={
         'Content-Type': 'application/json', 'x-api-key': key,
         'anthropic-version': '2023-06-01'})
-result = {'requested_model': model, 'endpoint': base}
+result = {'requested_model': model, 'endpoint': base,
+          'request_settings': {k: v for k, v in payload.items() if k != 'messages'}}
 try:
     with urllib.request.urlopen(request, timeout=45) as response:
         data = json.load(response)

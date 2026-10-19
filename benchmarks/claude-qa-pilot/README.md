@@ -9,13 +9,18 @@ every trial. Existing indexes are copied before each treatment; index preparatio
 is outside the agent wall-time measurement.
 
 The image pins Claude Code 2.1.212 and zg 0.2.2. The runner records the image ID
-and actual versions. Unlike the Harbor protocol, this pilot uses bare mode,
-restricted tools, turn/output/wall limits, and wall time that includes container
+and actual versions. This pilot uses a fresh HOME, empty setting sources,
+disabled CLAUDE.md/auto-memory, restricted tools, turn/output/wall limits, and wall time that includes container
 launch and MCP startup. `--effort high` is recorded; equivalence to another
 agent's provider-specific reasoning and temperature settings is not assumed.
 Third-party `total_cost_usd` is retained as unverified, not used as a budget or
 efficiency metric. There is no model fallback. A different resolved model or
-missing usage invalidates a trial and stops further spending.
+missing native tools invalidates the protocol and stops further spending.
+Task failures such as timeout or exhausted turns remain in the plan and do not
+prevent the other arm from running. `--bare` is intentionally absent: in this
+Claude version it suppresses Grep and Glob. The offline `probe_cli.py` verifies
+the actual native tool exposure, connected zg MCP and provider request settings
+before any paid task call. See `experiment.json` for the frozen two-route plan.
 
 Prepare an exported source tree with `git archive`, without `.git`. Build its
 index at **`/workspace` inside this same image**, preserving that absolute path
@@ -41,7 +46,7 @@ python3 benchmarks/claude-qa-pilot/run.py \
   --home-seed /absolute/prepared-home/.zvec-grep \
   --model qwen3.8-max \
   --output /absolute/new-pilot-output \
-  --repeats 1 --max-turns 30 --timeout 900 --max-output-tokens 4096
+  --repeats 1 --max-turns 30 --timeout 900 --max-output-tokens 8192
 ```
 
 Use `--dry-run` to validate and print the frozen manifest without a model call.

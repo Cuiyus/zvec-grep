@@ -43,6 +43,14 @@ jobs:
         run: python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py' -v
       - name: Build pinned Claude and zg runtime
         run: docker build -f benchmarks/claude-qa-pilot/Dockerfile -t zg-claude-qa-pilot:20261019 benchmarks/claude-qa-pilot
+      - name: Verify native tools, MCP and request settings offline
+        run: |
+          mkdir -p '${{ runner.temp }}/reports-${{ matrix.task }}'
+          docker run --rm --network none \
+            -v "$PWD/benchmarks/claude-qa-pilot:/pilot:ro" \
+            -v '${{ runner.temp }}/reports-${{ matrix.task }}:/out' \
+            zg-claude-qa-pilot:20261019 \
+            python3 /pilot/probe_cli.py --output /out/cli-probe.json
       - name: Run one frozen pair
         env:
           ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic

@@ -75,7 +75,7 @@ def main():
     (source / '.zvec-grep').mkdir(exist_ok=True)
     index, home = work / 'prepared-index', work / 'prepared-home'
     index.mkdir(); home.mkdir()
-    base = ['docker', 'run', '--rm', '--init',
+    base = ['docker', 'run', '--rm', '--init', '--user', f'{os.getuid()}:{os.getgid()}',
             '--mount', f'type=bind,src={source},dst=/workspace,readonly',
             '--mount', f'type=bind,src={index},dst=/workspace/.zvec-grep',
             '--mount', f'type=bind,src={home},dst=/root',

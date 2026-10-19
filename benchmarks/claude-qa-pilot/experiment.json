@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "experiment_id": "claude-qwen-two-route-pilot-20261019",
+  "purpose": "Compare baseline and zg in complete read-only QA with Claude Code + Qwen3.8-Max, using one existing SWE-QA task and one new closed-issue task.",
+  "upstream_configuration_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+  "upstream_configuration_path": "benchmarks/swe-qa-bench/zg_bench/settings.py",
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.212",
+    "model": "qwen3.8-max",
+    "effort": "high",
+    "max_output_tokens": 8192,
+    "max_turns": 30,
+    "wall_limit_seconds": 900,
+    "repository_guidance": "disabled using CLAUDE_CODE_DISABLE_CLAUDE_MDS and CLAUDE_CODE_DISABLE_AUTO_MEMORY; fresh HOME, empty setting sources"
+  },
+  "provider": {
+    "openai_compatible_base_url": "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "anthropic_compatible_base_url": "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+    "credential_source": "Cuiyus/zvec-grep Actions secret GLM_API_KEY",
+    "probe_run_id": 39268173808,
+    "probe_resolved_model": "qwen3.8-max"
+  },
+  "retrieval": {
+    "package": "@zvec/zvec-grep@0.2.2",
+    "embedding_model": "qwen/qwen3.7-text-embedding",
+    "embedding_credential_source": "Cuiyus/zvec-grep Actions secret QWEN_EMBEDDING_API_KEY",
+    "mcp_toolset": "agent",
+    "query_policy": "optional; no forced zg call",
+    "index_setup": "before timed solver; cloned per trial; separately recorded"
+  },
+  "tasks": [
+    {
+      "id": "reflex-6",
+      "selection_reason": "Existing selection.json gate.smoke_task, chosen before new outcomes.",
+      "repo": "reflex-dev/reflex",
+      "revision": "fe0f946dc0c240c6c1e513318c21db407e191c78"
+    },
+    {
+      "id": "zvec-q001",
+      "selection_reason": "Closed issue with resolvable merged fix, multi-file code-grounded causal chain, scenario-only question; no model-output screening.",
+      "repo": "alibaba/zvec",
+      "revision": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d"
+    }
+  ],
+  "run_plan": {
+    "smoke": "One pair per task; diagnose protocol/isolation/metrics failures before further paid runs.",
+    "confirmation": "After technically valid smoke, three new pairs per task using unchanged prompts/rubrics. Keep smoke separate. Retain all quality outcomes.",
+    "within_task_order": "baseline/zg for odd repeats, zg/baseline for even repeats"
+  },
+  "scoring": {
+    "primary": "Frozen claim-based source-grounded quality and citation validity, scored with profile hidden.",
+    "resource_metrics": [
+      "input tokens including cache read/write",
+      "tool calls",
+      "wall seconds including container and MCP startup",
+      "output tokens"
+    ],
+    "cost": "Claude-reported dollars are unverified for third-party models; not treated as real billing.",
+    "failure_policy": "Retain every attempted run and its failure. Failed/unfinished answers cannot be claimed as efficiency wins."
+  },
+  "scope_limits": [
+    "Two development tasks, not a representative population or statistical proof.",
+    "Newer public source does not establish absence from model training.",
+    "Read/Grep/Glob-only isolated Claude protocol differs from published full Harbor agent; only within-pilot comparisons isolate zg availability.",
+    "Remote embedding matches the first benchmark's model family but differs from recent local-embedding OpenCode runs.",
+    "Reflex source-corrected rubric is separate from official SWE-QA judge; the original needs_update wording is inaccurate.",
+    "No task removal, trimming or post-outcome prompt adjustment in confirmation trials."
+  ],
+  "preflight_invalid_attempts": [
+    {
+      "run_id": 39268696236,
+      "reason": "Cancelled after offline native CLI test showed --bare suppresses Grep/Glob; no valid paired outcome. Native tool exposure is now mandatory before paid trials."
+    }
+  ]
+}

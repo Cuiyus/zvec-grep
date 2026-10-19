@@ -15,6 +15,12 @@ def event_stream(*events):
     return "\n".join(json.dumps(event) for event in events)
 
 
+def init_event(profile="baseline", tools=None):
+    expected = sorted(pilot.BUILTIN_TOOLS | ({TOOL} if profile == "zg" else set()))
+    return {"type": "system", "subtype": "init", "tools": expected if tools is None else tools,
+            "mcp_servers": [{"name": "zvec_grep", "status": "connected"}] if profile == "zg" else []}
+
+
 def assistant(model=MODEL):
     return {"type": "assistant", "message": {"id": "msg-1", "model": model,
         "usage": {"input_tokens": 20, "cache_read_input_tokens": 40,
@@ -30,7 +36,7 @@ def result():
 
 class MetricsTests(unittest.TestCase):
     def test_session_usage_authoritative_and_duplicate_tool_not_double_counted(self):
-        metrics = pilot.parse_stream(event_stream(assistant(), assistant(), result()), MODEL, "baseline", TOOL)
+        metrics = pilot.parse_stream(event_stream(init_event(), assistant(), assistant(), result()), MODEL, "baseline", TOOL)
         self.assertEqual(metrics["input_tokens_including_cache"], 240)
         self.assertEqual(metrics["tool_calls"], 1)
         self.assertEqual(metrics["errors"], [])
@@ -60,10 +66,48 @@ class MetricsTests(unittest.TestCase):
     def test_mcp_connection_required_but_adoption_not_forced(self):
         events = event_stream(assistant(), result())
         self.assertIn("zg_mcp_not_connected", pilot.parse_stream(events, MODEL, "zg", TOOL)["errors"])
-        init = {"type": "system", "subtype": "init", "mcp_servers": [{"name": "zvec_grep", "status": "connected"}]}
+        init = init_event("zg")
         metrics = pilot.parse_stream(event_stream(init, assistant(), result()), MODEL, "zg", TOOL)
         self.assertEqual(metrics["errors"], [])
         self.assertFalse(metrics["zg_used"])
+
+    def test_only_read_inventory_rejects_silently_handicapped_baseline(self):
+        metrics = pilot.parse_stream(event_stream(init_event(tools=["Read"]), assistant(), result()), MODEL, "baseline", TOOL)
+        self.assertIn("missing_required_tools", metrics["errors"])
+        self.assertEqual(metrics["missing_required_tools"], ["Glob", "Grep"])
+
+    def test_missing_init_inventory_invalidates_even_successful_answer(self):
+        metrics = pilot.parse_stream(event_stream(assistant(), result()), MODEL, "baseline", TOOL)
+        self.assertIn("missing_init_tool_inventory", metrics["errors"])
+
+    def test_unexpected_exposed_tool_rejects_trial_even_if_unused(self):
+        metrics = pilot.parse_stream(event_stream(init_event(tools=["Read", "Grep", "Glob", "Bash"]), assistant(), result()), MODEL, "baseline", TOOL)
+        self.assertIn("unexpected_exposed_tools", metrics["errors"])
+        self.assertEqual(metrics["unexpected_exposed_tools"], ["Bash"])
+
+    def test_connected_mcp_without_search_schema_invalidates_treatment(self):
+        metrics = pilot.parse_stream(event_stream(init_event("zg", tools=["Read", "Grep", "Glob"]), assistant(), result()), MODEL, "zg", TOOL)
+        self.assertIn("missing_required_tools", metrics["errors"])
+        self.assertEqual(metrics["missing_required_tools"], [TOOL])
+
+    def test_budget_exhaustion_preserves_valid_protocol(self):
+        end = result()
+        end.update({"subtype": "error_max_turns", "is_error": True, "result": ""})
+        metrics = pilot.parse_stream(event_stream(init_event(), assistant(), end), MODEL, "baseline", TOOL)
+        self.assertTrue(metrics["protocol_valid"])
+        self.assertEqual(metrics["infrastructure_errors"], [])
+        self.assertIn("missing_final_answer", metrics["errors"])
+        self.assertIn("agent_result_error:error_max_turns", metrics["errors"])
+
+    def test_interrupted_stream_after_model_response_preserves_valid_protocol(self):
+        metrics = pilot.parse_stream(event_stream(init_event(), assistant()), MODEL, "baseline", TOOL)
+        self.assertTrue(metrics["protocol_valid"])
+        self.assertIn("missing_final_result", metrics["errors"])
+
+    def test_no_model_response_is_infrastructure_failure(self):
+        metrics = pilot.parse_stream(event_stream(init_event()), MODEL, "baseline", TOOL)
+        self.assertFalse(metrics["protocol_valid"])
+        self.assertIn("missing_resolved_model", metrics["infrastructure_errors"])
 
     def test_source_hash_excludes_index_but_detects_source_change(self):
         with tempfile.TemporaryDirectory() as directory:

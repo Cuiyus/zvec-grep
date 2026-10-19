@@ -26,6 +26,11 @@ COMMON_INSTRUCTIONS = (
     "This is a read-only QA task: do not edit files or execute programs. "
     "Only repository files are relevant; do not read credentials or runtime state."
 )
+INFRASTRUCTURE_ERRORS = {
+    "missing_resolved_model", "model_mismatch", "invalid_usage",
+    "unexpected_tools", "missing_init_tool_inventory", "missing_required_tools",
+    "unexpected_exposed_tools", "zg_mcp_not_connected",
+}
 
 
 def write_json(path: Path, value: object) -> None:
@@ -114,6 +119,19 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
     unexpected = sorted({name for name in calls.values() if name not in BUILTIN_TOOLS and not (profile == "zg" and name == zg_tool)})
     if unexpected:
         errors.append("unexpected_tools")
+    expected_tools = BUILTIN_TOOLS | ({zg_tool} if profile == "zg" else set())
+    raw_tools = init.get("tools")
+    exposed_tools = set()
+    if not isinstance(raw_tools, list) or not all(isinstance(tool, str) for tool in raw_tools):
+        errors.append("missing_init_tool_inventory")
+    else:
+        exposed_tools = set(raw_tools)
+    missing_tools = sorted(expected_tools - exposed_tools)
+    unexpected_exposed_tools = sorted(exposed_tools - expected_tools)
+    if missing_tools:
+        errors.append("missing_required_tools")
+    if unexpected_exposed_tools:
+        errors.append("unexpected_exposed_tools")
     mcp_servers = init.get("mcp_servers", [])
     if profile == "zg" and not any(server.get("name") == "zvec_grep" and server.get("status") == "connected" for server in mcp_servers if isinstance(server, dict)):
         errors.append("zg_mcp_not_connected")
@@ -124,13 +142,20 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
     answer = result.get("result", "")
     if not isinstance(answer, str) or not answer.strip():
         errors.append("missing_final_answer")
+    infrastructure_errors = [error for error in errors if error in INFRASTRUCTURE_ERRORS]
+    if not models:
+        infrastructure_errors.extend(error for error in errors if error in {"missing_input_usage", "empty_input_usage"})
     return {
         "errors": errors, "requested_model": model, "resolved_models": sorted(models),
+        "infrastructure_errors": infrastructure_errors,
+        "protocol_valid": not infrastructure_errors,
         "usage_source": usage_source, "usage": usage, "input_tokens_including_cache": input_total,
         "output_tokens": usage.get("output_tokens"), "tool_calls": len(calls),
         "tool_counts": {name: list(calls.values()).count(name) for name in sorted(set(calls.values()))},
         "tool_error_count": len(tool_errors), "zg_used": zg_tool in calls.values(),
         "unexpected_tools": unexpected, "mcp_servers": mcp_servers,
+        "expected_tools": sorted(expected_tools), "exposed_tools": sorted(exposed_tools),
+        "missing_required_tools": missing_tools, "unexpected_exposed_tools": unexpected_exposed_tools,
         "reported_cost_usd": result.get("total_cost_usd"),
         "cost_is_verified": False, "answer": answer,
         "result_subtype": result.get("subtype"), "non_json_stdout_lines": invalid_lines,
@@ -209,6 +234,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
         "ANTHROPIC_MODEL": args.model, "ANTHROPIC_DEFAULT_SONNET_MODEL": args.model,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": args.model, "ANTHROPIC_DEFAULT_HAIKU_MODEL": args.model,
         "CLAUDE_CODE_SUBAGENT_MODEL": args.model, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(args.max_output_tokens),
         "IS_SANDBOX": "1",
     }.items():
@@ -216,7 +242,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
     allowed = ",".join(sorted(BUILTIN_TOOLS))
     if profile == "zg":
         allowed += "," + args.zg_tool
-    command += [args.image, args.claude, "--bare", "--print", "--verbose",
+    command += [args.image, args.claude, "--print", "--verbose",
         "--output-format", "stream-json", "--model", args.model,
         "--max-turns", str(args.max_turns), "--effort", args.effort,
         "--permission-mode", "dontAsk", "--tools", ",".join(sorted(BUILTIN_TOOLS)),
@@ -299,7 +325,7 @@ def main() -> int:
     if min(args.repeats, args.timeout, args.max_turns, args.max_output_tokens) < 1:
         raise ValueError("limits and repeats must be positive")
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise ValueError("export ANTHROPIC_API_KEY (Claude --bare requires API-key auth)")
+        raise ValueError("export ANTHROPIC_API_KEY for the isolated provider session")
     if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         raise ValueError("unset ANTHROPIC_AUTH_TOKEN; use only ANTHROPIC_API_KEY to avoid mixed auth")
     if not os.environ.get("ANTHROPIC_BASE_URL"):
@@ -334,9 +360,10 @@ def main() -> int:
         "common_instructions": COMMON_INSTRUCTIONS, "zg_tool": args.zg_tool,
         "mcp_server": args.mcp_server, "repeats": args.repeats,
         "limits": {"wall_seconds": args.timeout, "max_turns": args.max_turns, "max_output_tokens": args.max_output_tokens, "effort": args.effort, "disable_adaptive_thinking": False},
+        "isolation": {"bare": False, "disable_claude_mds": True, "disable_auto_memory": True, "setting_sources": [], "disable_slash_commands": True, "strict_mcp_config": True},
         "order": [profile for repeat in range(1, args.repeats + 1) for profile in (("baseline", "zg") if repeat % 2 else ("zg", "baseline"))],
         "index_setup_excluded": True, "quality_judged": False,
-        "deviations": ["standalone Docker runner, no Harbor", "Read/Grep/Glob only plus zg search in treatment", "bare mode disables repository instructions, hooks, plugins and memory", "Claude --effort high is not assumed equivalent to OpenCode provider-specific high/xhigh or temperature settings", "wall includes container launch and MCP startup", "turn/wall/output limits instead of unverifiable third-party USD budget", "all planned trials retained; no trimming or task filtering"],
+        "deviations": ["standalone Docker runner, no Harbor", "Read/Grep/Glob only plus zg search in treatment", "fresh HOME, empty setting sources, disabled repository CLAUDE.md and auto-memory; bare mode is not used because it removes native Grep and Glob", "Claude --effort high is not assumed equivalent to OpenCode provider-specific high/xhigh or temperature settings", "wall includes container launch and MCP startup", "turn/wall/output limits instead of unverifiable third-party USD budget", "all planned trials retained; no trimming or task filtering"],
     }
     if args.dry_run:
         print(json.dumps(manifest, indent=2))
@@ -355,12 +382,18 @@ def main() -> int:
             unchanged = source_manifest(args.source)["sha256"] == frozen["sha256"]
             scan = scan_output_for_secrets(args.output)
             write_json(args.output / "secret-scan.json", scan)
-            write_json(args.output / "summary.json", {"trials": trials, "source_unchanged": unchanged, "quality_judged": False, "secret_scan_passed": scan["passed"]})
+            write_json(args.output / "summary.json", {
+                "trials": trials, "source_unchanged": unchanged, "quality_judged": False,
+                "secret_scan_passed": scan["passed"], "planned_trial_count": args.repeats * 2,
+                "all_planned_trials_completed": len(trials) == args.repeats * 2,
+                "invalid_trial_count": sum(not trial["valid"] for trial in trials),
+            })
             print(json.dumps(metrics), flush=True)
-            # Invalid infrastructure must be fixed before spending on further trials.
-            if not metrics["valid"] or not unchanged or not scan["passed"]:
+            # Contract failures stop spending. A model that exhausts its task budget
+            # is still a planned outcome; run the other arm rather than suppress it.
+            if metrics["infrastructure_errors"] or not unchanged or not scan["passed"]:
                 return 1
-    return 0
+    return 0 if all(trial["valid"] for trial in trials) else 1
 
 
 if __name__ == "__main__":
