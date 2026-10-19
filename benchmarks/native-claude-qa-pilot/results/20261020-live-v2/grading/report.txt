@@ -1,0 +1,18 @@
+q001 独立盲评（原始 rubric，满分 10；不是官方 SWE-QA 或人工评分）
+
+完整性：两份匿名答案的 SHA-256 和字节数均与 manifest.json 一致；原始答案字节未修改。核心源文件 SHA-256 与 rubric 一致。只读取指定题目、rubric、预定契约、匿名 final 和冻结源码；未读取分组映射、指标、轨迹或历史评分，未联网、调用 provider、执行复现或修改实现。
+
+答案            C1 C2 C3 C4 C5 C6 C7  主总分  主判定
+answer-45e3a687   2  2  2  0  1  0  1   8/10   PASS
+answer-871f7ed0   2  2  2  0  1  0  1   8/10   PASS
+
+两份答案的 C1–C3 均完整，核心引用有效，无 critical contradiction。
+C4：均解释了 doc_ids_ 计数与统计不证明耐久性，但没有解释 Stats 的 index_completeness 由 vector_indexed 元数据与计数比例得出。第一份关于 FLAT 已标记 indexed 的分析解释的是建索引跳过分支，不能替代统计计算的解释。此项无部分分。
+C6：均提出在恢复后重新打开现有 WAL 到 member wal_file_；均未说明该挂接/打开失败必须被检查传播、不能作为成功恢复继续。第一份另提“assign and check replay statuses”，但对应现有分支是日志后 continue，也没有解决新 member-open 的失败语义，故不满足预定主规则。
+C7：均包含 crash-before-flush、恢复核对、无额外写的 optimize、第三个进程 fresh reopen 后 count+known-doc 内容核对，以及 no-crash/already-flushed control。
+
+预定独立敏感性（不替代主分）：若 C6 只要求 minimal member-WAL lifecycle，两份 C6 均为 1，各为 9/10，仍 PASS。
+
+附带问题：两份都把保留内存/健康 Stats 延伸成 optimize 后 Fetch 仍可读取，源码中 memory fetch 还依赖已删除的 writing-forward-block marker，故该延伸不成立；不影响已正确解释的初次恢复读回和核心丢失链。第一份还误称现有 collection_optimizer 已逐字实现其提出的恢复后断言；实际 helper 只有统计打印、Optimize 和退出。更细的逐项原文引句、核实源码位置、事实分、引用判定和非关键过度表述见 grades.json。
+
+匿名限制：final 文本未显式披露条件或检索工具；没有按长度、内容或路径推测分组。不作 zg 收益判断。

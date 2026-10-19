@@ -26,6 +26,8 @@ has its own frozen plans and complete development/confirmation archives.
 Its input reductions and mixed quality results belong to a different agent
 stack; they do not change or extend the 22 Claude rows reported here.
 
+The subsequent [native Claude Code + Qwen experiment](../native-claude-qa-pilot/results/20261020-live-v2/README.md) enables the main benchmark's native behavior and has its own frozen protocol. Its one q001 pair scored 8/10 with both arms passing, while zg reported input including cache fell 63.27% and full slot wall fell 5.24%. It is an unconfirmed development candidate and is not added to these 22 restricted-loop rows.
+
 The image pins Claude Code 2.1.212 and the Rust zg binary built from upstream
 main `a424e0ce06868dc9ad8f142f57de59b8f9b58699` (package version 0.0.1).
 The native package, binary, and local potion-code model files are hash-verified.

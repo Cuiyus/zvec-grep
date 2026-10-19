@@ -10,6 +10,8 @@ positive development pair, two prospective confirmation pairs reduced zg input
 scoped-input confirmation rule was not met. All four trials are retained, and
 this whole-stack experiment is not pooled with the Claude results.
 
+A subsequent [native Claude Code + Qwen q001 pair](../native-claude-qa-pilot/results/20261020-live-v2/README.md) used the same original task and current-main Rust. Both answers scored 8/10 and passed; zg input including cache decreased 63.27%, native execution wall decreased 20.24%, and full slot wall including fresh indexing decreased 5.24%. Execution, source scope and blinded grading all passed. It meets that phase's reported-input development candidate rule, but has not yet been independently confirmed. Earlier negative confirmation outcomes remain unchanged.
+
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
 A later [auxiliary native check](../claude-qa-pilot/results/20261019/zvec-q001-native-validation/README.md) exercised an already installed post-fix 0.7.0 package with crash/recovery/optimize/fresh-process reopen and a no-crash control. Both retained all 150 IDs, scalar values, and vectors within a fixed tolerance. It does not validate the frozen pre-fix commit or replace a failure/pass regression at that exact source; package publishing metadata is not binary build attestation. The initial FP32 fixture failure is retained separately. This check did not change the task, rubric, or solver corpus.

@@ -1,0 +1,1157 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "evaluation_kind": "Independent source-grounded blinded model review; not official SWE-QA or human grading",
+  "inputs": {
+    "packet_directory": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-v2-blind-packet",
+    "question": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+    "rubric": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q001.json",
+    "prospective_contract": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/native-claude-qa-pilot/grader-contract-v1.json",
+    "frozen_source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source",
+    "source_commit": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d"
+  },
+  "integrity": {
+    "answer_sha256_and_byte_counts_match_manifest": true,
+    "original_answer_files_modified": false,
+    "verified_source_file_hashes": [
+      {
+        "path": "src/db/index/segment/segment.cc",
+        "sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+        "matches_rubric": true
+      },
+      {
+        "path": "src/db/collection.cc",
+        "sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+        "matches_rubric": true
+      },
+      {
+        "path": "tests/db/crash_recovery/write_recovery_test.cc",
+        "sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+        "matches_rubric": true
+      }
+    ]
+  },
+  "method": {
+    "allowed_inputs_only": true,
+    "prior_results_mapping_metrics_trajectories_or_other_reviewer_reports_read": false,
+    "network_or_provider_calls": false,
+    "project_code_executed_or_reproduction_run": false,
+    "implementation_modified": false,
+    "original_rubric_maximum": 10,
+    "scoring": "Each criterion scored independently; factual score, citation validity and contradictions are separate.",
+    "citation_resolution": "Basename shorthand such as segment.cc and collection.cc is resolved using the full repository-relative paths established in each answer. Line spans were inspected in the frozen tree, not inferred from retrieval overlap. Additional auditor-only spans are marked answer_cited=false.",
+    "primary_success_rule": "At least 8/10, C1-C3 each full, valid core citations and zero critical contradictions.",
+    "c6_primary_rule": "Attach/reopen the existing usable member WAL (or prove an equivalent lifecycle), and indicate that failure cannot silently become successful recovery.",
+    "c6_sensitivity_rule": "Minimal member-WAL lifecycle attachment alone, reported separately and never replacing the primary score.",
+    "c7_rule": "Fresh reopen after optimize with no extra writes, count and known-document checks, plus no-crash or already-flushed control.",
+    "omitted_coverage_policy": "A valid citation does not supply an explanation omitted from the final answer."
+  },
+  "answers": [
+    {
+      "blinded_answer_id": "answer-45e3a687",
+      "input_file": "answer-45e3a687.txt",
+      "input_integrity": {
+        "expected_sha256": "4c9949ba7e264355ff4972a95dbc44370ac04ec93ad8086e94488f990ea1f22b",
+        "actual_sha256": "4c9949ba7e264355ff4972a95dbc44370ac04ec93ad8086e94488f990ea1f22b",
+        "expected_bytes": 14717,
+        "actual_bytes": 14717,
+        "verified": true,
+        "bytes_modified": false
+      },
+      "blinding_limitation": "No explicit condition, treatment, retrieval-tool, cost, timing or run-label disclosure was identified in the final text. The answer was graded under its randomized ID without inferring a group from wording, length or technical choices.",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "opens the WAL `<collection>/<seg_id>/<block_id>.wal` (`src/db/common/file_helper.h:74–78`) into a **local** handle `recover_wal_file` and closes it on scope exit via `AILEGO_DEFER` (`segment.cc:4206–4215`);",
+            "**The differing state:** the member `wal_file_` stays `nullptr` after recovery; it is only (re)opened by the *next* `append_wal()`.",
+            "replays each record through `internal_insert/internal_update/internal_upsert/internal_delete` (`segment.cc:4234–4283`), which populate `memory_store_`, `memory_vector_indexers_`, `doc_ids_`, id map and delete store — all in memory."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 401,
+              "end_line": 401,
+              "support": "The member WAL starts as nullptr.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 484,
+              "end_line": 501,
+              "support": "A writing-forward block gates recover().",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4215,
+              "support": "Recovery opens an existing WAL in local recover_wal_file and defers closing it.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4234,
+              "end_line": 4301,
+              "support": "Replay calls internal operations directly; successful return does not attach the member WAL.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 837,
+              "end_line": 880,
+              "support": "Internal insertion populates memory store/indexes, writing-block metadata and doc_ids_.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Both required parts are explicit: temporary/local replay versus missing member WAL, and direct replay into readable in-memory data/doc IDs. Broad supplementary statements about all later read paths are recorded separately; they do not undo the correctly explained initial recovery state.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C2",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "if (wal_file_ == nullptr || !wal_file_->has_record()) { return Status::OK(); }",
+            "With the handle null, `flush()` returns OK *vacuously*, skipping every persistence step:",
+            "`finish_memory_components()` (2288–2298 → `segment.cc:4342–4412`, which converts the memory block and memory vector indexers into **persisted block metas** in `segment_meta_`), `update_version()` (2301 → 4414–4426), and the WAL removal (2304–2315)."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2197,
+              "end_line": 2222,
+              "support": "dump calls flush, whose exact null-or-no-record guard returns OK.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2224,
+              "end_line": 2269,
+              "support": "The early return bypasses WAL, forward, scalar/FTS/vector and ID-map flushes.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315,
+              "support": "It also bypasses memory-component finalization, version update and WAL removal.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4342,
+              "end_line": 4384,
+              "support": "Finalization would register scalar and vector persisted blocks.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4414,
+              "end_line": 4423,
+              "support": "update_version resets writing-segment metadata and flushes the version.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "The exact disjunction, the null-member arm active in the scenario, and the omitted data finalization/version persistence are all explained.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C3",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "`CollectionImpl::Optimize` (`collection.cc:779–915`): `writing_segment_->doc_count() != 0` (line 794) → `switch_to_new_segment_for_writing()` (796 → 1517–1552).",
+            "`switch_to_new_segment_for_writing` calls `writing_segment_->dump()` (`collection.cc:1519` → `segment.cc:2197–2215`), which calls `flush()` (`segment.cc:2201`).",
+            "then the critical meta mutation `writing_segment_meta->remove_writing_forward_block()` (1538 → `src/db/index/common/meta.h:263–265`) deletes the only manifest-visible pointer to the WAL;",
+            "In `SegmentImpl::Open`, `writing_forward_block()` is now `std::nullopt`, so the WAL-replay branch (484–501) is skipped"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 788,
+              "end_line": 816,
+              "support": "Optimize switches a nonempty writing segment before planning optimization tasks.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1517,
+              "end_line": 1551,
+              "support": "The switch calls dump, registers the old segment, removes its writing-forward block, installs a new writing segment and applies/flushes the version.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2197,
+              "end_line": 2222,
+              "support": "dump calls flush and accepts its early OK before sealing.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1836,
+              "end_line": 1892,
+              "support": "Reopen loads persisted and writing segments from the recovered version.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 468,
+              "end_line": 501,
+              "support": "Persisted blocks load first, and replay requires a writing-forward block.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 3913,
+              "end_line": 3957,
+              "support": "Only persisted scalar blocks rebuild persisted doc_ids_.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/common/version_manager.cc",
+              "start_line": 190,
+              "end_line": 241,
+              "support": "Version recovery chooses and loads the latest manifest.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/common/version_manager.cc",
+              "start_line": 282,
+              "end_line": 301,
+              "support": "A new manifest is saved before the previous manifest is removed.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 991,
+              "end_line": 1002,
+              "support": "A single group without rebuild uses CreateVectorIndexTask.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1617,
+              "end_line": 1640,
+              "support": "Creating all vector indexes copies metadata and removes its writing block.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1685,
+              "end_line": 1690,
+              "support": "An already-indexed field with unchanged params returns OK.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 863,
+              "end_line": 914,
+              "support": "Optimize applies task output metadata, flushes the version, reloads vector indexes and returns OK.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "The complete call chain and the specific metadata/reopen consequence are established. Additional single-segment/default-FLAT details are consistent with the cited source but not required for full C3 credit.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C4",
+          "maximum_points": 1,
+          "factual_points": 0,
+          "supporting_answer_quotes": [
+            "`Stats()` sums `segment->doc_count()` = `doc_ids_.size()` (`collection.cc:403–442`; `segment.cc:589–600`);",
+            "**Same-handle reads never touch the persisted image.** `Stats()`, `Fetch()`, and `Query()` read `doc_ids_`, `memory_store_`, and memory indexers (`collection.cc:403–442`, 1757–1790; `segment.cc:589–600`), all of which are unchanged in-process"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 403,
+              "end_line": 439,
+              "support": "Stats sums live segment counts; index completeness separately uses meta()->vector_indexed and a count ratio.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 589,
+              "end_line": 600,
+              "support": "doc_count derives from doc_ids_, with the supplied deletion filter.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/common/meta.h",
+              "start_line": 340,
+              "end_line": 342,
+              "support": "vector_indexed checks an indexed-field metadata set.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": false,
+            "verdict": "valid_spans_but_incomplete_answer_coverage",
+            "notes": "The Stats span is valid for the explained live-count claim and contains the index-completeness implementation, but the final answer does not explain that implementation. A citation containing an omitted causal part does not supply answer coverage."
+          },
+          "reasoning": "The doc_ids_-based count and lack of durability proof are explained. The required second part—Stats derives index completeness from vector_indexed metadata and a document-count ratio—is missing. Discussion elsewhere that FLAT fields are already marked indexed explains the index-creation skip, not how the statistic is computed. C4 has no partial point. The overbroad Fetch/Query claim is separately recorded.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C5",
+          "maximum_points": 1,
+          "factual_points": 1,
+          "supporting_answer_quotes": [
+            "`append_wal()` lazily opens the **member** `wal_file_` (`segment.cc:4324–4340` → `open_wal_file()`, `segment.cc:4303–4322`),",
+            "**Control (no crash):** in the inserting process `wal_file_` is open with records, so step 3's guard passes and `flush()` performs the full sequence",
+            "had process B inserted even one document, `append_wal` → `open_wal_file()` would have reopened the existing WAL (`segment.cc:4308–4312`), making `has_record()` true"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 903,
+              "end_line": 917,
+              "support": "Insert appends the WAL before internal_insert.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4338,
+              "support": "The member WAL is opened lazily, with existing-file reuse, and append/open errors are checked in the normal write path.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4234,
+              "end_line": 4265,
+              "support": "Recovery bypasses append_wal and calls internal operations directly.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.h",
+              "start_line": 75,
+              "end_line": 77,
+              "support": "has_record tests file size against the WAL header size.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Correctly contrasts ordinary append-before-internal-insert with replay, explains the no-crash control, and identifies why an extra insert masks the defect.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C6",
+          "maximum_points": 1,
+          "factual_points": 0,
+          "supporting_answer_quotes": [
+            "Minimally, at the end of a successful `recover()` (`segment.cc:4193–4301`), adopt the WAL — e.g., call `open_wal_file()` (4303–4322), which reopens the existing file in append mode — so `wal_file_ != nullptr && has_record()`",
+            "(Independently worth hardening: assign and check the replay statuses at `segment.cc:4249–4280`, and remove the `max_doc_id_` double-count at 4288.)"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4215,
+              "support": "Recovery uses a local handle and currently can return OK on local-open failure.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4285,
+              "end_line": 4301,
+              "support": "The successful recovery tail has no member-WAL attachment.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4329,
+              "support": "open_wal_file attaches the member and returns an error on failure; normal append explicitly propagates that status.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2220,
+              "end_line": 2222,
+              "support": "A usable member with records is necessary to pass the existing flush guard.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315,
+              "support": "The established flush order finalizes data, updates version and only then removes the WAL.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": false,
+            "verdict": "valid_spans_but_incomplete_answer_coverage",
+            "notes": "The cited normal member-open path supports the proposed lifecycle repair. It also exposes an error return that the proposed recovery-side call does not explicitly check/propagate or otherwise prevent from becoming successful recovery."
+          },
+          "reasoning": "The minimal member-WAL attachment is present, so it earns the separately reported lifecycle-only sensitivity point. Under the prospective primary rule, the repair must also indicate that failure cannot silently become successful recovery. The answer does not state that opening/attaching the member must succeed before recovery can return OK. Its separate suggestion to assign/check replay statuses is acknowledged, but it neither addresses the new member-open failure nor requires aborting/returning failure; the cited existing check logs and continues. It therefore does not establish the required failure semantics. The broader dirty-state alternative is not used to replace this missing primary requirement.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C7",
+          "maximum_points": 1,
+          "factual_points": 1,
+          "supporting_answer_quotes": [
+            "**Process 1 (writer, killed):** create the collection with `max_doc_count_per_segment` and buffer sizes large enough that no rollover occurs",
+            "insert N deterministic docs",
+            "**Process 2 (recover + optimize, no writes):** open the collection (WAL replay); assert `Stats().doc_count == N` and `Fetch` returns sample docs — proves recovery itself works; then call `Optimize()` and assert OK. Insert nothing in between.",
+            "**Process 3 (verify durability):** reopen; assert `Stats().doc_count == N`, `Fetch` all N pks with content equality, and a vector `Query` returns expected hits",
+            "**Controls:** (a) same sequence with process 1 closing gracefully — must pass before and after the fix"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 903,
+              "end_line": 917,
+              "support": "Additional inserts use append_wal and can mask the defect.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4330,
+              "support": "A new write reopens the existing WAL into the member.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1517,
+              "end_line": 1551,
+              "support": "Optimize's switch changes the persisted version and writing-block reachability.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "tests/db/crash_recovery/write_recovery_test.cc",
+              "start_line": 182,
+              "end_line": 218,
+              "support": "Existing crash-write test verifies recovered count/content without optimize followed by another fresh reopen.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 302,
+              "end_line": 358,
+              "support": "Normal collection destruction closes/flushed the writer, supporting an already-flushed control.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "tests/db/crash_recovery/optimize_recovery_test.cc",
+              "start_line": 169,
+              "end_line": 205,
+              "support": "Existing test demonstrates count, complete-doc comparison and vector-query assertions.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "tests/db/crash_recovery/optimize_recovery_test.cc",
+              "start_line": 207,
+              "end_line": 223,
+              "support": "Existing optimizer test performs additional writes and closes before later optimization.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "tests/db/crash_recovery/collection_optimizer.cc",
+              "start_line": 88,
+              "end_line": 125,
+              "support": "Helper opens, prints stats, optimizes and exits; it does not implement the newly proposed assertions.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "The proposed sequence includes deterministic known documents, abrupt pre-flush termination, recovery verification, optimize with no extra writes, a fresh third process checking count/content/vectors, and a graceful-close already-flushed control. The inaccurate claim that the existing helper is this process verbatim is ancillary: the proposed additional assertions are explicit.",
+          "critical_contradictions": []
+        }
+      ],
+      "unsupported_claims": [
+        {
+          "answer_quote": "**Same-handle reads never touch the persisted image.**",
+          "classification": "overbroad_noncritical",
+          "explanation": "Stats counts the live IDs, but general Fetch paths can use persisted stores and depend on block metadata. This cannot be generalized to every same-handle Fetch/Query. In particular, memory fetch routing requires the writing-forward-block marker that the answer itself says is removed. This does not contradict the initial successful recovery reads or the correct Stats durability conclusion.",
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2471,
+              "end_line": 2502,
+              "support": "Memory fetch routing requires has_writing_forward_block; otherwise a missing block returns nullptr.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2526,
+              "end_line": 2532,
+              "support": "Fetch selects persisted stores or the mapped memory store.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2743,
+              "end_line": 2755,
+              "support": "Single-row memory fetch also requires the writing-forward-block marker.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ]
+        },
+        {
+          "answer_quote": "The existing `collection_optimizer` binary is this process verbatim.",
+          "classification": "unsupported_ancillary_harness_claim",
+          "explanation": "The helper does Open, Stats logging, Optimize and exit, but does not assert recovered count N or fetch sample documents. Those additions are correctly proposed in the answer and remain necessary.",
+          "verified_source_spans": [
+            {
+              "path": "tests/db/crash_recovery/collection_optimizer.cc",
+              "start_line": 88,
+              "end_line": 125,
+              "support": "Actual helper flow lacks the proposed recovered-data assertions.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ]
+        },
+        {
+          "answer_quote": "`dump()` then seals the (absent) invert/FTS indexers",
+          "classification": "unestablished_schema_specific_qualification",
+          "explanation": "The code conditionally seals invert_indexers_ and calls dump_fts_indexers(); the question does not establish that these indexers are absent. The null-WAL early return and metadata loss do not depend on this aside.",
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2204,
+              "end_line": 2212,
+              "support": "Conditional scalar seal, FTS dump and sealed_ assignment.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ]
+        }
+      ],
+      "critical_contradictions": [],
+      "primary_total": 8,
+      "maximum_points": 10,
+      "core_criteria_full_credit": true,
+      "core_citations_valid": true,
+      "source_grounded_success": true,
+      "primary_pass": true,
+      "sensitivity": {
+        "name": "C6 minimal-lifecycle-only",
+        "replaces_primary": false,
+        "c6_primary_points": 0,
+        "c6_sensitivity_points": 1,
+        "score_delta": 1,
+        "total_if_applied": 9,
+        "pass_if_applied": true,
+        "reason": "The answer explicitly reopens the existing WAL into the member, so the lifecycle-only interpretation would add one point. The missing primary failure-handling requirement is not waived in primary_total."
+      },
+      "reviewer_notes": [
+        "Factual criterion points were assigned independently of citation validity.",
+        "The answer explicitly labels the reproduction as predicted and states it did not run a build or test.",
+        "No tool-use or benefit conclusion is drawn."
+      ]
+    },
+    {
+      "blinded_answer_id": "answer-871f7ed0",
+      "input_file": "answer-871f7ed0.txt",
+      "input_integrity": {
+        "expected_sha256": "d72dd1681a828276b270bcf3cc51060308f0e98d1ead669e005bedc368147114",
+        "actual_sha256": "d72dd1681a828276b270bcf3cc51060308f0e98d1ead669e005bedc368147114",
+        "expected_bytes": 9603,
+        "actual_bytes": 9603,
+        "verified": true,
+        "bytes_modified": false
+      },
+      "blinding_limitation": "No explicit condition, treatment, retrieval-tool, cost, timing or run-label disclosure was identified in the final text. The answer was graded under its randomized ID without inferring a group from wording, length or technical choices.",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "into a **local** `recover_wal_file` (`segment.cc:4206-4215`), replays each record by calling `internal_insert/update/upsert/delete` directly (`segment.cc:4250-4266`), and closes it. The member `wal_file_` is never assigned",
+            "**Why reads work anyway**: replay populates exactly the same in-memory structures as real writes. `doc_count()` is `doc_ids_.size()` (`segment.cc:589-599`);",
+            "`internal_insert()` etc. (`segment.cc:837-901`) populate `id_map_`, `memory_store_`, scalar/FTS/vector indexers, `doc_ids_`, and the writing-block counters (`segment.cc:874-878`)."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 401,
+              "end_line": 401,
+              "support": "The member WAL starts as nullptr.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 484,
+              "end_line": 501,
+              "support": "A writing-forward block gates recover().",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4215,
+              "support": "Recovery opens an existing WAL in local recover_wal_file and defers closing it.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4234,
+              "end_line": 4301,
+              "support": "Replay calls internal operations directly; successful return does not attach the member WAL.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 837,
+              "end_line": 880,
+              "support": "Internal insertion populates memory store/indexes, writing-block metadata and doc_ids_.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Explicitly explains temporary/local replay, lack of member attachment, and reconstructing memory/doc IDs through internal operations, establishing initial readability.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C2",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "`if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`.",
+            "Here `wal_file_ == nullptr`, so flush returns OK **before** every persistence step:",
+            "`finish_memory_components()` which converts the memory block into persisted block metas (2288-2298, `segment.cc:4342-4408`), `update_version()` (2300-2302, `segment.cc:4414-4427`), and even the WAL removal (2304-2315)."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2197,
+              "end_line": 2222,
+              "support": "dump calls flush, whose exact null-or-no-record guard returns OK.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2224,
+              "end_line": 2269,
+              "support": "The early return bypasses WAL, forward, scalar/FTS/vector and ID-map flushes.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315,
+              "support": "It also bypasses memory-component finalization, version update and WAL removal.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4342,
+              "end_line": 4384,
+              "support": "Finalization would register scalar and vector persisted blocks.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4414,
+              "end_line": 4423,
+              "support": "update_version resets writing-segment metadata and flushes the version.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Correct exact guard, active null-member arm, and skipped data finalization/version persistence.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C3",
+          "maximum_points": 2,
+          "factual_points": 2,
+          "supporting_answer_quotes": [
+            "`writing_segment_->doc_count() != 0` is **true** (recovered ids are in `doc_ids_`) → `switch_to_new_segment_for_writing()` (`collection.cc:1517-1552`).",
+            "`collection.cc:1519` → `SegmentImpl::dump()` (`segment.cc:2197-2215`) → `flush()` (`segment.cc:2217`).",
+            "`remove_writing_forward_block()` on the old segment's meta (1538; `meta.h:263-265`), `add_persisted_segment_meta(...)` (1539), a new empty writing segment (1527-1531, 1543), then `version_manager_->apply()` + `flush()` (1546-1549).",
+            "`SegmentImpl::Open` finds no writing block, so `recover()` is **skipped** (`segment.cc:490-501`) and `load_persist_*` find no blocks (468-482)."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 788,
+              "end_line": 816,
+              "support": "Optimize switches a nonempty writing segment before planning optimization tasks.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1517,
+              "end_line": 1551,
+              "support": "The switch calls dump, registers the old segment, removes its writing-forward block, installs a new writing segment and applies/flushes the version.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2197,
+              "end_line": 2222,
+              "support": "dump calls flush and accepts its early OK before sealing.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1836,
+              "end_line": 1892,
+              "support": "Reopen loads persisted and writing segments from the recovered version.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 468,
+              "end_line": 501,
+              "support": "Persisted blocks load first, and replay requires a writing-forward block.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 3913,
+              "end_line": 3957,
+              "support": "Only persisted scalar blocks rebuild persisted doc_ids_.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "The full call chain, removal of the old writing metadata, new persisted version, and future-open loss of the replay route are connected. The answer correctly treats detailed later optimize behavior as outside its asserted trace, while the scenario already stipulates success.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C4",
+          "maximum_points": 1,
+          "factual_points": 0,
+          "supporting_answer_quotes": [
+            "`CollectionImpl::Stats()` (`collection.cc:403-442`) sums `segment->doc_count(delete_filter)`, i.e., in-memory `doc_ids_` (`segment.cc:589-599`), over `get_all_segments()`.",
+            "Same-handle stats are therefore evidence about process memory, not about disk."
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 403,
+              "end_line": 439,
+              "support": "Stats sums live segment counts; index completeness separately uses meta()->vector_indexed and a count ratio.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 589,
+              "end_line": 600,
+              "support": "doc_count derives from doc_ids_, with the supplied deletion filter.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/common/meta.h",
+              "start_line": 340,
+              "end_line": 342,
+              "support": "vector_indexed checks an indexed-field metadata set.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": false,
+            "verdict": "valid_spans_but_incomplete_answer_coverage",
+            "notes": "The cited Stats span supports the live-count explanation and contains the index-completeness implementation, but the answer never explains the metadata-derived completeness calculation."
+          },
+          "reasoning": "Correct doc_ids_-based count and no-durability-proof explanation, but no account of vector_indexed metadata or the index-completeness ratio. The compound C4 criterion has no partial point. The separate assertion that same-handle fetches still work is overbroad and recorded below.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C5",
+          "maximum_points": 1,
+          "factual_points": 1,
+          "supporting_answer_quotes": [
+            "`SegmentImpl::Insert/Update/Upsert/Delete` (`segment.cc:903-989`) each call `append_wal(doc)` first, which lazily opens the member `wal_file_`",
+            "**Control case**: with in-process inserts, `wal_file_` is open and has records, so the same `dump()` executes the full sequence",
+            "a single new insert after recovery would re-open the existing WAL via `append_wal` (`segment.cc:4308-4312, 4327-4330`) and mask the bug"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 903,
+              "end_line": 917,
+              "support": "Insert appends the WAL before internal_insert.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4338,
+              "support": "The member WAL is opened lazily, with existing-file reuse, and append/open errors are checked in the normal write path.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4234,
+              "end_line": 4265,
+              "support": "Recovery bypasses append_wal and calls internal operations directly.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.h",
+              "start_line": 75,
+              "end_line": 77,
+              "support": "has_record tests file size against the WAL header size.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Correctly establishes normal append-before-mutation, lazy member-open, recovery bypass, and the no-crash control under the no-rollover assumption.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C6",
+          "maximum_points": 1,
+          "factual_points": 0,
+          "supporting_answer_quotes": [
+            "at the end of `SegmentImpl::recover()`, when at least one record was replayed, establish the live WAL handle — e.g., call the existing `open_wal_file()` (`segment.cc:4303-4322`), which opens the existing file (`create_new=false`) and assigns `wal_file_`.",
+            "Then `flush()`'s guard at 2220 sees `wal_file_ != nullptr && has_record() == true` and executes the intended persist → version-update → WAL-removal order"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4215,
+              "support": "Recovery uses a local handle and currently can return OK on local-open failure.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4285,
+              "end_line": 4301,
+              "support": "The successful recovery tail has no member-WAL attachment.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4329,
+              "support": "open_wal_file attaches the member and returns an error on failure; normal append explicitly propagates that status.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2220,
+              "end_line": 2222,
+              "support": "A usable member with records is necessary to pass the existing flush guard.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315,
+              "support": "The established flush order finalizes data, updates version and only then removes the WAL.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": false,
+            "verdict": "valid_spans_but_incomplete_answer_coverage",
+            "notes": "The cited source supports member-WAL attachment and normal flush ordering. No final-answer wording requires the proposed member-open failure to propagate or prevents recovery from returning success in that case."
+          },
+          "reasoning": "The minimal lifecycle attachment is present, earning the separate sensitivity point. The prospective primary C6 also requires the failure-not-silent-success meaning. Merely calling the Status-returning helper does not state that its failure is checked/propagated; recognizing ignored replay errors elsewhere is diagnostic, not a repair requirement. The alternative dirty-state guard also does not prove the remaining cleanup/error invariants.",
+          "critical_contradictions": []
+        },
+        {
+          "id": "C7",
+          "maximum_points": 1,
+          "factual_points": 1,
+          "supporting_answer_quotes": [
+            "Process A: create collection, insert N docs (N small — no rollover), SIGKILL before any flush.",
+            "Process B: open the collection (triggers WAL replay); assert `Stats().doc_count == N` and fetch-by-pk succeeds.",
+            "Same Process B: call `Optimize()` **with no intervening writes**; assert it returns OK.",
+            "Process C: reopen; assert `doc_count == N` and every pk fetches with matching content.",
+            "Controls: identical sequence without the crash between insert and optimize (must stay green)"
+          ],
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 903,
+              "end_line": 917,
+              "support": "Additional inserts use append_wal and can mask the defect.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4303,
+              "end_line": 4330,
+              "support": "A new write reopens the existing WAL into the member.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1517,
+              "end_line": 1551,
+              "support": "Optimize's switch changes the persisted version and writing-block reachability.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "tests/db/crash_recovery/write_recovery_test.cc",
+              "start_line": 182,
+              "end_line": 218,
+              "support": "Existing crash-write test verifies recovered count/content without optimize followed by another fresh reopen.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 302,
+              "end_line": 358,
+              "support": "Normal collection destruction closes/flushed the writer, supporting an already-flushed control.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ],
+          "citation_verdict": {
+            "valid_for_stated_supported_claims": true,
+            "complete_for_full_criterion": true,
+            "verdict": "verified",
+            "notes": "The cited spans resolve in the frozen tree and support the stated causal claim."
+          },
+          "reasoning": "Includes pre-flush crash, recovery verification, no intervening writes, a fresh third-process reopen with count and every known document's content, and the no-crash control. Matching document content is accepted as full-content verification, including stored vector fields; an additional ranking query is not required. This is a proposed test, not a claim of execution.",
+          "critical_contradictions": []
+        }
+      ],
+      "unsupported_claims": [
+        {
+          "answer_quote": "so the same handle keeps counting and fetching the recovered docs.",
+          "classification": "overbroad_noncritical",
+          "explanation": "Keeping doc_ids_ establishes counting. Fetching additionally requires a usable block mapping, and the memory-store paths check the removed writing-forward-block marker. The answer correctly explains initial recovery reads, but retained memory alone does not establish fetchability after optimize.",
+          "verified_source_spans": [
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 421,
+              "end_line": 439,
+              "support": "Stats only uses current count/metadata.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2483,
+              "end_line": 2502,
+              "support": "Memory fetch mapping requires the writing-forward-block marker.",
+              "answer_cited": false,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2743,
+              "end_line": 2755,
+              "support": "Single-row memory fetch has the same requirement.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ]
+        },
+        {
+          "answer_quote": "the handle's memory (the only place the data still existed)",
+          "classification": "internal_imprecision_noncritical",
+          "explanation": "Earlier the answer correctly says the WAL may remain on disk. The precise consequence is that its records become unreachable by normal reopen, not necessarily that memory is the only physical copy. The central metadata/replay explanation is correct and is not contradicted in a way that reverses the diagnosis.",
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2220,
+              "end_line": 2222,
+              "support": "The null-member path returns early.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "support": "WAL removal is after that early return and is skipped.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 490,
+              "end_line": 501,
+              "support": "Reopen replay is gated by writing-block metadata.",
+              "answer_cited": true,
+              "verified": true
+            }
+          ]
+        },
+        {
+          "answer_quote": "destructor → `cleanup()` → `RemoveDirectory(seg_path)`",
+          "classification": "missing_cleanup_qualification_noncritical",
+          "explanation": "The destructor calls cleanup only when need_destroyed_ is set; ordinary destruction is not itself sufficient. Explicit segment destroy sets this flag. The answer's later caveat about physical removal versus unreachability avoids relying on immediate deletion for the root cause.",
+          "verified_source_spans": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 112,
+              "end_line": 117,
+              "support": "Destructor cleanup is conditional on need_destroyed_.",
+              "answer_cited": true,
+              "verified": true
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2330,
+              "end_line": 2336,
+              "support": "Explicit destroy marks need_destroyed_; cleanup removes the directory.",
+              "answer_cited": false,
+              "verified": true
+            }
+          ]
+        }
+      ],
+      "critical_contradictions": [],
+      "primary_total": 8,
+      "maximum_points": 10,
+      "core_criteria_full_credit": true,
+      "core_citations_valid": true,
+      "source_grounded_success": true,
+      "primary_pass": true,
+      "sensitivity": {
+        "name": "C6 minimal-lifecycle-only",
+        "replaces_primary": false,
+        "c6_primary_points": 0,
+        "c6_sensitivity_points": 1,
+        "score_delta": 1,
+        "total_if_applied": 9,
+        "pass_if_applied": true,
+        "reason": "The answer explicitly reopens the existing WAL into the member, so the lifecycle-only interpretation would add one point. The primary failure-handling requirement remains unmet."
+      },
+      "reviewer_notes": [
+        "Factual criterion points were assigned independently of citation validity.",
+        "The answer explicitly states static analysis only and labels end-to-end reproduction as predicted.",
+        "No tool-use or benefit conclusion is drawn."
+      ]
+    }
+  ]
+}
