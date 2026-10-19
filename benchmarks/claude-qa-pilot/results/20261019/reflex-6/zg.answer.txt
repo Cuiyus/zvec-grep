@@ -1,0 +1,22 @@
+This question maps onto the **Reflex** framework in this workspace: the derived state variable class is `ComputedVar` (`reflex/vars/base.py`), and its computation function accessor is the `fget` property (base.py:2524–2531), which returns the stored `_fget` getter. That function plays a **dual role** in dependency tracking and recomputation:
+
+## 1. Its bytecode is the source for automatic dependency discovery
+
+- `ComputedVar._deps()` (base.py:2411–2460) defaults to analyzing `_fget` itself (`obj = cast(FunctionType, self._fget)`) and hands it to `DependencyTracker` (`reflex/vars/dep_tracking.py`).
+- `DependencyTracker` **statically disassembles the function** (`dis.get_instructions`) and scans for:
+  - attribute loads on `self` (the first parameter name is registered as a tracked local), recording every base var / backend var accessed (dep_tracking.py:93–147, 296–334);
+  - states fetched via `get_state(...)` — locals storing the result become tracked, so attribute access on them is attributed to the right state class (dep_tracking.py:177–224);
+  - vars passed to `get_var_value(...)`, resolved by re-evaluating the source snippet (dep_tracking.py:226–294);
+  - recursion into nested functions/comprehensions (`LOAD_CONST` code objects) and into any methods called on the state, merging their dependencies; it even unboxes `functools.partial` and `EventHandler` wrappers (dep_tracking.py:68–82).
+- The result is a `{state_name: {var_names}}` dependency map for the computed var. If bytecode analysis fails, Reflex warns and falls back to the statically declared `deps` (base.py:2454–2460); with `auto_deps=False`/explicit `deps`, the `fget` body is not scanned at all.
+
+## 2. That dependency map builds the reverse index driving recomputation
+
+- At state-class construction, `BaseState._init_var_dependency_dicts()` (state.py:769–800) calls `cvar._deps(objclass=cls)` for every **cached** computed var and inverts the result into `defining_state_cls._var_dependencies[dep_var] → {(state_name, cvar_name)}` (plus `_potentially_dirty_states`). Uncached (`cache=False`) computed vars skip analysis and go into `_always_dirty_computed_vars` instead.
+- When any tracked var is mutated, `_mark_dirty()` → `_mark_dirty_computed_vars()` (state.py:1947–1972) walks `_var_dependencies` from `dirty_vars`, **transitively** (dirty computed vars are fed back into the loop, so computed vars depending on other computed vars are caught), and calls `ComputedVar.mark_dirty(instance)` — which deletes the per-instance cache attribute `_cache_attr` (base.py:2462–2469) — adding the cvar to `dirty_vars` so `get_delta()` serializes it to the frontend.
+
+## 3. It is the recomputation routine itself
+
+On the next access after invalidation (or after `cache_expire_interval` expiry via `needs_update`), `ComputedVar.__get__` (base.py:2387–2398) calls `self.fget(instance)` again to recompute the value, re-caches it, and stamps the last-updated time (`AsyncComputedVar.fget` returns the coroutine variant, awaited instead — base.py:2646, 2656).
+
+**In short:** the function returned by the `fget` accessor is both *the blueprint* for dependency tracking — its bytecode is statically analyzed to derive which state vars the computed var reads, populating the `_var_dependencies` reverse index that decides what gets marked dirty — and *the engine* of recomputation — it is re-invoked to produce a fresh value whenever that invalidation clears its cache.

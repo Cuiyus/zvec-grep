@@ -1,0 +1,28 @@
+In this codebase (Reflex), the "derived state variable class" is `ComputedVar` in `reflex/vars/base.py`, and its computation-function accessor is the `fget` property, which returns `self._fget` — the user-decorated getter function. That function plays two central roles:
+
+## 1. Producing the value (with caching)
+
+In `ComputedVar.__get__` (base.py, ~line 2387), `self.fget(instance)` is called to compute the derived value:
+
+- If `_cache=False`, it's recomputed on every access.
+- If `_cache=True`, the result is stored on the state instance under `_cache_attr` (`__cached_<name>`) along with a last-updated timestamp, and `fget` is only re-invoked when `needs_update()` reports the cache is stale/expired.
+
+## 2. Driving automatic dependency tracking
+
+This is its key role in the recomputation machinery. At class-setup time (`_init_var_dependency_dicts` in `reflex/state.py`, line 783), the framework calls `cvar._deps(objclass=cls)`, which — when `auto_deps=True` and static deps aren't sufficient — hands `self._fget` to `DependencyTracker` in `reflex/vars/dep_tracking.py`.
+
+`DependencyTracker` **statically disassembles the function's bytecode** (`dis.get_instructions`) without executing it, acting as a state machine that discovers:
+
+- Attributes loaded from `self` (the first parameter, tracked in `tracked_locals`) that correspond to base vars or backend vars of the state class.
+- Attributes accessed on states fetched via `get_state(...)` (locals bound from that call are tracked too).
+- Dependencies hidden inside **nested functions/comprehensions** (`LOAD_CONST` of a `CodeType` triggers a recursive tracker whose deps are merged).
+- Dependencies inside **methods called on `self`** or plain `property` objects (recursion into their callables/fget).
+- Vars passed to `get_var_value(...)` (the source snippet is extracted from positions and evaluated to resolve the `Var`).
+
+The result is a `dict[state_name → set(var_names)]`. The state metaclass registers the inverse mapping in each defining state class's `_var_dependencies: dict[var_name → set[(state_full_name, computed_var_name)]]`.
+
+## How that enables recomputation
+
+At runtime, when a base var is assigned, `_setattr` marks it dirty and calls `_mark_dirty()` → `_mark_dirty_computed_vars()`, which looks up `_dirty_computed_vars()` via `_var_dependencies` to find every computed var that transitively depends on the changed var, and invalidates their caches (`mark_dirty` deletes the `_cache_attr`). The next `__get__` (or delta computation in `get_delta`) then re-invokes `fget` to recompute the value.
+
+So in short: the function returned by `fget` is both **the recomputation body** (called to regenerate the cached derived value) and **the artifact being analyzed** (its bytecode is the source of truth from which the dependency graph governing cache invalidation is automatically derived). If bytecode analysis fails or is disabled, developers can instead declare `deps=`/`static_deps` explicitly with `auto_deps=False`, and `add_dependency()` can register edges into the same `_var_dependencies` graph.

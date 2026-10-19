@@ -1,0 +1,29 @@
+## Short answer
+
+In Reflex, the derived state variable class is **`ComputedVar`** (`reflex/vars/base.py:2055`), and its computation-function accessor is the **`fget` property** (`reflex/vars/base.py:2524-2531`), which returns the underlying `_fget` getter — the user function decorated with `@rx.cached_var`. The function it returns plays a **dual role**: it is the *subject of static dependency analysis* at class-construction time, and it is the *recomputation routine* invoked at runtime whenever dependency tracking marks the var dirty.
+
+## Role 1: The function is the input to automatic dependency analysis
+
+- `ComputedVar._deps()` (`reflex/vars/base.py:2411-2460`) takes `self._fget` and hands it to `DependencyTracker` (`reflex/vars/dep_tracking.py:50`), unless `auto_deps=False` (in which case only explicit `_static_deps` are used).
+- `DependencyTracker` **disassembles the function's bytecode** (`dis.get_instructions`, `_populate_dependencies` at `dep_tracking.py:296`) and runs a state machine (`SCANNING` / `GETTING_ATTR` / `GETTING_STATE` / `GETTING_VAR`) to find every state attribute the function reads:
+  - attributes accessed on `self` (the first positional arg is registered in `tracked_locals`),
+  - locals assigned from `get_state(SomeState)` calls (`handle_getting_state`),
+  - vars passed to `get_var_value(...)` (`handle_getting_var`, which re-evals the source snippet),
+  - recursion into nested functions/comprehensions (`LOAD_CONST CodeType`) and into called methods and plain `property.fget`s (`load_attr_or_method`, which also merges deps transitively).
+- The result is `dict[state_name → set of var names]` — the dependency edges for that computed var.
+
+## Role 2: Those dependencies build the reverse-dependency map used for dirty marking
+
+- At state class construction, `BaseState._init_var_dependency_dicts()` (`reflex/state.py:769-800`) calls `cvar._deps(objclass=cls)` for every *cached* computed var and inverts the result into `_var_dependencies`: base var → set of `(state, computed_var)` pairs that depend on it (plus `_potentially_dirty_states` for cross-substate deps). Non-cached computed vars skip analysis entirely and land in `_always_dirty_computed_vars`.
+- When a base var is assigned, its name is added to `dirty_vars` (`state.py:1392-1430`). Then `_mark_dirty_computed_vars()` (`state.py:1947-1972`) consults `_dirty_computed_vars(from_vars=...)`, which looks up `_var_dependencies` to find every computed var whose dependency set intersects the dirty vars. It loops until a fixed point, so computed vars depending on other computed vars are transitively marked dirty, and `ComputedVar.mark_dirty()` deletes the cached value attribute (`base.py:2462-2469`).
+
+## Role 3: The same function performs the actual recomputation
+
+- When the var's value is next accessed, `ComputedVar.__get__` (`base.py:2387-2398`) sees the cache attr missing (or expired via `needs_update`/`_update_interval`) and calls **`self.fget(instance)`** — the accessor's returned function — to recompute the value, re-caches it, and timestamps it. For `AsyncComputedVar`, the accessor returns a coroutine function that is awaited at the same point (`base.py:2646-2674`). Recomputed frontend vars then flow into the delta in `get_delta()` (`state.py:2005+`).
+
+## Secondary uses of the accessor
+
+- **Type inference**: `_determine_var_type()` uses `get_type_hints(self._fget)`'s return annotation (`base.py:2504-2513`) — an untyped fget raises `UntypedComputedVarError`.
+- **Rebinding for mixins/subclasses**: when a computed var is inherited from a mixin, the framework copies the function via `value.fget` and `_copy_fn`, then `_replace(fget=...)` rebinds it to the new state class (`state.py:578-584`) so dependency analysis disassembles the correct function object.
+
+**In summary:** the function returned by `fget` is the single source of truth for the computed var's dependency graph — the framework statically disassembles *that exact function* to auto-derive which state vars it reads, registers the inverse mapping so mutations propagate dirtiness (transitively) to it, and finally calls the same function to recompute and re-cache the derived value whenever it has been invalidated.

@@ -79,13 +79,31 @@ All planned trials remain in the manifest. Infrastructure failures and incomplet
 answers stay visible; they are never treated as efficient answers. A single pair
 is descriptive and cannot establish a general improvement.
 
+The separate `root-v2` development plan in `experiment-root-v2.json` tests whether
+explicit workspace guidance prevents repository-root argument mistakes. Its only
+protocol change appends the same instruction to both arms: "The repository root
+is exactly /workspace. Use /workspace for every repository-scoped root argument."
+It runs only one `reflex-6` pair with the original question, source and rubric;
+V1 evidence remains separate and will not be replaced. The default remains V1
+(`workspace_root_guidance=false`, both tasks). To dispatch only the V2 case:
+
+```sh
+gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
+  --ref dev/claude-zvec-qa-pilot \
+  -f task=reflex-6 -f workspace_root_guidance=true
+```
+
 Outputs include the manifest, source hashes, prompts, per-trial stream JSON,
 answer, metrics, and a known-credential scan. The runtime home and writable index
 copies live outside the artifact directory and are deleted after each trial.
 Only upload the explicit output directory after `secret-scan.json` reports
 `passed: true`; never upload preparation seeds. Input tokens include ordinary
 input, cache reads, and cache writes. Final session usage takes precedence over
-deduplicated assistant message usage. Tool calls are counted by unique IDs.
+deduplicated assistant message usage. `usage_complete` requires final session
+usage with all four input/output/cache token fields present and finite nonnegative
+numbers; fallback usage is incomplete. `efficiency_comparable` additionally
+requires a successful final answer and a valid trial after timeout/exit checks;
+it does not establish answer quality. Tool calls are counted by unique IDs.
 `zg_used` means attempted use; the separate `zg_tool_attempts`,
 `zg_tool_successes`, `zg_tool_errors`, and `zg_tool_unresolved` fields distinguish
 actual successful retrieval from an error or a call with no observed result.

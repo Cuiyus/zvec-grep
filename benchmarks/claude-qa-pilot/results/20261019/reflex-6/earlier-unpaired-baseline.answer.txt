@@ -1,0 +1,30 @@
+## Short answer
+
+In this framework (Reflex), the derived state variable class is `ComputedVar` (in `reflex/vars/base.py`), and its computation-function accessor is the `fget` property, which returns the underlying `_fget` callable. That function plays a **dual role**:
+
+1. **It is the source of truth for dependency analysis** — its bytecode is disassembled to auto-discover which state vars the computed var reads.
+2. **It is the recomputation routine** — it is re-invoked to produce a fresh value whenever the dependency graph says the var has become dirty.
+
+## Role in dependency tracking
+
+When a state class is initialized, `_init_var_dependency_dicts` (in `reflex/state.py`, ~line 783) calls `cvar._deps(objclass=cls)` for each cached computed var. Inside `ComputedVar._deps` (`reflex/vars/base.py:2411`):
+
+- Unless `auto_deps=False`, it takes `self._fget` and feeds it to the `DependencyTracker` (`reflex/vars/dep_tracking.py`).
+- `DependencyTracker` walks the function's `dis` instructions as a state machine: it tracks `LOAD_FAST/LOAD_DEREF` of `self` (and states fetched via `get_state` / `get_var_value`), then records each subsequent `LOAD_ATTR/LOAD_METHOD` that resolves to a var or backend var as a dependency in `{state_name: {var_names}}`. It recurses into nested functions/comprehensions, called methods, and plain `property` fget functions to gather transitive reads.
+
+The resulting dependency sets are registered on the defining state class's `_var_dependencies` mapping (var name → set of `(state_full_name, computed_var_name)` pairs that depend on it) and `_potentially_dirty_states`. This builds the reverse-edge graph used for invalidation.
+
+## Role in recomputation
+
+At runtime, when a base var changes:
+
+- `__setattr__` adds the var to `dirty_vars`, and `_mark_dirty_computed_vars` (`reflex/state.py:1947`) walks the `_var_dependencies` graph, transitively finding every computed var affected by the dirty set, calling `ComputedVar.mark_dirty(instance)` to delete its cached value (`__cached_<var>`), and propagating dirtiness to other substates.
+- On the next read, `ComputedVar.__get__` (line 2357) finds no cache (or an expired interval via `needs_update`) and calls **`self.fget(instance)`** — the same function that was statically analyzed — to recompute the value, refresh the cache and `_last_updated` timestamp, and set `_was_touched` so the new value is serialized (e.g., to Redis) and included in the delta sent to the frontend.
+
+## Secondary uses of `fget`
+
+- Type inference: `_determine_var_type` uses `get_type_hints(self._fget)["return"]` to determine the var's type.
+- Naming/metadata: `fget.__name__` becomes the var name and the leading `_` determines backend-var status.
+- Mixin/inheritance handling: `state.py:579` copies the function via `cls._copy_fn(value.fget)` and rebuilds the `ComputedVar` with `_replace(fget=...)` so dependencies are re-derived against the new class.
+
+In essence, `fget` is the pivot of the whole mechanism: its *static bytecode* defines the dependency edges that determine **when** recomputation is needed, and its *runtime invocation* performs the actual recomputation that produces updated state for the delta.

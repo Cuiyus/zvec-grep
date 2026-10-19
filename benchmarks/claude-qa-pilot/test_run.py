@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location("pilot", Path(__file__).with_name("run.py"))
 pilot = importlib.util.module_from_spec(spec)
@@ -108,13 +108,63 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(metrics["input_tokens_including_cache"], 240)
         self.assertEqual(metrics["tool_calls"], 1)
         self.assertEqual(metrics["errors"], [])
+        self.assertTrue(metrics["usage_complete"])
+        self.assertTrue(metrics["efficiency_comparable"])
 
     def test_message_fallback_deduplicates_usage(self):
         end = result()
         end.pop("usage")
-        metrics = pilot.parse_stream(event_stream(assistant(), assistant(), end), MODEL, "baseline", TOOL)
+        metrics = pilot.parse_stream(event_stream(init_event(), assistant(), assistant(), end), MODEL, "baseline", TOOL)
         self.assertEqual(metrics["input_tokens_including_cache"], 70)
         self.assertEqual(metrics["usage_source"], "deduplicated_assistant_messages")
+        self.assertEqual(metrics["errors"], [])
+        self.assertFalse(metrics["usage_complete"])
+        self.assertFalse(metrics["efficiency_comparable"])
+
+    def test_final_usage_requires_every_billing_token_field(self):
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            with self.subTest(missing=key):
+                end = result()
+                del end["usage"][key]
+                metrics = pilot.parse_stream(event_stream(init_event(), assistant(), end), MODEL, "baseline", TOOL)
+                self.assertFalse(metrics["usage_complete"])
+                self.assertFalse(metrics["efficiency_comparable"])
+
+    def test_invalid_billing_counts_never_establish_complete_usage(self):
+        for value in (-1, True, None, "unknown", float("nan"), float("inf")):
+            with self.subTest(value=value):
+                end = result()
+                end["usage"]["cache_read_input_tokens"] = value
+                metrics = pilot.parse_stream(event_stream(init_event(), assistant(), end), MODEL, "baseline", TOOL)
+                self.assertFalse(metrics["usage_complete"])
+                self.assertFalse(metrics["efficiency_comparable"])
+
+    def test_efficiency_comparability_uses_final_process_outcome(self):
+        for exit_code, timed_out in ((0, False), (1, False), (137, True)):
+            with self.subTest(exit_code=exit_code, timed_out=timed_out), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = pilot.parser().parse_args([
+                    '--source', str(root / 'source'), '--prompt', str(root / 'prompt'),
+                    '--output', str(root / 'output'), '--index-seed', str(root / 'index'),
+                    '--model', MODEL,
+                ])
+                args.output.mkdir()
+                process = Mock(returncode=exit_code)
+                if timed_out:
+                    process.wait.side_effect = [pilot.subprocess.TimeoutExpired('docker', 900), None]
+
+                def start_process(command, **kwargs):
+                    kwargs['stdout'].write(event_stream(init_event(), assistant(), result()))
+                    return process
+
+                with patch.object(pilot.subprocess, 'Popen', side_effect=start_process), \
+                        patch.object(pilot.subprocess, 'run'):
+                    metrics = pilot.run_trial(args, 'baseline', 1, 'Question.')
+                self.assertTrue(metrics['usage_complete'])
+                self.assertEqual(metrics['valid'], exit_code == 0 and not timed_out)
+                self.assertEqual(metrics['efficiency_comparable'], metrics['valid'])
+                saved = json.loads((args.output / 'r01-baseline' / 'metrics.json').read_text())
+                self.assertEqual(saved['efficiency_comparable'], metrics['efficiency_comparable'])
 
     def test_model_fallback_and_unexpected_tool_fail(self):
         event = assistant("claude-opus-5")
@@ -203,11 +253,15 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(metrics["infrastructure_errors"], [])
         self.assertIn("missing_final_answer", metrics["errors"])
         self.assertIn("agent_result_error:error_max_turns", metrics["errors"])
+        self.assertTrue(metrics["usage_complete"])
+        self.assertFalse(metrics["efficiency_comparable"])
 
     def test_interrupted_stream_after_model_response_preserves_valid_protocol(self):
         metrics = pilot.parse_stream(event_stream(init_event(), assistant()), MODEL, "baseline", TOOL)
         self.assertTrue(metrics["protocol_valid"])
         self.assertIn("missing_final_result", metrics["errors"])
+        self.assertFalse(metrics["usage_complete"])
+        self.assertFalse(metrics["efficiency_comparable"])
 
     def test_no_model_response_is_infrastructure_failure(self):
         metrics = pilot.parse_stream(event_stream(init_event()), MODEL, "baseline", TOOL)

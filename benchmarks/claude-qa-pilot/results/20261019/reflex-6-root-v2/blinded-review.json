@@ -1,0 +1,982 @@
+{
+  "schema_version": 1,
+  "task_id": "reflex-6",
+  "review_type": "Codex model source review; not human scoring; not an official SWE-QA evaluation",
+  "review_language": "zh-CN",
+  "rubric_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/evaluator/reflex-6.json",
+  "source": {
+    "root": "/tmp/zg-reflex-6-gold-review/source",
+    "repository": "https://github.com/reflex-dev/reflex.git",
+    "commit": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+    "file_hashes_verified": true,
+    "source_file_hashes": {
+      "reflex/state.py": "213e08c5fa4a7efbaa29e197e9aaa3d4385f2569d1241f1d814218c5ef639cf9",
+      "reflex/vars/base.py": "ab6619bfe172c10682f8b1ef47553741363c92c3d849d8f9452244cca18e168d",
+      "reflex/vars/dep_tracking.py": "c46169329c396669871c80477a80d145e13b926c517d2248f88a91bbf2b04910"
+    }
+  },
+  "methodology": {
+    "blinded_answer_ids": [
+      "D",
+      "E"
+    ],
+    "inspected_candidate_inputs": [
+      "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/blinded/reflex-root-v2/D.txt",
+      "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/blinded/reflex-root-v2/E.txt"
+    ],
+    "other_experimental_answers_metrics_or_logs_inspected": false,
+    "arm_inference_performed": false,
+    "gold_or_source_modified": false,
+    "native_tests_executed": false,
+    "citation_rule": "接受候选答案给出的精确行段、唯一方法名和所在路径，或能唯一定位有限函数体的准确代码符号；逐项验证内容支持而非只验证路径命中。不把未引用的整文件作为核心证据。",
+    "point_rule": "事实分与引用有效性分别记录；C2/C4/C5 必须满分且核心证据有效，另需总分至少8、无列举的 critical contradiction，才通过。可选错误显式归因，未涉及核心因果要求的精度问题不额外扣分。",
+    "external_paid_model_api_calls_made": false,
+    "secondary_check": "另一个 Codex 子代理仅复核 D/C5 与 E/C2 的争议判断，仅读取同一冻结 rubric、D/E 和三个冻结源码文件；并非人工评分。"
+  },
+  "answers": [
+    {
+      "task_id": "reflex-6",
+      "blinded_answer_id": "D",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "准确辨认 ComputedVar.fget，并说明返回 self._fget，即存储的用户 getter callable；将访问该 callable 与 self.fget(instance) 的调用区分开。",
+          "evidence": [
+            "D1"
+          ]
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "明确说明 _deps 以 self._fget 为输入，由 DependencyTracker 通过 dis.get_instructions 静态分析字节码、识别 state 属性访问并登记依赖，满足核心机制要求。关于“static deps aren't sufficient”的额外门槛不符合源码，单独列为可选错误；不抹去其已正确说明的 getter/字节码/状态变量读取机制。",
+          "evidence": [
+            "D2",
+            "D3"
+          ]
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "将 state→源变量集合反转为源变量→(消费 state, computed var) 对，并明确 _dirty_computed_vars 利用该反向索引选择受影响的 computed vars；不是仅提到存在依赖图。",
+          "evidence": [
+            "D4",
+            "D5"
+          ]
+        },
+        {
+          "id": "C4",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "正确说明沿依赖传播脏标记，mark_dirty 删除 _cache_attr，并将 getter 的下一次执行放在随后访问阶段。_setattr 的方法名拼写错误单列，未破坏所引用 _mark_dirty/_mark_dirty_computed_vars/mark_dirty 的正确因果链。",
+          "evidence": [
+            "D5",
+            "D6",
+            "D7"
+          ]
+        },
+        {
+          "id": "C5",
+          "points": 1,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "正确写出失效后下一次 __get__ 调用 fget 重算，也引用有效缓存代码；但前文明确声称 fget 仅在 needs_update 报告过期时才重新调用，排除了缓存缺失/依赖失效这条独立路径。base.py:2391 使用 not hasattr(...) OR needs_update(...); interval=None 时 needs_update=False，缓存删除后仍重算。两处叙述互相矛盾，保留部分分而不静默修补为满分。",
+          "evidence": [
+            "D6",
+            "D7",
+            "D8"
+          ]
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          "the computation-function accessor is the `fget` property, which returns `self._fget` — the user-decorated getter function"
+        ],
+        "C2": [
+          "hands `self._fget` to `DependencyTracker` in `reflex/vars/dep_tracking.py`",
+          "`DependencyTracker` **statically disassembles the function's bytecode** (`dis.get_instructions`) without executing it",
+          "Attributes loaded from `self` ... that correspond to base vars or backend vars of the state class."
+        ],
+        "C3": [
+          "registers the inverse mapping in each defining state class's `_var_dependencies: dict[var_name → set[(state_full_name, computed_var_name)]]`",
+          "looks up `_dirty_computed_vars()` via `_var_dependencies` to find every computed var that transitively depends on the changed var"
+        ],
+        "C4": [
+          "invalidates their caches (`mark_dirty` deletes the `_cache_attr`)"
+        ],
+        "C5": [
+          "The next `__get__` (or delta computation in `get_delta`) then re-invokes `fget` to recompute the value.",
+          "`fget` is only re-invoked when `needs_update()` reports the cache is stale/expired."
+        ]
+      },
+      "verified_citations": [
+        {
+          "id": "D1",
+          "answer_anchor": "ComputedVar in reflex/vars/base.py; fget property returns self._fget",
+          "valid": true,
+          "precision": "path + uniquely identified property",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2524,
+              "end_line": 2531,
+              "symbol": "ComputedVar.fget"
+            }
+          ],
+          "supports": [
+            "C1"
+          ],
+          "finding": "精确 property 体返回 self._fget。"
+        },
+        {
+          "id": "D2",
+          "answer_anchor": "cvar._deps(objclass=cls) / self._fget, in previously identified ComputedVar",
+          "valid": true,
+          "precision": "identified class/path + unique method",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2411,
+              "end_line": 2460,
+              "symbol": "ComputedVar._deps"
+            }
+          ],
+          "supports": [
+            "C2"
+          ],
+          "finding": "有限方法体将存储 getter 作为 DependencyTracker(func=obj, ...)。不支持“static deps 不足时才自动分析”的额外限定。"
+        },
+        {
+          "id": "D3",
+          "answer_anchor": "DependencyTracker in reflex/vars/dep_tracking.py; dis.get_instructions; state attribute access, tracked_locals and backend/base vars",
+          "valid": true,
+          "precision": "path + unique executable expression and bounded attribute-dispatch chain",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 296,
+              "end_line": 334,
+              "symbol": "DependencyTracker._populate_dependencies"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 125,
+              "end_line": 147,
+              "symbol": "DependencyTracker.load_attr_or_method"
+            }
+          ],
+          "supports": [
+            "C2"
+          ],
+          "finding": "dis.get_instructions 在该文件中唯一，定位有限扫描函数；LOAD_ATTR/LOAD_METHOD 调用的有限属性处理器检验 target_state.vars/backend_vars 并记录依赖。接受这一等价源码定位，而非仅凭文件或类名命中。"
+        },
+        {
+          "id": "D4",
+          "answer_anchor": "_init_var_dependency_dicts in reflex/state.py, line 783; inverse _var_dependencies mapping",
+          "valid": true,
+          "precision": "line within uniquely named finite method",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 769,
+              "end_line": 800,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            }
+          ],
+          "supports": [
+            "C3"
+          ],
+          "finding": "783 为调用 _deps 的准确位置；794–797 确实建立源变量到消费者的反向关系。"
+        },
+        {
+          "id": "D5",
+          "answer_anchor": "_mark_dirty_computed_vars() / _dirty_computed_vars() via _var_dependencies",
+          "valid": true,
+          "precision": "established state.py path + unique method names",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1947,
+              "end_line": 1972,
+              "symbol": "BaseState._mark_dirty_computed_vars"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 1986,
+              "end_line": 2003,
+              "symbol": "BaseState._dirty_computed_vars"
+            }
+          ],
+          "supports": [
+            "C3",
+            "C4"
+          ],
+          "finding": "有限方法体按脏源变量反查消费者，标记 dependent computed vars，并调用其 mark_dirty。"
+        },
+        {
+          "id": "D6",
+          "answer_anchor": "mark_dirty deletes the _cache_attr",
+          "valid": true,
+          "precision": "identified ComputedVar/path + unique method and exact cache operation",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2462,
+              "end_line": 2469,
+              "symbol": "ComputedVar.mark_dirty"
+            }
+          ],
+          "supports": [
+            "C4",
+            "C5"
+          ],
+          "finding": "delattr 删除缓存；没有在该方法内执行 getter。"
+        },
+        {
+          "id": "D7",
+          "answer_anchor": "ComputedVar.__get__ (base.py, ~line 2387); next __get__ then re-invokes fget",
+          "valid": true,
+          "precision": "precise method + approximate line landing at relevant branch",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2387,
+              "end_line": 2398,
+              "symbol": "ComputedVar.__get__"
+            }
+          ],
+          "supports": [
+            "C5"
+          ],
+          "finding": "有效证据支持无缓存直算、缓存缺失或超时时计算、否则读取现有缓存；反驳候选的 only needs_update 限定。"
+        },
+        {
+          "id": "D8",
+          "answer_anchor": "needs_update()",
+          "valid": true,
+          "precision": "identified ComputedVar/path + unique method",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2272,
+              "end_line": 2286,
+              "symbol": "ComputedVar.needs_update"
+            }
+          ],
+          "supports": [
+            "C5"
+          ],
+          "finding": "仅按 update interval/last-updated timestamp 判断时间更新；interval=None 返回 False。"
+        },
+        {
+          "id": "D9",
+          "answer_anchor": "_setattr marks it dirty",
+          "valid": false,
+          "precision": "unresolvable exact method spelling",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1369,
+              "end_line": 1426,
+              "symbol": "BaseState.__setattr__"
+            }
+          ],
+          "supports": [],
+          "finding": "冻结源码相应方法名为 __setattr__，不是 _setattr；只作为名称错误记录，不以这个错误符号建立证据。正确 dirty→invalidate 链由 D5/D6 单独支持。"
+        }
+      ],
+      "core_citation_validity": {
+        "C2": {
+          "valid": true,
+          "evidence": [
+            "D2",
+            "D3"
+          ]
+        },
+        "C4": {
+          "valid": true,
+          "evidence": [
+            "D5",
+            "D6"
+          ]
+        },
+        "C5": {
+          "valid": true,
+          "evidence": [
+            "D6",
+            "D7"
+          ],
+          "note": "引用本身有效，但其中的源码反驳答案的一项排他断言；citation validity 不等于完整 factual correctness。"
+        },
+        "all_required_core_claims_have_supporting_source": true
+      },
+      "unsupported_claims": [
+        {
+          "quote": "when `auto_deps=True` and static deps aren't sufficient",
+          "affected_criterion": "C2",
+          "severity": "optional factual error",
+          "reason": "源码先保留 static deps，再仅依据 _auto_deps 决定是否扫描；没有 static deps 是否足够的判定。",
+          "source_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2433,
+              "end_line": 2453,
+              "symbol": "ComputedVar._deps"
+            }
+          ],
+          "score_effect": "C2 核心机制仍为2/2；错误显式记录。"
+        },
+        {
+          "quote": "`fget` is only re-invoked when `needs_update()` reports the cache is stale/expired.",
+          "affected_criterion": "C5",
+          "severity": "material core inconsistency",
+          "reason": "缓存缺失独立于 needs_update 足以触发 getter；mark_dirty 删除缓存，needs_update 无 interval 时仍为 False。后文正确说明失效后访问重算，不能消除前文的显式 only。",
+          "source_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2387,
+              "end_line": 2398,
+              "symbol": "ComputedVar.__get__"
+            },
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2462,
+              "end_line": 2469,
+              "symbol": "ComputedVar.mark_dirty"
+            },
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2272,
+              "end_line": 2286,
+              "symbol": "ComputedVar.needs_update"
+            }
+          ],
+          "score_effect": "C5 从2降至1；不重复扣分。"
+        },
+        {
+          "quote": "`_setattr` marks it dirty",
+          "affected_criterion": "C4",
+          "severity": "symbol spelling error",
+          "reason": "实际为 BaseState.__setattr__。正确方法确实执行 dirty_vars.add(name) 和 _mark_dirty。",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1369,
+              "end_line": 1426,
+              "symbol": "BaseState.__setattr__"
+            }
+          ],
+          "score_effect": "不额外扣分；关键失效机制已正确描述并有独立有效引用。"
+        }
+      ],
+      "optional_claim_checks": [
+        {
+          "claim": "uncached access recomputes every time",
+          "status": "supported",
+          "source_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2387,
+              "end_line": 2388,
+              "symbol": "ComputedVar.__get__"
+            }
+          ]
+        },
+        {
+          "claim": "recursive methods/properties and nested functions/comprehensions",
+          "status": "supported",
+          "source_spans": [
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 132,
+              "end_line": 139,
+              "symbol": "DependencyTracker.load_attr_or_method"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 323,
+              "end_line": 334,
+              "symbol": "DependencyTracker._populate_dependencies"
+            }
+          ]
+        },
+        {
+          "claim": "get_state locals and get_var_value source evaluation",
+          "status": "supported in the implementation's supported forms",
+          "source_spans": [
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 177,
+              "end_line": 224,
+              "symbol": "DependencyTracker.handle_getting_state"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 226,
+              "end_line": 294,
+              "symbol": "DependencyTracker._eval_var / handle_getting_var"
+            }
+          ],
+          "note": "答案未声称这些语法的所有动态表达式都被支持，故不因未列限制扣分。"
+        },
+        {
+          "claim": "add_dependency registers edges in _var_dependencies",
+          "status": "supported",
+          "source_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2471,
+              "end_line": 2502,
+              "symbol": "ComputedVar.add_dependency"
+            }
+          ]
+        },
+        {
+          "claim": "needs_update is only stale-cache recomputation trigger",
+          "status": "incorrect",
+          "linked_unsupported_claim_index": 1
+        },
+        {
+          "claim": "static dependency sufficiency gates automatic discovery",
+          "status": "incorrect",
+          "linked_unsupported_claim_index": 0
+        }
+      ],
+      "critical_contradictions": [],
+      "critical_contradiction_count": 0,
+      "critical_contradiction_reason": "按冻结 rubric 的已列举定义严格判断：未声称执行 getter 来发现依赖、needs_update 检测源变量变更、任何变量变化刷新所有缓存、fget accessor 返回值而非 callable，或 mark_dirty 直接执行 getter。C5 的 only 是实质错误，但不是其中任一显式断言，不扩展 critical 列表。",
+      "total_points": 9,
+      "maximum_points": 10,
+      "source_grounded_success": false,
+      "success_rule_evaluation": {
+        "minimum_points_met": true,
+        "required_full_credit": {
+          "C2": true,
+          "C4": true,
+          "C5": false
+        },
+        "zero_critical_contradictions": true,
+        "supporting_citations_for_core_claims": true
+      },
+      "reviewer_notes": [
+        "D 的核心引用可以按路径/唯一方法或表达式定位到有限源码体，不因缺少完整行段而一概判无效。",
+        "不根据答案长度、格式或工具来源打分；未推断 arm。",
+        "失败原因是必需满分的 C5 未满分，不是缺少源码引用，也不是新增 critical contradiction。"
+      ]
+    },
+    {
+      "task_id": "reflex-6",
+      "blinded_answer_id": "E",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "准确指出 ComputedVar.fget 返回存储于 self._fget 的用户定义 getter，随后单独说明调用 self.fget(instance) 取得值。",
+          "evidence": [
+            "E1"
+          ]
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "完整说明 _deps 将 getter 交给 DependencyTracker，_populate_dependencies 静态反汇编字节码并跟踪读取的状态变量。准确路径、方法名及有限源码体支撑机制；“once at class-definition time”在动态生命周期场景下不准确，单独记录，不否定本项要求的静态依赖发现机制。",
+          "evidence": [
+            "E2",
+            "E3"
+          ]
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "明确说 cached computed vars 的依赖被反转到 _var_dependencies，dirty 源变量通过该映射找到其消费者；同时提到 computed→computed 的传递链。",
+          "evidence": [
+            "E4",
+            "E5"
+          ]
+        },
+        {
+          "id": "C4",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "明确描述 dirty source→_dirty_computed_vars 选择依赖者→mark_dirty 删除 _cache_attr→dependent computed vars 被置 dirty，并说明传递传播；未混淆 needs_update 与变更检测。",
+          "evidence": [
+            "E5",
+            "E6"
+          ]
+        },
+        {
+          "id": "C5",
+          "points": 2,
+          "maximum_points": 2,
+          "citation_valid": true,
+          "reason": "运行时部分正确说明仅在缓存缺失或 needs_update 时才重新调用 getter；后续部分把依赖变更与缓存删除连接起来，合起来清楚给出失效后访问重算、有效缓存可复用的完整因果关系。",
+          "evidence": [
+            "E6",
+            "E7"
+          ]
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          "the computation-function accessor is the `fget` property (`reflex/vars/base.py:2524-2531`), which returns the user-defined getter stored in `self._fget`"
+        ],
+        "C2": [
+          "`_deps` takes `self._fget` and hands it to `DependencyTracker`",
+          "`DependencyTracker._populate_dependencies()` disassembles the function's **bytecode** (`dis.get_instructions`) with a small state machine to find every state var the computation *reads*"
+        ],
+        "C3": [
+          "calls `cvar._deps(objclass=cls)` for each **cached** computed var and *inverts* the result",
+          "looks up `_var_dependencies` for each dirty var"
+        ],
+        "C4": [
+          "invalidates each dependent `ComputedVar`'s cache (`mark_dirty` deletes `_cache_attr`, `base.py:2462-2469`), and adds it to `dirty_vars`"
+        ],
+        "C5": [
+          "`self.fget(instance)` is invoked to produce the value, either on every access (`cache=False`) or only when the cached value (`_cache_attr`) is missing or the var `needs_update`",
+          "which at runtime determines exactly which derived vars get marked dirty (cache-invalidated) and recomputed"
+        ]
+      },
+      "verified_citations": [
+        {
+          "id": "E1",
+          "answer_anchor": "reflex/vars/base.py:2055; reflex/vars/base.py:2524-2531",
+          "valid": true,
+          "precision": "exact class line and exact property span",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2055,
+              "end_line": 2056,
+              "symbol": "ComputedVar"
+            },
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2524,
+              "end_line": 2531,
+              "symbol": "ComputedVar.fget"
+            }
+          ],
+          "supports": [
+            "C1"
+          ],
+          "finding": "类与 property 均正确；return self._fget 直接支持 callable 身份。"
+        },
+        {
+          "id": "E2",
+          "answer_anchor": "ComputedVar._deps() base.py:2411-2460",
+          "valid": true,
+          "precision": "exact finite method span",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2411,
+              "end_line": 2460,
+              "symbol": "ComputedVar._deps"
+            }
+          ],
+          "supports": [
+            "C2"
+          ],
+          "finding": "保留 static deps、auto_deps 分支、getter 输入、DependencyTracker 调用及异常处理均在引用区间。"
+        },
+        {
+          "id": "E3",
+          "answer_anchor": "DependencyTracker reflex/vars/dep_tracking.py:50; DependencyTracker._populate_dependencies() / dis.get_instructions",
+          "valid": true,
+          "precision": "path + uniquely named finite method and directly dispatched finite handler",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 296,
+              "end_line": 334,
+              "symbol": "DependencyTracker._populate_dependencies"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 125,
+              "end_line": 147,
+              "symbol": "DependencyTracker.load_attr_or_method"
+            }
+          ],
+          "supports": [
+            "C2"
+          ],
+          "finding": "class:50 单独不足以证明机制；但候选进一步给出精确 _populate_dependencies 方法，扫描函数明确分派 LOAD_ATTR/LOAD_METHOD，直接处理器检验 vars/backend_vars 并登记依赖。按有限方法及等价源码证据接受。"
+        },
+        {
+          "id": "E4",
+          "answer_anchor": "BaseState._init_var_dependency_dicts() reflex/state.py:769-800; state.py:340",
+          "valid": true,
+          "precision": "exact finite method segment plus declaration",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 769,
+              "end_line": 800,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 339,
+              "end_line": 340,
+              "symbol": "BaseState._var_dependencies"
+            }
+          ],
+          "supports": [
+            "C3"
+          ],
+          "finding": "340 的声明单独不证明注册，但769–800的真实循环和add消费对操作证明反向注册及仅cached参与。"
+        },
+        {
+          "id": "E5",
+          "answer_anchor": "state.py:1947-1972; state.py:1986-2003",
+          "valid": true,
+          "precision": "two exact finite method spans",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1947,
+              "end_line": 1972,
+              "symbol": "BaseState._mark_dirty_computed_vars"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 1986,
+              "end_line": 2003,
+              "symbol": "BaseState._dirty_computed_vars"
+            }
+          ],
+          "supports": [
+            "C3",
+            "C4"
+          ],
+          "finding": "dirty var 反查消费者、标 dirty、调用 mark_dirty 和传递传播均有源码支持。"
+        },
+        {
+          "id": "E6",
+          "answer_anchor": "mark_dirty deletes _cache_attr, base.py:2462-2469",
+          "valid": true,
+          "precision": "exact finite method span",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2462,
+              "end_line": 2469,
+              "symbol": "ComputedVar.mark_dirty"
+            }
+          ],
+          "supports": [
+            "C4",
+            "C5"
+          ],
+          "finding": "确实仅删除 cache attribute，没有在失效函数内执行 getter。"
+        },
+        {
+          "id": "E7",
+          "answer_anchor": "ComputedVar.__get__ base.py:2387-2398",
+          "valid": true,
+          "precision": "exact relevant branch span",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2387,
+              "end_line": 2398,
+              "symbol": "ComputedVar.__get__"
+            }
+          ],
+          "supports": [
+            "C5"
+          ],
+          "finding": "明确支持 uncached 直接计算、cached 缺失或超时重算和 valid cache 读取。"
+        },
+        {
+          "id": "E8",
+          "answer_anchor": "__setattr__ state.py:1420-1426; get_delta()",
+          "valid": true,
+          "precision": "exact assignment branch plus unique method",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1420,
+              "end_line": 1426,
+              "symbol": "BaseState.__setattr__"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 2005,
+              "end_line": 2039,
+              "symbol": "BaseState.get_delta"
+            }
+          ],
+          "supports": [
+            "C4"
+          ],
+          "finding": "赋值置 dirty 并调用 _mark_dirty；get_delta 也调用 _mark_dirty_computed_vars。_mark_dirty 本身也立即调用该失效方法（2049–2061），但答案没有明确否认这一点，故不把其 get_delta 叙述理解为唯一入口。"
+        },
+        {
+          "id": "E9",
+          "answer_anchor": "state.py:802-807",
+          "valid": true,
+          "precision": "exact assignment span",
+          "verified_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 779,
+              "end_line": 783,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 802,
+              "end_line": 807,
+              "symbol": "BaseState._always_dirty_computed_vars"
+            }
+          ],
+          "supports": [],
+          "finding": "uncached computed vars 跳过这里的依赖注册，并列入 always-dirty 集合。"
+        },
+        {
+          "id": "E10",
+          "answer_anchor": "base.py:2454-2460",
+          "valid": true,
+          "precision": "exact exception-handler span",
+          "verified_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2433,
+              "end_line": 2460,
+              "symbol": "ComputedVar._deps"
+            }
+          ],
+          "supports": [],
+          "finding": "异常时警告并返回 d，d 已含静态依赖；该段支持用户提供静态依赖作为后备。"
+        }
+      ],
+      "core_citation_validity": {
+        "C2": {
+          "valid": true,
+          "evidence": [
+            "E2",
+            "E3"
+          ]
+        },
+        "C4": {
+          "valid": true,
+          "evidence": [
+            "E5",
+            "E6"
+          ]
+        },
+        "C5": {
+          "valid": true,
+          "evidence": [
+            "E6",
+            "E7"
+          ]
+        },
+        "all_required_core_claims_have_supporting_source": true
+      },
+      "unsupported_claims": [
+        {
+          "quote": "its bytecode is statically analyzed once at class-definition time",
+          "affected_criterion": "C2",
+          "severity": "optional lifecycle overstatement",
+          "reason": "在常规类构造时建立依赖是正确的，但 once 不是全生命周期保证：动态添加变量后重新调用 _init_var_dependency_dicts，继承变量更新和模块重载也会重建。",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 1082,
+              "end_line": 1096,
+              "symbol": "BaseState.add_var"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 1222,
+              "end_line": 1240,
+              "symbol": "BaseState._update_substate_inherited_vars"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 2762,
+              "end_line": 2769,
+              "symbol": "reload_state_module"
+            }
+          ],
+          "score_effect": "C2 保留2/2；错误是次数/生命周期的额外限定，未否定 getter 的静态字节码分析与状态变量读取机制。"
+        }
+      ],
+      "optional_claim_checks": [
+        {
+          "claim": "uncached vars skip registration and are always dirty; uncached access directly calls getter",
+          "status": "supported",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 779,
+              "end_line": 783,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 802,
+              "end_line": 807,
+              "symbol": "BaseState._always_dirty_computed_vars"
+            },
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2387,
+              "end_line": 2388,
+              "symbol": "ComputedVar.__get__"
+            }
+          ]
+        },
+        {
+          "claim": "analysis failure warns and returns static-dependency-backed dictionary",
+          "status": "supported",
+          "source_spans": [
+            {
+              "path": "reflex/vars/base.py",
+              "start_line": 2433,
+              "end_line": 2460,
+              "symbol": "ComputedVar._deps"
+            }
+          ],
+          "note": "异常处理返回的是共享字典 d，而非创建新的纯静态字典；不将候选泛称 static-deps 后备解读成额外声称保证清除部分扫描结果。"
+        },
+        {
+          "claim": "recursive methods/properties, nested functions, get_state locals and get_var_value source evaluation",
+          "status": "supported in the implementation's supported forms",
+          "source_spans": [
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 125,
+              "end_line": 147,
+              "symbol": "DependencyTracker.load_attr_or_method"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 177,
+              "end_line": 224,
+              "symbol": "DependencyTracker.handle_getting_state"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 226,
+              "end_line": 294,
+              "symbol": "DependencyTracker._eval_var / handle_getting_var"
+            },
+            {
+              "path": "reflex/vars/dep_tracking.py",
+              "start_line": 296,
+              "end_line": 334,
+              "symbol": "DependencyTracker._populate_dependencies"
+            }
+          ]
+        },
+        {
+          "claim": "_potentially_dirty_states are substates that may need recomputation",
+          "status": "imprecise terminology, no material scoring error",
+          "affected_criterion": "C3",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 794,
+              "end_line": 800,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            }
+          ],
+          "note": "实际存储消费 state 的完整名称，包括同一 state；不能把 substates 按严格含义理解成只包含真子状态。候选正确区分了该集合与 _var_dependencies 的消费者对，并未断言这里存储 computed-var 对。"
+        },
+        {
+          "claim": "_var_dependencies maps base-var names",
+          "status": "scope shorthand, no material scoring error",
+          "affected_criterion": "C3",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 783,
+              "end_line": 797,
+              "symbol": "BaseState._init_var_dependency_dicts"
+            },
+            {
+              "path": "reflex/state.py",
+              "start_line": 1998,
+              "end_line": 2003,
+              "symbol": "BaseState._dirty_computed_vars"
+            }
+          ],
+          "note": "实际源键可以是 computed vars；候选随后明确写出 computed vars depending on computed vars，因此不把 base-var 的简称认定为否认该能力。"
+        },
+        {
+          "claim": "dependent derived values are re-sent in get_delta",
+          "status": "supported for frontend computed vars",
+          "source_spans": [
+            {
+              "path": "reflex/state.py",
+              "start_line": 2013,
+              "end_line": 2027,
+              "symbol": "BaseState.get_delta"
+            }
+          ],
+          "note": "get_delta 排除 _backend computed vars；按答案的一般 delta 说明理解，不因没有主动列出 backend 例外而扣分。"
+        },
+        {
+          "claim": "computed vars are created via @rx.var/@cached_var",
+          "status": "not independently verified from the three frozen files",
+          "note": "装饰器别名不属于五项评分要求；冻结源码包没有相应公开导出文件，故不推断其真伪，不把此附带背景作为核心证据。"
+        },
+        {
+          "claim": "automatic analysis occurs only once in the lifecycle",
+          "status": "incorrect",
+          "linked_unsupported_claim_index": 0
+        }
+      ],
+      "critical_contradictions": [],
+      "critical_contradiction_count": 0,
+      "critical_contradiction_reason": "没有命中冻结 rubric 的任何列举项；尤其明确区分 getter callable 与其调用、静态依赖发现与 runtime cache invalidation，未把 needs_update 描述为源变量变更检测器。",
+      "total_points": 10,
+      "maximum_points": 10,
+      "source_grounded_success": true,
+      "success_rule_evaluation": {
+        "minimum_points_met": true,
+        "required_full_credit": {
+          "C2": true,
+          "C4": true,
+          "C5": true
+        },
+        "zero_critical_contradictions": true,
+        "supporting_citations_for_core_claims": true
+      },
+      "reviewer_notes": [
+        "“once”必须记录为源码不支持的额外绝对化描述，但不据此抹去正确且有证据的 C2 核心机制。",
+        "行号、唯一方法名与有限调用分派共同建立证据；未把 DependencyTracker 的类声明行或整文件命中当作完整证据。",
+        "五项事实要求和三项核心引用均满足；未根据长度、格式或任何 arm 信息评分。"
+      ]
+    }
+  ],
+  "comparative_conclusion": {
+    "D": {
+      "total_points": 9,
+      "source_grounded_success": false
+    },
+    "E": {
+      "total_points": 10,
+      "source_grounded_success": true
+    },
+    "main_difference": "D 的排他性 only needs_update 断言与缺失缓存分支冲突，使必需满分的 C5 仅得1分；E 正确说明缓存缺失或时间更新两个条件。两者核心引用有效，critical contradiction 数均为0。"
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -111,6 +112,13 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
     if isinstance(model_usage, dict):
         models.update(model_usage)
     usage = result.get("usage")
+    # Only final session usage can establish complete accounting. Fallback
+    # assistant usage may omit cache/output counts even when tokens were spent.
+    usage_complete = isinstance(usage, dict) and all(
+        type(value := usage.get(key)) in (int, float) and value >= 0
+        and (not isinstance(value, float) or math.isfinite(value))
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
     usage_source = "result.usage"
     if not isinstance(usage, dict) or "input_tokens" not in usage:
         usage_source = "deduplicated_assistant_messages"
@@ -168,6 +176,8 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
         "infrastructure_errors": infrastructure_errors,
         "protocol_valid": not infrastructure_errors,
         "usage_source": usage_source, "usage": usage, "input_tokens_including_cache": input_total,
+        "usage_complete": usage_complete,
+        "efficiency_comparable": usage_complete and result.get("subtype") == "success" and not errors,
         "output_tokens": usage.get("output_tokens"), "tool_calls": len(calls),
         "tool_counts": {name: list(calls.values()).count(name) for name in sorted(set(calls.values()))},
         "tool_error_count": len(tool_errors), "zg_used": zg_tool in calls.values(),
@@ -301,6 +311,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
     metrics.update({"profile": profile, "repeat": repeat, "wall_seconds": wall,
                     "wall_time_scope": "docker_start_through_agent_exit", "exit_code": proc.returncode})
     metrics["valid"] = not metrics["errors"]
+    metrics["efficiency_comparable"] = metrics["efficiency_comparable"] and metrics["valid"]
     (trial_dir / "answer.txt").write_text(metrics.pop("answer"))
     write_json(trial_dir / "metrics.json", metrics)
     return metrics
