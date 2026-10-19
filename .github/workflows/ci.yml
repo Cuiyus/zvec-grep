@@ -1,94 +1,91 @@
-name: Windows native disposal debug
+name: Windows AMX allocator validation
 
 on:
   workflow_dispatch:
-    inputs:
-      repeats:
-        description: Fresh processes per mode
-        type: number
-        default: 20
 
 permissions:
   contents: read
 
 jobs:
-  windows-lifecycle:
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        runtime: ["3.18.1", "3.22.2"]
-        host: [1]
-    name: Windows native ${{ matrix.runtime }} / host ${{ matrix.host }}
+  allocator:
     runs-on: windows-latest
-    timeout-minutes: 35
-    env:
-      ZG_DIAG_REPEATS: ${{ inputs.repeats }}
-      ZG_DIAG_MODES: traced,gc-stress
-      ZG_DIAG_PAGEHEAP: "1"
-      ZG_DIAG_EXPECTED_RUNTIME: ${{ matrix.runtime }}
-      ZVEC_GREP_SMOKE_MODEL: local/embeddinggemma-300m
+    timeout-minutes: 20
     steps:
-      - name: Set probe directories
-        shell: pwsh
-        run: |
-          "ZG_DIAG_OUTPUT=$env:RUNNER_TEMP/embeddinggemma-diag" >> $env:GITHUB_ENV
-          "ZVEC_GREP_MODEL_CACHE=$env:RUNNER_TEMP/zvec-grep-model-cache" >> $env:GITHUB_ENV
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-      - name: Restore the exact old dependency lock for the control group
-        if: matrix.runtime == '3.18.1'
-        run: git restore --source a424e0ce06868dc9ad8f142f57de59b8f9b58699 -- package.json package-lock.json
-      - run: npm ci
-      - run: npm run build
-        id: build
-      - uses: actions/cache@v5
-        with:
-          path: ${{ env.ZVEC_GREP_MODEL_CACHE }}
-          key: local-model-v2-${{ runner.os }}-${{ runner.arch }}-local/embeddinggemma-300m-${{ hashFiles('src/engine/models/catalog.ts', 'package-lock.json') }}
-          restore-keys: local-model-v2-${{ runner.os }}-${{ runner.arch }}-local/embeddinggemma-300m-
-      - name: Enable crash dumps for the probe children
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build and test the actual old AMX allocator before and after the fix
         shell: pwsh
-        run: |
-          $dumpPath = Join-Path $env:ZG_DIAG_OUTPUT 'dumps'
-          New-Item -ItemType Directory -Force -Path $dumpPath | Out-Null
-          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\node.exe'
-          New-Item -Path $key -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpFolder -Value $dumpPath -PropertyType ExpandString -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpCount -Value 2 -PropertyType DWord -Force | Out-Null
-          Get-CimInstance Win32_Processor | Format-List Name,NumberOfCores,NumberOfLogicalProcessors
-          $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
-          if (Test-Path -LiteralPath $debugger) { Write-Output $debugger } else { Write-Output "cdb: not installed" }
-      - name: Probe fresh embedding processes
-        timeout-minutes: 20
-        run: node .github/diagnostics/embedding-lifecycle-driver.mjs
-      - name: Analyze any crash minidumps
-        if: always()
-        timeout-minutes: 5
-        shell: pwsh
-        run: |
-          $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
-          Get-ChildItem (Join-Path $env:ZG_DIAG_OUTPUT 'dumps') -Filter '*.dmp' | ForEach-Object {
-            $log = Join-Path $env:ZG_DIAG_OUTPUT ($_.BaseName + '.crash-stack.log')
-            & $debugger -z $_.FullName -c '.exr -1; .ecxr; kv; lm; q' 2>&1 | Out-File -FilePath $log
-          }
-      - name: Validate the existing package smoke test
-        if: ${{ always() && steps.build.outcome == 'success' }}
-        run: npm run test:smoke:local-model
+        run: .github/diagnostics/build-amx-regression.ps1
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-embedding-${{ matrix.runtime }}-host-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: amx-native-validation
+          path: |
+            ${{ runner.temp }}/amx-validation/allocator-results.json
+            ${{ runner.temp }}/amx-validation/llama-source-sha.txt
+            ${{ runner.temp }}/amx-validation/tested-source.diff
+            ${{ runner.temp }}/amx-validation/*.log
+            ${{ runner.temp }}/amx-validation/original/*.dll
+            ${{ runner.temp }}/amx-validation/patched/*.dll
+          retention-days: 7
+  model:
+    needs: allocator
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        host: [1, 2, 3, 4, 5, 6, 7, 8]
+    name: AMX model same-host A/B ${{ matrix.host }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      ZG_DIAG_EXPECTED_RUNTIME: 3.18.1
+    steps:
+      - name: Detect eligible AMX host
+        id: cpu
+        shell: pwsh
+        run: |
+          $cpu = (Get-CimInstance Win32_Processor).Name
+          Write-Output $cpu
+          if ($cpu -match '8573C') { "eligible=true" >> $env:GITHUB_OUTPUT } else { "eligible=false" >> $env:GITHUB_OUTPUT }
+          "ZG_DIAG_OUTPUT=$env:RUNNER_TEMP/amx-model-ab" >> $env:GITHUB_ENV
+          "ZVEC_GREP_MODEL_CACHE=$env:RUNNER_TEMP/zvec-grep-model-cache" >> $env:GITHUB_ENV
+          "AMX_DLL_ARTIFACT=$env:RUNNER_TEMP/amx-dll" >> $env:GITHUB_ENV
+          "CPU: $cpu; eligible for real AMX model test: $($cpu -match '8573C')" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/checkout@v6
+        if: steps.cpu.outputs.eligible == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        if: steps.cpu.outputs.eligible == 'true'
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@v8
+        if: steps.cpu.outputs.eligible == 'true'
+        with:
+          name: amx-native-validation
+          path: ${{ env.AMX_DLL_ARTIFACT }}
+      - run: npm ci
+        if: steps.cpu.outputs.eligible == 'true'
+      - run: npm run build
+        if: steps.cpu.outputs.eligible == 'true'
+      - uses: actions/cache@v5
+        if: steps.cpu.outputs.eligible == 'true'
+        with:
+          path: ${{ env.ZVEC_GREP_MODEL_CACHE }}
+          key: amx-model-${{ runner.os }}-${{ runner.arch }}-embeddinggemma-300m
+          restore-keys: local-model-v2-${{ runner.os }}-${{ runner.arch }}-local/embeddinggemma-300m-
+      - name: Compare published, rebuilt original, and patched AMX backend on the same host
+        if: steps.cpu.outputs.eligible == 'true'
+        run: node .github/diagnostics/amx-model-ab.mjs
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.cpu.outputs.eligible == 'true'
+        with:
+          name: amx-model-host-${{ matrix.host }}
           path: |
             ${{ env.ZG_DIAG_OUTPUT }}/*.json
             ${{ env.ZG_DIAG_OUTPUT }}/*.log
-            ${{ env.ZG_DIAG_OUTPUT }}/dumps/**
           retention-days: 7
-          compression-level: 6

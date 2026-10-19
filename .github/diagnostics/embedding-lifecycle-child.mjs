@@ -62,6 +62,9 @@ try {
       JSON.stringify({ dimension: vector.length, norm }),
   );
   trace("embed:end", {
+    sharedObjects: process.report
+      .getReport()
+      .sharedObjects.filter((path) => /ggml|llama/i.test(path)),
     modelPath: model.resolvedModelPath,
     gpu: model.llama?.gpu,
     mathCores: model.llama?.cpuMathCores,
