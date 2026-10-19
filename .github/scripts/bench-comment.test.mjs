@@ -57,7 +57,7 @@ const retrieval = {
 };
 const e2e = {
   json: {
-    schema_version: 3,
+    schema_version: 4,
     cases: Array.from({ length: 20 }, (_, i) => ({ task_id: String(i) })),
     gate: { missing_tasks: [], passed: true },
   },
@@ -335,7 +335,7 @@ test("both benchmark tables are included and newer PR commits are called out", (
 });
 
 test("legacy and current report schemas are accepted, unknown schemas are not", () => {
-  for (const version of [2, 3, 99]) {
+  for (const version of [2, 3, 4, 99]) {
     const result = resultComment({
       context: fixture().context,
       request: { ...request, run_e2e: "true" },

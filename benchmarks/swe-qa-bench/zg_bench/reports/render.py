@@ -52,12 +52,16 @@ def render_report(report: dict[str, Any]) -> str:
     # raw cases so the Markdown and current statistical method always agree.
     aggregate = aggregate_cases(report["cases"])
     filtering = aggregate["filter"]
+    task_filter = aggregate["task_filter"]
+
+    def optional_number(value, *, decimals=2):
+        return "N/A" if value is None else _fmt_number(value, decimals=decimals)
 
     def table_row(label, profiles, comparison):
         baseline, zvec = (profiles[name] for name in ("baseline", "zvec-grep"))
         cells = [
             label,
-            f"{baseline['judge']:.2f} / {zvec['judge']:.2f} / {_fmt_delta(comparison['judge_delta'])}",
+            f"{optional_number(baseline['judge'])} / {optional_number(zvec['judge'])} / {_fmt_delta(comparison['judge_delta'])}",
         ]
         for metric, change in (
             ("input_tokens", "input_token_reduction_pct"),
@@ -91,25 +95,34 @@ def render_report(report: dict[str, Any]) -> str:
                 "Raw", aggregate["raw"]["profiles"], aggregate["raw"]["comparison"]
             ),
             table_row(
-                "**Aggregate (trim min/max)**",
+                "After score trim, before task screening",
+                aggregate["trimmed"]["profiles"],
+                aggregate["trimmed"]["comparison"],
+            ),
+            table_row(
+                "**After MAD task screening**",
                 aggregate["profiles"],
                 aggregate["comparison"],
             ),
             "",
-            "| Profile | Tasks | Original samples | Retained | Excluded |",
+            "| Profile | Completed tasks | Raw samples | After score trim | After MAD task screening |",
             "|---|---:|---:|---:|---:|",
         )
     )
-    for name, counts in filtering["profiles"].items():
+    for name, counts in task_filter["profiles"].items():
         values = [
             str(counts[key]) if counts[key] is not None else "N/A"
-            for key in ("original_count", "retained_count", "excluded_count")
+            for key in ("original_count", "after_trim_count", "final_count")
         ]
         lines.append(
             f"| {name} | {filtering['task_count']} | " + " | ".join(values) + " |"
         )
     lines.extend(
         (
+            "",
+            f"Task coverage after MAD screening: **{task_filter['retained_task_count']}/{task_filter['original_task_count']} completed tasks**; "
+            f"{task_filter['excluded_task_count']} excluded. Screening status: `{task_filter['status']}`. "
+            "All profiles use the same retained task set. Missing execution reports remain separate completion failures.",
             "",
             "**Trim one minimum and one maximum score** separately within each model × task × profile. "
             "Sort once by `(judge.total, trial_index)` and remove the first and last trials; "
@@ -118,15 +131,69 @@ def render_report(report: dict[str, Any]) -> str:
             "Groups with fewer than three trials retain all samples and are marked as insufficient for trimming.",
             "",
             "An excluded trial's score, time, tokens, cost and tool calls are removed together from statistical means; "
-            "time and token values are not screened independently. "
-            "Each task is first averaged over its retained trials, then **all completed tasks receive equal weight**. "
+            "individual trials are selected by score, not independently by time or token values. "
+            "Each task is first averaged over its retained trials, then **tasks in each displayed stage receive equal weight**. "
             "Aggregate resources are means, not sums. Every Aggregate change is calculated directly from the displayed Aggregate values, not an average of task percentages. "
-            "Raw trials, actual judge usage and completion failures are preserved. Trimming reduces tail influence; it does not establish that an excluded run was invalid.",
+            "Raw trials, actual judge usage and completion failures are preserved, including statistically excluded tasks.",
+            "",
+            "**MAD task screening:** use the retained trials' sample standard deviation for score and coefficient of variation "
+            "(sample standard deviation / mean) for time and input tokens. For each metric, take the maximum dispersion across "
+            "the profiles in this report, then compute its median and MAD across tasks. Exclude a task from every profile if any "
+            "available metric has `modified Z = 0.6745 × (dispersion − median) / MAD > 3.5`. "
+            "This is a single upper-tail pass; the reference is not refitted after exclusions. "
+            "At least five tasks are required as an engineering safeguard, not an official statistical minimum. "
+            "A metric is not screened if any task/profile lacks its dispersion or its across-task MAD is zero; "
+            "other available metrics may still be screened. Unavailable references are reported below and do not trigger exclusions.",
+            "",
+            "Reference profiles: " + ", ".join(f"`{name}`" for name in task_filter["profiles"]) + ". "
+            "Only this report's populations are used; historical rounds or a historical six-group comparison are not silently added. "
+            "The [NIST modified-Z guidance](https://www.itl.nist.gov/div898/handbook/eda/section3/eda35h.htm) "
+            "labels potential outliers above an absolute threshold of 3.5. This benchmark applies its upper tail to task dispersion "
+            "as a reporting rule, not a p-value or proof that excluded executions are invalid.",
+            "",
+            "### Task-screening references",
+            "",
+            "| Metric | Status | Across-task median | MAD | Upper dispersion threshold | Tasks with unavailable dispersion |",
+            "|---|---|---:|---:|---:|---|",
+        )
+    )
+    for metric, reference in task_filter["references"].items():
+        lines.append(
+            f"| {metric} | {reference['status']} | "
+            + " | ".join(optional_number(reference.get(key), decimals=6) for key in ("median", "mad", "upper_threshold"))
+            + " | " + (", ".join(reference.get("unavailable_task_ids", [])) or "—") + " |"
+        )
+    lines.extend(
+        (
+            "",
+            "### Tasks excluded from the final aggregate",
+            "",
+            "| Task | Source profile | Metric | Max dispersion | Median | MAD | Modified Z | Upper threshold | Reason |",
+            "|---|---|---|---:|---:|---:|---:|---:|---|",
+        )
+    )
+    for task_id in task_filter["excluded_task_ids"]:
+        for reason in task_filter["task_decisions"][task_id]["reasons"]:
+            reference = task_filter["references"][reason["metric"]]
+            lines.append(
+                f"| {task_id} | {reason['source_profile']} | {reason['metric']} | "
+                + " | ".join(optional_number(value, decimals=6) for value in (
+                    reason["dispersion"], reference.get("median"), reference.get("mad"),
+                    reason["modified_z"], reason["upper_threshold"],
+                ))
+                + " | modified Z > 3.5; excluded from every profile |"
+            )
+    if not task_filter["excluded_task_ids"]:
+        lines.extend(("", "No tasks were excluded by MAD screening."))
+    lines.extend(
+        (
             "",
             "### Per-task results: After score trimming",
             "",
-            "| Case | Judge mean | Input token mean | Tool call mean | Agent time mean (s) | Retained/original (baseline / zvec-grep) |",
-            "|---|---:|---:|---:|---:|---|",
+            "All completed tasks are listed, including those excluded from the final aggregate.",
+            "",
+            "| Case | Judge mean | Input token mean | Tool call mean | Agent time mean (s) | Retained/original (baseline / zvec-grep) | MAD task status |",
+            "|---|---:|---:|---:|---:|---|---|",
         )
     )
     exclusions = []
@@ -146,7 +213,7 @@ def render_report(report: dict[str, Any]) -> str:
             table_row(task["task_id"], profiles, task["comparison"])
             + " "
             + " / ".join(counts)
-            + " |"
+            + f" | {task['task_filter']['status']} |"
         )
     lines.append("")
     for name in filtering["profiles"]:
@@ -216,7 +283,7 @@ def render_report(report: dict[str, Any]) -> str:
         "The completion gate failed because one or more expected tasks did not produce a valid judged pair. "
         "The displayed Aggregate covers completed tasks only."
         if missing_tasks
-        else "The hard gate requires every expected trial and every judge call to succeed, including trimmed trials."
+        else "The hard gate requires every expected trial and every judge call to succeed, including trimmed trials and MAD-excluded tasks."
     )
     judge_metadata = report["judge"]
     generation_description = (

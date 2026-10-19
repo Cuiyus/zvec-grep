@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from zg_bench.core.errors import SweQaError
 from zg_bench.core.protocol import (
+    COMPARISON_KEYS,
     PROFILE_NAMES,
     SCORE_KEYS,
 )
@@ -16,6 +18,7 @@ from zg_bench.metrics.numbers import (
     mean_or_none,
     sum_or_none,
 )
+from zg_bench.metrics.task_screen import residual_dispersion, screen_tasks
 from zg_bench.metrics.usage import (
     compatible_usage_scope,
     summarize_usage,
@@ -108,6 +111,7 @@ def profile_statistics(profile: dict[str, Any]) -> dict[str, Any]:
         return {
             "raw": raw,
             "filtered": dict(raw),
+            "dispersion": residual_dispersion(None),
             "filter": {
                 "status": "unavailable_no_trial_evidence",
                 "original_count": None,
@@ -154,6 +158,7 @@ def profile_statistics(profile: dict[str, Any]) -> dict[str, Any]:
     return {
         "raw": summarize(trials),
         "filtered": summarize(retained),
+        "dispersion": residual_dispersion(retained),
         "filter": {
             "status": "applied"
             if trimmed_positions
@@ -197,20 +202,38 @@ def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
             {name: task["profiles"][name]["filtered"] for name in PROFILE_NAMES}
         )
 
-    def aggregate(view: str) -> dict[str, Any]:
+    task_filter = screen_tasks(tasks)
+    for task in tasks:
+        task["task_filter"] = task_filter["task_decisions"][task["task_id"]]
+    retained_ids = set(task_filter["retained_task_ids"])
+    retained_tasks = [task for task in tasks if task["task_id"] in retained_ids]
+
+    def aggregate(view: str, selected: Sequence[dict[str, Any]]) -> dict[str, Any]:
         profiles = {}
         for name in PROFILE_NAMES:
-            rows = [task["profiles"][name][view] for task in tasks]
-            profiles[name] = {
-                "judge": sum(row["judge"] for row in rows) / len(rows),
-                **_mean_metrics(rows),
-            }
-        comparison = _comparison(profiles)
+            rows = [task["profiles"][name][view] for task in selected]
+            if rows:
+                profiles[name] = {
+                    "judge": mean_or_none([row["judge"] for row in rows]),
+                    **_mean_metrics(rows),
+                }
+            else:
+                # Preserve the resource schema/scope while representing no estimates.
+                template = tasks[0]["profiles"][name][view]
+                profiles[name] = {
+                    key: value if key == "usage_scope" else None
+                    for key, value in template.items()
+                }
+        comparison = (
+            _comparison(profiles)
+            if selected
+            else {key: None for key in COMPARISON_KEYS}
+        )
         return {
             "profiles": profiles,
             "comparison": comparison,
             "comparison_samples": {
-                key: len(tasks) if value is not None else 0
+                key: len(selected) if value is not None else 0
                 for key, value in comparison.items()
             },
         }
@@ -229,8 +252,10 @@ def aggregate_cases(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ]
 
     return {
-        **aggregate("filtered"),
-        "raw": aggregate("raw"),
+        **aggregate("filtered", retained_tasks),
+        "raw": aggregate("raw", tasks),
+        "trimmed": aggregate("filtered", tasks),
+        "task_filter": task_filter,
         "comparison_basis": "ratio_of_aggregate_profile_means",
         "task_statistics": tasks,
         "filter": {**TRIM_POLICY, "task_count": len(tasks), "profiles": counts},
