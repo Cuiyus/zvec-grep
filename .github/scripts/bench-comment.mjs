@@ -117,7 +117,10 @@ export async function prepare({ github, context, core, env }) {
   const trialsPerProfile = runE2e
     ? JSON.parse(
         await readFile(
-          new URL("../../benchmarks/swe-qa-bench/ci-config.json", import.meta.url),
+          new URL(
+            "../../benchmarks/swe-qa-bench/ci-config.json",
+            import.meta.url,
+          ),
           "utf8",
         ),
       ).trials_per_profile

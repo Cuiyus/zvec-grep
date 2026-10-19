@@ -301,7 +301,8 @@ test("e2e is skipped by default and only explicit manual dispatch can enable it"
   await prepare(x);
   assert.equal(x.outputs.run_e2e, "true");
   assert.match(
-    x.calls.filter(([name]) => name === "create" || name === "update").at(-1)[1].body,
+    x.calls.filter(([name]) => name === "create" || name === "update").at(-1)[1]
+      .body,
     /10 trials per profile; trim one lowest and one highest score per task\/profile/,
   );
   const result = resultComment({
