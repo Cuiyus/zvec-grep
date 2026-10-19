@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "experiment_id": "claude-qwen-rust-reflex-root-v2-20261019",
+  "protocol_version": "root-v2",
+  "status": "frozen development plan; not executed by this change",
+  "base_experiment": {
+    "path": "benchmarks/claude-qa-pilot/experiment.json",
+    "sha256": "26fd3a3c8ae258a5524ee63c0edff9d519548b5fcc173c14b444a0d21f49d89e"
+  },
+  "motivation": "V1 reflex-6 completed a valid pair and both answers scored 10/10, but the zg arm used root=\"/\" in its only zg call, received an error, and answered using native tools. V1 does not demonstrate successful zg retrieval or a zg benefit.",
+  "hypothesis": "The same explicit workspace-root instruction in both arms may prevent an incorrect repository root argument and allow the zg arm to retrieve from its prepared index.",
+  "only_protocol_change": {
+    "workspace_root_guidance": true,
+    "append_to_shared_system_instructions": "The repository root is exactly /workspace. Use /workspace for every repository-scoped root argument.",
+    "applies_to": [
+      "baseline",
+      "zg"
+    ],
+    "default_remains": "v1; workspace_root_guidance=false",
+    "unchanged": [
+      "original question",
+      "source revision",
+      "gold and scoring rubric",
+      "native MCP tool schema and instructions",
+      "tools and permissions",
+      "agent and exact model",
+      "runtime and local embedding",
+      "limits",
+      "one-pair order baseline then zg",
+      "index preparation and exact-runtime preflight"
+    ]
+  },
+  "task": {
+    "id": "reflex-6",
+    "repository": "reflex-dev/reflex",
+    "revision": "fe0f946dc0c240c6c1e513318c21db407e191c78",
+    "question": {
+      "path": "benchmarks/swe-qa-bench/datasets/reflex-6/instruction.md",
+      "sha256": "efcd2e97275c4807201c7c9da33ee26343af6bdfe79230128ed87b168f9e9268"
+    },
+    "rubric": {
+      "path": "benchmarks/claude-qa-pilot/evaluator/reflex-6.json",
+      "sha256": "e6e214f50434fa36954cdf386d9b7a456dfb6fce020d6d0d29a6e5ca0686efde"
+    }
+  },
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.212",
+    "model": "qwen3.8-max",
+    "effort": "high",
+    "max_output_tokens": 8192,
+    "max_turns": 30,
+    "wall_limit_seconds": 900,
+    "repository_guidance": "disabled using CLAUDE_CODE_DISABLE_CLAUDE_MDS and CLAUDE_CODE_DISABLE_AUTO_MEMORY; fresh HOME, empty setting sources"
+  },
+  "retrieval": {
+    "implementation": "current upstream main Rust",
+    "source_repository": "zvec-ai/zvec-grep",
+    "source_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+    "native_package_version": "0.0.1",
+    "native_package_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "upstream_build_run": 39221698769,
+    "upstream_artifact_id": 12176409568,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_configuration_source": "current main benchmarks/swe-qa-bench/ci-config.json local default",
+    "mcp_toolset": "agent",
+    "query_policy": "Preserve native main MCP schema and instructions (including its semantic-search guidance); no additional benchmark-specific tool forcing.",
+    "index_setup": "before timed solver; cloned per trial; separately recorded",
+    "index_ignore_source": "main benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore",
+    "upstream_artifact_digest": "sha256:00873b7a5505bb4f628c5d33336c058750cb09dcccccc8ae2718fa8d0cfb0e03"
+  },
+  "run_plan": {
+    "workflow": ".github/workflows/claude-qa-pilot.yml",
+    "event": "workflow_dispatch",
+    "inputs": {
+      "task": "reflex-6",
+      "workspace_root_guidance": true
+    },
+    "repeats": 1,
+    "trial_count": 2,
+    "order": [
+      "baseline",
+      "zg"
+    ],
+    "automatic_expansion": false,
+    "paid_run_authorized_by_this_file": false
+  },
+  "evaluation": {
+    "primary_mechanism": "Record every zg root argument and whether each unique call returned a successful tool result; distinguish attempts, errors, successful calls, and unresolved calls.",
+    "quality": "Use the unchanged source-grounded rubric with profile hidden.",
+    "resources": [
+      "input tokens including cache read/write",
+      "tool calls",
+      "wall seconds including container and MCP startup",
+      "output tokens"
+    ],
+    "failure_policy": "Keep task-level failed zg calls as observed behavior, not infrastructure errors. Keep both complete trajectories and all attempts, including failures."
+  },
+  "retention_and_interpretation": [
+    "Retain and report V1 unchanged alongside V2; never replace or delete V1 results.",
+    "This is a development iteration motivated by an observed V1 failure, not an independent preregistered confirmation.",
+    "One pair may show whether the root-argument mechanism works; it cannot establish statistical reliability.",
+    "Correct root arguments and successful retrieval do not guarantee better answer quality, lower token use, fewer calls, or lower latency.",
+    "Do not change the question or rubric, select a different task, discard an unfavorable run, or pool V1 and V2 as one unchanged protocol."
+  ]
+}

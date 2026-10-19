@@ -26,6 +26,10 @@ COMMON_INSTRUCTIONS = (
     "This is a read-only QA task: do not edit files or execute programs. "
     "Only repository files are relevant; do not read credentials or runtime state."
 )
+WORKSPACE_ROOT_GUIDANCE = (
+    "The repository root is exactly /workspace. "
+    "Use /workspace for every repository-scoped root argument."
+)
 INFRASTRUCTURE_ERRORS = {
     "missing_resolved_model", "model_mismatch", "invalid_usage",
     "unexpected_tools", "missing_init_tool_inventory", "missing_required_tools",
@@ -35,6 +39,10 @@ INFRASTRUCTURE_ERRORS = {
 
 def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+
+
+def common_instructions(workspace_root_guidance: bool = False) -> str:
+    return COMMON_INSTRUCTIONS + (" " + WORKSPACE_ROOT_GUIDANCE if workspace_root_guidance else "")
 
 
 def source_manifest(source: Path) -> dict:
@@ -67,6 +75,7 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
     result_events = [event for event in events if event.get("type") == "result"]
     result = result_events[-1] if result_events else {}
     messages, calls, models, tool_errors, init = {}, {}, set(), set(), {}
+    tool_results = {}
     for event in events:
         if event.get("type") == "system" and event.get("subtype") == "init":
             init = event
@@ -90,8 +99,14 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
                 continue
             if block.get("type") == "tool_use":
                 calls[block.get("id", f"anonymous-{len(calls)}")] = block.get("name")
-            elif block.get("type") == "tool_result" and block.get("is_error"):
-                tool_errors.add(block.get("tool_use_id", f"anonymous-{len(tool_errors)}"))
+            elif block.get("type") == "tool_result":
+                tool_id = block.get("tool_use_id")
+                if isinstance(tool_id, str) and tool_id:
+                    # A repeated result cannot add another completion. If
+                    # conflicting copies exist, retain the error conservatively.
+                    tool_results[tool_id] = bool(block.get("is_error")) or tool_results.get(tool_id, False)
+                if block.get("is_error"):
+                    tool_errors.add(block.get("tool_use_id", f"anonymous-{len(tool_errors)}"))
     model_usage = result.get("modelUsage")
     if isinstance(model_usage, dict):
         models.update(model_usage)
@@ -145,6 +160,9 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
     infrastructure_errors = [error for error in errors if error in INFRASTRUCTURE_ERRORS]
     if not models:
         infrastructure_errors.extend(error for error in errors if error in {"missing_input_usage", "empty_input_usage"})
+    zg_call_ids = {tool_id for tool_id, name in calls.items() if name == zg_tool}
+    zg_successes = sum(tool_id in tool_results and not tool_results[tool_id] for tool_id in zg_call_ids)
+    zg_errors = sum(tool_results.get(tool_id, False) for tool_id in zg_call_ids)
     return {
         "errors": errors, "requested_model": model, "resolved_models": sorted(models),
         "infrastructure_errors": infrastructure_errors,
@@ -153,6 +171,9 @@ def parse_stream(text: str, model: str, profile: str, zg_tool: str) -> dict:
         "output_tokens": usage.get("output_tokens"), "tool_calls": len(calls),
         "tool_counts": {name: list(calls.values()).count(name) for name in sorted(set(calls.values()))},
         "tool_error_count": len(tool_errors), "zg_used": zg_tool in calls.values(),
+        "zg_tool_attempts": len(zg_call_ids), "zg_tool_successes": zg_successes,
+        "zg_tool_errors": zg_errors,
+        "zg_tool_unresolved": sum(tool_id not in tool_results for tool_id in zg_call_ids),
         "unexpected_tools": unexpected, "mcp_servers": mcp_servers,
         "expected_tools": sorted(expected_tools), "exposed_tools": sorted(exposed_tools),
         "missing_required_tools": missing_tools, "unexpected_exposed_tools": unexpected_exposed_tools,
@@ -251,7 +272,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
         "--allowedTools", allowed, "--disable-slash-commands", "--no-session-persistence",
         "--setting-sources", "", "--settings", "/pilot-config/settings.json",
         "--strict-mcp-config", "--mcp-config", "/pilot-config/mcp.json",
-        "--append-system-prompt", COMMON_INSTRUCTIONS, "--", prompt]
+        "--append-system-prompt", common_instructions(args.workspace_root_guidance), "--", prompt]
     write_json(trial_dir / "command.json", command)
     start = time.monotonic()
     timed_out = False
@@ -314,6 +335,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int, default=30)
     p.add_argument("--max-output-tokens", type=int, default=4096)
     p.add_argument("--effort", choices=("low", "medium", "high"), default="high")
+    p.add_argument("--workspace-root-guidance", action="store_true",
+                   help="Root V2: append the same explicit /workspace root guidance to both profiles")
     p.add_argument("--dry-run", action="store_true", help="Validate inputs and print manifest; no model calls")
     return p
 
@@ -366,7 +389,9 @@ def main() -> int:
         "embedding_model": args.embedding_model,
         "source_sha256": frozen["sha256"], "source_file_count": frozen["file_count"],
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-        "common_instructions": COMMON_INSTRUCTIONS, "zg_tool": args.zg_tool,
+        "common_instructions": common_instructions(args.workspace_root_guidance), "zg_tool": args.zg_tool,
+        "workspace_root_guidance": args.workspace_root_guidance,
+        "protocol_version": "root-v2" if args.workspace_root_guidance else "v1",
         "mcp_server": args.mcp_server, "repeats": args.repeats,
         "limits": {"wall_seconds": args.timeout, "max_turns": args.max_turns, "max_output_tokens": args.max_output_tokens, "effort": args.effort, "disable_adaptive_thinking": False},
         "isolation": {"bare": False, "disable_claude_mds": True, "disable_auto_memory": True, "setting_sources": [], "disable_slash_commands": True, "strict_mcp_config": True},

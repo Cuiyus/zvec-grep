@@ -86,6 +86,10 @@ Only upload the explicit output directory after `secret-scan.json` reports
 `passed: true`; never upload preparation seeds. Input tokens include ordinary
 input, cache reads, and cache writes. Final session usage takes precedence over
 deduplicated assistant message usage. Tool calls are counted by unique IDs.
+`zg_used` means attempted use; the separate `zg_tool_attempts`,
+`zg_tool_successes`, `zg_tool_errors`, and `zg_tool_unresolved` fields distinguish
+actual successful retrieval from an error or a call with no observed result.
+Fewer tokens after a failed zg call do not establish retrieval benefit.
 
 Quality is deliberately not inferred from completion. Judge the saved answers
 separately using a source-verified rubric outside the agent workspace, with

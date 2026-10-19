@@ -136,6 +136,7 @@ def main():
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--workspace-root-guidance', action='store_true')
     parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
     if args.collect_only:
@@ -145,6 +146,8 @@ def main():
         parser.error('--task is required unless --collect-only is used')
     if args.repeats != 1:
         parser.error('this iteration is frozen to one pair per task')
+    if args.workspace_root_guidance and args.task != 'reflex-6':
+        parser.error('root-v2 is frozen to reflex-6 only')
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
@@ -197,6 +200,8 @@ def main():
             output=reports / 'index.log')
         run(base + ['zg', '--status', '--check-ready'], output=reports / 'index-status.log')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
+                    'protocol_version': 'root-v2' if args.workspace_root_guidance else 'v1',
+                    'workspace_root_guidance': args.workspace_root_guidance,
                     'embedding_model': embedding, 'embedding_runtime': 'local',
                     'embedding_endpoint': None,
                     'upstream_benchmark': upstream, 'zg_runtime': runtime_provenance,
@@ -236,7 +241,8 @@ def main():
              '--embedding-model', embedding,
              '--mcp-args-json', '["--server","--stdio","--mcp-toolset","agent"]',
              '--repeats', str(args.repeats), '--max-turns', '30', '--timeout', '900',
-             '--max-output-tokens', '8192', '--effort', 'high'],
+             '--max-output-tokens', '8192', '--effort', 'high']
+            + (['--workspace-root-guidance'] if args.workspace_root_guidance else []),
             output=reports / 'runner.log', timeout=2000 * args.repeats, live=True)
     finally:
         collect_evidence(work, reports)

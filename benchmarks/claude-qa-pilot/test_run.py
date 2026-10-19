@@ -39,6 +39,30 @@ def result():
 
 
 class MetricsTests(unittest.TestCase):
+    def test_root_guidance_defaults_off_and_preserves_v1_instructions(self):
+        arguments = ['--source', '/source', '--prompt', '/prompt', '--output', '/output',
+                     '--index-seed', '/index', '--model', MODEL]
+        args = pilot.parser().parse_args(arguments)
+        self.assertFalse(args.workspace_root_guidance)
+        self.assertEqual(pilot.common_instructions(), pilot.COMMON_INSTRUCTIONS)
+        self.assertNotIn(pilot.WORKSPACE_ROOT_GUIDANCE, pilot.common_instructions())
+        self.assertTrue(pilot.parser().parse_args(arguments + ['--workspace-root-guidance']).workspace_root_guidance)
+
+    def test_root_v2_appends_only_exact_shared_guidance(self):
+        expected = ('The repository root is exactly /workspace. '
+                    'Use /workspace for every repository-scoped root argument.')
+        self.assertEqual(pilot.common_instructions(True), pilot.COMMON_INSTRUCTIONS + ' ' + expected)
+
+    def test_root_v2_rejects_other_task_before_setup(self):
+        arguments = ['ci_run.py', '--task', 'zvec-q001', '--work', '/unused-work',
+                     '--reports', '/unused-reports', '--workspace-root-guidance']
+        with patch('sys.argv', arguments), patch('sys.stderr'), \
+                patch.object(pilot_ci, 'upstream_protocol') as setup:
+            with self.assertRaises(SystemExit) as raised:
+                pilot_ci.main()
+        self.assertEqual(raised.exception.code, 2)
+        setup.assert_not_called()
+
     def test_trial_uses_host_identity_for_private_seed_permissions(self):
         # Prepared/copy_seed files retain private host-owned modes. Root with
         # all capabilities dropped cannot read those files or write this HOME.
@@ -114,6 +138,43 @@ class MetricsTests(unittest.TestCase):
         metrics = pilot.parse_stream(event_stream(init, assistant(), result()), MODEL, "zg", TOOL)
         self.assertEqual(metrics["errors"], [])
         self.assertFalse(metrics["zg_used"])
+
+    def test_zg_results_are_matched_to_their_unique_call_ids(self):
+        calls = assistant()
+        calls['message']['content'] = [
+            {'type': 'tool_use', 'id': 'zg-ok', 'name': TOOL},
+            {'type': 'tool_use', 'id': 'zg-error', 'name': TOOL},
+            {'type': 'tool_use', 'id': 'native-error', 'name': 'Read'},
+        ]
+        replies = {'type': 'user', 'message': {'content': [
+            {'type': 'tool_result', 'tool_use_id': 'zg-ok', 'content': 'Search results'},
+            {'type': 'tool_result', 'tool_use_id': 'zg-error', 'is_error': True, 'content': 'NOT_FOUND'},
+            {'type': 'tool_result', 'tool_use_id': 'native-error', 'is_error': True},
+            {'type': 'tool_result', 'tool_use_id': 'unknown-call', 'content': 'Unmatched result'},
+        ]}}
+        metrics = pilot.parse_stream(event_stream(init_event('zg'), calls, replies, result()), MODEL, 'zg', TOOL)
+        self.assertEqual([metrics[key] for key in ('zg_tool_attempts', 'zg_tool_successes',
+                         'zg_tool_errors', 'zg_tool_unresolved')], [2, 1, 1, 0])
+        self.assertTrue(metrics['zg_used'])
+
+    def test_zg_call_without_result_is_unresolved_even_when_answer_succeeds(self):
+        call = assistant()
+        call['message']['content'][0]['name'] = TOOL
+        metrics = pilot.parse_stream(event_stream(init_event('zg'), call, result()), MODEL, 'zg', TOOL)
+        self.assertEqual([metrics[key] for key in ('zg_tool_attempts', 'zg_tool_successes',
+                         'zg_tool_errors', 'zg_tool_unresolved')], [1, 0, 0, 1])
+
+    def test_duplicate_zg_calls_and_results_count_once_and_retain_errors(self):
+        call = assistant()
+        call['message']['content'][0]['name'] = TOOL
+        success = {'type': 'user', 'message': {'content': [
+            {'type': 'tool_result', 'tool_use_id': 'tool-1', 'is_error': False}]}}
+        error = {'type': 'user', 'message': {'content': [
+            {'type': 'tool_result', 'tool_use_id': 'tool-1', 'is_error': True}]}}
+        metrics = pilot.parse_stream(event_stream(init_event('zg'), call, call, success,
+                                                  success, error, error, result()), MODEL, 'zg', TOOL)
+        self.assertEqual([metrics[key] for key in ('zg_tool_attempts', 'zg_tool_successes',
+                         'zg_tool_errors', 'zg_tool_unresolved')], [1, 0, 1, 0])
 
     def test_only_read_inventory_rejects_silently_handicapped_baseline(self):
         metrics = pilot.parse_stream(event_stream(init_event(tools=["Read"]), assistant(), result()), MODEL, "baseline", TOOL)

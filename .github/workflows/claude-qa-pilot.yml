@@ -4,6 +4,16 @@ on:
     branches: [dev/claude-zvec-qa-pilot]
     paths: ['benchmarks/claude-qa-pilot/**', 'benchmarks/zvec-issue-qa/**', '.github/workflows/claude-qa-pilot.yml']
   workflow_dispatch:
+    inputs:
+      task:
+        description: Frozen task selection
+        type: choice
+        options: [both, reflex-6, zvec-q001]
+        default: both
+      workspace_root_guidance:
+        description: Root V2 shared /workspace guidance (reflex-6 only)
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -12,10 +22,29 @@ jobs:
     if: github.repository == 'Cuiyus/zvec-grep' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run pilot]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      tasks: ${{ steps.selection.outputs.tasks }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Resolve frozen task selection before provider calls
+        id: selection
+        env:
+          PILOT_TASK: ${{ inputs.task || 'both' }}
+          PILOT_ROOT_GUIDANCE: ${{ inputs.workspace_root_guidance && 'true' || 'false' }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          task = os.environ['PILOT_TASK']
+          if os.environ['PILOT_ROOT_GUIDANCE'] == 'true' and task != 'reflex-6':
+              raise SystemExit('root-v2 is frozen to task=reflex-6 only')
+          tasks = ['reflex-6', 'zvec-q001'] if task == 'both' else [task]
+          if any(value not in ('reflex-6', 'zvec-q001') for value in tasks):
+              raise SystemExit('unknown frozen task')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tasks=' + json.dumps(tasks) + '\n')
+          PY
       - name: Verify Qwen Anthropic protocol and exact model
         env:
           ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
@@ -35,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        task: [reflex-6, zvec-q001]
+        task: ${{ fromJSON(needs.provider-probe.outputs.tasks) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -79,6 +108,7 @@ jobs:
           --work '${{ runner.temp }}/pilot-${{ matrix.task }}'
           --reports '${{ runner.temp }}/reports-${{ matrix.task }}'
           --repeats 1
+          ${{ inputs.workspace_root_guidance && '--workspace-root-guidance' || '' }}
       - name: Preserve complete or partial evidence and redact credentials
         id: collect
         if: always()
