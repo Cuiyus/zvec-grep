@@ -181,7 +181,7 @@ class JudgeTests(unittest.TestCase):
                 self.assertNotIn("response_format", call)
             self.assertTrue(all(call["model"] == "openai/glm-5.2" for call in requests))
             self.assertTrue(all(call["api_key"] == "test-secret" for call in requests))
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertEqual(report["judge"]["label"], SELF_JUDGE_LABEL)
             self.assertTrue(report["judge"]["self_judge"])
             self.assertEqual(report["judge"]["temperature"], 0)
@@ -248,7 +248,7 @@ class JudgeTests(unittest.TestCase):
             )
             self.assertIn("not an average of task percentages", markdown)
             self.assertLess(
-                markdown.index("| **Aggregate (trim min/max)** |"),
+                markdown.index("| **After MAD task screening** |"),
                 markdown.index("| reflex:6 |"),
             )
             self.assertNotIn("| cost", markdown.lower())

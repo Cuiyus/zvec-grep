@@ -90,7 +90,7 @@ def paired_report(report, arm):
     profiles = {'baseline': report['profiles']['baseline'], 'zvec-grep': report['profiles'][arm]}
     case = dict(task_id=report['task_id'], trial_count=REPETITIONS, profiles=profiles)
     case['comparison'] = case_comparison(case)
-    return dict(schema_version=3, benchmark='peng-weihan/SWE-QA-Bench',
+    return dict(schema_version=4, benchmark='peng-weihan/SWE-QA-Bench',
                 usage_scope=usage_scope(profiles['baseline']['metrics']),
                 judge=judge_metadata(profiles), cases=[case],
                 gate=dict(passed=True, report_only=True, successful_judgements=REPETITIONS * 2))
@@ -166,63 +166,8 @@ def run(args):
 
 
 def summarize(reports, output):
-    expected = [t['task_id'] for t in json.loads((DATA / 'selection.json').read_text())['tasks']]
-    by_task = {}
-    for report in reports:
-        validate_report(report, output)
-        if report['task_id'] not in expected or report['task_id'] in by_task:
-            raise ValueError('Unknown or duplicate task report')
-        by_task[report['task_id']] = report
-    reports = [by_task[t] for t in expected if t in by_task]
-    if reports and any(r['provenance']['identities'] != reports[0]['provenance']['identities'] for r in reports):
-        raise ValueError('Cannot combine different package/binary identities')
-    if not reports:
-        raise ValueError('No completed reports')
-    pairwise = {arm: aggregate_cases([paired_report(r, arm)['cases'][0] for r in reports]) for arm in ('node', 'rust')}
-    rows = []
-    for arm in ARMS:
-        agg = pairwise['node' if arm == 'baseline' else arm]
-        slot = 'baseline' if arm == 'baseline' else 'zvec-grep'
-        rows.append(dict(group=arm, label=LABELS[arm], tasks=len(reports), **agg['filter']['profiles'][slot],
-                         raw=agg['raw']['profiles'][slot], filtered=agg['profiles'][slot]))
-    missing = [t for t in expected if t not in by_task]
-    data = dict(kind=EXPERIMENT['kind'], complete=not missing, expected_tasks=expected,
-                completed_tasks=list(by_task), missing_tasks=missing, experiment=EXPERIMENT,
-                judged_trials=sum(r['judge']['usage']['calls'] for r in reports), rows=rows,
-                pairwise=pairwise, source_harness_commits=sorted({r['provenance']['harness_commit'] for r in reports}))
-    versions.write_json(output / 'comparison.json', data)
-    lines = ['# GLM-5.2 · local embedding · E2E', '',
-        f"Completed tasks: **{len(reports)}/20**; scored trials: **{data['judged_trials']}/600**.", '',
-        '| Group | Original | Retained | Excluded | Score raw → trim | Agent seconds raw → trim | Input tokens raw → trim |',
-        '|---|---:|---:|---:|---:|---:|---:|']
-    for r in rows:
-        cells = [f"{r['raw'][key]:,.2f} → {r['filtered'][key]:,.2f}" for key in ('judge','agent_wall_seconds','input_tokens')]
-        lines.append(f"| {r['label']} | {r['original_count']} | {r['retained_count']} | {r['excluded_count']} | " + ' | '.join(cells) + ' |')
-    lines += ['', 'PR #261: remove exactly one lowest and one highest score per task/group; ties use trial index. '
-        'The same retained trials supply score, time and token means. All completed tasks are weighted equally. '
-        'Raw results, failures, retry history and original judge usage remain archived.', '',
-        f"Node: 0.2.2; Rust: {EXPERIMENT['rust']['source_commit']}; OpenCode: 1.18.4; local embedding: potion-code-16m-v2 (256D).",
-        'Baseline has no zg or embedding. Each group runs 10 fresh trials per main-branch task.', '']
-    if missing:
-        lines += ['**Incomplete:** ' + ', '.join(missing) + '. No missing values are replaced with zero.', '']
-    lines += ['<details>', '<summary>Per-task filtered results and exclusions</summary>', '',
-              '| Task | Group | Retained | Score | Agent seconds | Input tokens | Excluded trial indices / scores |',
-              '|---|---|---:|---:|---:|---:|---|']
-    for index, report in enumerate(reports):
-        for arm in ARMS:
-            agg = pairwise['node' if arm == 'baseline' else arm]
-            slot = 'baseline' if arm == 'baseline' else 'zvec-grep'
-            row = agg['task_statistics'][index]['profiles'][slot]
-            f, m = row['filter'], row['filtered']
-            exclusions = ', '.join(f"r{t['trial_index']}={t['score']} ({t['direction']})" for t in f['excluded_trials']) or '—'
-            lines.append(f"| {report['task_id']} | {LABELS[arm]} | {f['retained_count']}/{f['original_count']} | {m['judge']:.2f} | {m['agent_wall_seconds']:.2f} | {m['input_tokens']:,.2f} | {exclusions} |")
-    lines += ['', '</details>', '']
-    markdown = '\n'.join(lines)
-    (output / 'report.md').write_text(markdown)
-    if os.environ.get('GITHUB_STEP_SUMMARY'):
-        with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as stream:
-            stream.write(markdown)
-    return data
+    from zg_bench.glm_local_mad import summarize
+    return summarize(reports, output)
 
 
 if __name__ == '__main__':

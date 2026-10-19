@@ -133,7 +133,7 @@ class ThreeArmTests(unittest.TestCase):
             job = workflow['jobs']['package-' + arm]
             self.assertEqual(job['permissions']['actions'], 'read')
             download = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/download-artifact@'))
-            self.assertEqual(download['with']['run-id'], 38679000248)
+            self.assertEqual(download['with']['run-id'], 38700270964)
             self.assertEqual(download['with']['repository'], 'Cuiyus/zvec-grep')
             self.assertEqual(download['with']['name'], 'three-arm-package-' + arm)
             self.assertEqual(download['with']['github-token'], '${{ github.token }}')
@@ -141,16 +141,16 @@ class ThreeArmTests(unittest.TestCase):
             self.assertFalse(any('rust-candidate-package' in s.get('uses', '') for s in job['steps']))
         aggregate = workflow['jobs']['aggregate']
         self.assertEqual(aggregate['permissions']['actions'], 'read')
-        reference = next(s for s in aggregate['steps'] if s.get('name') == 'Download completed first-round reports for stability comparison')
-        self.assertEqual(reference['with']['run-id'], 38679000248)
+        reference = next(s for s in aggregate['steps'] if s.get('name') == 'Download completed previous-round reports for comparison')
+        self.assertEqual(reference['with']['run-id'], 38700270964)
         self.assertEqual(reference['with']['pattern'], 'three-arm-report-*')
         self.assertEqual(reference['with']['path'], '${{ runner.temp }}/reference-reports')
-        comparison = next(s for s in aggregate['steps'] if s.get('name') == 'Compare independent rounds with the same trimming rule')
+        comparison = next(s for s in aggregate['steps'] if s.get('name') == 'Compare rounds using one common six-group MAD mask')
         self.assertIn('--reference-reports "$RUNNER_TEMP/reference-reports"', comparison['run'])
         self.assertIn('--repeat-reports "$RUNNER_TEMP/task-reports"', comparison['run'])
         self.assertIn('--output "$RUNNER_TEMP/three-arm-comparison"', comparison['run'])
-        self.assertEqual(run.EXPERIMENT['round'], 2)
-        self.assertEqual(run.EXPERIMENT['reference_run_id'], 38679000248)
+        self.assertEqual(run.EXPERIMENT['round'], 3)
+        self.assertEqual(run.EXPERIMENT['reference_run_id'], 38700270964)
         self.assertEqual(run.EXPERIMENT['kind'], 'three-arm-glm-local-trim-repeat')
 
     def test_reused_package_verification_rejects_changed_package_and_cli(self):

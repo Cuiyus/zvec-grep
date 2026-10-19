@@ -530,7 +530,7 @@ class AggregateReportTests(unittest.TestCase):
                 output_dir=root / "combined",
                 expected=tasks,
             )
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertTrue(report["gate"]["passed"])
             self.assertEqual(report["gate"]["valid_pairs"], 20)
             self.assertEqual(report["gate"]["successful_judgements"], 400)
@@ -565,8 +565,8 @@ class AggregateReportTests(unittest.TestCase):
             markdown = (root / "combined" / "report.md").read_text()
             for task_id in tasks:
                 self.assertIn(f"| {task_id} |", markdown)
-            self.assertIn("| zvec-grep | 20 | 200 | 160 | 40 |", markdown)
-            self.assertIn("| baseline | 20 | 200 | 160 | 40 |", markdown)
+            self.assertIn("| zvec-grep | 20 | 200 | 160 | 160 |", markdown)
+            self.assertIn("| baseline | 20 | 200 | 160 | 160 |", markdown)
             self.assertIn("Excluded trials (80)", markdown)
             self.assertIn("| reflex:6 | zvec-grep | 10 | 5.00 |", markdown)
             self.assertNotIn("Notable task differences", markdown)
@@ -575,10 +575,72 @@ class AggregateReportTests(unittest.TestCase):
             ].split("<details>", 1)[0]
             for row in rows.splitlines():
                 if row.startswith("|"):
-                    self.assertEqual(row.count("|"), 7, row)
+                    self.assertEqual(row.count("|"), 8, row)
+
+    def test_task_screening_preserves_completion_and_judge_usage(self):
+        tasks = list(EXPECTED_TASK_IDS)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            original_trials = {}
+            for index, task_id in enumerate(tasks):
+                source = _judged_task_report(task_id, index)
+                width = index % 5 + 1
+                ordinary = [5] + [80 - width, 80 + width] * 4 + [100]
+                candidate = (
+                    [5] + [10, 90] * 4 + [100]
+                    if index == len(tasks) - 1
+                    else ordinary
+                )
+                _set_report_trial_judgements(
+                    source, baseline=ordinary, zvec=candidate
+                )
+                _set_report_trial_metrics(
+                    source,
+                    baseline=[(100 + index, 10, 20.0 + index, 1.0)] * 10,
+                    zvec=[(200 + index, 20, 40.0 + index, 2.0)] * 10,
+                )
+                original_trials[task_id] = copy.deepcopy(
+                    source["cases"][0]["profiles"]["zvec-grep"]["trials"]
+                )
+                _write_json(root / "reports" / str(index) / "report.json", source)
+            report = aggregate_reports(
+                reports_root=root / "reports",
+                output_dir=root / "combined",
+                expected=tasks,
+            )
+            aggregate = report["aggregate"]
+            screening = aggregate["task_filter"]
+            self.assertEqual(screening["excluded_task_ids"], [tasks[-1]])
+            self.assertEqual(screening["retained_task_count"], 19)
+            self.assertEqual(screening["profiles"]["baseline"]["final_count"], 152)
+            self.assertEqual(screening["profiles"]["zvec-grep"]["final_count"], 152)
+            self.assertEqual(aggregate["profiles"]["baseline"]["input_tokens"], 109)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["input_tokens"], 209)
+            self.assertEqual(aggregate["profiles"]["baseline"]["agent_wall_seconds"], 29)
+            self.assertEqual(aggregate["profiles"]["zvec-grep"]["agent_wall_seconds"], 49)
+            self.assertEqual(aggregate["trimmed"]["profiles"]["zvec-grep"]["input_tokens"], 209.5)
+            self.assertEqual(report["gate"]["valid_pairs"], 20)
+            self.assertEqual(report["gate"]["successful_judgements"], 400)
+            self.assertTrue(report["gate"]["passed"])
+            self.assertEqual(report["judge"]["usage"]["calls"], 400)
+            self.assertEqual(report["judge"]["usage"]["input_tokens"], 210000)
+            self.assertEqual(len(report["cases"]), 20)
+            for case in report["cases"]:
+                trials = case["profiles"]["zvec-grep"]["trials"]
+                self.assertEqual(len(trials), 10)
+                self.assertEqual(
+                    [row["judge"] for row in trials],
+                    [row["judge"] for row in original_trials[case["task_id"]]],
+                )
+            serialized = json.loads((root / "combined" / "report.json").read_text())
+            self.assertEqual(serialized["aggregate"], aggregate)
+            markdown = (root / "combined" / "report.md").read_text()
+            self.assertIn("MAD", markdown)
+            self.assertIn("modified Z", markdown)
+            self.assertIn(tasks[-1], markdown)
 
     def test_legacy_schema_recomputes_trim_from_raw_evidence(self) -> None:
-        for schema_version in (1, 2, 3):
+        for schema_version in (1, 2, 3, 4):
             with (
                 self.subTest(schema_version=schema_version),
                 tempfile.TemporaryDirectory() as temp_dir,

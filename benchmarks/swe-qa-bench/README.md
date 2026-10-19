@@ -93,10 +93,11 @@ breakdown, so resource deltas must not be compared across these scopes as if
 their accounting were identical. Failed attempts remain archived separately
 under `.retry-history/` and are not included in final-success trial means.
 
-The summary compares **raw** and **score-trimmed** results, with original,
-retained and excluded sample counts for each profile. Per-task rows show the
-filtered means and retained/original counts. Exclusion details identify the
-original task/profile/trial, score and selected tail (`low` or `high`).
+The summary shows three stages: **Raw**, **After score trim, before task
+screening**, and **After MAD task screening**. Each stage reports score, time,
+input tokens and tool calls together, with per-profile sample counts and final
+task coverage. All completed tasks remain in the per-task table; exclusions
+include their source profile, metric, dispersion, median, MAD and modified Z.
 
 - Within each model × task × profile, sort the original successful trials by
   `(judge.total, trial_index)` and remove the first and last entries **once**.
@@ -109,27 +110,47 @@ original task/profile/trial, score and selected tail (`low` or `high`).
   Groups with fewer than three trials retain all samples and are marked
   `unavailable_insufficient_trials`, with their sample counts still reported.
 - An excluded trial's score, time, input/output tokens, tool calls, cost and
-  session usage leave the statistical averages together. Do not screen time
-  or tokens independently. Do not remove entire tasks for large between-profile
-  score or token differences; the previous ±10-point/±100% task filter is removed.
-- Average the retained trials within each task/profile, then average **all
-  completed task means with equal weight**, for both quality and resources.
-  Aggregate resource values are now means rather than sums. Changes use the
-  displayed aggregate values, not averages of task percentages.
-- Report schema 3 keeps original cases/trials and raw profile means unchanged.
-  `aggregate.profiles` and `aggregate.comparison` hold filtered task-weighted
-  results; `aggregate.raw` holds the unfiltered counterparts.
-  `aggregate.task_statistics` records each task's raw/filtered values, retained
-  trial indices and excluded tails; `aggregate.filter` records the
-  `score_trim_min_max_once` policy and sample counts.
-  Reaggregating schema 1/2/3 evidence recalculates trimming from the original trials.
-  Summary-only legacy evidence remains explicitly unscreened, with unknown
-  sample counts shown as `N/A`.
+  session usage leave the statistical averages together. Do not independently
+  drop trials for time or tokens. The previous between-profile ±10-point/±100% task
+  filter remains removed.
+- On the score-trimmed trials, compute each task/profile's score sample standard
+  deviation and the time/input-token coefficient of variation (sample standard
+  deviation divided by mean). For each metric, take the **maximum across all
+  profiles in this report**. Across tasks, calculate the median of these maxima
+  and `MAD = median(abs(maximum - median))`.
+- In one pass, exclude a task when any available metric has
+  `modified Z = 0.6745 × (maximum - median) / MAD > 3.5`. Exclude that entire task
+  from **every profile and every final metric**, preserving a common task set.
+  Do not refit after exclusion. The reference uses the current report only:
+  ordinary CI has baseline and zvec-grep; a historical six-group replay requires
+  explicit combined input and is not silently mixed into CI.
+- Fewer than five tasks disable task screening; this is an engineering safeguard,
+  not an official statistical sample threshold. A metric is also disabled if any
+  task/profile lacks valid dispersion (including missing trial evidence,
+  insufficient samples or a zero resource mean), or its across-task MAD is zero.
+  Other available metrics can still screen tasks. The report records each
+  unavailable reference and affected task; it never substitutes zero dispersion.
+- Average trials within each task/profile, then average **task means with equal
+  weight within each stage**. The first two stages cover every completed task;
+  the final stage covers the common retained task set. Resource values are means,
+  not sums. Changes use displayed aggregate values, not averages of task percentages.
+- Report schema 4 preserves original cases/trials and raw profile means.
+  `aggregate.raw` is the first stage; `aggregate.trimmed` is the second;
+  `aggregate.profiles` / `comparison` are the final stage. `aggregate.filter`
+  records score trimming, `aggregate.task_filter` records task decisions,
+  reference statistics and three-stage sample counts, and
+  `aggregate.task_statistics` retains every task's means and dispersion.
+  Older reports are recalculated from their original trials. Summary-only legacy
+  evidence remains unscreened with `N/A` sample counts.
 
-Trimming reduces the influence of the two tails; it is not evidence that
-excluded data is invalid. The raw results remain available for comparison.
+The [NIST modified-Z guidance](https://www.itl.nist.gov/div898/handbook/eda/section3/eda35h.htm)
+uses an absolute threshold above 3.5 to label potential outliers. Applying its
+upper tail to task dispersion is this benchmark's reporting policy, not a
+p-value or evidence that excluded executions are invalid. The final means
+describe the retained task subset; raw and score-trimmed results remain visible.
 Actual judge usage/cost and the completion gate still count every original
-trial. Failures, exhausted retries and missing tasks cannot be hidden by trimming.
+trial and task. Failures, exhausted retries and missing tasks cannot be hidden
+by either screening stage.
 `all-full` runs 20 tasks × 2 profiles × 10 trials = 400 independent trials per
 model/embedding configuration; filtering does not trigger replacement runs.
 
