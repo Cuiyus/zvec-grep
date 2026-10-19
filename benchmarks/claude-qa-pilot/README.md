@@ -113,6 +113,27 @@ Quality is deliberately not inferred from completion. Judge the saved answers
 separately using a source-verified rubric outside the agent workspace, with
 profile labels hidden. Report correctness and evidence before efficiency.
 
+The separate `experiment-completion-v2.json` plan calibrates completion on the
+same zvec-q001 task after both V1 arms obtained core evidence but failed to
+deliver an answer. Both arms receive identical generic budget instructions and
+a native PreToolUse hook: admit at most 24 unique repository tool calls, and
+deny new retrieval after 600 elapsed seconds. All tools share the cap; atomic
+locking covers parallel calls. The hook never grants a permission exception.
+The original 30-turn/900-second total limits remain, and hook overhead counts in
+wall time. Denials request a final answer from existing evidence, but cannot
+guarantee that the model stops asking for tools. In-flight work is not cancelled
+at 600 seconds. This is a development protocol with disclosed post-observation
+budget selection, not a reconstructed second session or a blind confirmation.
+V1 failures remain in the report. A zero-inference fixture verifies actual
+Claude hook admission/denial and a subsequent final answer before paid trials;
+per-trial `tool-budget.json` audits hook IDs against the actual stream.
+
+```sh
+gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
+  --ref dev/claude-zvec-qa-pilot -f task=zvec-q001 \
+  -f workspace_root_guidance=false -f completion_budget=true
+```
+
 Run parser and source-isolation checks with:
 
 ```sh

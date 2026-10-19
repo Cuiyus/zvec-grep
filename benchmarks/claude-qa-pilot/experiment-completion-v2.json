@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "experiment_id": "claude-qwen-rust-zvec-completion-v2-20261019",
+  "protocol_version": "completion-v2",
+  "status": "frozen development plan; execution recorded separately",
+  "base_experiment": {
+    "path": "benchmarks/claude-qa-pilot/experiment.json",
+    "sha256": "26fd3a3c8ae258a5524ee63c0edff9d519548b5fcc173c14b444a0d21f49d89e"
+  },
+  "motivation": "V1 zvec-q001 both failed to deliver an answer despite obtaining the core source evidence. This iteration limits further investigation and measures final-answer completion.",
+  "development_selection_disclosure": "The budget was selected after reading V1 trajectories: both arms had the main causal evidence by 14/21 tool calls. A common 24-call cap permits that amount of investigation with limited additional checking. This is post-observation development calibration, not a blind or confirmatory performance estimate. No V2 result was available when selecting it.",
+  "task": {
+    "id": "zvec-q001",
+    "repository": "alibaba/zvec",
+    "revision": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+    "question": {
+      "path": "benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+      "sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef"
+    },
+    "rubric": {
+      "path": "benchmarks/zvec-issue-qa/evaluator/q001.json",
+      "sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9"
+    }
+  },
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.212",
+    "model": "qwen3.8-max",
+    "effort": "high",
+    "max_output_tokens": 8192,
+    "max_turns": 30,
+    "wall_limit_seconds": 900,
+    "repository_guidance": "disabled using CLAUDE_CODE_DISABLE_CLAUDE_MDS and CLAUDE_CODE_DISABLE_AUTO_MEMORY; fresh HOME, empty setting sources"
+  },
+  "retrieval": {
+    "implementation": "current upstream main Rust",
+    "source_repository": "zvec-ai/zvec-grep",
+    "source_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+    "native_package_version": "0.0.1",
+    "native_package_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "upstream_build_run": 39221698769,
+    "upstream_artifact_id": 12176409568,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_configuration_source": "current main benchmarks/swe-qa-bench/ci-config.json local default",
+    "mcp_toolset": "agent",
+    "query_policy": "Preserve native main MCP schema and instructions (including its semantic-search guidance); no additional benchmark-specific tool forcing.",
+    "index_setup": "before timed solver; cloned per trial; separately recorded",
+    "index_ignore_source": "main benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore",
+    "upstream_artifact_digest": "sha256:00873b7a5505bb4f628c5d33336c058750cb09dcccccc8ae2718fa8d0cfb0e03"
+  },
+  "completion_control": {
+    "applies_identically_to": [
+      "baseline",
+      "zg"
+    ],
+    "tool_budget": 24,
+    "counting": "Every unique repository tool_use_id consumes one admission, including tools later failing; all tools share one cap. Duplicate hook events are idempotent. Parallel calls are serialized by a file lock.",
+    "research_seconds": 600,
+    "wall_limit_seconds": 900,
+    "max_turns": 30,
+    "warning_after_admitted_calls": 18,
+    "warning_after_elapsed_seconds": 480,
+    "mechanism": "Native Claude PreToolUse command hook; after either budget limit deny new repository tools and request final answer from current evidence. Under budget omit permissionDecision, preserving ordinary permissions.",
+    "not_guaranteed": "No hard separation into a second model invocation. Already running work is not interrupted at 600 seconds. Denial leaves an opportunity to answer but the model may continue requesting denied tools or exhaust total time/turns. Such outcomes remain failures.",
+    "information_policy": "Generic budget/stop/uncertainty text only. No gold, source symbols, issue resolution, content filtering, suggested search terms or task-specific hint.",
+    "official_hook_reference": "https://code.claude.com/docs/en/hooks",
+    "hook_sha256": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761"
+  },
+  "unchanged": [
+    "question",
+    "source",
+    "gold/rubric",
+    "model and effort",
+    "main Rust binary and embedding",
+    "native MCP schema/instructions",
+    "native tools and permissions",
+    "output/total turn/total wall limits",
+    "source isolation",
+    "baseline then zg order"
+  ],
+  "run_plan": {
+    "workflow": ".github/workflows/claude-qa-pilot.yml",
+    "event": "workflow_dispatch",
+    "inputs": {
+      "task": "zvec-q001",
+      "workspace_root_guidance": false,
+      "completion_budget": true
+    },
+    "repeats": 1,
+    "trial_count": 2,
+    "order": [
+      "baseline",
+      "zg"
+    ],
+    "automatic_repeats": false,
+    "automatic_task_expansion": false
+  },
+  "evaluation": {
+    "primary": "Delivered final answer and source-grounded success under the unchanged q001 rubric; do not grade progress text as final answers.",
+    "mechanism": "Verify hook admission/denial inventory against raw tool IDs; separately report successful retrieval, task failures and infrastructure failures.",
+    "resources": "Count all agent input including cache, output, wall and tool attempts. Mark incomplete session usage unavailable for efficiency comparison. Hook overhead remains in wall time.",
+    "quality_review": "Fresh blinded Codex source audit, labels/metrics hidden; not human or official SWE-QA scoring.",
+    "retention": "Keep V1 failures and all V2 outcomes. Do not replace tasks, gold, budgets or unfavorable runs. Do not pool changed protocols.",
+    "scope": "One development pair can test feasibility and suggest a mechanism, not statistical stability or generalization."
+  }
+}

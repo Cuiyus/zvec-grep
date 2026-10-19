@@ -42,8 +42,60 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
-def common_instructions(workspace_root_guidance: bool = False) -> str:
-    return COMMON_INSTRUCTIONS + (" " + WORKSPACE_ROOT_GUIDANCE if workspace_root_guidance else "")
+def common_instructions(workspace_root_guidance: bool = False, tool_budget: int | None = None,
+                        research_seconds: int = 600) -> str:
+    instructions = COMMON_INSTRUCTIONS + (" " + WORKSPACE_ROOT_GUIDANCE if workspace_root_guidance else "")
+    if tool_budget is not None:
+        instructions += (
+            f" Your investigation budget is at most {tool_budget} repository tool calls "
+            f"or {research_seconds} elapsed seconds, whichever comes first. "
+            "All repository tools share this budget. You may answer earlier. "
+            "Once the requested explanation is supported, stop investigating and give your final answer. "
+            "At the budget boundary further tool calls will be denied. Use the remaining time "
+            "to answer from the available evidence and explicitly mark unverified points; "
+            "do not repeat searches merely to reconfirm established evidence."
+        )
+    return instructions
+
+
+def audit_tool_budget(state: dict, stream: str, limit: int, research_seconds: int) -> dict:
+    observed, results = {}, {}
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        content = event.get("message", {}).get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    observed[block.get("id")] = block.get("name")
+                elif isinstance(block, dict) and block.get("type") == "tool_result":
+                    tool_id = block.get("tool_use_id")
+                    results[tool_id] = bool(block.get("is_error")) or results.get(tool_id, False)
+    calls = state.get("calls", {})
+    errors = []
+    if set(calls) != set(observed):
+        errors.append("hook_call_inventory_mismatch")
+    if any(call.get("name") != observed.get(tool_id) for tool_id, call in calls.items()):
+        errors.append("hook_tool_name_mismatch")
+    admitted = sum(call.get("admitted") is True for call in calls.values())
+    if admitted > limit:
+        errors.append("tool_budget_exceeded")
+    if any(call.get("admitted") is True and not 0 <= call.get("elapsed_seconds", -1) < research_seconds
+           for call in calls.values()):
+        errors.append("research_deadline_exceeded")
+    if any(type(call.get("admitted")) is not bool for call in calls.values()):
+        errors.append("invalid_hook_decision")
+    denied_ids = {tool_id for tool_id, call in calls.items() if call.get("admitted") is False}
+    if any(tool_id in results and not results[tool_id] for tool_id in denied_ids):
+        errors.append("budget_denial_not_enforced")
+    return {"valid": not errors, "errors": errors, "limit": limit,
+            "research_seconds": research_seconds, "admitted": admitted,
+            "denied": len(calls) - admitted, "observed_calls": len(observed), "state": state,
+            "denied_result_errors": sum(results.get(tool_id, False) for tool_id in denied_ids),
+            "denied_result_unresolved": len(denied_ids - set(results)),
+            "interpretation": "admitted means permitted by the budget hook, not successful execution; denial does not guarantee a final answer"}
 
 
 def source_manifest(source: Path) -> dict:
@@ -249,10 +301,20 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
         mcp["mcpServers"]["zvec_grep"] = args.mcp_server
     write_json(trial_dir / "config" / "mcp.json", mcp)
     # Explicit settings avoid implicit user, repository, plugin and hook state.
-    write_json(trial_dir / "config" / "settings.json", {"permissions": {"deny": [
+    settings = {"permissions": {"deny": [
         "Read(//proc/**)", "Read(//root/**)", "Read(//pilot-config/**)",
         "Read(//workspace/.zvec-grep/**)", "Grep(//root/**)",
-    ]}})
+    ]}}
+    budget_state_path = runtime_dir / "home" / "tool-budget.json"
+    if args.tool_budget is not None:
+        shutil.copyfile(Path(__file__).with_name("tool_budget.py"), trial_dir / "config" / "tool_budget.py")
+        write_json(budget_state_path, {"schema_version": 1, "started_at_epoch": time.time(), "calls": {}})
+        settings["hooks"] = {"PreToolUse": [{"matcher": "Read|Grep|Glob|" + args.zg_tool, "hooks": [{
+            "type": "command", "command": "python3 /pilot-config/tool_budget.py "
+            f"--state /root/tool-budget.json --limit {args.tool_budget} --research-seconds {args.research_seconds}",
+            "timeout": 10,
+        }]}]}
+    write_json(trial_dir / "config" / "settings.json", settings)
     name = "zg-qa-" + uuid.uuid4().hex[:12]
     command = docker_base(args, name, trial_dir, runtime_dir)
     if profile == "zg":
@@ -282,7 +344,7 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
         "--allowedTools", allowed, "--disable-slash-commands", "--no-session-persistence",
         "--setting-sources", "", "--settings", "/pilot-config/settings.json",
         "--strict-mcp-config", "--mcp-config", "/pilot-config/mcp.json",
-        "--append-system-prompt", common_instructions(args.workspace_root_guidance), "--", prompt]
+        "--append-system-prompt", common_instructions(args.workspace_root_guidance, args.tool_budget, args.research_seconds), "--", prompt]
     write_json(trial_dir / "command.json", command)
     start = time.monotonic()
     timed_out = False
@@ -298,12 +360,27 @@ def run_trial(args: argparse.Namespace, profile: str, repeat: int, prompt: str) 
             subprocess.run(["docker", "kill", name], capture_output=True, timeout=30)
             proc.wait(timeout=30)
     wall = time.monotonic() - start
-    cleanup_runtime(runtime_dir, args.image)
     stdout = redact(stdout_path.read_text(errors="replace"))
     stderr = redact(stderr_path.read_text(errors="replace"))
     stdout_path.write_text(stdout)
     stderr_path.write_text(stderr)
     metrics = parse_stream(stdout, args.model, profile, args.zg_tool)
+    if args.tool_budget is not None:
+        try:
+            budget_audit = audit_tool_budget(json.loads(budget_state_path.read_text()), stdout,
+                                            args.tool_budget, args.research_seconds)
+        except (ValueError, OSError, TypeError, AttributeError):
+            budget_audit = {"valid": False, "errors": ["invalid_budget_state"]}
+        if "BUDGET_HOOK_INFRASTRUCTURE_ERROR" in stdout + stderr:
+            budget_audit["valid"] = False
+            budget_audit["errors"].append("hook_process_error")
+        write_json(trial_dir / "tool-budget.json", budget_audit)
+        metrics["tool_budget"] = {key: value for key, value in budget_audit.items() if key != "state"}
+        if not budget_audit["valid"]:
+            metrics["errors"].append("tool_budget_hook_error")
+            metrics["infrastructure_errors"].append("tool_budget_hook_error")
+            metrics["protocol_valid"] = False
+    cleanup_runtime(runtime_dir, args.image)
     if timed_out:
         metrics["errors"].append("wall_timeout")
     if proc.returncode:
@@ -348,6 +425,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--effort", choices=("low", "medium", "high"), default="high")
     p.add_argument("--workspace-root-guidance", action="store_true",
                    help="Root V2: append the same explicit /workspace root guidance to both profiles")
+    p.add_argument("--tool-budget", type=int, help="Shared native PreToolUse cap; absent preserves V1")
+    p.add_argument("--research-seconds", type=int, default=600,
+                   help="With --tool-budget, deny additional retrieval after this elapsed time")
     p.add_argument("--dry-run", action="store_true", help="Validate inputs and print manifest; no model calls")
     return p
 
@@ -366,6 +446,8 @@ def main() -> int:
         raise ValueError("index and home seeds must exist")
     if min(args.repeats, args.timeout, args.max_turns, args.max_output_tokens) < 1:
         raise ValueError("limits and repeats must be positive")
+    if args.tool_budget is not None and (args.tool_budget < 1 or not 0 < args.research_seconds < args.timeout):
+        raise ValueError("tool budget must be positive and research time must leave answer time before timeout")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("export ANTHROPIC_API_KEY for the isolated provider session")
     if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
@@ -400,9 +482,12 @@ def main() -> int:
         "embedding_model": args.embedding_model,
         "source_sha256": frozen["sha256"], "source_file_count": frozen["file_count"],
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-        "common_instructions": common_instructions(args.workspace_root_guidance), "zg_tool": args.zg_tool,
+        "common_instructions": common_instructions(args.workspace_root_guidance, args.tool_budget, args.research_seconds), "zg_tool": args.zg_tool,
         "workspace_root_guidance": args.workspace_root_guidance,
-        "protocol_version": "root-v2" if args.workspace_root_guidance else "v1",
+        "protocol_version": "completion-v2" if args.tool_budget is not None else "root-v2" if args.workspace_root_guidance else "v1",
+        "tool_budget": args.tool_budget,
+        "research_seconds": args.research_seconds if args.tool_budget is not None else None,
+        "budget_hook_sha256": hashlib.sha256(Path(__file__).with_name("tool_budget.py").read_bytes()).hexdigest() if args.tool_budget is not None else None,
         "mcp_server": args.mcp_server, "repeats": args.repeats,
         "limits": {"wall_seconds": args.timeout, "max_turns": args.max_turns, "max_output_tokens": args.max_output_tokens, "effort": args.effort, "disable_adaptive_thinking": False},
         "isolation": {"bare": False, "disable_claude_mds": True, "disable_auto_memory": True, "setting_sources": [], "disable_slash_commands": True, "strict_mcp_config": True},

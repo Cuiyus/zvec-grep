@@ -14,6 +14,10 @@ on:
         description: Root V2 shared /workspace guidance (reflex-6 only)
         type: boolean
         default: false
+      completion_budget:
+        description: Completion V2 shared 24-call budget (zvec-q001 only, root guidance off)
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -33,12 +37,15 @@ jobs:
         env:
           PILOT_TASK: ${{ inputs.task || 'both' }}
           PILOT_ROOT_GUIDANCE: ${{ inputs.workspace_root_guidance && 'true' || 'false' }}
+          PILOT_COMPLETION_BUDGET: ${{ inputs.completion_budget && 'true' || 'false' }}
         run: |
           python3 - <<'PY'
           import json, os
           task = os.environ['PILOT_TASK']
           if os.environ['PILOT_ROOT_GUIDANCE'] == 'true' and task != 'reflex-6':
               raise SystemExit('root-v2 is frozen to task=reflex-6 only')
+          if os.environ['PILOT_COMPLETION_BUDGET'] == 'true' and (task != 'zvec-q001' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true'):
+              raise SystemExit('completion-v2 requires task=zvec-q001 and workspace_root_guidance=false')
           tasks = ['reflex-6', 'zvec-q001'] if task == 'both' else [task]
           if any(value not in ('reflex-6', 'zvec-q001') for value in tasks):
               raise SystemExit('unknown frozen task')
@@ -98,6 +105,16 @@ jobs:
             -v '${{ runner.temp }}/reports-${{ matrix.task }}:/out' \
             zg-claude-qa-pilot:20261019 \
             python3 /pilot/probe_cli.py --output /out/cli-probe.json
+      - name: Verify completion budget hook and final answer offline
+        if: inputs.completion_budget
+        run: |
+          docker run --rm --network none --read-only \
+            --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=2g --tmpfs /run:rw,size=64m \
+            -v "$PWD/benchmarks/claude-qa-pilot:/pilot:ro" \
+            -v '${{ runner.temp }}/reports-${{ matrix.task }}:/out' \
+            zg-claude-qa-pilot:20261019 \
+            python3 /pilot/probe_budget.py --output /out/budget-probe.json
       - name: Run one frozen pair
         env:
           ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
@@ -109,6 +126,7 @@ jobs:
           --reports '${{ runner.temp }}/reports-${{ matrix.task }}'
           --repeats 1
           ${{ inputs.workspace_root_guidance && '--workspace-root-guidance' || '' }}
+          ${{ inputs.completion_budget && '--completion-budget' || '' }}
       - name: Preserve complete or partial evidence and redact credentials
         id: collect
         if: always()
