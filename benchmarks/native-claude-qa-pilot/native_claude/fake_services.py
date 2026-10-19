@@ -10,9 +10,11 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import math
 from pathlib import Path
 import threading
 import time
+import traceback
 from urllib.parse import urlsplit
 
 
@@ -78,6 +80,25 @@ def _tool(body: dict, names: tuple[str, ...]) -> dict:
     raise ValueError("required_tool_not_advertised:" + names[0])
 
 
+def _matches_json_type(value: object, kind: str) -> bool:
+    if kind == "null":
+        return value is None
+    if kind == "boolean":
+        return type(value) is bool
+    if kind == "string":
+        return isinstance(value, str)
+    if kind == "object":
+        return isinstance(value, dict)
+    if kind == "array":
+        return isinstance(value, list)
+    if kind in ("integer", "number"):
+        if type(value) is int:
+            return True
+        if type(value) is float and math.isfinite(value):
+            return kind == "number" or value.is_integer()
+    return False
+
+
 def _checked_args(tool: dict, args: dict) -> dict:
     schema = tool.get("input_schema", {})
     props = schema.get("properties", {})
@@ -87,10 +108,17 @@ def _checked_args(tool: dict, args: dict) -> dict:
         raise ValueError("unfilled_required_tool_argument:" + tool["name"])
     for name, value in args.items():
         spec = props[name]
-        kind = spec.get("type")
-        types = {"string": str, "boolean": bool, "integer": int, "number": (int, float)}
-        if kind in types and (not isinstance(value, types[kind]) or kind == "integer" and isinstance(value, bool)):
-            raise ValueError("tool_argument_type:" + name)
+        if "type" in spec:
+            declared = spec["type"]
+            kinds = [declared] if isinstance(declared, str) else declared
+            keywords = {"string", "number", "integer", "object", "array", "boolean", "null"}
+            if (not isinstance(kinds, list) or not kinds
+                    or any(not isinstance(kind, str) or kind not in keywords for kind in kinds)
+                    or len(set(kinds)) != len(kinds)):
+                raise ValueError("unsupported_tool_schema_type:" + name)
+            if not any(_matches_json_type(value, kind) for kind in kinds):
+                raise ValueError("tool_argument_type:" + name + ":expected=" + "|".join(kinds)
+                                 + ":actual=" + type(value).__name__)
         if "enum" in spec and value not in spec["enum"]:
             raise ValueError("tool_argument_enum:" + name)
     return args
@@ -236,7 +264,7 @@ class FakeServices:
         self.output = Path(output) if output is not None else None
         if self.output:
             self.output.mkdir(parents=True, exist_ok=True)
-        self.rows, self.errors = [], []
+        self.rows, self.errors, self.rejected_requests = [], [], []
         self.lock = threading.RLock()
         self.max_chat_requests, self.max_embedding_requests = max_chat_requests, max_embedding_requests
         self._started = self._closed = False
@@ -248,6 +276,8 @@ class FakeServices:
 
             def do_POST(self):
                 at = time.time()
+                rejected_chat = None
+                accepted = False
                 try:
                     path = urlsplit(self.path).path
                     kind = "embedding" if path == "/v1/embeddings" else "count_tokens" if path in ("/anthropic/v1/messages/count_tokens", "/v1/messages/count_tokens") else "chat" if path in ("/anthropic/v1/messages", "/v1/messages") else None
@@ -264,6 +294,12 @@ class FakeServices:
                     body = json.loads(self.rfile.read(size))
                     if not isinstance(body, dict):
                         raise ValueError("request_not_object")
+                    if kind == "chat":
+                        # Only fake-authenticated, parsed chat bodies may enter
+                        # rejection evidence; never capture authentication headers.
+                        rejected_chat = {"kind": kind, "profile": owner.profile, "at_unix": at,
+                                         "path": self.path, "authorization_is_exact_fixture": True,
+                                         "body": copy.deepcopy(body)}
                     with owner.lock:
                         row = {"sequence": len(owner.rows) + 1, "kind": kind, "profile": owner.profile,
                                "at_unix": at, "path": self.path, "authorization_is_exact_fixture": True}
@@ -304,6 +340,7 @@ class FakeServices:
                                 content_type, payload = "application/json", json.dumps(scripted["response"]).encode()
                         row.update(response_body_sha256=hashlib.sha256(payload).hexdigest(), response_body_bytes=len(payload), response_content_type=content_type)
                         owner.rows.append(row)
+                        accepted = True
                         owner._flush_row(row)
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
@@ -314,8 +351,18 @@ class FakeServices:
                 except Exception as exc:
                     # Never include request headers or arbitrary invalid JSON in errors.
                     reason = str(exc) if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError) else type(exc).__name__
+                    error = {"at_unix": at, "reason": reason, "exception_type": type(exc).__name__,
+                             "traceback": [{"file": Path(frame.filename).name,
+                                            "function": frame.name, "line": frame.lineno}
+                                           for frame in traceback.extract_tb(exc.__traceback__)]}
                     with owner.lock:
-                        owner.errors.append({"at_unix": at, "reason": reason})
+                        owner.errors.append(error)
+                        if rejected_chat is not None and not accepted:
+                            rejected_chat.update(rejected_sequence=len(owner.rejected_requests) + 1, error=error)
+                            owner.rejected_requests.append(rejected_chat)
+                            if owner.output:
+                                with (owner.output / "rejected-requests.jsonl").open("a") as handle:
+                                    handle.write(json.dumps(rejected_chat, sort_keys=True) + "\n")
                         if owner.output:
                             (owner.output / "errors.json").write_text(json.dumps(owner.errors, indent=2) + "\n")
                     self.send_error(400, "native_offline_fixture_rejected_request")
@@ -384,7 +431,8 @@ class FakeServices:
             trace = {"schema_version": 1, "scope": "native-claude-fake-services-v1", "profile": self.profile,
                      "quality_evaluated": False, "real_provider_calls_authorized": False,
                      "embedding_fixture_source_sha256": hashlib.sha256(_LEGACY_PATH.read_bytes()).hexdigest(),
-                     "rows": copy.deepcopy(self.rows), "errors": copy.deepcopy(self.errors)}
+                     "rows": copy.deepcopy(self.rows), "errors": copy.deepcopy(self.errors),
+                     "rejected_requests": copy.deepcopy(self.rejected_requests)}
         if path is not None:
             Path(path).write_text(json.dumps(trace, indent=2) + "\n")
         return trace

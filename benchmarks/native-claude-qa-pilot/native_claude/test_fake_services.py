@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from native_claude.fake_services import (
     CHAT_KEY, CHILD_MARKER, CHILD_SENTINEL, EMBEDDING_KEY, FINAL_SENTINEL,
     MODEL, QUERY, ROOT_MARKER, FakeServices, classify_request,
-    embedding_response, scripted_response, stream_events,
+    _checked_args, embedding_response, scripted_response, stream_events,
 )
 
 
@@ -56,6 +56,63 @@ def exchange(service, body):
 
 
 class FakeServicesTests(unittest.TestCase):
+    def test_json_schema_primitive_types_and_unions_reject_bool_as_numeric(self):
+        examples = {"string": ("text", 1), "number": (1.25, True), "integer": (1.0, False),
+                    "object": ({"a": 1}, []), "array": ([1], {}), "boolean": (True, 1), "null": (None, "null")}
+        for kind, (valid, invalid) in examples.items():
+            for declared in (kind, [kind, "null"] if kind != "null" else ["null", "string"]):
+                schema = tool("Example", {"value": {"type": declared}}, ["value"])
+                with self.subTest(declared=declared):
+                    self.assertEqual(_checked_args(schema, {"value": valid}), {"value": valid})
+                    # The extra union member is a valid alternative, not a bypass.
+                    if kind != "null" or isinstance(declared, str):
+                        with self.assertRaisesRegex(ValueError, "tool_argument_type"):
+                            _checked_args(schema, {"value": invalid})
+                        if kind != "null" and isinstance(declared, list):
+                            self.assertEqual(_checked_args(schema, {"value": None}), {"value": None})
+        for kind in ("number", "integer"):
+            for value in (True, False, float("inf"), float("nan")):
+                with self.subTest(kind=kind, value=value), self.assertRaisesRegex(ValueError, "tool_argument_type"):
+                    _checked_args(tool("Example", {"value": {"type": [kind, "null"]}}), {"value": value})
+        for declared in ([], ["string", "string"], ["string", 1], "not-a-json-type", None):
+            with self.subTest(declared=declared), self.assertRaisesRegex(ValueError, "unsupported_tool_schema_type"):
+                _checked_args(tool("Example", {"value": {"type": declared}}), {"value": "text"})
+        with self.assertRaisesRegex(ValueError, "tool_argument_enum"):
+            _checked_args(tool("Example", {"value": {"type": ["string", "null"], "enum": ["allowed", None]}}), {"value": "denied"})
+
+    def test_actual_rust_nullable_root_query_schema_excerpt_accepts_native_arguments(self):
+        body = request(treatment=True)
+        # Same nullable type shape as the retained Rust MCP schema; no schema
+        # rewriting or changed tool arguments is needed in the native gate.
+        body["tools"][-1]["input_schema"] = {"type": "object", "properties": {
+            "root": {"type": ["string", "null"]}, "query": {"type": ["string", "null"]}}}
+        with FakeServices(host="127.0.0.1", profile="zvec-grep") as service:
+            reply = exchange(service, body)
+            self.assertEqual(reply["content"][0]["input"], {"root": "/workspace", "query": QUERY})
+            self.assertEqual(service.rows[-1]["stage"], "root_mcp")
+            self.assertEqual(service.rejected_requests, [])
+
+    def test_fake_authenticated_rejection_retains_body_and_trace_but_bad_auth_does_not(self):
+        body = request(treatment=True)
+        body["tools"][-1]["input_schema"]["properties"]["query"]["type"] = ["integer", "null"]
+        with tempfile.TemporaryDirectory() as tmp, FakeServices(host="127.0.0.1", profile="zvec-grep", output=Path(tmp)) as service:
+            with self.assertRaises(HTTPError):
+                post(service, body)
+            self.assertEqual(service.rows, [])
+            rejected = service.dump_trace()["rejected_requests"]
+            self.assertEqual(len(rejected), 1)
+            self.assertEqual(rejected[0]["body"], body)
+            self.assertEqual(rejected[0]["error"]["exception_type"], "ValueError")
+            self.assertIn("expected=integer|null:actual=str", rejected[0]["error"]["reason"])
+            self.assertTrue(any(frame["function"] == "_checked_args" and frame["line"] > 0 for frame in rejected[0]["error"]["traceback"]))
+            self.assertEqual(json.loads((Path(tmp) / "rejected-requests.jsonl").read_text()), rejected[0])
+            with self.assertRaises(HTTPError):
+                post(service, {**body, "not_to_be_retained": "untrusted-body-marker"}, key="untrusted-key-marker")
+            trace = service.dump_trace()
+            self.assertEqual(len(trace["rejected_requests"]), 1)
+            self.assertNotIn("untrusted-body-marker", json.dumps(trace))
+            self.assertNotIn("untrusted-key-marker", json.dumps(trace))
+
     def test_root_child_classification_ignores_assistant_arguments_and_tool_results(self):
         body = request()
         body["messages"].extend([

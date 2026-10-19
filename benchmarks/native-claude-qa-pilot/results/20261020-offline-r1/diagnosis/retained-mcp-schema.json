@@ -1,0 +1,321 @@
+{
+  "$defs": {
+    "FreshnessInput": {
+      "enum": [
+        "eventual",
+        "wait_for_fresh"
+      ],
+      "type": "string"
+    },
+    "GlobInput": {
+      "additionalProperties": false,
+      "properties": {
+        "caseInsensitive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pattern": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "GlobListInput": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/GlobInput"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Public string/list globs plus the existing typed-rule extension."
+    },
+    "PathListInput": {
+      "anyOf": [
+        {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        {
+          "items": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        }
+      ]
+    },
+    "QueryListInput": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      ]
+    },
+    "SymbolTypeInput": {
+      "enum": [
+        "alias",
+        "class",
+        "enum",
+        "function",
+        "interface",
+        "module",
+        "value"
+      ],
+      "type": "string"
+    },
+    "TimeInput": {
+      "anyOf": [
+        {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "maxLength": 128,
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "autoUpdate": {
+      "default": true,
+      "description": "Allow eventual search to schedule a background index update.",
+      "type": "boolean"
+    },
+    "categories": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Categories inferred from indexed file names, such as code or document."
+    },
+    "embeddingConcurrency": {
+      "description": "Index-only refresh budget; query-vector inference keeps its own defaults.\nControls llama.cpp contexts or concurrent batches/requests for other backends.",
+      "format": "uint",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "excludedCategories": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exclude matching file-name categories, taking precedence over categories."
+    },
+    "excludedFileTypes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "excludedFormats": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exclude matching file-name formats, taking precedence over formats."
+    },
+    "fileTypes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Ripgrep type names, such as ts, py, h or cpp."
+    },
+    "formats": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Formats inferred from indexed file names, such as rust or markdown; source contents are not inspected."
+    },
+    "freshness": {
+      "$ref": "#/$defs/FreshnessInput",
+      "description": "Search now or wait for delivered workspace changes to be indexed.\nResident servers cover watcher notifications received before the refresh\nbarrier; OS notifications delivered later require a subsequent refresh."
+    },
+    "fts": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QueryListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Supplemental lexical-route groups."
+    },
+    "fuse": {
+      "description": "Collapse all query groups into one ranked plan.",
+      "type": "boolean"
+    },
+    "globs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GlobListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Ordered path glob rules; later matching rules take precedence."
+    },
+    "insensitiveGlobs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Ordered case-insensitive rg glob rules, applied after globs."
+    },
+    "limit": {
+      "description": "Maximum returned items per query group or fused plan.",
+      "format": "uint",
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "modifiedAfter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only query files modified after this time."
+    },
+    "modifiedBefore": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Only query files modified before this time."
+    },
+    "preferSymbol": {
+      "description": "Prefer exact indexed symbols.",
+      "type": "boolean"
+    },
+    "preview": {
+      "default": "short",
+      "description": "Source display only: short bounds snippets; full preserves all available retrieved content and outline without changing retrieval or ranking.",
+      "enum": [
+        "short",
+        "full"
+      ],
+      "type": "string"
+    },
+    "queries": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QueryListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "One or more primary hybrid-search groups."
+    },
+    "query": {
+      "description": "One primary hybrid-search group.",
+      "maxLength": 4000,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "root": {
+      "description": "Absolute workspace root visible to the daemon.",
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "symbolTypes": {
+      "description": "Restrict indexed results to symbol types.",
+      "items": {
+        "$ref": "#/$defs/SymbolTypeInput"
+      },
+      "maxItems": 7,
+      "type": "array"
+    },
+    "trace": {
+      "description": "Include per-hit search trace.",
+      "type": "boolean"
+    },
+    "vector": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QueryListInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Supplemental semantic/vector-route groups."
+    }
+  },
+  "required": [
+    "root"
+  ],
+  "type": "object"
+}

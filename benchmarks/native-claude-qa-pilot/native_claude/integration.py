@@ -339,7 +339,17 @@ def main(argv=None):
             except Exception as exc:
                 proof['verification'].append({'profile': profile, 'valid': False, 'error': str(exc)})
             pilot.write(args.output / 'proof.json', proof)
-        proof['valid'] = len(proof['verification']) == 2 and all(v['valid'] for v in proof['verification'])
+        runtime_hashes = [v.get('source_audit', {}).get('before', {}).get('observed', {}).get('runtime', {}).get('claude', {}).get('binary_sha256') for v in proof['verification']]
+        init_tools = []
+        for profile in ('baseline', 'zvec-grep'):
+            streams = list((args.output / 'runs' / ('q001-' + profile)).glob('*/agent/claude-code.txt'))
+            inits = [json.loads(line) for stream in streams for line in stream.read_text().splitlines()
+                     if line.startswith('{') and json.loads(line).get('subtype') == 'init']
+            init_tools.append(sorted(t for t in inits[0]['tools'] if not t.startswith('mcp__zvec_grep__')) if len(inits) == 1 else None)
+        proof['pair_checks'] = {
+            'same_actual_claude_binary': len(runtime_hashes) == 2 and bool(runtime_hashes[0]) and runtime_hashes[0] == runtime_hashes[1],
+            'same_native_init_tools_except_zg': bool(init_tools[0]) and init_tools[0] == init_tools[1]}
+        proof['valid'] = len(proof['verification']) == 2 and all(v['valid'] for v in proof['verification']) and all(proof['pair_checks'].values())
     except Exception as exc:
         proof['errors'].append({'type': type(exc).__name__, 'message': str(exc)})
     finally:
