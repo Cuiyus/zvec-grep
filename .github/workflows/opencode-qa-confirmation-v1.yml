@@ -1,0 +1,178 @@
+name: OpenCode q001 confirmation v1
+run-name: q001 confirmation v1 / ${{ inputs.execute_pairs && 'two frozen confirmation pairs' || 'controller preflight' }}
+
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths: ['benchmarks/opencode-qa-pilot/confirmation_v1.py', 'benchmarks/opencode-qa-pilot/test_confirmation_v1.py', 'benchmarks/opencode-qa-pilot/confirmation-v1.json', '.github/workflows/opencode-qa-confirmation-v1.yml']
+  workflow_dispatch:
+    inputs:
+      execute_pairs:
+        description: Execute exactly c01 and c02, each fresh baseline then zg, without retries
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: main-opencode-q001-confirmation-v1-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  confirmation:
+    name: confirmation ${{ matrix.repeat }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        repeat: [c01, c02]
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    env:
+      QA_REPEAT: ${{ matrix.repeat }}
+      SWE_QA_MODEL_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    steps:
+      - name: Set isolated runtime paths
+        run: |
+          cat >> "$GITHUB_ENV" <<EOF
+          MAIN_ROOT=$RUNNER_TEMP/qa-main/benchmarks/swe-qa-bench
+          QA_MAIN_ROOT=$RUNNER_TEMP/qa-main/benchmarks/swe-qa-bench
+          PREPARED_ROOT=$RUNNER_TEMP/qa-prepared
+          RUN_ROOT=$RUNNER_TEMP/qa-confirmation-run
+          REPORT_ROOT=$RUNNER_TEMP/qa-confirmation-reports
+          PROOF_ROOT=$RUNNER_TEMP/qa-confirmation-proof
+          EOF
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Export and reverify current upstream main and fixed source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=a424e0ce06868dc9ad8f142f57de59b8f9b58699
+          test "$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)" = "$expected"
+          git init "$RUNNER_TEMP/qa-main-git"
+          git -C "$RUNNER_TEMP/qa-main-git" fetch --depth=1 https://github.com/zvec-ai/zvec-grep.git "$expected"
+          test "$(git -C "$RUNNER_TEMP/qa-main-git" rev-parse FETCH_HEAD)" = "$expected"
+          mkdir -p "$RUNNER_TEMP/qa-main" "$REPORT_ROOT"
+          git -C "$RUNNER_TEMP/qa-main-git" archive "$expected" benchmarks/swe-qa-bench benchmarks/shared/rust-package-cache.mjs | tar -x -C "$RUNNER_TEMP/qa-main"
+          git init "$RUNNER_TEMP/qa-zvec-git"
+          git -C "$RUNNER_TEMP/qa-zvec-git" fetch --depth=1 https://github.com/alibaba/zvec.git ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project "$MAIN_ROOT" --frozen
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/benchmarks/opencode-qa-pilot:$MAIN_ROOT" >> "$GITHUB_ENV"
+      - name: Verify and retrieve the exact successful Docker proof and install archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, io, json, os, pathlib, subprocess, zipfile
+          plan = json.loads(pathlib.Path('benchmarks/opencode-qa-pilot/confirmation-v1.json').read_text())
+          binding = plan['offline_proof']
+          repo = 'Cuiyus/zvec-grep'
+          def api(path):
+              return subprocess.check_output(['gh', 'api', 'repos/' + repo + '/' + path])
+          run = json.loads(api('actions/runs/' + str(binding['ci_run_id'])))
+          assert run['repository']['full_name'] == repo
+          assert run['head_sha'] == binding['ci_head_sha'] and run['run_attempt'] == 1
+          assert run['event'] == 'push' and run['status'] == 'completed' and run['conclusion'] == 'success'
+          artifact = json.loads(api('actions/artifacts/' + str(binding['artifact_id'])))
+          assert artifact['workflow_run']['id'] == binding['ci_run_id'] and not artifact['expired']
+          assert artifact['name'] == 'q001-infrastructure-v2-' + str(binding['ci_run_id'])
+          raw = api('actions/artifacts/' + str(binding['artifact_id']) + '/zip')
+          sha = hashlib.sha256(raw).hexdigest()
+          assert sha == binding['artifact_sha256'] and artifact['digest'] == 'sha256:' + sha
+          root = pathlib.Path(os.environ['PROOF_ROOT']); root.mkdir()
+          seen = set()
+          with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+              for entry in archive.infolist():
+                  rel = pathlib.PurePosixPath(entry.filename)
+                  assert not rel.is_absolute() and '..' not in rel.parts and entry.filename not in seen
+                  assert ((entry.external_attr >> 16) & 0o170000) != 0o120000
+                  seen.add(entry.filename)
+                  if entry.is_dir():
+                      continue
+                  destination = root.joinpath(*rel.parts)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(archive.read(entry))
+          assert hashlib.sha256((root / 'zg-install.tgz').read_bytes()).hexdigest() == plan['candidate_sha256']
+          report = {'run': run, 'artifact': artifact, 'verified_zip_sha256': sha,
+                    'verified_file_count': sum(p.is_file() for p in root.rglob('*'))}
+          (pathlib.Path(os.environ['REPORT_ROOT']) / 'offline-proof-origin.json').write_text(json.dumps(report, indent=2) + '\n')
+          PY
+      - name: Validate the separate frozen plan and all retained proof bytes
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/confirmation_v1.py \
+            --plan benchmarks/opencode-qa-pilot/confirmation-v1.json --repo-root "$GITHUB_WORKSPACE" \
+            --main-root "$MAIN_ROOT" --proof-dir "$PROOF_ROOT/integration" --repeat "$QA_REPEAT" validate
+          "$MAIN_ROOT/.venv/bin/python" -m unittest test_pilot_v2 test_confirmation_v1 -v \
+            2>&1 | tee "$REPORT_ROOT/controller-tests.txt"
+      - name: Prepare a fresh unchanged q001 task and verify both commands
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/confirmation_v1.py \
+            --plan benchmarks/opencode-qa-pilot/confirmation-v1.json --repo-root "$GITHUB_WORKSPACE" \
+            --main-root "$MAIN_ROOT" --proof-dir "$PROOF_ROOT/integration" --repeat "$QA_REPEAT" \
+            prepare --zvec-repo "$RUNNER_TEMP/qa-zvec-git" --output "$PREPARED_ROOT"
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/confirmation_v1.py \
+            --plan benchmarks/opencode-qa-pilot/confirmation-v1.json --repo-root "$GITHUB_WORKSPACE" \
+            --main-root "$MAIN_ROOT" --proof-dir "$PROOF_ROOT/integration" --repeat "$QA_REPEAT" \
+            run --prepared "$PREPARED_ROOT" --output "$REPORT_ROOT/dry-run" \
+            --candidate-tgz "$PROOF_ROOT/zg-install.tgz" --dry-run
+      - name: Run this scheduled fresh baseline then zg pair
+        id: live
+        if: github.event_name == 'workflow_dispatch' && inputs.execute_pairs
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/confirmation_v1.py \
+            --plan benchmarks/opencode-qa-pilot/confirmation-v1.json --repo-root "$GITHUB_WORKSPACE" \
+            --main-root "$MAIN_ROOT" --proof-dir "$PROOF_ROOT/integration" --repeat "$QA_REPEAT" \
+            run --prepared "$PREPARED_ROOT" --output "$RUN_ROOT" --candidate-tgz "$PROOF_ROOT/zg-install.tgz"
+      - name: Preserve completed or partial evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_ROOT"
+          cp benchmarks/opencode-qa-pilot/confirmation-v1.json "$REPORT_ROOT/confirmation-v1.json"
+          if test -d "$RUN_ROOT" && test -x "$MAIN_ROOT/.venv/bin/python"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/confirmation_v1.py \
+              --plan benchmarks/opencode-qa-pilot/confirmation-v1.json --repo-root "$GITHUB_WORKSPACE" \
+              --main-root "$MAIN_ROOT" --proof-dir "$PROOF_ROOT/integration" --repeat "$QA_REPEAT" \
+              collect --run-dir "$RUN_ROOT" --output "$REPORT_ROOT/collection"
+          fi
+      - name: Reject configured secret leakage
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GLM_API_KEY: ${{ (steps.live.outcome == 'success' || steps.live.outcome == 'failure' || steps.live.outcome == 'cancelled') && secrets.GLM_API_KEY || '' }}
+          ZVEC_GREP_API_KEY: ${{ (steps.live.outcome == 'success' || steps.live.outcome == 'failure' || steps.live.outcome == 'cancelled') && secrets.QWEN_EMBEDDING_API_KEY || '' }}
+        run: |
+          "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan \
+            --secret-env GH_TOKEN --secret-env GLM_API_KEY --secret-env ZVEC_GREP_API_KEY \
+            --root "$REPORT_ROOT" --root "$RUN_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: main-opencode-q001-confirmation-v1-${{ github.run_id }}-${{ matrix.repeat }}
+          path: |
+            ${{ runner.temp }}/qa-confirmation-reports/
+            ${{ runner.temp }}/qa-confirmation-run/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

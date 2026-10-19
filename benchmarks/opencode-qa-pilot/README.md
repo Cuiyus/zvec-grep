@@ -107,6 +107,16 @@ at `cbf62676`, with one valid pair and 76/76 independent execution checks.
 The phase is closed; failed attempts remain evidence and are not retried.
 The positive scoped-input candidate permits only a separately frozen confirmation.
 
+The [confirmation plan](confirmation-v1.json) schedules exactly **c01 and c02**,
+each on a fresh Linux runner, with baseline then zg and no whole-trial retry.
+The [separate decision](provenance/confirmation-v1-decision-20261020.json) binds
+the accepted development evidence. Both pairs must independently pass the same
+scoped-input candidate rule; the development pair is not pooled with them.
+The [confirmation workflow](../../.github/workflows/opencode-qa-confirmation-v1.yml)
+uses serial jobs with `fail-fast: false`, first performs a provider-free push
+preflight, then permits one explicit `execute_pairs=true` dispatch. Execution
+is pending at this freeze. Green CI alone is not a quality or benefit result.
+
 ## Why this phase exists
 
 The earlier Claude experiments have 22 retained trials. They did not establish
