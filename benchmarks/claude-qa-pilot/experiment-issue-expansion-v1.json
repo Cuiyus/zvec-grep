@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "experiment_id": "claude-qwen-rust-zvec-issue-expansion-v1",
+  "protocol_version": "completion-v2",
+  "phase": "issue-expansion",
+  "status": "Source exports, independent task-package review and guarded wiring verified; awaiting the q001 confirmation-result decision. Unfrozen: do not dispatch.",
+  "development_selection_disclosure": "Both issues were reserve candidates in evaluator/candidates.json before any pilot results. Their source/rubric development followed the q001 development pilot. No solver answer or zg outcome on q002/q003 was observed during selection or authoring. This is a purposive two-task expansion, not a random sample or a contamination-free held-out set.",
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.212",
+    "model": "qwen3.8-max",
+    "effort": "high",
+    "max_output_tokens": 8192,
+    "max_turns": 30,
+    "wall_limit_seconds": 900,
+    "repository_guidance": "disabled using CLAUDE_CODE_DISABLE_CLAUDE_MDS and CLAUDE_CODE_DISABLE_AUTO_MEMORY; fresh HOME, empty setting sources"
+  },
+  "retrieval": {
+    "implementation": "current upstream main Rust",
+    "source_repository": "zvec-ai/zvec-grep",
+    "source_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+    "native_package_version": "0.0.1",
+    "native_package_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "upstream_build_run": 39221698769,
+    "upstream_artifact_id": 12176409568,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_configuration_source": "current main benchmarks/swe-qa-bench/ci-config.json local default",
+    "mcp_toolset": "agent",
+    "query_policy": "Preserve native main MCP schema and instructions (including its semantic-search guidance); no additional benchmark-specific tool forcing.",
+    "index_setup": "before timed solver; cloned per trial; separately recorded",
+    "index_ignore_source": "main benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore",
+    "upstream_artifact_digest": "sha256:00873b7a5505bb4f628c5d33336c058750cb09dcccccc8ae2718fa8d0cfb0e03",
+    "main_rechecked_at_utc": "2026-10-19T16:20:03Z",
+    "main_rechecked_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699"
+  },
+  "completion_control": {
+    "applies_identically_to": [
+      "baseline",
+      "zg"
+    ],
+    "tool_budget": 24,
+    "counting": "Every unique repository tool_use_id consumes one admission, including tools later failing; all tools share one cap. Duplicate hook events are idempotent. Parallel calls are serialized by a file lock.",
+    "research_seconds": 600,
+    "wall_limit_seconds": 900,
+    "max_turns": 30,
+    "warning_after_admitted_calls": 18,
+    "warning_after_elapsed_seconds": 480,
+    "mechanism": "Native Claude PreToolUse command hook; after either budget limit deny new repository tools and request final answer from current evidence. Under budget omit permissionDecision, preserving ordinary permissions.",
+    "not_guaranteed": "No hard separation into a second model invocation. Already running work is not interrupted at 600 seconds. Denial leaves an opportunity to answer but the model may continue requesting denied tools or exhaust total time/turns. Such outcomes remain failures.",
+    "information_policy": "Generic budget/stop/uncertainty text only. No gold, source symbols, issue resolution, content filtering, suggested search terms or task-specific hint.",
+    "official_hook_reference": "https://code.claude.com/docs/en/hooks",
+    "hook_sha256": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761"
+  },
+  "common_instructions_sha256": "220823c068789010a8f43aac840768b7d4ba7996d927ff58573f0b0641249325",
+  "run_plan": {
+    "workflow": ".github/workflows/claude-qa-pilot.yml",
+    "event": "workflow_dispatch",
+    "inputs": {
+      "task": "zvec-expansion",
+      "workspace_root_guidance": false,
+      "completion_budget": true,
+      "completion_confirmation": false,
+      "closed_issue_expansion": true
+    },
+    "tasks": [
+      "zvec-q002",
+      "zvec-q003"
+    ],
+    "repeats_per_task": 1,
+    "start_repeat_per_task": 1,
+    "planned_trials_per_task": [
+      {
+        "repeat": 1,
+        "profile": "baseline"
+      },
+      {
+        "repeat": 1,
+        "profile": "zg"
+      }
+    ],
+    "total_planned_trials": 4,
+    "job_timeout_minutes_per_task": 45,
+    "runner_timeout_seconds_per_task": 2000,
+    "automatic_repeats": false,
+    "bad_outcome_replacement": false,
+    "partial_task_selection": false
+  },
+  "evaluation": {
+    "primary": "Per-task final-answer source-grounded quality under the task-specific frozen rubric, followed by complete input tokens including cache; report every task individually.",
+    "quality_review": "Fresh blinded Codex source audit of anonymous final answers with no arm labels, metrics or prior answers/reviews. Keep criterion scores, unsupported claims and citations.",
+    "resources": [
+      "input tokens including cache",
+      "input excluding cache read",
+      "output tokens",
+      "tool attempts and admission/execution outcomes",
+      "agent wall",
+      "separate index/preflight time"
+    ],
+    "set_signal_rule": "Both planned tasks must have valid protocol and complete accounting, both answers pass their frozen source-grounded gates, zg score is at least baseline on each task, zg uses fewer input tokens including cache on each task, and zg has at least one successful retrieval with the correct repository root on each task. Otherwise report the mixed result/failure/quality-resource tradeoff without replacing or hiding tasks.",
+    "aggregation": "Per-task scores and ratios are primary. Any aggregate of the two new tasks must include both and be labeled a purposive two-case description. Never pool the selected q001 development pair or its confirmation replicates into an unseen-task claim.",
+    "failure_policy": "Keep model failures/timeouts and all later planned trials. Infrastructure/isolation/credential failures stop the affected task with partial evidence; no automatic rerun.",
+    "wall": "Report wall separately; baseline runs first within both tasks. Order/service/cache effects are not identifiable from one pair each; do not claim statistical significance.",
+    "retrieval_interpretation": "Audit whether successful returned locations/previews contain relevant evidence and distinguish retrieval from later native reads. Success alone is not proof of useful content or causal attribution; savings without successful retrieval cannot be presented as retrieval benefit."
+  },
+  "unchanged": [
+    "common agent instructions",
+    "model/provider and effort",
+    "native Claude version",
+    "current-main Rust binary and embedding",
+    "native tools, MCP schema and instructions",
+    "hook file and budgets",
+    "per-trial wall/turn/output settings",
+    "source isolation and fresh per-trial HOME/index"
+  ],
+  "changes_from_development": [
+    "Two separately frozen reserve issue tasks with their own neutral questions, exact pre-fix source and source-grounded rubrics.",
+    "Each task runs one pair with the same completion-v2 solver protocol.",
+    "Dataset-aware source export and phase-specific dispatch guards; original q001 dataset remains byte-identical."
+  ],
+  "frozen": false,
+  "dataset_path": "benchmarks/zvec-issue-qa/dataset-expansion-v1.json",
+  "dataset_sha256": "e874a1d6509967f76f739ac99f70910c5a5a0a6c590514aac8de7cb4e2bf0e91",
+  "preceding_confirmation_run": 39282211793,
+  "pre_execution_validation": [
+    {
+      "path": "benchmarks/zvec-issue-qa/evaluator/provenance/expansion-source-validation.json",
+      "sha256": "b24dce030c8fc5fd3e7b4f21d229925a9f12de88f46d261be7be11c5c4210dcc"
+    },
+    {
+      "path": "benchmarks/zvec-issue-qa/evaluator/provenance/expansion-wiring-review.json",
+      "sha256": "54f9e6ed9f4cd454acd9c7388db452562d7082f1491f4e43d06c50b4c1dfa231"
+    },
+    {
+      "path": "benchmarks/zvec-issue-qa/evaluator/provenance/q002/final-independent-review.json",
+      "sha256": "b3d607650afea8f916d28e0403d3f2ac9cb4b6fe9d97ed465f1637cfd4bfc5e2"
+    },
+    {
+      "path": "benchmarks/zvec-issue-qa/evaluator/provenance/q003/final-independent-review.json",
+      "sha256": "9bd55adec157c34d757563f78ea224e20ba907c663505dacc454a0cfd7e58739"
+    }
+  ],
+  "pre_execution_review_snapshot": {
+    "path": "benchmarks/zvec-issue-qa/evaluator/provenance/expansion-reviewed-plan.json",
+    "sha256": "ab14516a3f59d648aae39f1561561e820af385733d0adaa017a3bfe44bcdb07a",
+    "subsequent_changes": "Only status text, evidence links and a repeated upstream-main observation were added after this wiring-review snapshot. Execution/evaluation fields, dataset hash, and frozen=false remain unchanged."
+  }
+}

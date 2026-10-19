@@ -157,6 +157,16 @@ manifest `planned_trials` and the actual loop use the same schedule function.
 The artifact audit verifies the summary's execution order and strictly increasing
 per-trial hook start times, rather than inferring order from directory names.
 
+The separately prepared `experiment-issue-expansion-v1.json` references q002 and
+q003 in `benchmarks/zvec-issue-qa/dataset-expansion-v1.json`. It is currently
+unfrozen, pending the q001 confirmation decision; no new-task solver run is implied
+by the prepared files. Its eventual `task=zvec-expansion` dispatch must set
+`closed_issue_expansion=true` and `completion_budget=true`, with both other phase
+flags false. The selector emits both tasks, each with one unchanged completion-v2
+pair. The wrapper rejects an unfrozen plan or a dataset hash mismatch before
+setup, and saves both plan and dataset in the task artifact. This phase neither
+changes nor pools with q001 confirmation or the selected development results.
+
 Run parser and source-isolation checks with:
 
 ```sh

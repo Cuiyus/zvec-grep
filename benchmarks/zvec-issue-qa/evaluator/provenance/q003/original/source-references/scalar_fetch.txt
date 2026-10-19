@@ -1,0 +1,100 @@
+1028: Doc::Ptr SegmentImpl::Fetch(
+1029:     uint64_t g_doc_id,
+1030:     const std::optional<std::vector<std::string>> &output_fields,
+1031:     bool include_vector) {
+1032:   std::lock_guard lock(seg_mtx_);
+1033: 
+1034:   if (g_doc_id > segment_meta_->max_doc_id()) {
+1035:     LOG_ERROR("g_doc_id[%zu] not exist in segment[%d] ", (size_t)g_doc_id,
+1036:               id());
+1037:     return nullptr;
+1038:   }
+1039: 
+1040:   int segment_doc_id = 0;
+1041:   auto it = std::lower_bound(doc_ids_.begin(), doc_ids_.end(), g_doc_id);
+1042:   if (it != doc_ids_.end() && *it == g_doc_id) {
+1043:     segment_doc_id = static_cast<int>(std::distance(doc_ids_.begin(), it));
+1044:   } else {
+1045:     LOG_ERROR(
+1046:         "g_doc_id[%zu] not found in doc_ids_[%zu], min_doc_id[%zu] "
+1047:         "max_doc_id[%zu], meta[%s]",
+1048:         (size_t)g_doc_id, doc_ids_.size(), (size_t)doc_ids_.front(),
+1049:         (size_t)doc_ids_.back(), segment_meta_->to_string_formatted().c_str());
+1050:     return nullptr;
+1051:   }
+1052: 
+1053:   std::vector<std::string> forward_columns;
+1054:   forward_columns.push_back(GLOBAL_DOC_ID);
+1055:   forward_columns.push_back(USER_ID);
+1056:   if (!output_fields.has_value()) {
+1057:     // No output_fields specified: return all forward fields
+1058:     for (const auto &field : collection_schema_->forward_fields()) {
+1059:       forward_columns.push_back(field->name());
+1060:     }
+1061:   } else {
+1062:     // output_fields specified: only return requested fields that exist
+1063:     const auto &requested = *output_fields;
+1064:     std::unordered_set<std::string> requested_set(requested.begin(),
+1065:                                                   requested.end());
+1066:     for (const auto &field : collection_schema_->forward_fields()) {
+1067:       if (requested_set.count(field->name())) {
+1068:         forward_columns.push_back(field->name());
+1069:       }
+1070:     }
+1071:   }
+1072: 
+1073:   // Build result schema
+1074:   std::vector<std::shared_ptr<arrow::Field>> fields;
+1075:   for (size_t i = 0; i < forward_columns.size(); ++i) {
+1076:     const auto &col = forward_columns[i];
+1077:     if (col == GLOBAL_DOC_ID) {
+1078:       fields.push_back(arrow::field(GLOBAL_DOC_ID, arrow::uint64()));
+1079:     } else if (col == USER_ID) {
+1080:       fields.push_back(arrow::field(USER_ID, arrow::utf8()));
+1081:     } else {
+1082:       auto *field = collection_schema_->get_field(col);
+1083:       std::shared_ptr<arrow::Field> arrow_field;
+1084:       auto status = ConvertFieldSchemaToArrowField(field, &arrow_field);
+1085:       if (!status.ok()) {
+1086:         LOG_ERROR("Convert field schema failed: %s",
+1087:                   field->to_string().c_str());
+1088:         return nullptr;
+1089:       }
+1090:       fields.push_back(std::move(arrow_field));
+1091:     }
+1092:   }
+1093:   auto result_schema = std::make_shared<arrow::Schema>(fields);
+1094: 
+1095:   // fetch forward columns
+1096:   auto exec_batch = fetch(forward_columns, segment_doc_id);
+1097:   if (!exec_batch) {
+1098:     LOG_ERROR("Fetch failed, doc_id: %zu", (size_t)g_doc_id);
+1099:     return nullptr;
+1100:   }
+1101:   if (exec_batch->length != 1) {
+1102:     LOG_ERROR("Fetch failed, doc_id: %zu, num_rows: %zu != 1", (size_t)g_doc_id,
+1103:               (size_t)exec_batch->length);
+1104:     return nullptr;
+1105:   }
+1106: 
+1107:   if (exec_batch->num_values() != (int)forward_columns.size()) {
+1108:     LOG_ERROR("table column size error, expect %zu, actual %d",
+1109:               forward_columns.size(), exec_batch->num_values());
+1110:     return nullptr;
+1111:   }
+1112: 
+1113:   auto doc = std::make_shared<Doc>();
+1114: 
+1115:   // column 0 is the global doc_id
+1116:   if (auto doc_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+1117:           (*exec_batch)[0].scalar())) {
+1118:     doc->set_doc_id(doc_id_scalar->value);
+1119:   } else {
+1120:     LOG_ERROR("Global doc id scalar is not of int64 type");
+1121:     return nullptr;
+1122:   }
+1123: 
+1124:   // column 1 is the uid(pk)
+1125:   if (auto str_scalar = std::dynamic_pointer_cast<arrow::StringScalar>(
+1126:           (*exec_batch)[1].scalar())) {
+1127:     doc->set_pk(std::string(str_scalar->view()));

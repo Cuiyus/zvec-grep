@@ -1,0 +1,71 @@
+255: int MixedStreamerReducer::read_vec(size_t source_streamer_index,
+256:                                    const IndexProvider::Pointer &provider,
+257:                                    const IndexFilter &filter,
+258:                                    const uint32_t id_offset,
+259:                                    uint32_t *next_id) {
+260:   const auto &streamer = streamers_[source_streamer_index];
+261:   const auto &reformer = source_streamers_reformers_[source_streamer_index];
+262:   const IndexQueryMeta source_streamer_query_meta{streamer->meta().data_type(),
+263:                                                   streamer->meta().dimension()};
+264: 
+265:   bool need_revert = (target_streamer_->meta().reformer_name() !=
+266:                           streamer->meta().reformer_name() &&
+267:                       reformer != nullptr);
+268:   if (target_builder_ && reformer) {
+269:     need_revert = true;
+270:   }
+271: 
+272:   if (!provider) {
+273:     LOG_ERROR("Source provider is null, index=%zu", source_streamer_index);
+274:     return IndexError_Runtime;
+275:   }
+276:   IndexProvider::Iterator::Pointer iterator = provider->create_iterator();
+277:   if (!iterator) {
+278:     LOG_ERROR("Failed to create source provider iterator, index=%zu",
+279:               source_streamer_index);
+280:     return IndexError_Runtime;
+281:   }
+282: 
+283:   while (iterator->is_valid()) {
+284:     if (stop_flag_ != nullptr && stop_flag_->load(std::memory_order_relaxed)) {
+285:       LOG_DEBUG("read_vec cancelled.");
+286:       return 0;
+287:     }
+288:     if (filter(iterator->key() + (uint64_t)id_offset)) {
+289:       (*stats_.mutable_filtered_count())++;
+290:       iterator->next();
+291:       continue;
+292:     }
+293: 
+294:     const void *vector_data = iterator->data();
+295:     if (!vector_data) {
+296:       LOG_ERROR("Failed to read source vector, index=%zu key=%zu",
+297:                 source_streamer_index, static_cast<size_t>(iterator->key()));
+298:       return IndexError_ReadData;
+299:     }
+300: 
+301:     std::vector<uint8_t> bytes;
+302:     if (need_revert) {
+303:       std::string new_vector;
+304:       if (reformer->revert(vector_data, source_streamer_query_meta,
+305:                            &new_vector) != 0) {
+306:         LOG_ERROR("Failed to revert the vector");
+307:         return IndexError_Runtime;
+308:       }
+309:       bytes.resize(new_vector.size());
+310:       memcpy(bytes.data(), new_vector.data(), bytes.size());
+311:     } else {
+312:       // TODO: eliminate the copy
+313:       bytes.resize(provider->element_size());
+314:       memcpy(bytes.data(), vector_data, bytes.size());
+315:     }
+316: 
+317:     // TODO: use id instead of key
+318:     if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {
+319:       LOG_ERROR("Produce vector to queue failed. key[%lu]",
+320:                 (size_t)iterator->key());
+321:       return IndexError_Runtime;
+322:     }
+323:     iterator->next();
+324:   }
+325:   return 0;

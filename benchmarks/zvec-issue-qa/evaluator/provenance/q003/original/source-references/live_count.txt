@@ -1,0 +1,16 @@
+529:   auto segments = get_all_segments();
+530: 
+531:   CollectionStats stats;
+532:   auto vector_fields = schema_->vector_fields();
+533:   if (segments.empty()) {
+534:     stats.doc_count = 0;
+535:     for (auto &field : vector_fields) {
+536:       stats.index_completeness[field->name()] =
+537:           1;  // if no doc, completeness is 1
+538:     }
+539:     return stats;
+540:   }
+541: 
+542:   for (auto &segment : segments) {
+543:     stats.doc_count += segment->doc_count(delete_store_->make_filter());
+544:   }

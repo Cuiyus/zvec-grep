@@ -1,0 +1,155 @@
+{
+  "status": "draft only; not used to score any solver output; not part of q001 confirmation batch",
+  "max_points": 10,
+  "source_revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+  "instruction_sha256": "8da02b18d0a8efd6925150055ddff3988564e0999f95c339f8d03a1d7e670348",
+  "evidence_file": "evidence.json",
+  "scoring_rules": [
+    "Score supported factual claims and causal reasoning, never wording, verbosity, tool choice or exact upstream patch syntax.",
+    "Allow equivalent valid code citations/ranges and alternative correct explanations; these evidence IDs are reference support, not mandatory literal wording.",
+    "A proposed regression design is sufficient. Do not require installation, execution or code changes. Unsupported claims of executed tests are not evidence.",
+    "Each criterion is worth 0, 1 or 2 points. Grade against the frozen pre-fix source, not the reporter rootcause narrative."
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "points": 2,
+      "critical": true,
+      "claim": "Indexed zero-match handoff",
+      "full_credit": "Explains that a computed inverted result with count zero qualifies for the candidate-ID path, returns a present-but-empty optional, and clears the indexed filter/result when handing off those IDs. Zero matches is a real restrictive outcome, not absence of a scalar condition.",
+      "partial_credit": "Correctly identifies zero-result handling and candidate handoff but omits either optional presence or consumption/reset of the indexed constraint.",
+      "evidence": [
+        "E01",
+        "E03",
+        "E05",
+        "E06",
+        "E07"
+      ]
+    },
+    {
+      "id": "C2",
+      "points": 2,
+      "critical": true,
+      "claim": "FTS consumer loses the restrictive empty state",
+      "full_credit": "Connects ordinary vector candidate representation and the nonempty-only intersection guard: absent and explicit empty candidates collapse; no candidate intersection runs, and the remaining filter no longer carries the indexed predicate, so matching text hits can be emitted.",
+      "partial_credit": "Identifies either empty-candidate bypass or loss of the indexed predicate, but does not connect the two to FTS traversal.",
+      "evidence": [
+        "E06",
+        "E07",
+        "E08",
+        "E09",
+        "E13"
+      ]
+    },
+    {
+      "id": "C3",
+      "points": 2,
+      "critical": false,
+      "claim": "Explains the controls",
+      "full_credit": "1 point for scalar-only using an empty inverted iterator as its source; 1 point for the unindexed forward filter retaining/evaluating the predicate and for nonempty indexed/forward constraints retaining correct positive or disjoint results. Does not assume every positive-match predicate uses candidate IDs, since optimizer/threshold may choose another path.",
+      "partial_credit": "Correctly explains one of the two control groups above.",
+      "evidence": [
+        "E01",
+        "E02",
+        "E05",
+        "E09",
+        "E10",
+        "E11",
+        "E13"
+      ]
+    },
+    {
+      "id": "C4",
+      "points": 2,
+      "critical": true,
+      "claim": "Repair preserves query semantics",
+      "full_credit": "Proposes a source-grounded repair preserving unrestricted, explicitly empty and nonempty-restricted search end to end, e.g. optional candidate state with reject-all on present-empty or a safe zero-result short-circuit before constraint loss. Preserves remaining delete/forward constraints and ordinary unfiltered queries.",
+      "partial_credit": "Suggests special handling of zero results without explaining preservation of the ordinary unrestricted path or the consumed-filter handoff. A pointer-only bitmap change without addressing subsequent reset is insufficient for full credit.",
+      "evidence": [
+        "E05",
+        "E06",
+        "E07",
+        "E08",
+        "E09",
+        "F01",
+        "F02"
+      ]
+    },
+    {
+      "id": "C5",
+      "points": 2,
+      "critical": false,
+      "claim": "Regression and boundary checks",
+      "full_credit": "1 point for an end-to-end zero-match indexed-scalar + matching-FTS regression with expected empty IDs and a scalar-only or unindexed control; 1 point for a boundary matrix covering no scalar restriction, nonempty overlap and nonempty disjoint cases, while keeping valid results/topk/remaining filter behavior. No need to copy the upstream test name or write executable code.",
+      "partial_credit": "Covers one of the two test groups above with explicit expected behavior.",
+      "evidence": [
+        "E09",
+        "E10",
+        "E13",
+        "F03"
+      ]
+    }
+  ],
+  "draft_success_rule": {
+    "minimum_score": 8,
+    "critical_full_credit": [
+      "C1",
+      "C2",
+      "C4"
+    ],
+    "additional_requirements": [
+      "Core causal claims have valid source references.",
+      "No critical contradiction that makes the explanation or repair wrong."
+    ],
+    "not_yet_preregistered": true
+  },
+  "critical_corrections_to_issue_narrative": [
+    "A null bitmap is not required: a non-null bitmap of cardinality zero also yields an empty candidate vector and loses the indexed filter after reset.",
+    "DocFilter::empty() need not be true universally. Remaining delete or forward filters can exist, while the indexed scalar restriction has still been lost.",
+    "Changing make_filter() to produce a non-null reject-all filter alone is not sufficient if get_bf_by_keys_and_update() later consumes/resets it.",
+    "Do not generalize to vector-only queries from the similar remaining-filter assignment. Its explicit empty inner candidate list follows a different downstream path.",
+    "Nonempty filter controls can use candidates, a retained bitmap, or forward evaluation depending on selectivity; all preserve a meaningful restriction."
+  ],
+  "reference_answer_outline": [
+    {
+      "claim": "Indexed conditions become an inverted result. get_bf_by_keys_and_update sees count zero, extracts no IDs, resets the indexed filter/result, and returns an engaged optional.",
+      "evidence": [
+        "E01",
+        "E03",
+        "E05",
+        "E06"
+      ]
+    },
+    {
+      "claim": "FtsRecallNode moves that value into ordinary vector candidate_ids. Its empty value is also the unrestricted default. FTS only intersects nonempty candidates, and the remaining filter no longer contains this indexed predicate, allowing ordinary FTS hits.",
+      "evidence": [
+        "E07",
+        "E08",
+        "E09"
+      ]
+    },
+    {
+      "claim": "Scalar-only query instead iterates the empty scalar result; a field without inverted index is evaluated by a remaining forward filter. A nonempty restriction still admits only qualifying documents, so a disjoint text hit set is empty.",
+      "evidence": [
+        "E01",
+        "E02",
+        "E05",
+        "E09",
+        "E10",
+        "E11"
+      ]
+    },
+    {
+      "claim": "Preserve no-restriction vs explicit-empty vs nonempty restriction at the handoff and consumer, or short-circuit a computed zero result safely. Test zero-result FTS plus ordinary unrestricted, overlap, disjoint and forward/scalar controls.",
+      "evidence": [
+        "E06",
+        "E07",
+        "E08",
+        "E09",
+        "F01",
+        "F02",
+        "F03"
+      ]
+    }
+  ]
+}

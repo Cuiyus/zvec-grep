@@ -1,0 +1,109 @@
+commit a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59
+Author:     egolearner <jiliang.ljl@alibaba-inc.com>
+AuthorDate: Fri Jul 10 15:20:51 2026 +0800
+Commit:     GitHub <noreply@github.com>
+CommitDate: Fri Jul 10 15:20:51 2026 +0800
+
+    fix(fts): preserve zero-match filter semantics (#584)
+
+diff --git a/src/db/index/column/fts_column/fts_column_indexer.cc b/src/db/index/column/fts_column/fts_column_indexer.cc
+index e0aaa74..7fc66a8 100644
+--- a/src/db/index/column/fts_column/fts_column_indexer.cc
++++ b/src/db/index/column/fts_column/fts_column_indexer.cc
+@@ -206,11 +206,14 @@ Result<std::vector<FtsResult>> FtsColumnIndexer::search(
+   // Candidate-driven mode: AND a CandidateDocIterator into the root so the
+   // small candidate set leads (Conjunction sorts by cost asc), turning the
+   // posting walk into per-candidate advance()+matches()+score().
+-  if (!query_params.candidate_ids.empty()) {
++  if (query_params.candidate_ids) {
++    if (query_params.candidate_ids->empty()) {
++      return std::vector<FtsResult>{};
++    }
+     std::vector<DocIteratorPtr> musts;
+     musts.reserve(2);
+     musts.push_back(
+-        std::make_unique<CandidateDocIterator>(query_params.candidate_ids));
++        std::make_unique<CandidateDocIterator>(*query_params.candidate_ids));
+     musts.push_back(std::move(root_iter));
+     root_iter = std::make_unique<ConjunctionIterator>(
+         std::move(musts), std::vector<DocIteratorPtr>{});
+diff --git a/src/db/index/column/fts_column/fts_types.h b/src/db/index/column/fts_column/fts_types.h
+index 9544e9a..7d96a14 100644
+--- a/src/db/index/column/fts_column/fts_types.h
++++ b/src/db/index/column/fts_column/fts_types.h
+@@ -15,6 +15,7 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <optional>
+ #include <string>
+ #include <vector>
+ #include "db/index/common/index_filter.h"
+@@ -28,11 +29,11 @@ struct FtsQueryParams {
+   // Wraps zvec::IndexFilter for push-down filtering inside the search loop.
+   IndexFilter::Ptr filter{nullptr};
+   // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;
+-  // when non-empty, FtsColumnIndexer restricts evaluation to this set by
+-  // AND-ing it with the root iterator. Filled by the planner via
++  // nullopt means no candidate restriction, while a present empty vector
++  // means no document can match. Filled by the planner via
+   // DocFilter::get_bf_by_keys_and_update when an invert result is highly
+   // selective.
+-  std::vector<uint64_t> candidate_ids;
++  std::optional<std::vector<uint64_t>> candidate_ids;
+ };
+ 
+ /*! Per-segment statistics needed by the FTS reducer for doc_id remapping.
+diff --git a/tests/db/index/column/fts_column/fts_column_indexer_test.cc b/tests/db/index/column/fts_column/fts_column_indexer_test.cc
+index e9b816e..0b0702a 100644
+--- a/tests/db/index/column/fts_column/fts_column_indexer_test.cc
++++ b/tests/db/index/column/fts_column/fts_column_indexer_test.cc
+@@ -1778,7 +1778,8 @@ TEST_F(FtsColumnIndexerTest, BruteForceCoexistsWithFilterPushdown) {
+ 
+   zvec::fts::FtsQueryParams qp;
+   qp.topk = 10;
+-  qp.candidate_ids = {0, 1, 2};          // candidates restrict to {0,1,2}
++  qp.candidate_ids =
++      std::vector<uint64_t>{0, 1, 2};    // candidates restrict to {0,1,2}
+   qp.filter = make_blocked_filter({1});  // further drop doc 1
+   auto ret = indexer->search(*ast, qp);
+   ASSERT_TRUE(ret.has_value());
+@@ -1792,9 +1793,8 @@ TEST_F(FtsColumnIndexerTest, BruteForceCoexistsWithFilterPushdown) {
+   EXPECT_EQ(ids[1], 2ull);
+ }
+ 
+-// Empty candidate_ids takes the regular posting-driven path (the wrap guard
+-// requires non-empty), so search still finds all matching docs.
+-TEST_F(FtsColumnIndexerTest, BruteForceEmptyCandidatesFallsBack) {
++// A present empty candidate_ids means the upstream filter matched no docs.
++TEST_F(FtsColumnIndexerTest, BruteForceEmptyCandidatesReturnsEmpty) {
+   auto indexer = make_indexer("content");
+   EXPECT_TRUE(indexer->insert(0, "alpha beta").has_value());
+   EXPECT_TRUE(indexer->insert(1, "alpha gamma").has_value());
+@@ -1802,7 +1802,7 @@ TEST_F(FtsColumnIndexerTest, BruteForceEmptyCandidatesFallsBack) {
+ 
+   std::vector<FtsResult> r;
+   EXPECT_TRUE(search_ok_with_candidates(*indexer, "alpha", 10, {}, &r));
+-  EXPECT_EQ(r.size(), 2u);
++  EXPECT_TRUE(r.empty());
+ }
+ 
+ // Regression guard: a null filter yields the same doc_ids and scores as the
+diff --git a/tests/db/sqlengine/fts_recall_test.cc b/tests/db/sqlengine/fts_recall_test.cc
+index 0a1ec38..5b66523 100644
+--- a/tests/db/sqlengine/fts_recall_test.cc
++++ b/tests/db/sqlengine/fts_recall_test.cc
+@@ -528,6 +528,13 @@ TEST_F(FtsRecallTest, FtsSearchWithFilter_TopkRespected) {
+   EXPECT_LE(result->size(), 1u);
+ }
+ 
++// "apple" matches docs 0,3,5, but no doc has tag=999.
++TEST_F(FtsRecallTest, FtsSearchWithFilter_ZeroMatchesReturnsEmpty) {
++  auto result = fts_search_with_filter("apple", "tag = 999");
++  ASSERT_TRUE(result.has_value()) << result.error().c_str();
++  EXPECT_TRUE(result->empty());
++}
++
+ // An FTS field can only be used as a query target, not as a filter condition.
+ // Putting the FTS field ("content") in the WHERE filter must be rejected.
+ TEST_F(FtsRecallTest, FtsFieldNotAllowedInFilter) {

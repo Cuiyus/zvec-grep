@@ -1,0 +1,69 @@
+{
+  "merged_fix_and_parent_verified": {
+    "url": "https://github.com/alibaba/zvec/pull/731",
+    "merged": true,
+    "mergedAt": "2026-09-09T07:06:04Z",
+    "mergeCommit": {
+      "oid": "31d88ea3e95430b79d12e2461dabc3ab3de5bcc0",
+      "parents": {
+        "nodes": [
+          {
+            "oid": "68078e55e7ae9d705b8829b5d416e022060bebf7"
+          }
+        ]
+      }
+    },
+    "closingIssuesReferences": {
+      "nodes": [
+        {
+          "number": 724,
+          "url": "https://github.com/alibaba/zvec/issues/724"
+        }
+      ]
+    }
+  },
+  "old_filter_present": true,
+  "new_filter_absent": true,
+  "regression_names_present": [
+    "Feature_Optimize_Delete_RowMapping",
+    "Feature_Optimize_Upsert_RowMapping",
+    "Feature_CreateIndex_Delete_RowMapping"
+  ],
+  "runtime_reproduction_performed": false,
+  "build_or_dependencies_installed": false,
+  "solver_or_ci_run": false,
+  "interpretation": "Static source and merged regression-test inspection only; test source is not a passing test execution.",
+  "r2_static_evidence": {
+    "hnsw_schema_not_initially_marked_indexed": {
+      "reference": "initial_indexed_flag",
+      "assertion": "Create only calls add_indexed_vector_field when schema index type is FLAT."
+    },
+    "initial_vectors_use_flat_storage": {
+      "references": [
+        "writes",
+        "initial_flat_storage",
+        "default_flat_params"
+      ],
+      "assertion": "Insertion initializes memory components and default parameters return FlatIndexParams."
+    },
+    "flush_preserves_available_vector_storage": {
+      "reference": "flush_vector_transfer",
+      "assertion": "FLAT memory vector indexers are moved into persisted vector_indexers with physical block counts."
+    },
+    "target_index_build_and_skip": {
+      "references": [
+        "record_indexed_flag",
+        "same_index_skip"
+      ],
+      "assertion": "Building records indexed fields; later same-parameter creation returns early."
+    },
+    "scalar_enumeration_direct_evidence": {
+      "references": [
+        "scalar_forward_scan",
+        "scalar_delete_predicate"
+      ],
+      "assertion": "forward_scan filters LOCAL_ROW_ID with the segment delete predicate."
+    },
+    "method": "Inspected exact frozen source; no engine or solver execution."
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "status": "candidate source-grounded draft, not admitted to dataset and not solver-tested",
+  "issue": "https://github.com/alibaba/zvec/issues/724",
+  "pre_fix_commit": "68078e55e7ae9d705b8829b5d416e022060bebf7",
+  "total_points": 10,
+  "grading_policy": "Score the causal explanation and valid pre-fix source citations, not exact function-name phrasing. Partial credit is allowed. Do not award points merely for repeating the scenario. Post-fix evidence is evaluator-only corroboration; solver gets only the pre-fix export and prompt.",
+  "criteria": [
+    {
+      "id": "physical_vs_live",
+      "points": 1,
+      "claim": "Deletes mark tombstones without removing physical forward rows; an upsert likewise tombstones the old ID and appends a new row. Thus physical and live counts differ, and stats count live rows using the delete filter. The prompt only requires the delete route.",
+      "references": [
+        "writes",
+        "live_count",
+        "segment_count"
+      ]
+    },
+    {
+      "id": "maintenance_branch",
+      "points": 2,
+      "claim": "optimize seals nonempty writing data and snapshots persisted segments. With a small deletion fraction the planner does not physically purge rows; a single group/segment uses CreateVectorIndexTask and create_all_vector_index/create_vector_index. The actual criterion is live < physical * (1 - 0.3); three of 28 is below that deletion threshold. It is not generic deletion loss in every optimize call.",
+      "references": [
+        "optimize_entry",
+        "task_policy",
+        "threshold",
+        "create_vector_path"
+      ]
+    },
+    {
+      "id": "broken_mapping",
+      "points": 2,
+      "claim": "The in-place index-build helper passes the segment deletion filter into Merge. The filter resolves original row positions to deleted global IDs. Merge enables PK rewrite and the reducer skips filtered vectors while assigning surviving vectors consecutive IDs. Forward rows/doc_ids and new block metadata retain physical positions/counts, so compact vector keys no longer denote the same forward rows.",
+      "references": [
+        "delete_filter",
+        "create_vector_path",
+        "merge_bridge",
+        "pk_rewrite",
+        "dense_renumber"
+      ]
+    },
+    {
+      "id": "symptoms_and_persistence",
+      "points": 1,
+      "claim": "Search keys are interpreted as segment row indices when fetching forward IDs/fields; point vector fetch uses the original physical row/block offset. This explains wrong associations and high-row vector-fetch failure while scalar-only access and live counts can agree. Flushed replacement index/metadata and reload explain why reopening is not a repair. Do not reduce the fault to harmless ANN recall or missing scalar rows.",
+      "references": [
+        "search_keys",
+        "search_forward_join",
+        "scalar_fetch",
+        "vector_fetch",
+        "live_count",
+        "persist_reload"
+      ]
+    },
+    {
+      "id": "bounded_controls",
+      "points": 1,
+      "claim": "Empty optimize returns without persisted content. A clean initial index build has no deleted rows to skip; later same-parameter index creation can be skipped once indexed, and non-purging multi-segment compaction keeps scalar/vector row treatment aligned. This explains the stated clean-first control, not a universal lifetime immunity of every directory.",
+      "references": [
+        "optimize_entry",
+        "create_vector_path",
+        "task_policy",
+        "compact_scalar_vector",
+        "compact_filter_bitmap"
+      ]
+    },
+    {
+      "id": "high_delete_path",
+      "points": 1,
+      "claim": "Above the deletion threshold, true CompactTask passes the delete filter through scalar reduction, constructs a bitmap of omitted original row positions, and uses the matching row filter for vector reduction. Both spaces are compacted together. Therefore skipping tombstoned vectors is appropriate there, unlike a vector-only rebuild over unchanged forward rows.",
+      "references": [
+        "task_policy",
+        "compact_scalar_vector",
+        "compact_forward_rewrite",
+        "compact_filter_bitmap"
+      ]
+    },
+    {
+      "id": "repair_invariant",
+      "points": 1,
+      "claim": "A vector-only rebuild must retain tombstoned vector slots when forward rows are unchanged; or both sides would need coordinated remapping. Passing no deletion filter on the former path is the targeted correction, while deletion filtering at query time and coordinated full compaction remain necessary.",
+      "references": [
+        "create_vector_path",
+        "query_delete_filter",
+        "compact_scalar_vector"
+      ],
+      "evaluator_only_corroboration": [
+        "fixed_filter"
+      ]
+    },
+    {
+      "id": "regression_design",
+      "points": 1,
+      "claim": "Use independent distinct vectors (for example basis vectors) and compare expected ID plus payload for each live document after deletion/overwrite and optimize, including read-only reopen and clean/empty controls. Count-only tests are inadequate. Tests should target below-threshold single-segment rebuild and compare real compaction; a same-document-ID query is not an independent vector oracle.",
+      "references": [
+        "search_forward_join",
+        "vector_fetch"
+      ],
+      "evaluator_only_corroboration": [
+        "regression_oracle",
+        "regression_delete_upsert",
+        "regression_create_index"
+      ]
+    }
+  ],
+  "not_required_or_not_proven": [
+    "Windows-specific cause",
+    "all index types or all versions have identical behavior",
+    "segfault mechanism or dimension/volume thresholds",
+    "exactly K missing IDs under every segment topology",
+    "global durable directory immunity after one optimize",
+    "ANN top-k or recall guarantees across arbitrary data"
+  ],
+  "disqualifying_overclaims": [
+    "Treat original tail-only account as complete and deny wrong-vector associations",
+    "Claim every overwrite/delete followed by optimize is affected regardless of path",
+    "Recommend repairing only absent tail rows using vectors fetched from the affected index as a complete repair",
+    "Claim local runtime reproduction or passing upstream tests without evidence"
+  ]
+}

@@ -1,0 +1,2566 @@
+// Copyright 2025-present the zvec project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+#include <ailego/io/file_lock.h>
+#include <zvec/ailego/io/file.h>
+#include <zvec/ailego/logger/logger.h>
+#include <zvec/ailego/pattern/expected.hpp>
+#include <zvec/ailego/utility/file_helper.h>
+#include <zvec/db/collection.h>
+#include <zvec/db/doc.h>
+#include <zvec/db/doc_iterator.h>
+#include <zvec/db/options.h>
+#include <zvec/db/reranker.h>
+#include <zvec/db/schema.h>
+#include <zvec/db/status.h>
+#include "db/collection_query_internal.h"
+#include "db/common/constants.h"
+#include "db/common/file_helper.h"
+#include "db/common/global_resource.h"
+#include "db/common/profiler.h"
+#include "db/common/typedef.h"
+#include "db/doc_iterator_internal.h"
+#include "db/index/common/delete_store.h"
+#include "db/index/common/id_map.h"
+#include "db/index/common/index_filter.h"
+#include "db/index/common/type_helper.h"
+#include "db/index/common/version_manager.h"
+#include "db/index/segment/segment.h"
+#include "db/index/segment/segment_helper.h"
+#include "db/index/segment/segment_manager.h"
+#include "db/sqlengine/sqlengine.h"
+#include "zvec/core/interface/index.h"
+
+namespace zvec {
+
+
+enum class WriteMode : uint8_t {
+  UNDEFINED = 0,
+  INSERT,
+  UPDATE,
+  UPSERT,
+};
+
+
+Collection::~Collection() = default;
+
+class CollectionImpl : public Collection {
+  friend class Collection;
+
+ public:
+  explicit CollectionImpl(const std::string &path,
+                          const CollectionSchema &schema);
+
+  explicit CollectionImpl(const std::string &path);
+
+  ~CollectionImpl() override;
+
+ private:
+  Status open(const CollectionOptions &options);
+
+ public:
+  Status close() override;
+
+  Status destroy() override;
+
+  Status flush() override;
+
+  Result<std::string> path() const override;
+
+  Result<CollectionStats> stats() const override;
+
+  Result<CollectionSchema> schema() const override;
+
+  Result<CollectionOptions> options() const override;
+
+ public:
+  Status create_index(const std::string &column_name,
+                      const IndexParams::Ptr &index_params,
+                      const CreateIndexOptions &options) override;
+
+  Status drop_index(const std::string &column_name) override;
+
+  Status optimize(const OptimizeOptions &options) override;
+
+  Status add_column(const FieldSchema::Ptr &column_schema,
+                    const std::string &expression,
+                    const AddColumnOptions &options) override;
+
+  Status drop_column(const std::string &column_name) override;
+
+  Status alter_column(
+      const std::string &column_name, const std::string &rename,
+      const FieldSchema::Ptr &new_column_schema = nullptr,
+      const AlterColumnOptions &options = AlterColumnOptions()) override;
+
+  Result<WriteResults> insert(std::vector<Doc> &docs) override;
+
+  Result<WriteResults> upsert(std::vector<Doc> &docs) override;
+
+  Result<WriteResults> update(std::vector<Doc> &docs) override;
+
+  Result<WriteResults> delete_(const std::vector<std::string> &pks) override;
+
+  Status delete_by_filter(const std::string &filter) override;
+
+  Result<DocPtrList> query(const SearchQuery &query) const override;
+
+  Result<DocPtrList> query(const MultiQuery &query) const override;
+
+  Result<GroupResults> group_by_query(
+      const GroupByVectorQuery &query) const override;
+
+  Result<DocPtrMap> fetch(const std::vector<std::string> &pks,
+                          const std::optional<std::vector<std::string>>
+                              &output_fields = std::nullopt,
+                          bool include_vector = true) const override;
+
+  Result<DocIterator::Ptr> create_iterator(
+      const IteratorOptions &options = {}) override;
+
+  Result<std::string> debug_get_hnsw_storage_mode(
+      const std::string &column_name) const override;
+
+  // Execute a query and capture the docs together with a shared_ptr snapshot of
+  // schema_, all within a single shared lock on schema_handle_mtx_. Used by the
+  // internal query_result_snapshot() free functions below. Public because those
+  // free functions are not members/friends, but CollectionImpl itself is not
+  // exposed in any public header, so this stays internal to this .cc.
+  template <typename Query>
+  Result<internal::QueryResultSnapshot> query_result_snapshot_impl(
+      const Query &query) const;
+
+ private:
+  // Query bodies without locking; the caller must hold schema_handle_mtx_
+  // (at least shared) for the whole duration.
+  Result<DocPtrList> query_unsafe(const SearchQuery &query) const;
+
+  Result<DocPtrList> query_unsafe(const MultiQuery &query) const;
+
+  void prepare_schema();
+
+  Status close_internal();
+  Status close_locked();
+  Status close_unsafe();
+
+  Status flush_unsafe();
+
+  Status create();
+
+  Status recovery();
+
+  Status create_idmap_and_delete_store();
+
+  Status recover_idmap_and_delete_store();
+
+  void cleanup_orphan_segment_dirs(const Version &version);
+
+  Status acquire_file_lock(bool create = false);
+
+  Status init_version_manager();
+
+  Status init_writing_segment();
+
+  bool need_switch_to_new_segment() const;
+
+  Status switch_to_new_segment_for_writing(
+      const CollectionSchema::Ptr &schema = nullptr);
+
+  Status commit_schema_change_with_new_writing_segment(
+      const CollectionSchema::Ptr &new_schema,
+      const Segment::Ptr &old_writing_segment, const Version &old_version,
+      Version *new_version, uint64_t writing_min_doc_id);
+
+  Result<WriteResults> write_impl(std::vector<Doc> &docs, WriteMode mode);
+
+  // Columns for Segment::scan: system columns (+ LOCAL_ROW_ID when vectors
+  // are needed) plus the requested forward fields (all when nullopt).
+  Result<std::vector<std::string>> build_iterator_columns(
+      const IteratorOptions &options) const;
+
+  // Builds the iterator state (schema snapshot, sealed segment list, cloned
+  // delete store, scan columns and delete filter) into a DocIterator::Impl.
+  // The caller (create_iterator) holds schema_handle_mtx_ exclusively and
+  // registers the active-iterator count.
+  Result<std::unique_ptr<DocIterator::Impl>> prepare_iterate(
+      const IteratorOptions &options);
+
+  std::vector<Segment::Ptr> get_all_segments() const;
+
+  std::vector<Segment::Ptr> get_all_persist_segments() const;
+
+  Segment::Ptr local_segment_by_doc_id(
+      uint64_t doc_id, const std::vector<Segment::Ptr> &segments) const;
+
+  SegmentID allocate_segment_id() {
+    return segment_id_allocator_.fetch_add(1);
+  }
+
+  SegmentID allocate_segment_id_for_tmp_segment() {
+    return tmp_segment_id_allocator_.fetch_add(1);
+  }
+
+  std::vector<SegmentTask::Ptr> build_compact_task(
+      const CollectionSchema::Ptr &schema,
+      const std::vector<Segment::Ptr> &segments, int concurrency,
+      const IndexFilter::Ptr filter);
+
+  Status execute_compact_task(std::vector<SegmentTask::Ptr> &tasks) const;
+
+  std::vector<SegmentTask::Ptr> build_create_vector_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column,
+      const IndexParams::Ptr &index_params, int concurrency);
+
+  std::vector<SegmentTask::Ptr> build_create_scalar_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column,
+      const IndexParams::Ptr &index_params, int concurrency);
+
+  std::vector<SegmentTask::Ptr> build_drop_vector_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column);
+
+  std::vector<SegmentTask::Ptr> build_drop_scalar_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column);
+
+  std::vector<SegmentTask::Ptr> build_create_fts_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column,
+      const IndexParams::Ptr &index_params);
+
+  std::vector<SegmentTask::Ptr> build_drop_fts_index_task(
+      const std::vector<Segment::Ptr> &segments, const std::string &column);
+
+  Status execute_tasks(std::vector<SegmentTask::Ptr> &tasks) const;
+
+ private:
+  //! Rejects while iterators are open; caller holds schema_handle_mtx_
+  //! exclusively, under which the count only changes.
+  Status check_no_active_iterators(const char *operation) const {
+    if (active_iterators_ > 0) {
+      return Status::FailedPrecondition(
+          operation,
+          " is not allowed while iterators are open; "
+          "close all iterators first");
+    }
+    return Status::OK();
+  }
+
+  // Called via Impl::release_slot when an iterator is closed or destroyed.
+  void decrement_active_iterators();
+
+  Status handle_upsert(Doc &doc);
+
+  Status handle_update(Doc &doc);
+
+  Status handle_insert(Doc &doc);
+
+  Status internal_fetch_by_doc(const Doc &doc, Doc::Ptr *doc_out);
+
+ private:
+  // Helper functions for add/alter/drop column
+  Status validate(const std::string &column, const FieldSchema::Ptr &schema,
+                  const std::string &expression, const std::string &rename,
+                  ColumnOp op);
+
+ private:
+  std::string path_;
+
+  bool destroyed_{false};
+
+  // Atomic because path() is the one accessor that reads it without holding
+  // schema_handle_mtx_, while close() writes it under the exclusive lock.
+  std::atomic<bool> closed_{false};
+
+  CollectionSchema::Ptr schema_;
+
+  CollectionOptions options_;
+
+  mutable std::shared_mutex schema_handle_mtx_;
+  // Number of open iterators, guarded by schema_handle_mtx_ (exclusive).
+  int active_iterators_{0};
+  // Signalled when the count reaches zero; close_internal waits on it.
+  std::condition_variable_any iterator_cv_;
+  // Guards writes and every read that includes the mutable writing segment.
+  // Readers take this shared for the complete query/fetch operation so the
+  // segment's forward store, indexes and metadata form one visible state.
+  mutable std::shared_mutex write_mtx_;
+  // Serializes maintenance operations (optimize, schema DDL, close and
+  // destroy) without holding schema_handle_mtx_, so a maintenance
+  // operation waiting for a running optimize never becomes a pending
+  // exclusive acquirer of the schema lock (which would block new readers).
+  // Lock order: maintenance -> schema -> write -> SegmentManager; never
+  // acquire maintenance_mtx_ after any of the others.
+  mutable std::mutex maintenance_mtx_;
+
+  std::atomic<SegmentID> segment_id_allocator_;
+  std::atomic<SegmentID> tmp_segment_id_allocator_;
+
+  // writing segment
+  Segment::Ptr writing_segment_;
+  // non-writing segments, sort by doc_id range
+  SegmentManager::Ptr segment_manager_;
+
+  // latest version: std::vector<SegmentMeta>
+  VersionManager::Ptr version_manager_;
+
+  // file lock
+  ailego::File lock_file_;
+
+  IDMap::Ptr id_map_;
+  DeleteStore::Ptr delete_store_;
+
+  sqlengine::SQLEngine::Ptr sql_engine_;
+};
+
+Result<Collection::Ptr> Collection::CreateAndOpen(
+    const std::string &path, const CollectionSchema &schema,
+    const CollectionOptions &options) {
+  auto collection = std::make_shared<CollectionImpl>(path, schema);
+
+  auto s = collection->open(options);
+  CHECK_RETURN_STATUS_EXPECTED(s);
+
+  return collection;
+}
+
+Result<Collection::Ptr> Collection::Open(const std::string &path,
+                                         const CollectionOptions &options) {
+  auto collection = std::make_shared<CollectionImpl>(path);
+
+  auto s = collection->open(options);
+  CHECK_RETURN_STATUS_EXPECTED(s);
+
+  return collection;
+}
+
+CollectionImpl::CollectionImpl(const std::string &path,
+                               const CollectionSchema &schema)
+    : path_(path), schema_(std::make_shared<CollectionSchema>(schema)) {
+  prepare_schema();
+}
+
+void CollectionImpl::prepare_schema() {
+  // set default index params for vector fields
+  for (auto &field : schema_->fields()) {
+    if (field->is_vector_field()) {
+      if (field->index_params() == nullptr) {
+        field->set_index_params(DefaultVectorIndexParams);
+      }
+    }
+  }
+}
+
+CollectionImpl::CollectionImpl(const std::string &path) : path_(path) {}
+
+CollectionImpl::~CollectionImpl() {
+  if (!destroyed_ && !closed_) {
+    close_internal();
+  }
+}
+
+Status CollectionImpl::open(const CollectionOptions &options) {
+  options_ = options;
+
+  if (schema_ != nullptr && options_.read_only_) {
+    return Status::InvalidArgument(
+        "Unable to create collection with read-only mode.");
+  }
+
+  Status s;
+  if (schema_ == nullptr) {
+    // recovery from disk
+    s = recovery();
+  } else {
+    // create new collection with existing schema
+    s = create();
+  }
+
+  auto profiler = std::make_shared<Profiler>();
+  sql_engine_ = sqlengine::SQLEngine::create(profiler);
+
+  return s;
+}
+
+Status CollectionImpl::close() {
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("close"));
+
+  return close_locked();
+}
+
+// Used only from the destructor, which cannot report errors: waiting is
+// the only way to still release resources when iterators are open.
+Status CollectionImpl::close_internal() {
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+
+  if (active_iterators_ > 0) {
+    LOG_WARN(
+        "the collection is being destroyed while %d iterator(s) are "
+        "open; waiting for them to close",
+        active_iterators_);
+    iterator_cv_.wait(lock, [&] { return active_iterators_ == 0; });
+  }
+
+  return close_locked();
+}
+
+// Requires maintenance_mtx_ and schema_handle_mtx_ (exclusive).
+Status CollectionImpl::close_locked() {
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+
+  // closing twice is a no-op
+  if (closed_) {
+    return Status::OK();
+  }
+  closed_ = true;
+
+  return close_unsafe();
+}
+
+Status CollectionImpl::close_unsafe() {
+  Status result = Status::OK();
+
+  // flush
+  if (!options_.read_only_) {
+    auto s = flush_unsafe();
+    if (!s.ok()) {
+      result = s;
+    }
+  }
+
+  // always release resources regardless of flush outcome
+  writing_segment_.reset();
+  segment_manager_.reset();
+  version_manager_.reset();
+  id_map_.reset();
+  delete_store_.reset();
+
+  lock_file_.close();
+
+  return result;
+}
+
+Status CollectionImpl::destroy() {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("destroy"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  auto s = close_unsafe();
+  CHECK_RETURN_STATUS(s);
+
+  ailego::FileHelper::RemoveDirectory(path_.c_str());
+
+  destroyed_ = true;
+
+  return Status::OK();
+}
+
+Status CollectionImpl::flush() {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  // Only flushes the writing segment's WAL (no schema/segment-structure
+  // change), so it needs neither maintenance_mtx_ nor exclusion from a
+  // running optimize.
+  std::lock_guard lock(schema_handle_mtx_);
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  return flush_unsafe();
+}
+
+Status CollectionImpl::flush_unsafe() {
+  if (!writing_segment_) {
+    return Status::InternalError(
+        "flush writing segment failed because writing segment is nullptr");
+  }
+  return writing_segment_->flush();
+}
+
+Result<std::string> CollectionImpl::path() const {
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  return path_;
+}
+
+Result<CollectionStats> CollectionImpl::stats() const {
+  std::shared_lock<std::shared_mutex> lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  // Shared write_mtx_ before reading the segment list: get_all_segments()
+  // reads writing_segment_ and doc_count() below iterates doc_ids_, both
+  // of which Insert mutates under the exclusive write_mtx_.
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+
+  auto segments = get_all_segments();
+
+  CollectionStats stats;
+  auto vector_fields = schema_->vector_fields();
+  if (segments.empty()) {
+    stats.doc_count = 0;
+    for (auto &field : vector_fields) {
+      stats.index_completeness[field->name()] =
+          1;  // if no doc, completeness is 1
+    }
+    return stats;
+  }
+
+  for (auto &segment : segments) {
+    stats.doc_count += segment->doc_count(delete_store_->make_filter());
+  }
+
+  for (auto &field : vector_fields) {
+    if (stats.doc_count == 0) {
+      stats.index_completeness[field->name()] = 1;
+      continue;
+    }
+
+    uint32_t indexed_doc_count{0};
+    for (auto &segment : segments) {
+      if (segment->meta()->vector_indexed(field->name())) {
+        indexed_doc_count += segment->doc_count(delete_store_->make_filter());
+      }
+    }
+    stats.index_completeness[field->name()] =
+        indexed_doc_count * 1.0 / stats.doc_count;
+  }
+
+  return stats;
+}
+
+Result<CollectionSchema> CollectionImpl::schema() const {
+  std::shared_lock<std::shared_mutex> lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  return *schema_;
+}
+
+Result<CollectionOptions> CollectionImpl::options() const {
+  std::shared_lock<std::shared_mutex> lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  return options_;
+}
+
+Status CollectionImpl::create_index(const std::string &column_name,
+                                    const IndexParams::Ptr &index_params,
+                                    const CreateIndexOptions &options) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("create_index"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  if (index_params == nullptr) {
+    return Status::InvalidArgument("create_index: index_params is null");
+  }
+
+  auto new_schema = std::make_shared<CollectionSchema>(*schema_);
+  auto s = new_schema->add_index(column_name, index_params);
+  CHECK_RETURN_STATUS(s);
+  s = new_schema->validate();
+  CHECK_RETURN_STATUS(s);
+
+  auto field = schema_->get_field(column_name);
+  if (field->index_params() != nullptr &&
+      *field->index_params() == *index_params) {
+    // equal index params
+    return Status::OK();
+  }
+
+  // Reject creating a non-vector index when the column already has a different
+  // non-vector index type (e.g. adding FTS when INVERT exists, or vice versa).
+  if (!field->is_vector_field() && field->index_params() != nullptr &&
+      field->index_params()->type() != index_params->type()) {
+    return Status::NotSupported(
+        "create_index: column[", column_name, "] already has index type [",
+        IndexTypeCodeBook::AsString(field->index_params()->type()),
+        "], cannot create index type [",
+        IndexTypeCodeBook::AsString(index_params->type()),
+        "] on the same column");
+  }
+
+  // forbidden writing until index is ready
+  std::lock_guard write_lock(write_mtx_);
+
+  if (writing_segment_->has_record()) {
+    s = switch_to_new_segment_for_writing();
+    CHECK_RETURN_STATUS(s);
+  }
+
+  auto old_writing_segment = writing_segment_;
+  Version old_version = version_manager_->get_current_version();
+  Version new_version = old_version;
+  auto writing_min_doc_id = old_writing_segment->meta()->min_doc_id();
+
+  // DDL tasks only run on persisted segments. Non-empty writing segment has
+  // already been switched to a persisted segment above.
+  auto persist_segments = get_all_persist_segments();
+
+  bool is_vector_field = field->is_vector_field();
+
+  std::vector<SegmentTask::Ptr> tasks;
+  if (is_vector_field) {
+    tasks = build_create_vector_index_task(persist_segments, column_name,
+                                           index_params, options.concurrency_);
+  } else if (index_params->type() == IndexType::INVERT) {
+    tasks = build_create_scalar_index_task(persist_segments, column_name,
+                                           index_params, options.concurrency_);
+  } else if (index_params->type() == IndexType::FTS) {
+    tasks = build_create_fts_index_task(persist_segments, column_name,
+                                        index_params);
+  } else {
+    return Status::NotSupported(
+        "create_index: index type [",
+        IndexTypeCodeBook::AsString(index_params->type()),
+        "] is not supported");
+  }
+
+  if (!tasks.empty()) {
+    s = execute_tasks(tasks);
+    CHECK_RETURN_STATUS(s);
+  }
+
+  new_version.set_schema(*new_schema);
+
+  for (auto &task : tasks) {
+    auto task_info = task->task_info();
+
+    if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+      auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          create_index_task.output_segment_meta_);
+    } else if (std::holds_alternative<CreateScalarIndexTask>(task_info)) {
+      auto create_index_task = std::get<CreateScalarIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          create_index_task.output_segment_meta_);
+    } else if (std::holds_alternative<CreateFtsIndexTask>(task_info)) {
+      auto fts_task = std::get<CreateFtsIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          fts_task.output_segment_meta_);
+    }
+    CHECK_RETURN_STATUS(s);
+  }
+
+  s = commit_schema_change_with_new_writing_segment(
+      new_schema, old_writing_segment, old_version, &new_version,
+      writing_min_doc_id);
+  CHECK_RETURN_STATUS(s);
+
+  // 4. remove old segments or block
+  for (auto &task : tasks) {
+    auto task_info = task->task_info();
+
+    if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+      auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+      s = create_index_task.input_segment_->reload_vector_index(
+          *new_schema, create_index_task.output_segment_meta_,
+          create_index_task.output_vector_indexers_,
+          create_index_task.output_quant_vector_indexers_);
+    } else if (std::holds_alternative<CreateScalarIndexTask>(task_info)) {
+      auto create_index_task = std::get<CreateScalarIndexTask>(task_info);
+      s = create_index_task.input_segment_->reload_scalar_index(
+          *new_schema, create_index_task.output_segment_meta_,
+          create_index_task.output_scalar_indexer_);
+    } else if (std::holds_alternative<CreateFtsIndexTask>(task_info)) {
+      auto fts_task = std::get<CreateFtsIndexTask>(task_info);
+      s = fts_task.input_segment_->reload_fts_index(
+          *new_schema, fts_task.output_segment_meta_,
+          fts_task.output_fts_indexer_);
+    }
+    CHECK_RETURN_STATUS(s);
+  }
+
+  return Status::OK();
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_create_vector_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column,
+    const IndexParams::Ptr &index_params, int concurrency) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    if (!segment->vector_index_ready(column, index_params)) {
+      tasks.push_back(SegmentTask::CreateCreateVectorIndexTask(
+          CreateVectorIndexTask{segment, column, index_params, concurrency}));
+    }
+  }
+  return tasks;
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_create_scalar_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column,
+    const IndexParams::Ptr &index_params, int concurrency) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    tasks.push_back(SegmentTask::CreateCreateScalarIndexTask(
+        CreateScalarIndexTask{segment, {column}, index_params, concurrency}));
+  }
+  return tasks;
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_create_fts_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column,
+    const IndexParams::Ptr &index_params) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    tasks.push_back(SegmentTask::CreateCreateFtsIndexTask(
+        CreateFtsIndexTask{segment, column, index_params}));
+  }
+  return tasks;
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_drop_fts_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    tasks.push_back(
+        SegmentTask::CreateDropFtsIndexTask(DropFtsIndexTask{segment, column}));
+  }
+  return tasks;
+}
+
+Status CollectionImpl::execute_tasks(
+    std::vector<SegmentTask::Ptr> &tasks) const {
+  Status s;
+  for (auto &task : tasks) {
+    s = SegmentHelper::Execute(task);
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  return Status::OK();
+}
+
+Status CollectionImpl::drop_index(const std::string &column_name) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("drop_index"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  auto new_schema = std::make_shared<CollectionSchema>(*schema_);
+  auto s = new_schema->drop_index(column_name);
+  CHECK_RETURN_STATUS(s);
+
+  auto field = schema_->get_field(column_name);
+  if (field->index_params() == nullptr) {
+    return Status::OK();  // return ok if not indexed
+  }
+
+  if (field->is_vector_field() &&
+      *field->index_params() == DefaultVectorIndexParams) {
+    return Status::OK();
+  }
+
+  // forbidden writing until index is ready
+  std::lock_guard write_lock(write_mtx_);
+
+  if (writing_segment_->has_record()) {
+    s = switch_to_new_segment_for_writing();
+    CHECK_RETURN_STATUS(s);
+  }
+
+  auto old_writing_segment = writing_segment_;
+  Version old_version = version_manager_->get_current_version();
+  Version new_version = old_version;
+  auto writing_min_doc_id = old_writing_segment->meta()->min_doc_id();
+
+  auto persist_segments = get_all_persist_segments();
+
+  bool is_vector_field = field->is_vector_field();
+
+  std::vector<SegmentTask::Ptr> tasks;
+  if (is_vector_field) {
+    tasks = build_drop_vector_index_task(persist_segments, column_name);
+  } else if (field->index_params()->type() == IndexType::INVERT) {
+    tasks = build_drop_scalar_index_task(persist_segments, column_name);
+  } else if (field->index_params()->type() == IndexType::FTS) {
+    tasks = build_drop_fts_index_task(persist_segments, column_name);
+  } else {
+    return Status::NotSupported(
+        "drop_index: index type [",
+        IndexTypeCodeBook::AsString(field->index_params()->type()),
+        "] on column[", column_name, "] is not supported");
+  }
+
+  if (!tasks.empty()) {
+    s = execute_tasks(tasks);
+    CHECK_RETURN_STATUS(s);
+  }
+
+  new_version.set_schema(*new_schema);
+
+  for (auto &task : tasks) {
+    auto task_info = task->task_info();
+
+    if (std::holds_alternative<DropVectorIndexTask>(task_info)) {
+      auto drop_index_task = std::get<DropVectorIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          drop_index_task.output_segment_meta_);
+    } else if (std::holds_alternative<DropScalarIndexTask>(task_info)) {
+      auto drop_index_task = std::get<DropScalarIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          drop_index_task.output_segment_meta_);
+    } else if (std::holds_alternative<DropFtsIndexTask>(task_info)) {
+      auto fts_task = std::get<DropFtsIndexTask>(task_info);
+      s = new_version.update_persisted_segment_meta(
+          fts_task.output_segment_meta_);
+    }
+    CHECK_RETURN_STATUS(s);
+  }
+
+  s = commit_schema_change_with_new_writing_segment(
+      new_schema, old_writing_segment, old_version, &new_version,
+      writing_min_doc_id);
+  CHECK_RETURN_STATUS(s);
+
+  // 4. remove old segments or block
+  for (auto &task : tasks) {
+    auto task_info = task->task_info();
+
+    if (std::holds_alternative<DropVectorIndexTask>(task_info)) {
+      auto drop_index_task = std::get<DropVectorIndexTask>(task_info);
+      s = drop_index_task.input_segment_->reload_vector_index(
+          *new_schema, drop_index_task.output_segment_meta_,
+          drop_index_task.output_vector_indexers_);
+    } else if (std::holds_alternative<DropScalarIndexTask>(task_info)) {
+      auto drop_index_task = std::get<DropScalarIndexTask>(task_info);
+      s = drop_index_task.input_segment_->reload_scalar_index(
+          *new_schema, drop_index_task.output_segment_meta_,
+          drop_index_task.output_scalar_indexer_);
+    } else if (std::holds_alternative<DropFtsIndexTask>(task_info)) {
+      auto fts_task = std::get<DropFtsIndexTask>(task_info);
+      s = fts_task.input_segment_->reload_fts_index(
+          *new_schema, fts_task.output_segment_meta_,
+          fts_task.output_fts_indexer_);
+    }
+    CHECK_RETURN_STATUS(s);
+  }
+
+  return Status::OK();
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_drop_vector_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    tasks.emplace_back(SegmentTask::CreateDropVectorIndexTask(
+        DropVectorIndexTask{segment, column}));
+  }
+  return tasks;
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_drop_scalar_index_task(
+    const std::vector<Segment::Ptr> &segments, const std::string &column) {
+  std::vector<SegmentTask::Ptr> tasks;
+  for (auto &segment : segments) {
+    tasks.emplace_back(SegmentTask::CreateDropScalarIndexTask(
+        DropScalarIndexTask(segment, {column})));
+  }
+  return tasks;
+}
+
+Status CollectionImpl::optimize(const OptimizeOptions &options) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  // Serialize against other maintenance operations for the whole optimize.
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::vector<Segment::Ptr> persist_segments;
+
+  // Phase 1: exclusively seal the current writing segment and snapshot
+  // the persisted segment set.
+  {
+    std::unique_lock schema_lock(schema_handle_mtx_);
+    // Nothing has been built yet, so failing fast leaves nothing to clean.
+    CHECK_RETURN_STATUS(check_no_active_iterators("optimize"));
+    std::lock_guard write_lock(write_mtx_);
+
+    CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+    CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+    if (writing_segment_->has_record()) {
+      auto s = switch_to_new_segment_for_writing();
+      if (!s.ok()) {
+        return s;
+      }
+    }
+
+    persist_segments =
+        get_all_persist_segments();  // will not return writing segment
+  }
+
+  if (persist_segments.size() == 0) {
+    return Status::OK();
+  }
+
+  // Phase 2: lock-free optimize. Readers and writers proceed freely.
+  auto delete_store_clone = delete_store_->clone();
+  auto tasks =
+      build_compact_task(schema_, persist_segments, options.concurrency_,
+                         delete_store_clone->make_filter());
+  auto s = execute_compact_task(tasks);
+  CHECK_RETURN_STATUS(s);
+
+  // End of phase 2 (still lock-free): move built tmp segments to their
+  // final paths and open them before the manifest is persisted, so a
+  // failure aborts cleanly without a version/disk mismatch.
+  std::vector<Segment::Ptr> opened_segments;
+  std::vector<std::string> moved_dirs;
+  auto cleanup_moved_dirs = [&]() {
+    for (auto &dir : moved_dirs) {
+      FileHelper::RemoveDirectory(dir);
+    }
+  };
+  for (auto &task : tasks) {
+    auto task_info = task->task_info();
+    if (!std::holds_alternative<CompactTask>(task_info)) {
+      continue;
+    }
+    auto compact_task = std::get<CompactTask>(task_info);
+    if (!compact_task.output_segment_meta_) {
+      continue;
+    }
+
+    auto tmp_segment_path =
+        FileHelper::MakeTempSegmentPath(path_, compact_task.output_segment_id_);
+    auto new_segment_id = allocate_segment_id();
+    auto new_segment_path = FileHelper::MakeSegmentPath(path_, new_segment_id);
+
+    if (!FileHelper::MoveDirectory(tmp_segment_path, new_segment_path)) {
+      cleanup_moved_dirs();
+      return Status::InternalError("move segment directory failed");
+    }
+    moved_dirs.push_back(new_segment_path);
+    compact_task.output_segment_meta_->set_id(new_segment_id);
+
+    auto new_segment =
+        Segment::Open(path_, *schema_, *compact_task.output_segment_meta_,
+                      id_map_, delete_store_, version_manager_,
+                      SegmentOptions{true, options_.enable_mmap_});
+    if (!new_segment.has_value()) {
+      // best-effort cleanup: these directories are not referenced by any
+      // manifest yet, so remove them rather than leaking them on disk
+      cleanup_moved_dirs();
+      return new_segment.error();
+    }
+    opened_segments.push_back(new_segment.value());
+  }
+
+  // Phase 3: short exclusive commit. No readers can be using the old
+  // indexers — they all hold the shared schema lock — so in-place
+  // reload_vector_index() is safe.
+  {
+    // No iterator wait: phase 1 rejects open iterators and create_iterator
+    // is rejected while optimize holds maintenance_mtx_, so the count is
+    // zero here.
+    std::unique_lock schema_lock(schema_handle_mtx_);
+    std::lock_guard write_lock(write_mtx_);
+
+    Version new_version = version_manager_->get_current_version();
+
+    for (auto &task : tasks) {
+      auto task_info = task->task_info();
+
+      if (std::holds_alternative<CompactTask>(task_info)) {
+        auto compact_task = std::get<CompactTask>(task_info);
+
+        if (compact_task.output_segment_meta_) {
+          s = new_version.add_persisted_segment_meta(
+              compact_task.output_segment_meta_);
+          CHECK_RETURN_STATUS(s);
+          new_version.set_next_segment_id(segment_id_allocator_.load());
+        }
+
+        for (auto input_segment : compact_task.input_segments_) {
+          s = new_version.remove_persisted_segment_meta(input_segment->id());
+          CHECK_RETURN_STATUS(s);
+        }
+      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+        s = new_version.update_persisted_segment_meta(
+            create_index_task.output_segment_meta_);
+        CHECK_RETURN_STATUS(s);
+      }
+    }
+
+    s = version_manager_->apply(new_version);
+    CHECK_RETURN_STATUS(s);
+
+    s = version_manager_->flush();
+    CHECK_RETURN_STATUS(s);
+
+    // publish new segments, retire compacted inputs and reload rebuilt
+    // vector indexes
+    size_t opened_index = 0;
+    for (auto &task : tasks) {
+      auto task_info = task->task_info();
+
+      if (std::holds_alternative<CompactTask>(task_info)) {
+        auto compact_task = std::get<CompactTask>(task_info);
+
+        if (compact_task.output_segment_meta_) {
+          if (opened_index >= opened_segments.size()) {
+            return Status::InternalError("opened_segments index out of bounds");
+          }
+          s = segment_manager_->add_segment(opened_segments[opened_index++]);
+          CHECK_RETURN_STATUS(s);
+        }
+
+        for (auto input_segment : compact_task.input_segments_) {
+          s = segment_manager_->destroy_segment(input_segment->id());
+          CHECK_RETURN_STATUS(s);
+        }
+      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+
+        s = create_index_task.input_segment_->reload_vector_index(
+            *schema_, create_index_task.output_segment_meta_,
+            create_index_task.output_vector_indexers_,
+            create_index_task.output_quant_vector_indexers_);
+        CHECK_RETURN_STATUS(s);
+      }
+    }
+  }
+
+  // segment_manager_->destroy_segment() / Segment::destroy() closes the retired
+  // segments while the task still hold the shared_ptr of them. Clear to drop
+  // the compaction snapshots after releasing the write_mtx so the segment
+  // destructors perform recursive directory cleanup without blocking readers
+  // and writers.
+  tasks.clear();
+  persist_segments.clear();
+
+  return Status::OK();
+}
+
+std::vector<SegmentTask::Ptr> CollectionImpl::build_compact_task(
+    const CollectionSchema::Ptr &schema,
+    const std::vector<Segment::Ptr> &segments, int concurrency,
+    const IndexFilter::Ptr filter) {
+  std::vector<SegmentTask::Ptr> tasks;
+  if (segments.empty()) return tasks;
+
+  size_t current_physical_doc_count = 0;
+  size_t current_live_doc_count = 0;
+  for (auto &segment : segments) {
+    current_physical_doc_count += segment->doc_count();
+    current_live_doc_count += segment->doc_count(filter);
+  }
+  const bool purge_deleted_docs =
+      current_live_doc_count <
+      current_physical_doc_count * (1 - COMPACT_DELETE_RATIO_THRESHOLD);
+
+  auto max_doc_count_per_segment = schema->max_doc_count_per_segment();
+
+  std::vector<Segment::Ptr> current_group;
+  current_physical_doc_count = 0;
+  current_live_doc_count = 0;
+
+  for (const auto &seg : segments) {
+    const auto seg_physical_doc_count = seg->doc_count();
+    const auto seg_live_doc_count = seg->doc_count(filter);
+
+    if (!current_group.empty()) {
+      SegmentTask::Ptr task;
+      bool skip_task{false};
+      if (purge_deleted_docs) {
+        if (current_live_doc_count + seg_live_doc_count >
+            max_doc_count_per_segment) {
+          // Compaction physically removes deleted rows.
+          task = SegmentTask::CreateCompactTask(
+              CompactTask{path_, schema, current_group,
+                          allocate_segment_id_for_tmp_segment(), filter,
+                          !options_.enable_mmap_, concurrency});
+        }
+      } else {
+        if (current_physical_doc_count + seg_physical_doc_count >
+            max_doc_count_per_segment) {
+          if (current_group.size() == 1) {
+            task =
+                SegmentTask::CreateCreateVectorIndexTask(CreateVectorIndexTask{
+                    current_group[0], "", nullptr, concurrency});
+            skip_task = current_group[0]->all_vector_index_ready();
+          } else {
+            // Merge segments while preserving deleted rows.
+            task = SegmentTask::CreateCompactTask(
+                CompactTask{path_, schema, current_group,
+                            allocate_segment_id_for_tmp_segment(), nullptr,
+                            !options_.enable_mmap_, concurrency});
+          }
+        }
+      }
+
+      if (task) {
+        current_group.clear();
+        current_physical_doc_count = 0;
+        current_live_doc_count = 0;
+        if (!skip_task) {
+          tasks.push_back(task);
+        }
+      }
+    }
+
+    current_group.push_back(seg);
+    current_physical_doc_count += seg_physical_doc_count;
+    current_live_doc_count += seg_live_doc_count;
+  }
+
+  if (current_group.size() > 0) {
+    SegmentTask::Ptr task;
+    if (current_group.size() == 1 && !purge_deleted_docs) {
+      task = SegmentTask::CreateCreateVectorIndexTask(
+          CreateVectorIndexTask{current_group[0], "", nullptr, concurrency});
+    } else {
+      task = SegmentTask::CreateCompactTask(CompactTask{
+          path_, schema, current_group, allocate_segment_id_for_tmp_segment(),
+          purge_deleted_docs ? filter : nullptr, !options_.enable_mmap_,
+          concurrency});
+    }
+    tasks.push_back(task);
+  }
+
+  return tasks;
+}
+
+Status CollectionImpl::execute_compact_task(
+    std::vector<SegmentTask::Ptr> &tasks) const {
+  Status s;
+  for (auto &task : tasks) {
+    s = SegmentHelper::Execute(task);
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  return Status::OK();
+}
+
+Status CollectionImpl::validate(const std::string &column,
+                                const FieldSchema::Ptr &schema,
+                                const std::string &expression,
+                                const std::string &rename, ColumnOp op) {
+  auto check_data_type = [&](const FieldSchema *field) -> Status {
+    if (field->data_type() < DataType::INT32 ||
+        field->data_type() > DataType::DOUBLE) {
+      return Status::InvalidArgument(
+          "Only support basic numeric data type [int32, int64, uint32, uint64, "
+          "float, double]: ",
+          field->to_string());
+    }
+    return Status::OK();
+  };
+
+  switch (op) {
+    case ColumnOp::ADD: {
+      if (schema == nullptr) {
+        return Status::InvalidArgument("Column schema is null");
+      }
+
+      if (schema->name().empty()) {
+        return Status::InvalidArgument("Column name is empty");
+      }
+      if (schema_->has_field(schema->name())) {
+        return Status::InvalidArgument("column already exists: ",
+                                       schema->name());
+      }
+
+      auto s = schema->validate();
+      CHECK_RETURN_STATUS(s);
+
+      s = check_data_type(schema.get());
+      CHECK_RETURN_STATUS(s);
+
+      if (expression.empty() && !schema->nullable()) {
+        return Status::InvalidArgument(
+            "Add column is not supported for non-nullable column: ",
+            schema->name());
+      }
+
+      break;
+    }
+    case ColumnOp::ALTER: {
+      if (column.empty()) {
+        return Status::InvalidArgument("column name is empty");
+      }
+
+      if (!schema_->has_field(column)) {
+        return Status::InvalidArgument("column ", column, " not found");
+      }
+
+      if (!rename.empty() && schema) {
+        return Status::InvalidArgument(
+            "cannot specify both rename and new column schema");
+      }
+
+      auto *old_field_schema = schema_->get_field(column);
+      auto s = check_data_type(old_field_schema);
+      CHECK_RETURN_STATUS(s);
+
+      if (!rename.empty()) {
+        // rename case
+        if (schema_->has_field(rename)) {
+          return Status::InvalidArgument("new column name ", rename,
+                                         " already exists");
+        }
+      } else {
+        // schema change case
+        if (!schema) {
+          return Status::InvalidArgument("New column schema is null");
+        }
+
+        s = schema->validate();
+        CHECK_RETURN_STATUS(s);
+
+        if (schema->name().empty()) {
+          return Status::InvalidArgument("new column schema name is empty");
+        }
+
+        if (!schema->nullable() && old_field_schema->nullable()) {
+          return Status::InvalidArgument(
+              "new column schema is not nullable, but old column schema is "
+              "nullable");
+        }
+
+        if (*old_field_schema == *schema) {
+          // equal schema
+          return Status::OK();
+        }
+
+        s = check_data_type(schema.get());
+        CHECK_RETURN_STATUS(s);
+      }
+
+      break;
+    }
+    case ColumnOp::DROP: {
+      if (!schema_->has_field(column)) {
+        return Status::InvalidArgument("Column not exists: ", column);
+      }
+
+      auto *old_field_schema = schema_->get_field(column);
+      auto s = check_data_type(old_field_schema);
+      CHECK_RETURN_STATUS(s);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return Status::OK();
+}
+
+Status CollectionImpl::add_column(const FieldSchema::Ptr &column_schema,
+                                  const std::string &expression,
+                                  const AddColumnOptions &options) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("add_column"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  // validate
+  auto s = validate("", column_schema, expression, "", ColumnOp::ADD);
+  CHECK_RETURN_STATUS(s);
+
+  // forbidden writing until index is ready
+  std::lock_guard write_lock(write_mtx_);
+
+  auto new_schema = std::make_shared<CollectionSchema>(*schema_);
+  s = new_schema->add_field(column_schema);
+  CHECK_RETURN_STATUS(s);
+
+  if (writing_segment_->has_record()) {
+    s = switch_to_new_segment_for_writing();
+    CHECK_RETURN_STATUS(s);
+  }
+
+  Version new_version = version_manager_->get_current_version();
+
+  // add column on segment manager
+  s = segment_manager_->add_column(column_schema, expression,
+                                   options.concurrency_);
+  CHECK_RETURN_STATUS(s);
+
+  // reset writing segment with new schema
+  auto id = writing_segment_->id();
+  auto min_doc_id = writing_segment_->meta()->min_doc_id();
+
+  s = writing_segment_->destroy();
+  CHECK_RETURN_STATUS(s);
+  writing_segment_.reset();
+
+  SegmentOptions seg_options;
+  seg_options.enable_mmap_ = options_.enable_mmap_;
+  seg_options.max_buffer_size_ = options_.max_buffer_size_;
+  seg_options.read_only_ = options_.read_only_;
+  auto writing_segment =
+      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,
+                             delete_store_, version_manager_, seg_options);
+  if (!writing_segment) {
+    return writing_segment.error();
+  }
+  writing_segment_ = writing_segment.value();
+
+  // update new version
+  new_version.set_schema(*new_schema);
+  new_version.reset_writing_segment_meta(writing_segment_->meta());
+
+  auto new_segment_metas = segment_manager_->get_segments_meta();
+  for (auto meta : new_segment_metas) {
+    s = new_version.update_persisted_segment_meta(meta);
+    CHECK_RETURN_STATUS(s);
+  }
+
+  s = version_manager_->apply(new_version);
+  CHECK_RETURN_STATUS(s);
+
+  // persist manifest
+  s = version_manager_->flush();
+  CHECK_RETURN_STATUS(s);
+
+  schema_ = new_schema;
+
+  return Status::OK();
+}
+
+Status CollectionImpl::drop_column(const std::string &column_name) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("drop_column"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  // validate
+  auto s = validate(column_name, nullptr, "", "", ColumnOp::DROP);
+  CHECK_RETURN_STATUS(s);
+
+  // forbidden writing until index is ready
+  std::lock_guard write_lock(write_mtx_);
+
+  auto new_schema = std::make_shared<CollectionSchema>(*schema_);
+  s = new_schema->drop_field(column_name);
+  CHECK_RETURN_STATUS(s);
+
+  if (writing_segment_->has_record()) {
+    s = switch_to_new_segment_for_writing();
+    CHECK_RETURN_STATUS(s);
+  }
+
+  Version new_version = version_manager_->get_current_version();
+
+  // drop column on segment manager
+  s = segment_manager_->drop_column(column_name);
+  CHECK_RETURN_STATUS(s);
+
+  // reset writing segment with new schema
+  auto id = writing_segment_->id();
+  auto min_doc_id = writing_segment_->meta()->min_doc_id();
+
+  s = writing_segment_->destroy();
+  CHECK_RETURN_STATUS(s);
+  writing_segment_.reset();
+
+  SegmentOptions seg_options;
+  seg_options.enable_mmap_ = options_.enable_mmap_;
+  seg_options.max_buffer_size_ = options_.max_buffer_size_;
+  seg_options.read_only_ = options_.read_only_;
+  auto writing_segment =
+      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,
+                             delete_store_, version_manager_, seg_options);
+  if (!writing_segment) {
+    return writing_segment.error();
+  }
+  writing_segment_ = writing_segment.value();
+
+  // update new version
+  new_version.set_schema(*new_schema);
+  new_version.reset_writing_segment_meta(writing_segment_->meta());
+
+  auto new_segment_metas = segment_manager_->get_segments_meta();
+  for (auto meta : new_segment_metas) {
+    s = new_version.update_persisted_segment_meta(meta);
+    CHECK_RETURN_STATUS(s);
+  }
+
+  s = version_manager_->apply(new_version);
+  CHECK_RETURN_STATUS(s);
+
+  // persist manifest
+  s = version_manager_->flush();
+  CHECK_RETURN_STATUS(s);
+
+  schema_ = new_schema;
+
+  return Status::OK();
+}
+
+Status CollectionImpl::alter_column(const std::string &column_name,
+                                    const std::string &rename,
+                                    const FieldSchema::Ptr &new_column_schema,
+                                    const AlterColumnOptions &options) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::lock_guard maintenance_lock(maintenance_mtx_);
+
+  std::unique_lock lock(schema_handle_mtx_);
+  CHECK_RETURN_STATUS(check_no_active_iterators("alter_column"));
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  // validate
+  auto s =
+      validate(column_name, new_column_schema, "", rename, ColumnOp::ALTER);
+  CHECK_RETURN_STATUS(s);
+
+  // forbidden writing until index is ready
+  std::lock_guard write_lock(write_mtx_);
+
+  std::shared_ptr<FieldSchema> new_field_schema{nullptr};
+  if (!rename.empty()) {
+    new_field_schema =
+        std::make_shared<FieldSchema>(*schema_->get_field(column_name));
+    new_field_schema->set_name(rename);
+  } else {
+    new_field_schema = std::make_shared<FieldSchema>(*new_column_schema);
+  }
+
+  auto new_schema = std::make_shared<CollectionSchema>(*schema_);
+  s = new_schema->alter_field(column_name, new_field_schema);
+  CHECK_RETURN_STATUS(s);
+
+  if (writing_segment_->has_record()) {
+    s = switch_to_new_segment_for_writing();
+    CHECK_RETURN_STATUS(s);
+  }
+
+  Version new_version = version_manager_->get_current_version();
+
+  // alter column on segment manager
+  s = segment_manager_->alter_column(column_name, new_field_schema,
+                                     options.concurrency_);
+  CHECK_RETURN_STATUS(s);
+
+  // reset writing segment with new schema
+  auto id = writing_segment_->id();
+  auto min_doc_id = writing_segment_->meta()->min_doc_id();
+
+  s = writing_segment_->destroy();
+  CHECK_RETURN_STATUS(s);
+  writing_segment_.reset();
+
+  SegmentOptions seg_options;
+  seg_options.enable_mmap_ = options_.enable_mmap_;
+  seg_options.max_buffer_size_ = options_.max_buffer_size_;
+  seg_options.read_only_ = options_.read_only_;
+  auto writing_segment =
+      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,
+                             delete_store_, version_manager_, seg_options);
+  if (!writing_segment) {
+    return writing_segment.error();
+  }
+  writing_segment_ = writing_segment.value();
+
+  // update new version
+  new_version.set_schema(*new_schema);
+  new_version.reset_writing_segment_meta(writing_segment_->meta());
+
+  auto new_segment_metas = segment_manager_->get_segments_meta();
+  for (auto meta : new_segment_metas) {
+    s = new_version.update_persisted_segment_meta(meta);
+    CHECK_RETURN_STATUS(s);
+  }
+
+  s = version_manager_->apply(new_version);
+  CHECK_RETURN_STATUS(s);
+
+  // persist manifest
+  s = version_manager_->flush();
+  CHECK_RETURN_STATUS(s);
+
+  schema_ = new_schema;
+
+  return Status::OK();
+}
+
+Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {
+  return write_impl(docs, WriteMode::INSERT);
+}
+
+Result<WriteResults> CollectionImpl::update(std::vector<Doc> &docs) {
+  return write_impl(docs, WriteMode::UPDATE);
+}
+
+Result<WriteResults> CollectionImpl::upsert(std::vector<Doc> &docs) {
+  return write_impl(docs, WriteMode::UPSERT);
+}
+
+Status CollectionImpl::internal_fetch_by_doc(const Doc &doc,
+                                             Doc::Ptr *doc_out) {
+  auto segments = get_all_segments();
+  uint64_t doc_id;
+  bool has = id_map_->has(doc.pk(), &doc_id);
+  if (!has) {
+    return Status::NotFound("Document not found");
+  }
+  if (delete_store_->is_deleted(doc_id)) {
+    return Status::NotFound("Document already deleted");
+  }
+
+  auto segment = local_segment_by_doc_id(doc_id, segments);
+  if (!segment) {
+    LOG_WARN("doc_id: %zu segment not found", (size_t)doc_id);
+    return Status::InternalError("Segment not found");
+  }
+
+  auto old_doc = segment->Fetch(doc_id, std::nullopt, true);
+  if (!old_doc) {
+    LOG_WARN("doc_id: %zu fetch doc failed", (size_t)doc_id);
+    return Status::InternalError("Fetch doc failed");
+  }
+  *doc_out = old_doc;
+  return Status::OK();
+}
+
+Status CollectionImpl::handle_upsert(Doc &doc) {
+  return writing_segment_->Upsert(doc);
+}
+
+Status CollectionImpl::handle_update(Doc &doc) {
+  Doc::Ptr old_doc{nullptr};
+  auto s = internal_fetch_by_doc(doc, &old_doc);
+  CHECK_RETURN_STATUS(s);
+
+  old_doc->merge(doc);
+  return writing_segment_->Update(*old_doc);
+}
+
+Status CollectionImpl::handle_insert(Doc &doc) {
+  return writing_segment_->Insert(doc);
+}
+
+Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,
+                                                WriteMode mode) {
+  CHECK_READONLY_RETURN_STATUS_EXPECTED();
+
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  for (auto &&doc : docs) {
+    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);
+    CHECK_RETURN_STATUS_EXPECTED(s);
+  }
+
+  // TODO: The granularity of the write_lock is too coarse.
+  std::lock_guard write_lock(write_mtx_);
+
+  WriteResults results;
+  // validate write batch size
+  if (docs.size() > kMaxWriteBatchSize) {
+    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(
+        "Too many docs: ", docs.size(), " exceeds max write batch size of ",
+        kMaxWriteBatchSize));
+  }
+
+  for (auto &&doc : docs) {
+    if (need_switch_to_new_segment()) {
+      auto s = switch_to_new_segment_for_writing();
+      CHECK_RETURN_STATUS_EXPECTED(s);
+    }
+
+    Status s;
+
+    switch (mode) {
+      case WriteMode::UPSERT:
+        s = handle_upsert(doc);
+        break;
+      case WriteMode::UPDATE:
+        s = handle_update(doc);
+        break;
+      case WriteMode::INSERT:
+        s = handle_insert(doc);
+        break;
+      default:
+        s = Status::InvalidArgument("Invalid write mode");
+    }
+
+    results.push_back(s);
+  }
+
+  return results;
+}
+
+bool CollectionImpl::need_switch_to_new_segment() const {
+  return writing_segment_->doc_count() >= schema_->max_doc_count_per_segment();
+}
+
+Status CollectionImpl::commit_schema_change_with_new_writing_segment(
+    const CollectionSchema::Ptr &new_schema,
+    const Segment::Ptr &old_writing_segment, const Version &old_version,
+    Version *new_version, uint64_t writing_min_doc_id) {
+  if (new_version == nullptr) {
+    return Status::InvalidArgument("new_version is null");
+  }
+
+  auto seg_options =
+      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_};
+  auto new_writing_segment = Segment::CreateAndOpen(
+      path_, *new_schema, allocate_segment_id(), writing_min_doc_id, id_map_,
+      delete_store_, version_manager_, seg_options);
+  if (!new_writing_segment) {
+    return new_writing_segment.error();
+  }
+  new_version->reset_writing_segment_meta(new_writing_segment.value()->meta());
+  new_version->set_next_segment_id(segment_id_allocator_.load());
+
+  auto s = version_manager_->apply(*new_version);
+  if (!s.ok()) {
+    new_writing_segment.value()->destroy();
+    return s;
+  }
+
+  s = version_manager_->flush();
+  if (!s.ok()) {
+    new_writing_segment.value()->destroy();
+    auto rollback_status = version_manager_->apply(old_version);
+    CHECK_RETURN_STATUS(rollback_status);
+    return s;
+  }
+
+  schema_ = new_schema;
+  writing_segment_ = new_writing_segment.value();
+  s = old_writing_segment->destroy();
+  CHECK_RETURN_STATUS(s);
+
+  return Status::OK();
+}
+
+Status CollectionImpl::switch_to_new_segment_for_writing(
+    const CollectionSchema::Ptr &schema) {
+  if (writing_segment_->doc_count() == 0) {
+    return writing_segment_->flush();
+  }
+
+  auto s = writing_segment_->dump();
+  CHECK_RETURN_STATUS(s);
+
+  s = segment_manager_->add_segment(writing_segment_);
+  CHECK_RETURN_STATUS(s);
+
+  // when create new segment, segment meta should create a first new block
+  // meta
+  auto new_segment = Segment::CreateAndOpen(
+      path_, schema == nullptr ? *schema_ : *schema, allocate_segment_id(),
+      writing_segment_->meta()->max_doc_id() + 1, id_map_, delete_store_,
+      version_manager_,
+      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_});
+  if (!new_segment) {
+    return new_segment.error();
+  }
+
+  Version version = version_manager_->get_current_version();
+  auto writing_segment_meta = writing_segment_->meta();
+  writing_segment_meta->remove_writing_forward_block();
+  s = version.add_persisted_segment_meta(writing_segment_meta);
+  CHECK_RETURN_STATUS(s);
+
+  writing_segment_ = new_segment.value();
+  version.reset_writing_segment_meta(writing_segment_->meta());
+  version.set_next_segment_id(segment_id_allocator_.load());
+
+  s = version_manager_->apply(version);
+  CHECK_RETURN_STATUS(s);
+  s = version_manager_->flush();
+  CHECK_RETURN_STATUS(s);
+
+  return Status::OK();
+}
+
+Result<WriteResults> CollectionImpl::delete_(
+    const std::vector<std::string> &pks) {
+  CHECK_READONLY_RETURN_STATUS_EXPECTED();
+
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  // TODO: The granularity of the write_lock is too coarse.
+  std::lock_guard write_lock(write_mtx_);
+  WriteResults results;
+  for (auto &&pk : pks) {
+    Status s = writing_segment_->Delete(pk);
+    results.push_back(s);
+  }
+
+  return results;
+}
+
+Status CollectionImpl::delete_by_filter(const std::string &filter) {
+  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS(closed_, false);
+
+  SearchQuery query;
+  query.filter_ = filter;
+  query.topk_ = INT32_MAX;
+  query.output_fields_ = std::vector<std::string>{};
+  query.include_doc_id_ = true;
+
+  // A query must see a stable writing segment. Writers publish the forward
+  // store, scalar/vector indexes and segment metadata in several steps while
+  // holding write_mtx_ exclusively.
+  auto ret = [&]() {
+    std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+    return sql_engine_->execute(schema_, std::move(query), get_all_segments());
+  }();
+  if (!ret.has_value()) {
+    return ret.error();
+  }
+
+  // TODO: The granularity of the write_lock is too coarse.
+  std::lock_guard write_lock(write_mtx_);
+  for (auto &doc : ret.value()) {
+    Status s = writing_segment_->Delete(doc->doc_id());
+    if (!s.ok()) {
+      LOG_ERROR("Delete doc_id: %zu failed", (size_t)doc->doc_id());
+      return s;
+    }
+  }
+
+  return Status::OK();
+}
+
+Result<DocPtrList> CollectionImpl::query(const SearchQuery &query) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  return query_unsafe(query);
+}
+
+Result<DocPtrList> CollectionImpl::query(const MultiQuery &query) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  return query_unsafe(query);
+}
+
+template <typename Query>
+Result<internal::QueryResultSnapshot>
+CollectionImpl::query_result_snapshot_impl(const Query &query) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  auto docs = query_unsafe(query);
+  if (!docs) {
+    return tl::make_unexpected(docs.error());
+  }
+  // Snapshot the schema within the same critical section so it always matches
+  // the one used by query_unsafe, even under concurrent DDL. The shared_ptr
+  // only bumps the refcount; DDL uses clone-and-swap under the exclusive lock,
+  // so this captured schema stays valid after the lock is released.
+  std::shared_ptr<const CollectionSchema> schema_snapshot = schema_;
+  return internal::QueryResultSnapshot{std::move(docs.value()),
+                                       std::move(schema_snapshot)};
+}
+
+Result<DocPtrList> CollectionImpl::query_unsafe(
+    const SearchQuery &query) const {
+  // When field_name_ is set, use get_field to retrieve the schema uniformly.
+  // validate checks that the field type matches the query type
+  // (FTS query requires an FTS field, vector query requires a vector field).
+  const auto &field_name = query.target_.field_name_;
+  const FieldSchema *field_schema =
+      field_name.empty() ? nullptr : schema_->get_field(field_name);
+  bool need_sanitize = false;
+  auto s = query.validate(field_schema, &need_sanitize);
+  CHECK_RETURN_STATUS_EXPECTED(s);
+
+  auto segments = get_all_segments();
+  if (segments.empty()) {
+    return DocPtrList();
+  }
+
+  if (!need_sanitize) {
+    return sql_engine_->execute(schema_, query, segments);
+  }
+
+  // Sparse needs sanitization: make a mutable copy and sort indices in place.
+  SearchQuery sanitized_query = query;
+  auto ss = sanitize_sparse_vector(sanitized_query.target_, field_schema);
+  CHECK_RETURN_STATUS_EXPECTED(ss);
+  return sql_engine_->execute(schema_, std::move(sanitized_query), segments);
+}
+
+Result<DocPtrList> CollectionImpl::query_unsafe(const MultiQuery &query) const {
+  if (query.queries.size() < 2) {
+    return tl::make_unexpected(Status::InvalidArgument(
+        "Invalid query: MultiQuery requires at least 2 sub-queries, got ",
+        query.queries.size()));
+  }
+
+  if (auto s = validate_topk_and_output_fields(query.topk, query.output_fields);
+      !s.ok()) {
+    return tl::make_unexpected(s);
+  }
+
+  auto segments = get_all_segments();
+  if (segments.empty()) {
+    return DocPtrList();
+  }
+
+  // Convert each SubQuery to a SearchQuery and validate.
+  std::vector<SearchQuery> pending_queries;
+  std::vector<FieldSchema::Ptr> field_schemas;
+  pending_queries.reserve(query.queries.size());
+  field_schemas.reserve(query.queries.size());
+
+  for (const auto &sub : query.queries) {
+    const auto &target = sub.target_;
+    auto field_ptr = schema_->get_field_ptr(target.field_name_);
+    if (!field_ptr) {
+      return tl::make_unexpected(Status::InvalidArgument(
+          "Invalid query: field ", target.field_name_, " not found"));
+    }
+    auto *field_schema = field_ptr.get();
+
+    bool need_sanitize = false;
+    auto s = target.validate(field_schema, &need_sanitize);
+    CHECK_RETURN_STATUS_EXPECTED(s);
+
+    SearchQuery sq;
+    sq.target_ = target;
+    sq.topk_ = sub.num_candidates_;
+    sq.filter_ = query.filter;
+    sq.include_vector_ = query.include_vector;
+    sq.include_doc_id_ = query.include_doc_id_;
+    sq.output_fields_ = query.output_fields;
+
+    if (need_sanitize) {
+      auto ss = sanitize_sparse_vector(sq.target_, field_schema);
+      CHECK_RETURN_STATUS_EXPECTED(ss);
+    }
+    pending_queries.push_back(std::move(sq));
+    field_schemas.push_back(std::move(field_ptr));
+  }
+
+  auto execute_query = [&](SearchQuery &pending) -> Result<DocPtrList> {
+    auto engine = sqlengine::SQLEngine::create(std::make_shared<Profiler>());
+    return engine->execute(schema_, std::move(pending), segments);
+  };
+
+  std::vector<Result<DocPtrList>> results(pending_queries.size());
+
+  // Single-segment queries have no segment-level fanout; multi-segment queries
+  // already use the query pool per sub-query.
+  if (segments.size() == 1) {
+    auto group = GlobalResource::Instance().query_thread_pool()->make_group();
+    for (size_t i = 0; i < pending_queries.size(); ++i) {
+      group->execute(
+          [&, i]() { results[i] = execute_query(pending_queries[i]); });
+    }
+    group->wait_finish();
+  } else {
+    for (size_t i = 0; i < pending_queries.size(); ++i) {
+      results[i] = execute_query(pending_queries[i]);
+    }
+  }
+
+  std::vector<DocPtrList> query_results;
+  query_results.reserve(pending_queries.size());
+  for (size_t i = 0; i < pending_queries.size(); ++i) {
+    if (!results[i]) {
+      return tl::make_unexpected(results[i].error());
+    }
+    query_results.push_back(std::move(results[i].value()));
+  }
+
+  // Dispatch rerank — schema info injected via field_schemas
+  return reranker::rerank(query.rerank, query_results, field_schemas,
+                          query.topk);
+}
+
+Result<GroupResults> CollectionImpl::group_by_query(
+    const GroupByVectorQuery &query) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  auto segments = get_all_segments();
+  if (segments.empty()) {
+    return GroupResults();
+  }
+
+  // Determine vector data source (zero-copy for dense, copy+sort for sparse)
+  const FieldSchema *field_schema =
+      schema_->get_field(query.target_.field_name_);
+  bool need_sanitize = false;
+  auto s = query.target_.validate(field_schema, &need_sanitize);
+  CHECK_RETURN_STATUS_EXPECTED(s);
+
+  if (!need_sanitize) {
+    return sql_engine_->execute_group_by(schema_, query, segments);
+  }
+
+  // Sparse needs sanitization: make a mutable copy and sort indices in place.
+  GroupByVectorQuery sanitized_query = query;
+  auto ss = sanitize_sparse_vector(sanitized_query.target_, field_schema);
+  CHECK_RETURN_STATUS_EXPECTED(ss);
+  return sql_engine_->execute_group_by(schema_, sanitized_query, segments);
+}
+
+Result<DocPtrMap> CollectionImpl::fetch(
+    const std::vector<std::string> &pks,
+    const std::optional<std::vector<std::string>> &output_fields,
+    bool include_vector) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  auto segments = get_all_segments();
+
+  DocPtrMap results;
+
+  for (auto &pk : pks) {
+    uint64_t doc_id;
+    bool has = id_map_->has(pk, &doc_id);
+    if (!has) {
+      results.insert({pk, nullptr});
+      continue;
+    }
+    if (delete_store_->is_deleted(doc_id)) {
+      results.insert({pk, nullptr});
+      continue;
+    }
+    auto segment = local_segment_by_doc_id(doc_id, segments);
+    if (!segment) {
+      LOG_WARN("doc_id: %zu segment not found", (size_t)doc_id);
+      results.insert({pk, nullptr});
+      continue;
+    }
+    results.insert({pk, segment->Fetch(doc_id, output_fields, include_vector)});
+  }
+
+  return results;
+}
+
+Result<std::string> CollectionImpl::debug_get_hnsw_storage_mode(
+    const std::string &column_name) const {
+  std::shared_lock lock(schema_handle_mtx_);
+
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  std::shared_lock<std::shared_mutex> write_lock(write_mtx_);
+  // Try all segments (including the writing one). The first segment that has
+  // a fully-built HNSW index wins; if only a building segment exists we still
+  // surface its current storage mode so that tests can observe the entity
+  // type right after open().
+  auto segments = get_all_segments();
+
+  for (const auto &segment : segments) {
+    if (!segment) {
+      continue;
+    }
+    auto indexers = segment->get_vector_indexer(column_name);
+    for (const auto &indexer : indexers) {
+      if (!indexer) {
+        continue;
+      }
+      auto index = indexer->debug_get_index();
+      if (!index) {
+        continue;
+      }
+      auto *hnsw_index = dynamic_cast<core_interface::HNSWIndex *>(index.get());
+      if (!hnsw_index) {
+        return tl::make_unexpected(Status::InvalidArgument(
+            "Column '", column_name,
+            "' does not have an HNSW index (or index is sparse)"));
+      }
+      auto mode = hnsw_index->storage_mode();
+      if (mode.empty()) {
+        // streamer not initialized yet; skip and look at other segments
+        continue;
+      }
+      return mode;
+    }
+  }
+
+  return tl::make_unexpected(
+      Status::NotFound("No HNSW index found for column '", column_name, "'"));
+}
+
+Status CollectionImpl::recovery() {
+  if (!FileHelper::DirectoryExists(path_.c_str())) {
+    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+  }
+
+  // get lock file
+  auto s = acquire_file_lock(false);
+  CHECK_RETURN_STATUS(s);
+
+  // recovery version first
+  auto version_manager = VersionManager::Recovery(path_);
+  if (!version_manager.has_value()) {
+    return version_manager.error();
+  }
+
+  version_manager_ = version_manager.value();
+  const auto v = version_manager_->get_current_version();
+  schema_ = std::make_shared<CollectionSchema>(v.schema());
+  options_.enable_mmap_ = v.enable_mmap();
+  s = recover_idmap_and_delete_store();
+  CHECK_RETURN_STATUS(s);
+
+  // recover persist segments
+  segment_manager_ = std::make_shared<SegmentManager>();
+
+  auto segment_metas = v.persisted_segment_metas();
+
+  // Remove crash-leftover segment dirs before opening segments; safe
+  // under the exclusive file lock held above. Read-only opens hold only
+  // a shared lock and must not modify the collection.
+  if (!options_.read_only_) {
+    cleanup_orphan_segment_dirs(v);
+  }
+
+  SegmentOptions seg_options;
+  seg_options.read_only_ = true;
+  seg_options.enable_mmap_ = options_.enable_mmap_;
+  for (size_t i = 0; i < segment_metas.size(); ++i) {
+    auto segment = Segment::Open(path_, *schema_, *segment_metas[i], id_map_,
+                                 delete_store_, version_manager_, seg_options);
+    if (!segment) {
+      return segment.error();
+    }
+
+    segment_manager_->add_segment(segment.value());
+  }
+
+  seg_options.read_only_ = options_.read_only_;
+  seg_options.max_buffer_size_ = options_.max_buffer_size_;
+
+  // recover writing segment
+  auto writing_segment =
+      Segment::Open(path_, *schema_, *v.writing_segment_meta(), id_map_,
+                    delete_store_, version_manager_, seg_options);
+  if (!writing_segment) {
+    return writing_segment.error();
+  }
+
+  writing_segment_ = writing_segment.value();
+  segment_id_allocator_.store(v.next_segment_id());
+
+  // recover id map & delete store
+  return Status::OK();
+}
+
+Status CollectionImpl::recover_idmap_and_delete_store() {
+  const auto v = version_manager_->get_current_version();
+
+  // idmap
+  std::string idmap_path =
+      FileHelper::MakeFilePath(path_, FileID::ID_FILE, v.id_map_path_suffix());
+  id_map_ = IDMap::CreateAndOpen(schema_->name(), idmap_path, false,
+                                 options_.read_only_);
+  if (!id_map_) {
+    return Status::InternalError("recovery idmap failed, path: ", idmap_path);
+  }
+
+  // delete store
+  std::string delete_store_path = FileHelper::MakeFilePath(
+      path_, FileID::DELETE_FILE, v.delete_snapshot_path_suffix());
+  delete_store_ =
+      DeleteStore::CreateAndLoad(schema_->name(), delete_store_path);
+  if (!delete_store_) {
+    return Status::InternalError("recovery delete store failed, path: ",
+                                 delete_store_path);
+  }
+
+  return Status::OK();
+}
+
+// Removes segment directories that `version` does not reference: numeric
+// directories absent from the persisted set and the writing segment, plus
+// `<id>.tmp` compact outputs that were never renamed. Best-effort: a
+// directory that cannot be removed is only logged, since it is no worse
+// than the leftover itself. Must be called with the exclusive collection
+// file lock held.
+void CollectionImpl::cleanup_orphan_segment_dirs(const Version &version) {
+  std::unordered_set<SegmentID> referenced_ids;
+  for (auto &meta : version.persisted_segment_metas()) {
+    referenced_ids.insert(meta->id());
+  }
+  if (version.writing_segment_meta()) {
+    referenced_ids.insert(version.writing_segment_meta()->id());
+  }
+
+  // A name counts as a segment id only if it round-trips through the id
+  // formatting (all digits, no leading zeros, fits SegmentID); anything
+  // else was not created by the collection and is left untouched.
+  auto parse_segment_id = [](const std::string &name, SegmentID *id) {
+    if (name.empty() || name.size() > 10) {
+      return false;
+    }
+    uint64_t value = 0;
+    for (char c : name) {
+      if (c < '0' || c > '9') {
+        return false;
+      }
+      value = value * 10 + (c - '0');
+    }
+    if (value > std::numeric_limits<SegmentID>::max() ||
+        std::to_string(value) != name) {
+      return false;
+    }
+    *id = static_cast<SegmentID>(value);
+    return true;
+  };
+
+  // Collect candidates first and remove them after the scan: deleting an
+  // entry while iterating a directory is implementation-defined, and this
+  // matches the CleanupDirectory precedent.
+  std::vector<std::string> orphan_names;
+  std::error_code ec;
+  std::filesystem::directory_iterator it(
+      ailego::FileHelper::PathFromUtf8(path_), ec);
+  std::filesystem::directory_iterator end;
+  while (!ec && it != end) {
+    std::error_code entry_ec;
+    if (it->is_directory(entry_ec) && !entry_ec) {
+      const std::string name =
+          ailego::FileHelper::PathToUtf8(it->path().filename());
+
+      std::string stem = name;
+      bool is_tmp = false;
+      if (name.size() > 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
+        stem = name.substr(0, name.size() - 4);
+        is_tmp = true;
+      }
+
+      SegmentID segment_id = 0;
+      if (parse_segment_id(stem, &segment_id) &&
+          (is_tmp || referenced_ids.count(segment_id) == 0)) {
+        orphan_names.push_back(name);
+      }
+    }
+    it.increment(ec);
+  }
+  if (ec) {
+    LOG_WARN("Failed to list collection directory for orphan cleanup: %s",
+             ec.message().c_str());
+    return;
+  }
+
+  for (const auto &name : orphan_names) {
+    auto orphan_path = ailego::FileHelper::PathJoin(path_, name);
+    if (FileHelper::RemoveDirectory(orphan_path)) {
+      LOG_WARN(
+          "Recovery removed orphan segment directory not referenced by "
+          "manifest: path=%s",
+          orphan_path.c_str());
+    } else {
+      const auto error = ailego::FileHelper::GetLastErrorString();
+      LOG_WARN(
+          "Recovery failed to remove orphan segment directory not referenced "
+          "by manifest: path=%s, error=%s",
+          orphan_path.c_str(), error.c_str());
+    }
+  }
+}
+
+Status CollectionImpl::create() {
+  // check path
+  if (path_.empty()) {
+    return Status::InvalidArgument("path validate failed: path is empty");
+  }
+  if (!FileHelper::PathSimpleValidation(path_)) {
+    return Status::InvalidArgument("path validate failed: path[", path_,
+                                   "] is not a valid path");
+  }
+  if (ailego::FileHelper::IsExist(path_.c_str())) {
+    return Status::InvalidArgument("path validate failed: path[", path_,
+                                   "] exists, create expects a path that does "
+                                   "not exist");
+  }
+
+  // check schema
+  auto s = schema_->validate();
+  CHECK_RETURN_STATUS(s);
+
+  if (!ailego::FileHelper::MakePath(path_.c_str())) {
+    return Status::InvalidArgument(
+        "create collection path failed: ", path_,
+        ", error: ", ailego::FileHelper::GetLastErrorString());
+  }
+
+  // init lock file
+  s = acquire_file_lock(true);
+  CHECK_RETURN_STATUS(s);
+
+  // init idmap & delete store
+  s = create_idmap_and_delete_store();
+  CHECK_RETURN_STATUS(s);
+
+  // init version manager
+  s = init_version_manager();
+  CHECK_RETURN_STATUS(s);
+
+  // create segment
+  s = init_writing_segment();
+  CHECK_RETURN_STATUS(s);
+
+  // init version
+  Version version;
+  version.set_schema(*schema_);
+  version.set_enable_mmap(options_.enable_mmap_);
+  version.reset_writing_segment_meta(writing_segment_->meta());
+  version.set_id_map_path_suffix(0);
+  version.set_delete_snapshot_path_suffix(0);
+  version.set_next_segment_id(1);
+
+  version_manager_->apply(version);
+  s = version_manager_->flush();
+  CHECK_RETURN_STATUS(s);
+
+  segment_id_allocator_.store(1);
+  segment_manager_ = std::make_unique<SegmentManager>();
+
+  return Status::OK();
+}
+
+Status CollectionImpl::create_idmap_and_delete_store() {
+  // idmap
+  std::string idmap_path = FileHelper::MakeFilePath(path_, FileID::ID_FILE, 0);
+  id_map_ = IDMap::CreateAndOpen(schema_->name(), idmap_path, true,
+                                 options_.read_only_);
+  if (!id_map_) {
+    return Status::InternalError("create id map failed, path: ", idmap_path);
+  }
+
+  std::string delete_store_path =
+      FileHelper::MakeFilePath(path_, FileID::DELETE_FILE, 0);
+  delete_store_ = std::make_shared<DeleteStore>(schema_->name());
+  // when first create collection, delete store will flush a empty snapshot
+  delete_store_->flush(delete_store_path);
+
+  return Status::OK();
+}
+
+Status CollectionImpl::init_version_manager() {
+  // use empty version to init version manager
+  auto version_manager = VersionManager::Create(path_, Version{});
+  if (!version_manager.has_value()) {
+    return version_manager.error();
+  }
+
+  version_manager_ = version_manager.value();
+  return Status::OK();
+}
+
+Status CollectionImpl::init_writing_segment() {
+  SegmentOptions options;
+  options.enable_mmap_ = options_.enable_mmap_;
+  options.max_buffer_size_ = options_.max_buffer_size_;
+  options.read_only_ = options_.read_only_;
+
+  auto writing_segment = Segment::CreateAndOpen(
+      path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options);
+
+  if (!writing_segment) {
+    return writing_segment.error();
+  }
+
+  writing_segment_ = writing_segment.value();
+
+  return Status::OK();
+}
+
+Status CollectionImpl::acquire_file_lock(bool create) {
+  std::string lock_file_path = ailego::FileHelper::PathJoin(path_, "LOCK");
+
+  if (create) {
+    if (!lock_file_.create(lock_file_path.c_str(), 0)) {
+      return Status::InternalError("Can't create lock file: ", lock_file_path);
+    }
+  } else {
+    if (!lock_file_.open(lock_file_path.c_str(), options_.read_only_)) {
+      return Status::InternalError("Can't open lock file: ", lock_file_path);
+    }
+  }
+
+  if (options_.read_only_) {
+    if (!ailego::FileLock::TryLockShared(lock_file_.native_handle())) {
+      return Status::InternalError("Can't lock read-only collection: ",
+                                   lock_file_path);
+    }
+  } else {
+    if (!ailego::FileLock::TryLock(lock_file_.native_handle())) {
+      return Status::InternalError("Can't lock read-write collection: ",
+                                   lock_file_path);
+    }
+  }
+
+  return Status::OK();
+}
+
+Segment::Ptr CollectionImpl::local_segment_by_doc_id(
+    uint64_t doc_id, const std::vector<Segment::Ptr> &segments) const {
+  size_t left = 0;
+  size_t right = segments.size();
+
+  while (left < right) {
+    size_t mid = left + (right - left) / 2;
+    uint64_t min_id = segments[mid]->meta()->min_doc_id();
+    uint64_t max_id = segments[mid]->meta()->max_doc_id();
+
+    if (doc_id < min_id) {
+      right = mid;
+    } else if (doc_id > max_id) {
+      left = mid + 1;
+    } else {
+      return segments[mid];
+    }
+  }
+
+  return nullptr;
+}
+
+std::vector<Segment::Ptr> CollectionImpl::get_all_segments() const {
+  std::vector<Segment::Ptr> segments = get_all_persist_segments();
+  if (writing_segment_->doc_count() > 0) {
+    segments.push_back(writing_segment_);
+  }
+  return segments;
+}
+
+std::vector<Segment::Ptr> CollectionImpl::get_all_persist_segments() const {
+  return segment_manager_->get_segments();
+}
+
+namespace internal {
+
+namespace {
+// The binding layer only holds a Collection reference and cannot see
+// CollectionImpl, so recover the concrete type here. CollectionImpl is the sole
+// Collection implementation; the dynamic_cast is negligible next to a query and
+// safer than assuming the concrete type. Should a decorator/proxy Collection
+// ever appear, this returns NotSupported at runtime instead of misbehaving.
+template <typename Query>
+Result<QueryResultSnapshot> query_result_snapshot_dispatch(
+    const Collection &collection, const Query &query) {
+  const auto *impl = dynamic_cast<const CollectionImpl *>(&collection);
+  if (impl == nullptr) {
+    return tl::make_unexpected(
+        Status::NotSupported("Unsupported Collection implementation"));
+  }
+  return impl->query_result_snapshot_impl(query);
+}
+}  // namespace
+
+Result<QueryResultSnapshot> query_result_snapshot(const Collection &collection,
+                                                  const SearchQuery &query) {
+  return query_result_snapshot_dispatch(collection, query);
+}
+
+Result<QueryResultSnapshot> query_result_snapshot(const Collection &collection,
+                                                  const MultiQuery &query) {
+  return query_result_snapshot_dispatch(collection, query);
+}
+
+}  // namespace internal
+
+Result<std::vector<std::string>> CollectionImpl::build_iterator_columns(
+    const IteratorOptions &options) const {
+  std::vector<std::string> columns;
+  columns.push_back(GLOBAL_DOC_ID);
+  columns.push_back(USER_ID);
+  if (options.include_vector_) {
+    // Segment-local row id used to fetch vectors from the indexer (robust
+    // against non-contiguous g_doc_ids in compacted segments).
+    columns.push_back(LOCAL_ROW_ID);
+  }
+
+  const auto &output_fields = options.output_fields_;
+  if (!output_fields.has_value()) {
+    for (const auto &field : schema_->forward_fields()) {
+      columns.push_back(field->name());
+    }
+  } else {
+    // Reject unknown, non-scalar and duplicate names so callers get an error
+    // instead of a silently dropped field.
+    const auto &requested = *output_fields;
+    std::unordered_set<std::string> seen;
+    for (const auto &name : requested) {
+      const auto *field = schema_->get_forward_field(name);
+      if (field == nullptr) {
+        return tl::make_unexpected(Status::InvalidArgument(
+            "output_fields contains unknown or non-scalar field: ", name));
+      }
+      if (!seen.insert(name).second) {
+        return tl::make_unexpected(Status::InvalidArgument(
+            "output_fields contains duplicate field: ", name));
+      }
+      columns.push_back(field->name());
+    }
+  }
+
+  return columns;
+}
+
+Result<std::unique_ptr<DocIterator::Impl>> CollectionImpl::prepare_iterate(
+    const IteratorOptions &options) {
+  // Caller holds schema_handle_mtx_ exclusively. The snapshot below
+  // isolates concurrent writes and deletes (which the iterator count does
+  // not block) by fixing segments and cloning the delete store under
+  // write_mtx_.
+  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);
+
+  auto impl = std::make_unique<DocIterator::Impl>();
+  impl->schema = schema_;
+  impl->include_vector = options.include_vector_;
+
+  // Validate before sealing the writing segment so invalid options fail fast
+  // without leaving a sealed-segment side effect.
+  auto columns = build_iterator_columns(options);
+  if (!columns) {
+    return tl::make_unexpected(columns.error());
+  }
+  impl->iterator_columns = std::move(columns.value());
+
+  {
+    std::lock_guard<std::shared_mutex> write_lock(write_mtx_);
+
+    if (options_.read_only_) {
+      // No flushing on read-only collections; include the writing segment
+      // (SegmentImpl::scan reads its in-memory block), which is stable since
+      // no concurrent writes exist.
+      impl->segments = get_all_segments();
+    } else {
+      // Seal the writing segment so concurrent writes cannot mutate the
+      // snapshot; has_record() also covers delete-only segments.
+      if (writing_segment_->has_record()) {
+        auto s = switch_to_new_segment_for_writing();
+        CHECK_RETURN_STATUS_EXPECTED(s);
+      }
+      impl->segments = get_all_persist_segments();
+    }
+
+    impl->delete_store = delete_store_->clone();
+  }
+
+  impl->filter = impl->delete_store->make_filter();
+  return impl;
+}
+
+Result<DocIterator::Ptr> CollectionImpl::create_iterator(
+    const IteratorOptions &options) {
+  // Iterators and maintenance operations are mutually exclusive (see the
+  // contract in collection.h); fail fast instead of blocking here.
+  std::unique_lock maintenance_lock(maintenance_mtx_, std::try_to_lock);
+  if (!maintenance_lock.owns_lock()) {
+    return tl::make_unexpected(Status::FailedPrecondition(
+        "create_iterator is not allowed while a maintenance operation "
+        "(optimize, schema DDL, close or destroy) is running; "
+        "retry later"));
+  }
+
+  std::unique_lock schema_lock(schema_handle_mtx_);
+
+  auto impl_result = prepare_iterate(options);
+  if (!impl_result) {
+    return tl::make_unexpected(impl_result.error());
+  }
+  auto impl = std::move(impl_result.value());
+  // Assign before incrementing: the assignment can throw (std::function
+  // heap allocation), and a count bump without a working release_slot
+  // would never drain.
+  impl->release_slot = [this] { decrement_active_iterators(); };
+  ++active_iterators_;
+
+  return std::make_shared<DocIterator>(std::move(impl));
+}
+
+void CollectionImpl::decrement_active_iterators() {
+  std::unique_lock lock(schema_handle_mtx_);
+  --active_iterators_;
+  if (active_iterators_ == 0) {
+    iterator_cv_.notify_all();
+  }
+}
+
+}  // namespace zvec

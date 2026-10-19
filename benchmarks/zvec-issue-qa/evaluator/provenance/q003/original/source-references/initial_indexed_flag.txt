@@ -1,0 +1,21 @@
+536: Status SegmentImpl::Create(const SegmentOptions &options, uint64_t min_doc_id) {
+537:   options_ = options;
+538:   filter_ =
+539:       std::make_shared<SegmentIndexFilter>(delete_store_, shared_from_this());
+540: 
+541:   // init memory forward block
+542:   auto block_id = allocate_block_id();
+543:   std::vector<std::string> columns{GLOBAL_DOC_ID, USER_ID};
+544:   std::vector<std::string> schema_forward_fields =
+545:       collection_schema_->forward_field_names();
+546:   columns.insert(columns.end(), schema_forward_fields.begin(),
+547:                  schema_forward_fields.end());
+548: 
+549:   segment_meta_->set_writing_forward_block(
+550:       {block_id, BlockType::SCALAR, min_doc_id, min_doc_id, 0, columns});
+551:   auto vector_fields = collection_schema_->vector_fields();
+552:   for (auto &field : vector_fields) {
+553:     if (field->index_params()->type() == IndexType::FLAT) {
+554:       segment_meta_->add_indexed_vector_field(field->name());
+555:     }
+556:   }

@@ -1,0 +1,113 @@
+1466: Status SegmentImpl::create_all_vector_index(
+1467:     int concurrency, SegmentMeta::Ptr *segment_meta,
+1468:     std::unordered_map<std::string, VectorColumnIndexer::Ptr> *vector_indexers,
+1469:     std::unordered_map<std::string, VectorColumnIndexer::Ptr>
+1470:         *quant_vector_indexers) {
+1471:   const auto &vector_fields = collection_schema_->vector_fields();
+1472: 
+1473:   auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);
+1474:   new_segment_meta->remove_writing_forward_block();
+1475: 
+1476:   std::set<std::string> vector_field_names;
+1477:   for (const auto &field : vector_fields) {
+1478:     auto s = create_vector_index(field->name(), field->index_params(),
+1479:                                  concurrency, &new_segment_meta,
+1480:                                  vector_indexers, quant_vector_indexers);
+1481:     CHECK_RETURN_STATUS(s);
+1482:     vector_field_names.insert(field->name());
+1483:   }
+1484: 
+1485:   new_segment_meta->set_indexed_vector_fields(vector_field_names);
+1486:   *segment_meta = new_segment_meta;
+1487: 
+1488:   return Status::OK();
+1489: }
+1490: 
+1491: Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(
+1492:     const std::string &index_file_path, const std::string &column,
+1493:     const FieldSchema &field, int concurrency) {
+1494:   VectorColumnIndexer::Ptr vector_indexer =
+1495:       std::make_shared<VectorColumnIndexer>(index_file_path, field);
+1496: 
+1497:   vector_column_params::ReadOptions options{options_.enable_mmap_, true};
+1498: 
+1499:   auto s = vector_indexer->Open(options);
+1500:   CHECK_RETURN_STATUS_EXPECTED(s);
+1501:   std::vector<VectorColumnIndexer::Ptr> to_merge_indexers =
+1502:       vector_indexers_[column];
+1503:   vector_column_params::MergeOptions merge_options;
+1504:   if (concurrency == 0) {
+1505:     merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+1506:     merge_options.write_concurrency =
+1507:         static_cast<uint32_t>(merge_options.pool->count());
+1508:   } else {
+1509:     merge_options.write_concurrency = concurrency;
+1510:   }
+1511:   s = vector_indexer->Merge(to_merge_indexers, filter_, merge_options);
+1512:   CHECK_RETURN_STATUS_EXPECTED(s);
+1513:   s = vector_indexer->Flush();
+1514:   CHECK_RETURN_STATUS_EXPECTED(s);
+1515: 
+1516:   return vector_indexer;
+1517: }
+1518: 
+1519: Status SegmentImpl::create_vector_index(
+1520:     const std::string &column, const IndexParams::Ptr &index_params,
+1521:     int concurrency, SegmentMeta::Ptr *segment_meta,
+1522:     std::unordered_map<std::string, VectorColumnIndexer::Ptr> *vector_indexers,
+1523:     std::unordered_map<std::string, VectorColumnIndexer::Ptr>
+1524:         *quant_vector_indexers) {
+1525:   auto field = collection_schema_->get_vector_field(column);
+1526:   SegmentMeta::Ptr new_segment_meta;
+1527:   if (*segment_meta == nullptr) {
+1528:     new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);
+1529:     new_segment_meta->remove_writing_forward_block();
+1530:   } else {
+1531:     new_segment_meta = *segment_meta;
+1532:   }
+1533: 
+1534:   if (segment_meta_->vector_indexed(column) &&
+1535:       *field->index_params() == *index_params) {
+1536:     // if segment is already indexed and index params are same, skip create
+1537:     *segment_meta = new_segment_meta;
+1538:     return Status::OK();
+1539:   }
+1540:   new_segment_meta->add_indexed_vector_field(column);
+1541: 
+1542:   auto vector_index_params =
+1543:       std::dynamic_pointer_cast<VectorIndexParams>(index_params);
+1544: 
+1545:   if (vector_index_params->quantize_type() == QuantizeType::UNDEFINED) {
+1546:     auto block_id = allocate_block_id();
+1547: 
+1548:     auto field_with_new_index_params = std::make_shared<FieldSchema>(*field);
+1549:     field_with_new_index_params->set_index_params(index_params);
+1550: 
+1551:     std::string index_file_path = FileHelper::MakeVectorIndexPath(
+1552:         path_, column, segment_meta_->id(), block_id);
+1553:     if (FileHelper::FileExists(index_file_path)) {
+1554:       LOG_WARN(
+1555:           "Index file[%s] already exists (possible crash residue); cleaning "
+1556:           "and overwriting.",
+1557:           index_file_path.c_str());
+1558:       FileHelper::RemoveFile(index_file_path);
+1559:     }
+1560:     auto vector_indexer = merge_vector_indexer(
+1561:         index_file_path, column, *field_with_new_index_params, concurrency);
+1562:     if (!vector_indexer.has_value()) {
+1563:       return vector_indexer.error();
+1564:     }
+1565: 
+1566:     vector_indexers->insert({column, vector_indexer.value()});
+1567: 
+1568:     new_segment_meta->remove_vector_persisted_block(column);
+1569:     BlockMeta block;
+1570:     block.set_id(block_id);
+1571:     block.set_type(BlockType::VECTOR_INDEX);
+1572:     block.set_columns({column});
+1573:     block.set_min_doc_id(doc_ids_.front());
+1574:     block.set_max_doc_id(doc_ids_.back());
+1575:     block.set_doc_count(doc_ids_.size());
+1576:     new_segment_meta->add_persisted_block(block);
+1577: 
+1578:     *segment_meta = new_segment_meta;

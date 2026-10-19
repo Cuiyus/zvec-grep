@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "reviewed_at_utc": "2026-10-19T16:10:12.759632+00:00",
+  "candidate": "alibaba/zvec#583",
+  "review_type": "independent focused static cross-check",
+  "verdict": "no_mandatory_revision_found_in_checked_scope",
+  "required_revisions": [],
+  "summary": "The zero-candidate handoff explanation, source snapshot, control expectations and scoring gate are consistent. In particular, the rubric explicitly permits retained bitmap or forward-filter explanations for positive/disjoint controls and does not force them onto the candidate-ID path.",
+  "scope_and_limits": {
+    "existing_solver_outputs_read": false,
+    "solver_or_ci_run": false,
+    "repository_code_executed": false,
+    "dependencies_installed": false,
+    "runtime_reproduction_performed": false,
+    "upstream_test_execution_verified": false,
+    "language_unification": "Outside review scope; parent will normalize before any future formal freeze.",
+    "limitations": "Static audit of the draft, issue body/comment, patch evidence and relevant frozen source. Not evidence that a local binary reproduced the issue."
+  },
+  "input_sha256": {
+    "solver/instruction.md": "8da02b18d0a8efd6925150055ddff3988564e0999f95c339f8d03a1d7e670348",
+    "evaluator/rubric-draft.json": "798db6354feababec632d3b009e6f550cba2805ffd7e683b179e8b7766a23d18",
+    "evaluator/evidence.json": "e99e6d318ec5c5c960b8781341a7de9c4b282f99cef8fb12638e1e9324e79d48",
+    "source-manifest.json": "9a0425b55fc6d5ee90b00c4c1ab418ff531115b2940bf1e7c32cdac300a2f00b"
+  },
+  "artifact_verification": {
+    "source_manifest_files_checked": 1216,
+    "source_manifest_errors": [],
+    "evidence_file_and_excerpt_hashes_checked": 18,
+    "evidence_hash_errors": [],
+    "prompt_hash_matches_rubric": true
+  },
+  "checked_findings": [
+    {
+      "id": "S1",
+      "result": "supported",
+      "claim": "Zero-match inverted result is handed off as an engaged empty candidate optional, with indexed filter/result reset.",
+      "reason": "DocFilter computes an inverted result; get_bf_by_keys_and_update accepts count=0, extracts no IDs, resets both fields and returns a vector value. The FTS parameter field is a plain vector and the consumer intersects only nonempty vectors. Both null and non-null zero-cardinality bitmaps can reach this state. The rubric correctly rejects a make_filter pointer-only fix that ignores later reset.",
+      "references": [
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 24,
+          "end_line": 35,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        },
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 109,
+          "end_line": 140,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        },
+        {
+          "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+          "start_line": 110,
+          "end_line": 140,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8"
+        },
+        {
+          "path": "src/db/index/column/fts_column/fts_types.h",
+          "start_line": 24,
+          "end_line": 35,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1"
+        },
+        {
+          "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+          "start_line": 194,
+          "end_line": 236,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982"
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "result": "supported_without_candidate_path_overclaim",
+      "claim": "The exact three-document positive and disjoint status-equality controls retain a scalar restriction.",
+      "reason": "Default fts_brute_force_by_keys_ratio is 0.05, so a three-row segment has candidate threshold floor(3*0.05)=0. status=published matches two rows and does not enter candidate extraction; its inverted bitmap remains. The optimizer explicitly exempts Q_EQ from ratio-based forwarding. Thus the direct one-segment default case uses retained inverted filtering: hello intersects to IDs {2,3}; one only matches ID 1 and is rejected. More general schemas/topologies may use another valid path, so the rubric correctly avoids insisting that all nonempty predicates become candidate IDs.",
+      "references": [
+        {
+          "path": "src/db/common/config.cc",
+          "start_line": 38,
+          "end_line": 40,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "59142d5c2c7963f9557d7ffb627c5fc64b9dbd8181430265fe76a800ea2c69aa"
+        },
+        {
+          "path": "src/db/sqlengine/planner/optimizer.cc",
+          "start_line": 31,
+          "end_line": 45,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "ed5b5f17b553ce256f131b4dc95206935db1ad417ba9366fa89a26261582bb5a"
+        },
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 109,
+          "end_line": 140,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        },
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 68,
+          "end_line": 85,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        }
+      ],
+      "rubric_check": "C3 full_credit and critical_corrections_to_issue_narrative explicitly recognize candidates, retained bitmap, or forward evaluation; no forced-candidate gold error found."
+    },
+    {
+      "id": "S3",
+      "result": "supported",
+      "claim": "Scalar-only zero-match and no-inverted-index controls remain empty for different reasons.",
+      "reason": "Scalar-only path consumes the inverted result iterator directly and stops on an invalid iterator. Without an inverted index the analyzer retains a forward expression. For the default unindexed scenario it is projected into a forward bitmap before recall; get_bf_by_keys_and_update has no inverted result to consume. The remaining DocFilter evaluates that false bitmap for every FTS hit. The rubric allows this path and does not demand an incorrect candidate-ID explanation.",
+      "references": [
+        {
+          "path": "src/db/sqlengine/analyzer/query_node_walker.cc",
+          "start_line": 213,
+          "end_line": 298,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "54ff97d8e84734e15691bc92c0b837fa1f03bd8d7d7cb3b78502b079988447a4"
+        },
+        {
+          "path": "src/db/sqlengine/planner/query_planner.cc",
+          "start_line": 533,
+          "end_line": 556,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708"
+        },
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 36,
+          "end_line": 47,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        },
+        {
+          "path": "src/db/sqlengine/planner/doc_filter.cc",
+          "start_line": 68,
+          "end_line": 106,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346"
+        },
+        {
+          "path": "src/db/sqlengine/planner/invert_recall_node.cc",
+          "start_line": 30,
+          "end_line": 85,
+          "revision": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+          "sha256": "6c586eb56007fbbf7d0f26baf865c5aae59e0d7b7030b9cf47106d987b69bb17"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "result": "supported",
+      "claim": "Repair and grading preserve no restriction, explicit empty and nonempty restriction separately.",
+      "reason": "C4 accepts either an optional representation with empty rejection or a safe computed-zero short-circuit and requires preservation of remaining constraints. C1/C2/C4 are mandatory full-credit criteria under the explicit >=8 gate; each criterion has 0/1/2 scoring and partial/full anchors. No absent success-rule defect analogous to #724 was found.",
+      "rubric_fields": [
+        "criteria.C1",
+        "criteria.C2",
+        "criteria.C3",
+        "criteria.C4",
+        "criteria.C5",
+        "draft_success_rule"
+      ],
+      "limit": "The draft is explicitly not preregistered; this review does not admit it or authorize a solver run."
+    }
+  ]
+}

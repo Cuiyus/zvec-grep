@@ -1,0 +1,22 @@
+4117:   // create and open memory vector indexer
+4118:   for (const auto &field : collection_schema_->vector_fields()) {
+4119:     auto index_params =
+4120:         std::dynamic_pointer_cast<VectorIndexParams>(field->index_params());
+4121: 
+4122:     if (index_params->quantize_type() == QuantizeType::UNDEFINED) {
+4123:       // create normal vector indexer
+4124:       FieldSchema normal_field(*field);
+4125:       normal_field.set_index_params(MakeDefaultVectorIndexParams(
+4126:           index_params->metric_type(),
+4127:           index_params->use_flat_contiguous_memory(),
+4128:           segment_detail::FlatStorageDataTypeForField(
+4129:               field->data_type(), index_params->flat_data_type())));
+4130:       auto block_id = allocate_block_id();
+4131:       auto vector_indexer =
+4132:           create_vector_indexer(field->name(), normal_field, block_id);
+4133:       if (!vector_indexer) {
+4134:         return Status::InternalError("Create vector column indexer failed: ",
+4135:                                      field->name());
+4136:       }
+4137:       memory_vector_indexers_.insert({field->name(), vector_indexer});
+4138:     } else {

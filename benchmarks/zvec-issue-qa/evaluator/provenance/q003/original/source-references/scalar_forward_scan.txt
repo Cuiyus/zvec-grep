@@ -1,0 +1,27 @@
+467: Result<PlanInfo::Ptr> QueryPlanner::forward_scan(
+468:     Segment::Ptr seg, QueryInfo::Ptr query_info,
+469:     std::unique_ptr<arrow::compute::Expression> forward_filter) {
+470:   auto reader = seg->scan(query_info->get_all_fetched_scalar_field_names());
+471:   auto schema = reader->schema();
+472:   ac::Declaration node{
+473:       "record_batch_reader_source",
+474:       ac::RecordBatchReaderSourceNodeOptions{std::move(reader)}};
+475: 
+476:   auto seg_filter = seg->get_filter();
+477:   if (seg_filter) {
+478:     cp::Expression check_not_filtered =
+479:         cp::call(kCheckNotFiltered, {cp::field_ref(LOCAL_ROW_ID)},
+480:                  std::make_shared<CheckNotFilteredOp::Options>(seg_filter));
+481:     node =
+482:         ac::Declaration{"filter",
+483:                         {std::move(node)},
+484:                         ac::FilterNodeOptions(std::move(check_not_filtered))};
+485:   }
+486: 
+487:   if (forward_filter) {
+488:     node = ac::Declaration{"filter",
+489:                            {std::move(node)},
+490:                            ac::FilterNodeOptions(std::move(*forward_filter))};
+491:   }
+492: 
+493:   if (query_info->is_include_vector()) {

@@ -1,0 +1,62 @@
+934: arrow::Status SegmentHelper::FilterRecordBatch(
+935:     const std::shared_ptr<arrow::RecordBatch> &batch,
+936:     const IndexFilter::Ptr filter, uint32_t row_id_offset,
+937:     std::shared_ptr<arrow::RecordBatch> *filterd,
+938:     roaring::Roaring *delete_row_id_bitmap, uint64_t *min_doc_id,
+939:     uint64_t *max_doc_id) {
+940:   if (!filter) {
+941:     *filterd = batch;
+942:     for (int64_t i = 0; i < batch->num_rows(); ++i) {
+943:       // column 0 is doc_id
+944:       auto result = batch->column(0)->GetScalar(i);
+945:       if (!result.ok()) {
+946:         return result.status();
+947:       }
+948:       uint64_t doc_id =
+949:           std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;
+950:       *min_doc_id = std::min(*min_doc_id, doc_id);
+951:       *max_doc_id = std::max(*max_doc_id, doc_id);
+952:     }
+953:     return arrow::Status::OK();
+954:   }
+955: 
+956:   std::vector<uint64_t> selected_indices;
+957:   for (int64_t i = 0; i < batch->num_rows(); ++i) {
+958:     auto result = batch->column(0)->GetScalar(i);
+959:     if (!result.ok()) {
+960:       return result.status();
+961:     }
+962:     uint64_t doc_id =
+963:         std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;
+964:     if (!filter->is_filtered(doc_id)) {
+965:       selected_indices.push_back(i);
+966:       *min_doc_id = std::min(*min_doc_id, doc_id);
+967:       *max_doc_id = std::max(*max_doc_id, doc_id);
+968:     } else {
+969:       delete_row_id_bitmap->add(i + row_id_offset);
+970:     }
+971:   }
+972: 
+973:   if (selected_indices.empty()) {
+974:     return arrow::Status::OK();
+975:   }
+976: 
+977:   arrow::UInt64Builder builder;
+978:   ARROW_RETURN_NOT_OK(builder.AppendValues(selected_indices));
+979:   std::shared_ptr<arrow::Array> selection_array;
+980:   ARROW_RETURN_NOT_OK(builder.Finish(&selection_array));
+981: 
+982:   std::vector<std::shared_ptr<arrow::Array>> filtered_columns;
+983:   for (int i = 0; i < batch->num_columns(); ++i) {
+984:     arrow::Datum out;
+985:     ARROW_ASSIGN_OR_RAISE(
+986:         out, arrow::compute::Take(batch->column(i), selection_array));
+987:     filtered_columns.push_back(out.make_array());
+988:   }
+989: 
+990:   auto filtered_batch = arrow::RecordBatch::Make(
+991:       batch->schema(), static_cast<int64_t>(selected_indices.size()),
+992:       filtered_columns);
+993: 
+994:   *filterd = filtered_batch;
+995: 

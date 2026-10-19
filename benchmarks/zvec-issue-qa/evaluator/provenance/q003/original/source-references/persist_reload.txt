@@ -1,0 +1,62 @@
+1009:     Version new_version = version_manager_->get_current_version();
+1010: 
+1011:     for (auto &task : tasks) {
+1012:       auto task_info = task->task_info();
+1013: 
+1014:       if (std::holds_alternative<CompactTask>(task_info)) {
+1015:         auto compact_task = std::get<CompactTask>(task_info);
+1016: 
+1017:         if (compact_task.output_segment_meta_) {
+1018:           s = new_version.add_persisted_segment_meta(
+1019:               compact_task.output_segment_meta_);
+1020:           CHECK_RETURN_STATUS(s);
+1021:           new_version.set_next_segment_id(segment_id_allocator_.load());
+1022:         }
+1023: 
+1024:         for (auto input_segment : compact_task.input_segments_) {
+1025:           s = new_version.remove_persisted_segment_meta(input_segment->id());
+1026:           CHECK_RETURN_STATUS(s);
+1027:         }
+1028:       } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+1029:         auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+1030:         s = new_version.update_persisted_segment_meta(
+1031:             create_index_task.output_segment_meta_);
+1032:         CHECK_RETURN_STATUS(s);
+1033:       }
+1034:     }
+1035: 
+1036:     s = version_manager_->apply(new_version);
+1037:     CHECK_RETURN_STATUS(s);
+1038: 
+1039:     s = version_manager_->flush();
+1040:     CHECK_RETURN_STATUS(s);
+1041: 
+1042:     // publish new segments, retire compacted inputs and reload rebuilt
+1043:     // vector indexes
+1044:     size_t opened_index = 0;
+1045:     for (auto &task : tasks) {
+1046:       auto task_info = task->task_info();
+1047: 
+1048:       if (std::holds_alternative<CompactTask>(task_info)) {
+1049:         auto compact_task = std::get<CompactTask>(task_info);
+1050: 
+1051:         if (compact_task.output_segment_meta_) {
+1052:           if (opened_index >= opened_segments.size()) {
+1053:             return Status::InternalError("opened_segments index out of bounds");
+1054:           }
+1055:           s = segment_manager_->add_segment(opened_segments[opened_index++]);
+1056:           CHECK_RETURN_STATUS(s);
+1057:         }
+1058: 
+1059:         for (auto input_segment : compact_task.input_segments_) {
+1060:           s = segment_manager_->destroy_segment(input_segment->id());
+1061:           CHECK_RETURN_STATUS(s);
+1062:         }
+1063:       } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {
+1064:         auto create_index_task = std::get<CreateVectorIndexTask>(task_info);
+1065: 
+1066:         s = create_index_task.input_segment_->reload_vector_index(
+1067:             *schema_, create_index_task.output_segment_meta_,
+1068:             create_index_task.output_vector_indexers_,
+1069:             create_index_task.output_quant_vector_indexers_);
+1070:         CHECK_RETURN_STATUS(s);

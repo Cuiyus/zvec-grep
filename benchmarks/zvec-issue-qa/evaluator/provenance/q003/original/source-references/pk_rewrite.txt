@@ -1,0 +1,61 @@
+1016: int Index::merge(const std::vector<Index::Pointer> &indexes,
+1017:                  const IndexFilter &filter, const MergeOptions &options) {
+1018:   if (indexes.empty()) {
+1019:     return core::IndexError_Success;
+1020:   }
+1021:   // ivf need builder
+1022:   auto reducer =
+1023:       core::IndexFactory::CreateStreamerReducer("MixedStreamerReducer");
+1024:   if (reducer == nullptr) {
+1025:     LOG_ERROR("Failed to create reducer");
+1026:     return core::IndexError_Runtime;
+1027:   }
+1028: 
+1029:   if (options.write_concurrency == 0) {
+1030:     LOG_ERROR("Write concurrency must be greater than 0");
+1031:     return core::IndexError_InvalidArgument;
+1032:   }
+1033:   // must declare here to ensure its lifespan can cover reducer->reduce()
+1034:   std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;
+1035:   uint32_t effective_write_concurrency = options.write_concurrency;
+1036:   if (options.pool != nullptr) {
+1037:     reducer->set_thread_pool(options.pool);
+1038:     effective_write_concurrency =
+1039:         std::min<uint32_t>(effective_write_concurrency, options.pool->count());
+1040:   } else {
+1041:     local_thread_pool =
+1042:         std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);
+1043:     reducer->set_thread_pool(local_thread_pool.get());
+1044:     effective_write_concurrency =
+1045:         static_cast<uint32_t>(local_thread_pool->count());
+1046:   }
+1047: 
+1048:   ailego::Params reducer_params;
+1049:   reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,
+1050:                      true);
+1051:   reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,
+1052:                      effective_write_concurrency);
+1053:   if (reducer->init(reducer_params) != 0) {
+1054:     LOG_ERROR("Failed to init reducer");
+1055:     return core::IndexError_Runtime;
+1056:   }
+1057:   if (reducer->set_target_streamer_wiht_info(builder_, streamer_, converter_,
+1058:                                              reformer_,
+1059:                                              input_vector_meta_) != 0) {
+1060:     LOG_ERROR("Failed to set target streamer");
+1061:     return core::IndexError_Runtime;
+1062:   }
+1063: 
+1064:   for (const auto &index : indexes) {
+1065:     if (reducer->feed_streamer_with_reformer(index->streamer_,
+1066:                                              index->reformer_) != 0) {
+1067:       LOG_ERROR("Failed to feed streamer");
+1068:       return core::IndexError_Runtime;
+1069:     }
+1070:   }
+1071:   if (reducer->reduce(filter) != 0) {
+1072:     LOG_ERROR("Failed to reduce");
+1073:     return core::IndexError_Runtime;
+1074:   }
+1075:   is_trained_ = true;
+1076:   return 0;

@@ -1,0 +1,43 @@
+910: Status CollectionImpl::optimize(const OptimizeOptions &options) {
+911:   CHECK_COLLECTION_READONLY_RETURN_STATUS;
+912: 
+913:   // Serialize against other maintenance operations for the whole optimize.
+914:   std::lock_guard maintenance_lock(maintenance_mtx_);
+915: 
+916:   std::vector<Segment::Ptr> persist_segments;
+917: 
+918:   // Phase 1: exclusively seal the current writing segment and snapshot
+919:   // the persisted segment set.
+920:   {
+921:     std::unique_lock schema_lock(schema_handle_mtx_);
+922:     // Nothing has been built yet, so failing fast leaves nothing to clean.
+923:     CHECK_RETURN_STATUS(check_no_active_iterators("optimize"));
+924:     std::lock_guard write_lock(write_mtx_);
+925: 
+926:     CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+927:     CHECK_CLOSED_RETURN_STATUS(closed_, false);
+928: 
+929:     if (writing_segment_->has_record()) {
+930:       auto s = switch_to_new_segment_for_writing();
+931:       if (!s.ok()) {
+932:         return s;
+933:       }
+934:     }
+935: 
+936:     persist_segments =
+937:         get_all_persist_segments();  // will not return writing segment
+938:   }
+939: 
+940:   if (persist_segments.size() == 0) {
+941:     return Status::OK();
+942:   }
+943: 
+944:   // Phase 2: lock-free compact. Readers and writers proceed freely.
+945:   auto delete_store_clone = delete_store_->clone();
+946:   auto tasks =
+947:       build_compact_task(schema_, persist_segments, options.concurrency_,
+948:                          delete_store_clone->make_filter());
+949: 
+950:   // execute segment compact task
+951:   auto s = execute_compact_task(tasks);
+952:   CHECK_RETURN_STATUS(s);

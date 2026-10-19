@@ -1,0 +1,12 @@
+464: bool SegmentImpl::SegmentIndexFilter::is_filtered(uint64_t id) const {
+465:   auto impl = impl_.lock();
+466:   if (!impl) return false;
+467:   auto result = impl->get_global_doc_id(id);
+468:   if (!result.has_value()) {
+469:     return false;
+470:   }
+471:   uint64_t doc_id = result.value();
+472:   if (delete_store_ && delete_store_->is_deleted(doc_id)) {
+473:     return true;
+474:   }
+475:   return false;

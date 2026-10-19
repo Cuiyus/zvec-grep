@@ -1,0 +1,21 @@
+21: arrow::Status CheckNotFilteredOp::CheckNotFilteredFunction(
+22:     cp::KernelContext *ctx, const cp::ExecSpan &batch, cp::ExecResult *out) {
+23:   CheckNotFilteredState *state =
+24:       static_cast<CheckNotFilteredState *>(ctx->state());
+25:   auto *filter = state->args.filter.get();
+26:   if (filter == nullptr) {
+27:     return arrow::Status::ExecutionError("filter is null");
+28:   }
+29: 
+30:   auto row_span = batch[0].array.GetSpan<uint64_t>(1, batch.length);
+31:   std::shared_ptr<arrow::BooleanBuilder> builder =
+32:       std::make_shared<arrow::BooleanBuilder>(ctx->memory_pool());
+33:   ARROW_RETURN_NOT_OK(builder->Reserve(batch.length));
+34:   for (int i = 0; i < batch.length; i++) {
+35:     builder->UnsafeAppend(!filter->is_filtered(row_span[i]));
+36:   }
+37:   std::shared_ptr<arrow::Array> result_array;
+38:   ARROW_RETURN_NOT_OK(builder->Finish(&result_array));
+39: 
+40:   out->value = std::move(result_array->data());
+41:   return arrow::Status::OK();

@@ -1,0 +1,16 @@
+1525:   auto field = collection_schema_->get_vector_field(column);
+1526:   SegmentMeta::Ptr new_segment_meta;
+1527:   if (*segment_meta == nullptr) {
+1528:     new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);
+1529:     new_segment_meta->remove_writing_forward_block();
+1530:   } else {
+1531:     new_segment_meta = *segment_meta;
+1532:   }
+1533: 
+1534:   if (segment_meta_->vector_indexed(column) &&
+1535:       *field->index_params() == *index_params) {
+1536:     // if segment is already indexed and index params are same, skip create
+1537:     *segment_meta = new_segment_meta;
+1538:     return Status::OK();
+1539:   }
+1540:   new_segment_meta->add_indexed_vector_field(column);

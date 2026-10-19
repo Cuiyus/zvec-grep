@@ -1,0 +1,41 @@
+1268:   // fetch vector
+1269:   if (!include_vector) {
+1270:     return doc;
+1271:   }
+1272:   // Segment switching can dump a block without seg_mtx_. Keep the block
+1273:   // offsets and indexer lookup in the same snapshot as the flush handoff.
+1274:   std::shared_lock<std::shared_mutex> col_lock(seg_col_mtx_);
+1275:   for (const auto &field : collection_schema_->vector_fields()) {
+1276:     int block_idx = find_persist_block_id(BlockType::VECTOR_INDEX,
+1277:                                           segment_doc_id, field->name());
+1278:     if (block_idx != -1) {
+1279:       const auto &block_offsets =
+1280:           get_persist_block_offsets(BlockType::VECTOR_INDEX, field->name());
+1281:       auto block_offset = block_offsets[block_idx];
+1282:       auto block_doc_id = segment_doc_id - block_offset;
+1283: 
+1284:       auto column_name = field->name();
+1285:       auto iter = vector_indexers_.find(column_name);
+1286:       if (iter != vector_indexers_.end()) {
+1287:         const auto &vector_indexers = iter->second;
+1288:         if (block_idx >= (int)vector_indexers.size()) {
+1289:           LOG_ERROR("block_idx[%d] out of range[%lu]", block_idx,
+1290:                     vector_indexers.size());
+1291:           continue;
+1292:         }
+1293:         auto vector_indexer = vector_indexers[block_idx];
+1294:         auto fetch_result = vector_indexer->Fetch(block_doc_id);
+1295:         if (!fetch_result) {
+1296:           LOG_ERROR(
+1297:               "vector indexer fetch failed, block_doc_id: %d, block_idx: %d, "
+1298:               "segment_doc_id: %d",
+1299:               block_doc_id, block_idx, segment_doc_id);
+1300:           return nullptr;
+1301:         }
+1302:         const auto &vector_buffer = fetch_result.value();
+1303:         auto status =
+1304:             ConvertVectorDataBufferToDocField(field, vector_buffer, doc.get());
+1305:         if (!status.ok()) {
+1306:           LOG_ERROR("convert vector data buffer to doc field failed %s",
+1307:                     status.message().c_str());
+1308:         }

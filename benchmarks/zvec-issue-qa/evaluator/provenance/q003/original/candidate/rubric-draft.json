@@ -1,0 +1,391 @@
+{
+  "status": "revised candidate draft; R1/R2/R3 addressed by author, pending independent re-review/admission; no solver or runtime execution",
+  "issue": "https://github.com/alibaba/zvec/issues/724",
+  "pre_fix_commit": "68078e55e7ae9d705b8829b5d416e022060bebf7",
+  "total_points": 10,
+  "grading_policy": "Award only the integer point units explicitly defined below (no half-points). Each unit requires a correct causal statement, not merely a restatement of the prompt. Equivalent terminology and equivalent invariant-preserving repairs are accepted. Grade only the submitted final answer. Post-fix evidence is evaluator-only corroboration; solver receives only the frozen pre-fix source and source-neutral prompt.",
+  "criteria": [
+    {
+      "id": "physical_vs_live",
+      "points": 1,
+      "claim": "Deleting a document marks its global ID deleted and removes the external-ID mapping, but does not erase the physical forward row/doc_ids entry. Physical=28 and live=25; stats applies the deletion filter. Upsert behavior is optional for this delete-only task.",
+      "references": [
+        "writes",
+        "live_count",
+        "segment_count"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "physical_vs_live.1",
+          "points": 1,
+          "required": "Explain tombstones/retained physical rows and how filtered live counting yields 25 from 28 in this delete sequence."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "The upsert tombstone-and-append route; omission cannot reduce credit."
+      ]
+    },
+    {
+      "id": "maintenance_branch",
+      "points": 2,
+      "claim": "Vector storage already exists before optimize: non-quantized inserts create default FLAT memory vector indexers; flush transfers them to persisted vector_indexers. A new HNSW-schema segment lacks the requested-index built flag (only an initially FLAT schema is pre-marked). The first nonempty optimize materializes the requested HNSW index. With physical=28/live=25 the strict live < physical * (1 - 0.3f) purge test is false, so the sealed single-segment group gets CreateVectorIndexTask and no coordinated forward-row purge.",
+      "references": [
+        "optimize_entry",
+        "task_policy",
+        "threshold",
+        "create_vector_path",
+        "initial_indexed_flag",
+        "indexed_flag_definition",
+        "initial_flat_storage",
+        "default_flat_params",
+        "flush_vector_transfer"
+      ],
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "maintenance_branch.1",
+          "points": 1,
+          "required": "Explain the physical-versus-live denominator and strict purge condition; 3/28 deletion fraction selects the non-purging branch, while a sufficiently larger fraction selects coordinated compaction. Do not require ideal-decimal equality behavior at exactly 30%."
+        },
+        {
+          "id": "maintenance_branch.2",
+          "points": 1,
+          "required": "Trace sealing the nonempty segment to the single-segment CreateVectorIndexTask/create_vector_index path without forward-row purge. Distinguish existing default FLAT storage (memory then persisted) from first materialization of the requested HNSW index with its initially unset indexed flag."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is fully supported.",
+        "1": "Exactly one of the two stated point units is fully supported; identify which one.",
+        "2": "Both point units are fully supported without contradicting each other."
+      }
+    },
+    {
+      "id": "broken_mapping",
+      "points": 2,
+      "claim": "The in-place index-build helper passes the segment deletion filter into Merge. The filter resolves original row positions to deleted global IDs. Merge enables PK rewrite and the reducer skips filtered vectors while assigning surviving vectors consecutive IDs. Forward rows/doc_ids and new block metadata retain physical positions/counts, so compact vector keys no longer denote the same forward rows.",
+      "references": [
+        "delete_filter",
+        "create_vector_path",
+        "merge_bridge",
+        "pk_rewrite",
+        "dense_renumber"
+      ],
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "broken_mapping.1",
+          "points": 1,
+          "required": "Identify deletion filtering in vector Merge and the reducer skipping tombstones while assigning consecutive keys only to surviving vectors."
+        },
+        {
+          "id": "broken_mapping.2",
+          "points": 1,
+          "required": "Explain that forward/doc_ids positions and vector block metadata still describe the physical row space, and explicitly connect the dense survivor keys to the resulting coordinate mismatch."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is fully supported.",
+        "1": "Exactly one of the two stated point units is fully supported; identify which one.",
+        "2": "Both point units are fully supported without contradicting each other."
+      }
+    },
+    {
+      "id": "symptoms_and_persistence",
+      "points": 1,
+      "claim": "Search keys are interpreted as segment row indices when fetching forward IDs/fields; point vector fetch uses the original physical row/block offset. This explains wrong associations and high-row vector-fetch failure while scalar-only access and live counts can agree. Flushed replacement index/metadata and reload explain why reopening is not a repair. Do not reduce the fault to harmless ANN recall or missing scalar rows.",
+      "references": [
+        "search_keys",
+        "search_forward_join",
+        "scalar_fetch",
+        "vector_fetch",
+        "live_count",
+        "persist_reload",
+        "scalar_forward_scan",
+        "scalar_delete_predicate"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "symptoms_and_persistence.1",
+          "points": 1,
+          "required": "Explain why vector keys/physical offsets fetch the wrong association or run past the vector tail while live counts and scalar scans use retained forward rows with deletion filtering, and why flushing/committing the rebuilt index makes read-only reopen no repair. It is sufficient to name the access paths; detailed conversion internals are unnecessary."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "bounded_controls",
+      "points": 1,
+      "claim": "Empty optimize has no persisted content to process. Clean nonempty first materialization has no tombstones, so it preserves key alignment and records the target index as built. The later delete-only same-segment/same-parameter create_vector_index returns early on the indexed flag. This explains the exact controls, not universal directory immunity.",
+      "references": [
+        "optimize_entry",
+        "initial_flat_storage",
+        "default_flat_params",
+        "initial_indexed_flag",
+        "record_indexed_flag",
+        "same_index_skip",
+        "writes"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "bounded_controls.1",
+          "points": 1,
+          "required": "Explain both controls: empty optimize does no useful build, whereas a clean nonempty requested-index build stays aligned and sets the indexed flag, allowing the later same-parameter delete-only control to skip rebuilding."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "Non-purging multi-segment compaction; not needed for full control credit because the prompt adds no documents after the clean first build."
+      ]
+    },
+    {
+      "id": "high_delete_path",
+      "points": 1,
+      "claim": "Above the deletion threshold, true CompactTask passes the delete filter through scalar reduction, constructs a bitmap of omitted original row positions, and uses the matching row filter for vector reduction. Both spaces are compacted together. Therefore skipping tombstoned vectors is appropriate there, unlike a vector-only rebuild over unchanged forward rows.",
+      "references": [
+        "task_policy",
+        "compact_scalar_vector",
+        "compact_forward_rewrite",
+        "compact_filter_bitmap"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "high_delete_path.1",
+          "points": 1,
+          "required": "Explain that the above-threshold path filters forward rows and records omitted original positions in a bitmap used to filter vectors, preserving correspondence by compacting both spaces together. Merely naming CompactTask is insufficient; it can also be called with no purge filter."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "repair_invariant",
+      "points": 1,
+      "claim": "A vector-only rebuild must retain tombstoned vector slots when forward rows are unchanged; or both sides would need coordinated remapping. Passing no deletion filter on the former path is the targeted correction, while deletion filtering at query time and coordinated full compaction remain necessary.",
+      "references": [
+        "create_vector_path",
+        "query_delete_filter",
+        "compact_scalar_vector"
+      ],
+      "evaluator_only_corroboration": [
+        "fixed_filter"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "repair_invariant.1",
+          "points": 1,
+          "required": "State and preserve the same row-key correspondence on both sides: retain tombstoned vector slots for unchanged forward rows, or provide an equivalent coordinated remapping. Keep logical deletion filtering in reads. Literal nullptr spelling is not required."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "regression_design",
+      "points": 1,
+      "claim": "The essential oracle supplies independent known normalized directions, such as unit basis vectors, and checks the expected live ID and vector payload after the below-threshold delete/optimize sequence. It must detect wrong association rather than only counts; an affected-index fetch or same-ID query is not an independent vector oracle. Wider variant coverage is useful but optional for this single point.",
+      "references": [
+        "search_forward_join",
+        "vector_fetch"
+      ],
+      "evaluator_only_corroboration": [
+        "regression_oracle",
+        "regression_delete_upsert",
+        "regression_create_index"
+      ],
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "regression_design.1",
+          "points": 1,
+          "required": "Propose an independently retained known-direction vector oracle and assert correct live ID plus payload after the triggering delete/optimize sequence, explicitly catching associations that count-only checks miss."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "Read-only reopen, empty/clean controls, high-delete comparison, upsert, quantization or explicit create_index matrix; none is required for this point once the essential independent oracle is sound.",
+        "Distinct raw vectors alone are not necessarily distinct COSINE directions; normalized basis directions avoid that ambiguity. No universal ANN recall guarantee is inferred."
+      ]
+    }
+  ],
+  "not_required_or_not_proven": [
+    "Windows-specific cause",
+    "all index types or all versions have identical behavior",
+    "segfault mechanism or dimension/volume thresholds",
+    "exactly K missing IDs under every segment topology",
+    "global durable directory immunity after one optimize",
+    "ANN top-k or recall guarantees across arbitrary data"
+  ],
+  "disqualifying_overclaims": [
+    {
+      "id": "D1",
+      "claim": "Treat the original tail-only description as complete and explicitly deny wrong-vector associations.",
+      "references": [
+        "dense_renumber",
+        "search_forward_join"
+      ]
+    },
+    {
+      "id": "D2",
+      "claim": "Every overwrite/delete followed by optimize is affected regardless of the maintenance path.",
+      "references": [
+        "task_policy",
+        "same_index_skip",
+        "compact_scalar_vector"
+      ]
+    },
+    {
+      "id": "D3",
+      "claim": "Repairing only absent tail rows with vectors fetched from the affected index fully repairs all wrong associations.",
+      "references": [
+        "dense_renumber",
+        "vector_fetch",
+        "search_forward_join"
+      ]
+    },
+    {
+      "id": "D4",
+      "claim": "Assert a local runtime reproduction or passing upstream test execution without supporting execution evidence.",
+      "evidence_records": [
+        "source-checks.json",
+        "independent-review.json:independence_and_limits"
+      ]
+    }
+  ],
+  "revision": "r2-after-independent-static-review",
+  "revised_at_utc": "2026-10-19T16:11:40.367041+00:00",
+  "success": {
+    "minimum_score": 8,
+    "maximum_score": 10,
+    "final_answer_required": true,
+    "required_full_credit": {
+      "maintenance_branch": 2,
+      "broken_mapping": 2
+    },
+    "core_citation_gate": {
+      "criteria": [
+        "maintenance_branch",
+        "broken_mapping"
+      ],
+      "rule": "For each core criterion, the answer must give existing pre-fix file paths and line numbers whose cited content jointly supports both awarded point units. Judge the actual frozen source, not literal equality with curated ranges. A post-fix-only, fabricated, wrong-revision, or materially unrelated citation cannot satisfy this gate. Missing core citations fail the answer even if its prose is correct.",
+      "required_record": "For each core unit record the answer citation, verified pre-fix location, and a short explanation of how it supports the unit."
+    },
+    "critical_contradictions_allowed": 0,
+    "rule": "pass = nonempty final answer AND total_points >= 8 AND maintenance_branch == 2 AND broken_mapping == 2 AND all core citation gates pass AND no substantiated disqualifying overclaim/critical contradiction. A disqualification forces pass=false independently of total score.",
+    "authority": "Scratch author adopted the independent review proposal in this revision before any solver run; this is a draft scoring contract, not dataset admission or execution authorization."
+  },
+  "score_output_required": [
+    "final_answer_present",
+    "per-criterion integer score and satisfied point-unit IDs",
+    "total_points",
+    "core citation gate results with verified source locations",
+    "disqualifications with answer quotations and evidence, or an empty list",
+    "pass boolean and failed gates"
+  ],
+  "disqualification_policy": {
+    "application": "Apply only to an explicit material assertion or recommendation in the final answer that contradicts the frozen evidence; an omission is scored by anchors and mandatory gates, not automatically treated as a contradiction. A claim clearly quoted and rejected by the answer is not an endorsement.",
+    "evidence_required": [
+      "short exact quotation from the answer",
+      "the violated disqualifier/contradiction ID",
+      "pre-fix source path and line range demonstrating the conflict, or the named evidence record for an unsupported execution claim",
+      "a short rationale"
+    ],
+    "uncertainty": "Do not manufacture an answer quotation or infer a disqualification solely from ambiguous wording; record the ambiguity and use ordinary point/citation rules. An unresolved factual dispute must be adjudicated before declaring pass."
+  },
+  "critical_contradictions": [
+    {
+      "id": "C1",
+      "claim": "The single-segment vector-only path compacts forward rows in coordination with the filtered vectors, while identifying that same path as the cause.",
+      "references": [
+        "task_policy",
+        "create_vector_path",
+        "dense_renumber"
+      ]
+    },
+    {
+      "id": "C2",
+      "claim": "There is no vector/forward association error; the scenario is solely ordinary approximate-search recall loss.",
+      "references": [
+        "create_vector_path",
+        "dense_renumber",
+        "search_forward_join"
+      ]
+    },
+    {
+      "id": "C3",
+      "claim": "Read-only reopening repairs the persisted vector-key mapping.",
+      "references": [
+        "create_vector_path",
+        "persist_reload"
+      ]
+    },
+    {
+      "id": "C4",
+      "claim": "Disabling tombstone filtering during queries is the repair.",
+      "references": [
+        "query_delete_filter",
+        "scalar_forward_scan",
+        "scalar_delete_predicate"
+      ]
+    },
+    {
+      "id": "C5",
+      "claim": "No vector storage or vector indexer exists before the first optimize, or an existing default FLAT indexer means the requested HNSW index is already marked built.",
+      "references": [
+        "initial_indexed_flag",
+        "indexed_flag_definition",
+        "initial_flat_storage",
+        "default_flat_params",
+        "flush_vector_transfer",
+        "same_index_skip"
+      ]
+    }
+  ]
+}

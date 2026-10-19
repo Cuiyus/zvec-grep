@@ -1,0 +1,30 @@
+103: Status VectorColumnIndexer::Merge(
+104:     const std::vector<VectorColumnIndexer::Ptr> &indexers,
+105:     const IndexFilter::Ptr &filter,
+106:     const vector_column_params::MergeOptions &merge_options) {
+107:   if (index == nullptr) {
+108:     return Status::InvalidArgument("Index not opened");
+109:   }
+110: 
+111:   if (indexers.empty()) {
+112:     return Status::OK();
+113:   }
+114: 
+115:   auto engine_indexers = std::vector<core_interface::Index::Pointer>();
+116: 
+117:   for (auto &indexer : indexers) {
+118:     if (indexer->index_file_path() == this->index_file_path()) {
+119:       continue;
+120:     }
+121:     engine_indexers.push_back(indexer->index);
+122:   }
+123:   auto engine_filter =
+124:       ProximaEngineHelper::convert_to_engine_filter(filter.get());
+125:   if (engine_filter == nullptr) {
+126:     return Status::InvalidArgument("Failed to convert filter");
+127:   }
+128:   if (0 !=
+129:       index->merge(engine_indexers, *engine_filter,
+130:                    {merge_options.write_concurrency, merge_options.pool})) {
+131:     return Status::InternalError("Failed to merge index");
+132:   }

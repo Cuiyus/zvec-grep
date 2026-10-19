@@ -1,0 +1,88 @@
+1086: std::vector<SegmentTask::Ptr> CollectionImpl::build_compact_task(
+1087:     const CollectionSchema::Ptr &schema,
+1088:     const std::vector<Segment::Ptr> &segments, int concurrency,
+1089:     const IndexFilter::Ptr filter) {
+1090:   std::vector<SegmentTask::Ptr> tasks;
+1091:   if (segments.empty()) return tasks;
+1092: 
+1093:   bool rebuild = false;
+1094:   size_t current_doc_count = 0;
+1095:   size_t current_actual_doc_count = 0;
+1096:   for (auto &segment : segments) {
+1097:     current_doc_count += segment->doc_count();
+1098:     current_actual_doc_count += segment->doc_count(filter);
+1099:   }
+1100:   if (current_actual_doc_count <
+1101:       current_doc_count * (1 - COMPACT_DELETE_RATIO_THRESHOLD)) {
+1102:     // if delete ratio is large enough, rebuild
+1103:     rebuild = true;
+1104:   }
+1105: 
+1106:   auto max_doc_count_per_segment = schema->max_doc_count_per_segment();
+1107: 
+1108:   std::vector<Segment::Ptr> current_group;
+1109:   current_doc_count = 0;
+1110:   current_actual_doc_count = 0;
+1111: 
+1112:   for (const auto &seg : segments) {
+1113:     uint64_t doc_count = seg->doc_count();
+1114:     uint64_t actual_doc_count = seg->doc_count(filter);
+1115: 
+1116:     if (!current_group.empty()) {
+1117:       SegmentTask::Ptr task;
+1118:       bool skip_task{false};
+1119:       if (rebuild) {
+1120:         if (current_actual_doc_count + actual_doc_count >
+1121:             max_doc_count_per_segment) {
+1122:           // only create SegmentCompactTask when rebuild=true
+1123:           task = SegmentTask::CreateCompactTask(
+1124:               CompactTask{path_, schema, current_group,
+1125:                           allocate_segment_id_for_tmp_segment(), filter,
+1126:                           !options_.enable_mmap_, concurrency});
+1127:         }
+1128:       } else {
+1129:         if (current_doc_count + doc_count > max_doc_count_per_segment) {
+1130:           // check current_group size
+1131:           if (current_group.size() == 1) {
+1132:             task =
+1133:                 SegmentTask::CreateCreateVectorIndexTask(CreateVectorIndexTask{
+1134:                     current_group[0], "", nullptr, concurrency});
+1135:             skip_task = current_group[0]->all_vector_index_ready();
+1136:           } else {
+1137:             task = SegmentTask::CreateCompactTask(
+1138:                 CompactTask{path_, schema, current_group,
+1139:                             allocate_segment_id_for_tmp_segment(), nullptr,
+1140:                             !options_.enable_mmap_, concurrency});
+1141:           }
+1142:         }
+1143:       }
+1144: 
+1145:       if (task) {
+1146:         current_group.clear();
+1147:         current_doc_count = 0;
+1148:         current_actual_doc_count = 0;
+1149:         if (!skip_task) {
+1150:           tasks.push_back(task);
+1151:         }
+1152:       }
+1153:     }
+1154: 
+1155:     current_group.push_back(seg);
+1156:     current_doc_count += doc_count;
+1157:     current_actual_doc_count += actual_doc_count;
+1158:   }
+1159: 
+1160:   if (current_group.size() > 0) {
+1161:     SegmentTask::Ptr task;
+1162:     if (current_group.size() == 1 && !rebuild) {
+1163:       task = SegmentTask::CreateCreateVectorIndexTask(
+1164:           CreateVectorIndexTask{current_group[0], "", nullptr, concurrency});
+1165:     } else {
+1166:       task = SegmentTask::CreateCompactTask(CompactTask{
+1167:           path_, schema, current_group, allocate_segment_id_for_tmp_segment(),
+1168:           rebuild ? filter : nullptr, !options_.enable_mmap_, concurrency});
+1169:     }
+1170:     tasks.push_back(task);
+1171:   }
+1172: 
+1173:   return tasks;

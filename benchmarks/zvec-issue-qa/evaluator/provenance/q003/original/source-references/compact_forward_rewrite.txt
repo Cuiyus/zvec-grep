@@ -1,0 +1,49 @@
+232:   for (auto &segment : input_segments) {
+233:     auto reader = segment->scan(all_reduce_columns);
+234:     if (reader == nullptr) {
+235:       return Status::InternalError("scan segment failed");
+236:     }
+237: 
+238:     while (true) {
+239:       auto batch = reader->Next();
+240:       if (!batch.ok()) {
+241:         return Status::InternalError("reader next failed: ",
+242:                                      batch.status().message());
+243:       }
+244: 
+245:       auto batch_value = batch.ValueOrDie();
+246: 
+247:       if (!batch_value) {
+248:         break;
+249:       }
+250: 
+251:       if (batch_value->num_rows() == 0) continue;
+252: 
+253:       std::shared_ptr<arrow::RecordBatch> filtered_batch;
+254:       auto as =
+255:           FilterRecordBatch(batch_value, filter, row_id_offset, &filtered_batch,
+256:                             delete_row_id_bitmap, min_doc_id, max_doc_id);
+257:       if (!as.ok()) {
+258:         return Status::InternalError("filter record batch failed: ",
+259:                                      as.message());
+260:       }
+261: 
+262:       row_id_offset += batch_value->num_rows();
+263: 
+264:       if (!filtered_batch || filtered_batch->num_rows() == 0) {
+265:         continue;
+266:       }
+267: 
+268:       // forward
+269:       as = forward_writer->insert_batch(filtered_batch);
+270:       if (!as.ok()) {
+271:         return Status::InternalError("writer insert failed: ", as.message());
+272:       }
+273: 
+274:       // invert index
+275:       if (invert_indexer) {
+276:         auto s = ReduceScalarIndex(invert_indexer, filtered_batch, *doc_count);
+277:         CHECK_RETURN_STATUS(s);
+278:       }
+279: 
+280:       *doc_count += filtered_batch->num_rows();

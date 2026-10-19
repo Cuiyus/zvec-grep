@@ -130,15 +130,34 @@ def verify_runtime_provenance(value):
         raise RuntimeError('runtime does not contain the pinned current-main Rust zg candidate')
 
 
+def validate_expansion_plan():
+    """Shared pre-provider and pre-solver gate for this separately frozen batch."""
+    plan_path = HERE / 'experiment-issue-expansion-v1.json'
+    dataset_path = ROOT / 'benchmarks/zvec-issue-qa/dataset-expansion-v1.json'
+    plan = json.loads(plan_path.read_text())
+    if plan.get('frozen') is not True:
+        raise ValueError('issue expansion plan has not been frozen for execution')
+    metadata = {
+        'path': str(plan_path.relative_to(ROOT)),
+        'sha256': hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+        'dataset_path': str(dataset_path.relative_to(ROOT)),
+        'dataset_sha256': hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
+    }
+    if metadata['dataset_sha256'] != plan.get('dataset_sha256'):
+        raise ValueError('issue expansion dataset differs from its frozen plan')
+    return metadata
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001'])
+    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001', 'zvec-q002', 'zvec-q003'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--workspace-root-guidance', action='store_true')
     parser.add_argument('--completion-budget', action='store_true')
     parser.add_argument('--completion-confirmation', action='store_true')
+    parser.add_argument('--closed-issue-expansion', action='store_true')
     parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
     if args.collect_only:
@@ -151,8 +170,15 @@ def main():
         parser.error(f'this phase is frozen to {expected_repeats} pair(s) per task')
     if args.workspace_root_guidance and args.task != 'reflex-6':
         parser.error('root-v2 is frozen to reflex-6 only')
-    if args.completion_budget and (args.task != 'zvec-q001' or args.workspace_root_guidance):
-        parser.error('completion-v2 is frozen to zvec-q001 without workspace-root guidance')
+    if args.closed_issue_expansion:
+        if (args.task not in ('zvec-q002', 'zvec-q003') or not args.completion_budget
+                or args.workspace_root_guidance or args.completion_confirmation):
+            parser.error('issue expansion requires q002/q003 with completion budget and no other phase')
+    elif args.task in ('zvec-q002', 'zvec-q003'):
+        parser.error('q002/q003 require the separately frozen issue expansion phase')
+    if args.completion_budget and (args.workspace_root_guidance
+            or (args.task != 'zvec-q001' and not args.closed_issue_expansion)):
+        parser.error('completion-v2 requires zvec-q001 or the separate issue expansion phase')
     if args.completion_confirmation and (args.task != 'zvec-q001' or not args.completion_budget or args.workspace_root_guidance):
         parser.error('completion confirmation requires zvec-q001 with completion-budget and without workspace-root guidance')
     start_repeat = 2 if args.completion_confirmation else 1
@@ -163,14 +189,32 @@ def main():
             'path': str(plan_path.relative_to(ROOT)),
             'sha256': hashlib.sha256(plan_path.read_bytes()).hexdigest(),
         }
+    expansion_plan = None
+    expansion_dataset_path = ROOT / 'benchmarks/zvec-issue-qa/dataset-expansion-v1.json'
+    if args.closed_issue_expansion:
+        plan_path = HERE / 'experiment-issue-expansion-v1.json'
+        try:
+            expansion_plan = validate_expansion_plan()
+        except (ValueError, OSError) as error:
+            parser.error(str(error))
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
+    if args.closed_issue_expansion:
+        shutil.copyfile(plan_path, reports / 'experiment-plan.json')
+        shutil.copyfile(expansion_dataset_path, reports / 'dataset-manifest.json')
     embedding, ignore_text, upstream = upstream_protocol(work, reports)
     if args.task == 'reflex-6':
         repository = 'https://github.com/reflex-dev/reflex.git'
         revision = 'fe0f946dc0c240c6c1e513318c21db407e191c78'
         prompt = ROOT / 'benchmarks/swe-qa-bench/datasets/reflex-6/instruction.md'
+    elif args.closed_issue_expansion:
+        dataset = json.loads(expansion_dataset_path.read_text())
+        selected = [task for task in dataset['tasks'] if 'zvec-' + task['id'] == args.task]
+        if len(selected) != 1:
+            raise RuntimeError('issue expansion task must occur exactly once in the frozen dataset')
+        repository, revision = selected[0]['source_repository'], selected[0]['source_commit']
+        prompt = expansion_dataset_path.parent / selected[0]['instruction']
     else:
         repository = 'https://github.com/alibaba/zvec.git'
         revision = 'ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d'
@@ -180,10 +224,12 @@ def main():
     run(['git', '-C', str(repo), 'fetch', '-q', '--depth=1', repository, revision])
     actual = run(['git', '-C', str(repo), 'rev-parse', 'FETCH_HEAD']).strip()
     assert actual == revision
-    if args.task == 'zvec-q001':
+    if args.task.startswith('zvec-'):
         run(['python3', str(ROOT / 'benchmarks/zvec-issue-qa/prepare_corpus.py'),
              '--repo', str(repo), '--output', str(source),
-             '--manifest', str(reports / 'corpus-validation.json')])
+             '--manifest', str(reports / 'corpus-validation.json')]
+            + (['--dataset', str(expansion_dataset_path), '--task', selected[0]['id']]
+               if args.closed_issue_expansion else []))
     else:
         archive = work / 'source.tar'
         run(['git', '-C', str(repo), 'archive', '--format=tar', '--output', str(archive), revision])
@@ -215,8 +261,10 @@ def main():
             output=reports / 'index.log')
         run(base + ['zg', '--status', '--check-ready'], output=reports / 'index-status.log')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
-                    'phase': 'confirmation' if args.completion_confirmation else 'development',
+                    'phase': ('issue-expansion' if args.closed_issue_expansion else
+                              'confirmation' if args.completion_confirmation else 'development'),
                     'confirmation_plan': confirmation_plan,
+                    'issue_expansion_plan': expansion_plan,
                     'start_repeat': start_repeat, 'planned_trial_count': args.repeats * 2,
                     'planned_trials': [
                         {'repeat': repeat, 'profile': profile}

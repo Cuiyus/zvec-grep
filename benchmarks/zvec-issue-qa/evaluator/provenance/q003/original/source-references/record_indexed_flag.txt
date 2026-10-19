@@ -1,0 +1,17 @@
+1470:         *quant_vector_indexers) {
+1471:   const auto &vector_fields = collection_schema_->vector_fields();
+1472: 
+1473:   auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);
+1474:   new_segment_meta->remove_writing_forward_block();
+1475: 
+1476:   std::set<std::string> vector_field_names;
+1477:   for (const auto &field : vector_fields) {
+1478:     auto s = create_vector_index(field->name(), field->index_params(),
+1479:                                  concurrency, &new_segment_meta,
+1480:                                  vector_indexers, quant_vector_indexers);
+1481:     CHECK_RETURN_STATUS(s);
+1482:     vector_field_names.insert(field->name());
+1483:   }
+1484: 
+1485:   new_segment_meta->set_indexed_vector_fields(vector_field_names);
+1486:   *segment_meta = new_segment_meta;

@@ -1,0 +1,71 @@
+4006: namespace {
+4007: 
+4008: constexpr int kRowMappingDocCount = 28;
+4009: constexpr int kRowMappingDimension = 32;
+4010: 
+4011: Doc MakeRowMappingDoc(int id, int vector_position) {
+4012:   Doc doc;
+4013:   doc.set_pk(TestHelper::MakePK(id));
+4014:   doc.set<int32_t>("marker", vector_position);
+4015:   std::vector<float> vector(kRowMappingDimension, 0.0f);
+4016:   vector[vector_position] = 1.0f;
+4017:   doc.set<std::vector<float>>("embedding", vector);
+4018:   return doc;
+4019: }
+4020: 
+4021: CollectionSchema::Ptr MakeRowMappingSchema(const IndexParams::Ptr &params) {
+4022:   auto schema = std::make_shared<CollectionSchema>("row_mapping");
+4023:   schema->add_field(
+4024:       std::make_shared<FieldSchema>("marker", DataType::INT32, false));
+4025:   schema->add_field(std::make_shared<FieldSchema>(
+4026:       "embedding", DataType::VECTOR_FP32, uint32_t{kRowMappingDimension}, false,
+4027:       params));
+4028:   return schema;
+4029: }
+4030: 
+4031: void InsertRowMappingDocs(const Collection::Ptr &collection,
+4032:                           bool flush_between_batches = false) {
+4033:   for (int begin : {0, kRowMappingDocCount / 2}) {
+4034:     std::vector<Doc> docs;
+4035:     for (int id = begin; id < begin + kRowMappingDocCount / 2; ++id) {
+4036:       docs.push_back(MakeRowMappingDoc(id, id));
+4037:     }
+4038:     auto result = collection->insert(docs);
+4039:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4040:     for (const auto &status : result.value()) {
+4041:       ASSERT_TRUE(status.ok()) << status.message();
+4042:     }
+4043:     if (begin == 0 && flush_between_batches) {
+4044:       ASSERT_TRUE(collection->flush().ok());
+4045:     }
+4046:   }
+4047: }
+4048: 
+4049: void CheckRowMapping(const Collection::Ptr &collection,
+4050:                      const std::vector<int> &vector_positions) {
+4051:   size_t live_doc_count = 0;
+4052:   for (int id = 0; id < kRowMappingDocCount; ++id) {
+4053:     if (vector_positions[id] < 0) {
+4054:       continue;
+4055:     }
+4056:     ++live_doc_count;
+4057:     auto expected = MakeRowMappingDoc(id, vector_positions[id]);
+4058:     auto vector = expected.get<std::vector<float>>("embedding").value();
+4059:     SearchQuery query;
+4060:     query.topk_ = 1;
+4061:     query.include_vector_ = true;
+4062:     query.target_.field_name_ = "embedding";
+4063:     query.target_.set_vector(
+4064:         std::string(reinterpret_cast<const char *>(vector.data()),
+4065:                     vector.size() * sizeof(float)));
+4066:     query.target_.query_params_ =
+4067:         std::make_shared<HnswQueryParams>(128, 0.0f, true);
+4068:     auto result = collection->query(query);
+4069:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4070:     ASSERT_EQ(result->size(), 1u);
+4071:     ASSERT_EQ(*result->front(), expected);
+4072:   }
+4073:   auto stats = collection->stats();
+4074:   ASSERT_TRUE(stats.has_value()) << stats.error().message();
+4075:   ASSERT_EQ(stats->doc_count, live_doc_count);
+4076: }

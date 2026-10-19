@@ -1,0 +1,61 @@
+{
+  "task_id": "q002",
+  "visibility": "evaluator-only; not source evidence available to solver",
+  "source_commit": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+  "fix_commit": "a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59",
+  "reference_origin": "research/evaluator/evidence.json",
+  "evidence": [
+    {
+      "id": "F01",
+      "revision": "a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59",
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "local_file": "research/evaluator/fix-source/src/db/index/column/fts_column/fts_types.h",
+      "start_line": 24,
+      "end_line": 36,
+      "file_sha256": "a6a724d3342d340f7934e2a85f702590d810af360f74844d5de383bcde0826fd",
+      "excerpt_sha256": "2aad416d7701fda27e84f97de7e2e26ad2dc5e21d9059da6f5613a7a57a4972b",
+      "excerpt_hash_method": "SHA256 of concatenated original byte lines start_line through end_line inclusive; line endings retained",
+      "source_url": "https://github.com/alibaba/zvec/blob/a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59/src/db/index/column/fts_column/fts_types.h#L24-L36",
+      "claim": "Merged fix makes candidate IDs optional, separating absent, present-empty and present-nonempty states.",
+      "excerpt": "\n/*! FTS query parameters passed to FtsColumnIndexer::search(). */\nstruct FtsQueryParams {\n  uint32_t topk{10};\n  // Optional filter: returns true if a doc should be EXCLUDED.\n  // Wraps zvec::IndexFilter for push-down filtering inside the search loop.\n  IndexFilter::Ptr filter{nullptr};\n  // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;\n  // nullopt means no candidate restriction, while a present empty vector\n  // means no document can match. Filled by the planner via\n  // DocFilter::get_bf_by_keys_and_update when an invert result is highly\n  // selective.\n  std::optional<std::vector<uint64_t>> candidate_ids;\n"
+    },
+    {
+      "id": "F02",
+      "revision": "a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59",
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "local_file": "research/evaluator/fix-source/src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 206,
+      "end_line": 225,
+      "file_sha256": "dbe3bffb8fef7d15a4be09babd5c7d3706dcdde4343d1318a310ba24662d5cab",
+      "excerpt_sha256": "2325966597b26f576244018cbdcad9460f57cd70839a211c15fb212fe10bbe97",
+      "excerpt_hash_method": "SHA256 of concatenated original byte lines start_line through end_line inclusive; line endings retained",
+      "source_url": "https://github.com/alibaba/zvec/blob/a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59/src/db/index/column/fts_column/fts_column_indexer.cc#L206-L225",
+      "claim": "Merged consumer handles present-empty as empty result and intersects present-nonempty candidates.",
+      "excerpt": "  // Candidate-driven mode: AND a CandidateDocIterator into the root so the\n  // small candidate set leads (Conjunction sorts by cost asc), turning the\n  // posting walk into per-candidate advance()+matches()+score().\n  if (query_params.candidate_ids) {\n    if (query_params.candidate_ids->empty()) {\n      return std::vector<FtsResult>{};\n    }\n    std::vector<DocIteratorPtr> musts;\n    musts.reserve(2);\n    musts.push_back(\n        std::make_unique<CandidateDocIterator>(*query_params.candidate_ids));\n    musts.push_back(std::move(root_iter));\n    root_iter = std::make_unique<ConjunctionIterator>(\n        std::move(musts), std::vector<DocIteratorPtr>{});\n  }\n\n  const uint32_t topk = query_params.topk;\n  const zvec::IndexFilter *filter_ptr = query_params.filter.get();\n\n  using MinHeap = std::priority_queue<FtsResult, std::vector<FtsResult>,\n"
+    },
+    {
+      "id": "F03",
+      "revision": "a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59",
+      "path": "tests/db/sqlengine/fts_recall_test.cc",
+      "local_file": "research/evaluator/fix-source/tests/db/sqlengine/fts_recall_test.cc",
+      "start_line": 531,
+      "end_line": 537,
+      "file_sha256": "b114234e4b56e9dc4ab7c24158cb4af284126e01be4d0b459f92c8fa6e69b2cf",
+      "excerpt_sha256": "f68eddf88f2e6a30f7f144b26e2d99e0c3131fa77259042cdfaaceeba1401ace",
+      "excerpt_hash_method": "SHA256 of concatenated original byte lines start_line through end_line inclusive; line endings retained",
+      "source_url": "https://github.com/alibaba/zvec/blob/a90ec5b1d658d55cdb5f4f0f158fa21d82cfbc59/tests/db/sqlengine/fts_recall_test.cc#L531-L537",
+      "claim": "Merged end-to-end regression checks FTS term hits combined with zero-match tag filter.",
+      "excerpt": "// \"apple\" matches docs 0,3,5, but no doc has tag=999.\nTEST_F(FtsRecallTest, FtsSearchWithFilter_ZeroMatchesReturnsEmpty) {\n  auto result = fts_search_with_filter(\"apple\", \"tag = 999\");\n  ASSERT_TRUE(result.has_value()) << result.error().c_str();\n  EXPECT_TRUE(result->empty());\n}\n\n"
+    }
+  ],
+  "original_criterion_references": {
+    "C4": [
+      "F01",
+      "F02"
+    ],
+    "C5": [
+      "F03"
+    ]
+  },
+  "purpose": "Corroborates repair/regression; excluded from q002 evidence_spans and mandatory solver citations."
+}

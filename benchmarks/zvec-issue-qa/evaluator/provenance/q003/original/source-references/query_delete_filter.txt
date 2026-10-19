@@ -1,0 +1,18 @@
+68: bool DocFilter::empty() const {
+69:   return !(delete_filter_ || invert_filter_ || forward_plan_ ||
+70:            forward_filter_expr_);
+71: }
+72: 
+73: bool DocFilter::is_filtered(uint64_t id) const {
+74:   if (delete_filter_ && delete_filter_->is_filtered(id)) {
+75:     return true;
+76:   }
+77:   if (invert_filter_ && invert_filter_->is_filtered(id)) {
+78:     return true;
+79:   }
+80:   auto forward_bit = get_forward_bit(id);
+81:   if (!forward_bit) {
+82:     return false;
+83:   }
+84:   // revert to return false if forward filter is matched
+85:   return !forward_bit.value();

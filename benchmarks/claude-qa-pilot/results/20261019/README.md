@@ -64,7 +64,7 @@ zg 在第 2 次调用使用 `/workspace` 搜索，将 `recover()` 排在第一�
 
 GitHub 元数据曾在实际运行期间持续显示 queued；此前的[排队观测](zvec-q001-completion-v2/queue-observation.json)保留。完整产物及 15:52:11 UTC 的 job 清理日志确认执行结束，详见[执行记录](zvec-q001-completion-v2/execution.json)。没有因为状态延迟取消或重新提交此 pair。
 
-下一步按[独立重复验证计划](../../experiment-completion-confirmation.json)补同一 case 的两对：第 2 对 zg→baseline，第 3 对 baseline→zg。保持同一 completion-v2 协议，把已观察到的开发 pair 和后续确认结果分开；所有结果保留，不挑最好的一次。此计划是在看到当前信号后选择的，同题重复仍不代表新题泛化能力。
+已按[独立重复验证计划](../../experiment-completion-confirmation.json)提交同一 case 的两对：[run 39282211793](https://github.com/Cuiyus/zvec-grep/actions/runs/39282211793)，第 2 对 zg→baseline，第 3 对 baseline→zg。精确模型 provider 探测已通过，QA 产物尚未发布；[提交观测](zvec-q001-completion-confirmation/dispatch-observation.json)单独保存。保持同一 completion-v2 协议，把已观察到的开发 pair 和后续确认结果分开；所有结果保留，不挑最好的一次。此计划是在看到当前信号后选择的，同题重复仍不代表新题泛化能力。
 
 ## 所有前置尝试
 

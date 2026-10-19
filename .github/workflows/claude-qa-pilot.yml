@@ -8,18 +8,22 @@ on:
       task:
         description: Frozen task selection
         type: choice
-        options: [both, reflex-6, zvec-q001]
+        options: [both, reflex-6, zvec-q001, zvec-expansion]
         default: both
       workspace_root_guidance:
         description: Root V2 shared /workspace guidance (reflex-6 only)
         type: boolean
         default: false
       completion_budget:
-        description: Completion V2 shared 24-call budget (zvec-q001 only, root guidance off)
+        description: Completion V2 shared 24-call budget (zvec-q001 or frozen issue expansion)
         type: boolean
         default: false
       completion_confirmation:
         description: Two further frozen completion V2 pairs (zvec-q001 with completion budget only)
+        type: boolean
+        default: false
+      closed_issue_expansion:
+        description: Separately frozen q002 and q003 batch (completion budget required)
         type: boolean
         default: false
 permissions:
@@ -43,21 +47,39 @@ jobs:
           PILOT_ROOT_GUIDANCE: ${{ inputs.workspace_root_guidance && 'true' || 'false' }}
           PILOT_COMPLETION_BUDGET: ${{ inputs.completion_budget && 'true' || 'false' }}
           PILOT_COMPLETION_CONFIRMATION: ${{ inputs.completion_confirmation && 'true' || 'false' }}
+          PILOT_ISSUE_EXPANSION: ${{ inputs.closed_issue_expansion && 'true' || 'false' }}
         run: |
           python3 - <<'PY'
           import json, os
           task = os.environ['PILOT_TASK']
+          if task not in ('both', 'reflex-6', 'zvec-q001', 'zvec-expansion'):
+              raise SystemExit('unknown frozen task selection')
+          expansion = os.environ['PILOT_ISSUE_EXPANSION'] == 'true'
+          if expansion and (task != 'zvec-expansion' or os.environ['PILOT_COMPLETION_BUDGET'] != 'true' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true' or os.environ['PILOT_COMPLETION_CONFIRMATION'] == 'true'):
+              raise SystemExit('issue expansion requires its full task batch, completion budget, and no other phase')
+          if task == 'zvec-expansion' and not expansion:
+              raise SystemExit('zvec-expansion requires its separate phase flag')
           if os.environ['PILOT_ROOT_GUIDANCE'] == 'true' and task != 'reflex-6':
               raise SystemExit('root-v2 is frozen to task=reflex-6 only')
-          if os.environ['PILOT_COMPLETION_BUDGET'] == 'true' and (task != 'zvec-q001' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true'):
-              raise SystemExit('completion-v2 requires task=zvec-q001 and workspace_root_guidance=false')
+          if os.environ['PILOT_COMPLETION_BUDGET'] == 'true' and ((task != 'zvec-q001' and not expansion) or os.environ['PILOT_ROOT_GUIDANCE'] == 'true'):
+              raise SystemExit('completion-v2 requires zvec-q001 or the separate issue expansion phase')
           if os.environ['PILOT_COMPLETION_CONFIRMATION'] == 'true' and (task != 'zvec-q001' or os.environ['PILOT_COMPLETION_BUDGET'] != 'true' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true'):
               raise SystemExit('completion confirmation requires task=zvec-q001, completion_budget=true and workspace_root_guidance=false')
-          tasks = ['reflex-6', 'zvec-q001'] if task == 'both' else [task]
-          if any(value not in ('reflex-6', 'zvec-q001') for value in tasks):
+          tasks = (['zvec-q002', 'zvec-q003'] if expansion else
+                   ['reflex-6', 'zvec-q001'] if task == 'both' else [task])
+          if any(value not in ('reflex-6', 'zvec-q001', 'zvec-q002', 'zvec-q003') for value in tasks):
               raise SystemExit('unknown frozen task')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('tasks=' + json.dumps(tasks) + '\n')
+          PY
+      - name: Verify issue expansion is frozen before provider calls
+        if: inputs.closed_issue_expansion
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'benchmarks/claude-qa-pilot')
+          from ci_run import validate_expansion_plan
+          validate_expansion_plan()
           PY
       - name: Verify Qwen Anthropic protocol and exact model
         env:
@@ -84,7 +106,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test pilot parser and isolation contracts
-        run: python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py' -v
+        run: |
+          python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py' -v
+          python3 -m unittest discover -s benchmarks/zvec-issue-qa -p 'test_*.py' -v
       - name: Read the existing main Rust binary artifact
         uses: actions/download-artifact@v8
         with:
@@ -135,6 +159,7 @@ jobs:
           ${{ inputs.workspace_root_guidance && '--workspace-root-guidance' || '' }}
           ${{ inputs.completion_budget && '--completion-budget' || '' }}
           ${{ inputs.completion_confirmation && '--completion-confirmation' || '' }}
+          ${{ inputs.closed_issue_expansion && '--closed-issue-expansion' || '' }}
       - name: Preserve complete or partial evidence and redact credentials
         id: collect
         if: always()

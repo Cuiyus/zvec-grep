@@ -1,0 +1,71 @@
+4080: TEST_F(CollectionTest, Feature_Optimize_Delete_RowMapping) {
+4081:   auto func = [&](bool enable_mmap, QuantizeType quantize_type) {
+4082:     FileHelper::RemoveDirectory(col_path);
+4083:     auto index_params = std::make_shared<HnswIndexParams>(
+4084:         MetricType::COSINE, 16, 200, quantize_type);
+4085:     auto schema = MakeRowMappingSchema(index_params);
+4086:     auto result = Collection::CreateAndOpen(
+4087:         col_path, *schema, CollectionOptions{false, enable_mmap});
+4088:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4089:     auto collection = std::move(result.value());
+4090: 
+4091:     InsertRowMappingDocs(collection, quantize_type == QuantizeType::FP16);
+4092:     std::vector<int> vector_positions(kRowMappingDocCount);
+4093:     std::iota(vector_positions.begin(), vector_positions.end(), 0);
+4094:     for (int id : {0, 4, 9}) {
+4095:       vector_positions[id] = -1;
+4096:     }
+4097:     auto deleted = collection->delete_(
+4098:         {TestHelper::MakePK(0), TestHelper::MakePK(4), TestHelper::MakePK(9)});
+4099:     ASSERT_TRUE(deleted.has_value()) << deleted.error().message();
+4100: 
+4101:     ASSERT_TRUE(collection->optimize(OptimizeOptions{1}).ok());
+4102:     CheckRowMapping(collection, vector_positions);
+4103: 
+4104:     collection.reset();
+4105:     result = Collection::Open(col_path, CollectionOptions{true, enable_mmap});
+4106:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4107:     CheckRowMapping(result.value(), vector_positions);
+4108:   };
+4109: 
+4110:   for (bool enable_mmap : {true, false}) {
+4111:     func(enable_mmap, QuantizeType::UNDEFINED);
+4112:     func(enable_mmap, QuantizeType::FP16);
+4113:   }
+4114: }
+4115: 
+4116: TEST_F(CollectionTest, Feature_Optimize_Upsert_RowMapping) {
+4117:   auto func = [&](bool enable_mmap) {
+4118:     FileHelper::RemoveDirectory(col_path);
+4119:     auto index_params =
+4120:         std::make_shared<HnswIndexParams>(MetricType::COSINE, 16, 200);
+4121:     auto schema = MakeRowMappingSchema(index_params);
+4122:     auto result = Collection::CreateAndOpen(
+4123:         col_path, *schema, CollectionOptions{false, enable_mmap});
+4124:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4125:     auto collection = std::move(result.value());
+4126: 
+4127:     InsertRowMappingDocs(collection);
+4128:     std::vector<int> vector_positions(kRowMappingDocCount);
+4129:     std::iota(vector_positions.begin(), vector_positions.end(), 0);
+4130:     std::vector<Doc> replacements;
+4131:     for (int id : {0, 4, 9}) {
+4132:       vector_positions[id] =
+4133:           kRowMappingDocCount + static_cast<int>(replacements.size());
+4134:       replacements.push_back(MakeRowMappingDoc(id, vector_positions[id]));
+4135:     }
+4136:     auto upserted = collection->upsert(replacements);
+4137:     ASSERT_TRUE(upserted.has_value()) << upserted.error().message();
+4138: 
+4139:     ASSERT_TRUE(collection->optimize(OptimizeOptions{1}).ok());
+4140:     CheckRowMapping(collection, vector_positions);
+4141: 
+4142:     collection.reset();
+4143:     result = Collection::Open(col_path, CollectionOptions{true, enable_mmap});
+4144:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4145:     CheckRowMapping(result.value(), vector_positions);
+4146:   };
+4147: 
+4148:   func(true);
+4149:   func(false);
+4150: }

@@ -1,0 +1,22 @@
+54: class VectorResultAccumulator {
+55:  public:
+56:   // Collect plain topk results from each block after translating block-local
+57:   // doc IDs back to segment-level IDs.
+58:   void AddBlock(uint32_t block_offset, VectorIndexResults *results) {
+59:     auto &docs = results->docs();
+60:     auto &reverted_vectors = results->reverted_vector_list();
+61:     auto &reverted_sparse_values = results->reverted_sparse_values_list();
+62:     docs_.reserve(docs_.size() + docs.size());
+63: 
+64:     for (size_t i = 0; i < docs.size(); ++i) {
+65:       auto doc = std::move(docs[i]);
+66:       doc.set_key(block_offset + doc.key());
+67: 
+68:       ResultDoc result_doc{std::move(doc), {}, {}};
+69:       if (i < reverted_vectors.size()) {
+70:         result_doc.reverted_vector = std::move(reverted_vectors[i]);
+71:       }
+72:       if (i < reverted_sparse_values.size()) {
+73:         result_doc.reverted_sparse_values =
+74:             std::move(reverted_sparse_values[i]);
+75:       }

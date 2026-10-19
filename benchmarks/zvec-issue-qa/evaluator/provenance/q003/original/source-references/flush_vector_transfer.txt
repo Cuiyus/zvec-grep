@@ -1,0 +1,15 @@
+4382:   // remove indexer from memory to persist
+4383:   for (auto &[column_name, indexer] : memory_vector_indexers_) {
+4384:     auto block_id = memory_vector_block_ids_[column_name];
+4385:     BlockMeta vb =
+4386:         BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,
+4387:                   block.max_doc_id_, block.doc_count_,        {column_name}};
+4388:     auto it = vector_indexers_.find(column_name);
+4389:     if (it == vector_indexers_.end()) {
+4390:       std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};
+4391:       vector_indexers_.emplace(column_name, std::move(vector_indexers));
+4392:     } else {
+4393:       it->second.push_back(indexer);
+4394:     }
+4395:     segment_meta_->add_persisted_block(vb);
+4396:   }

@@ -1,0 +1,72 @@
+100: Status SegmentHelper::ExecuteCompactTask(CompactTask &task) {
+101:   // input
+102:   auto collection_path = task.collection_path_;
+103:   auto schema = task.schema_;
+104:   auto input_segments = task.input_segments_;
+105:   auto filter = task.filter_;
+106:   auto output_segment_id = task.output_segment_id_;
+107: 
+108:   // input_segments must be pre-sorted by ascending min_doc_id so the
+109:   // shared delete_row_id_bitmap (built by FilterRecordBatch, consumed by
+110:   // both vector and FTS reducers) is well-defined.  Guaranteed upstream by
+111:   // SegmentManager::get_segments().
+112:   auto columns = schema->forward_field_names();
+113: 
+114:   // make segment path
+115:   auto output_segment_path =
+116:       FileHelper::MakeTempSegmentPath(collection_path, output_segment_id);
+117:   if (!FileHelper::CreateDirectory(output_segment_path)) {
+118:     LOG_ERROR("Create directory failed: %s", output_segment_path.c_str());
+119:     return Status::InternalError("Create directory failed: %s",
+120:                                  output_segment_path.c_str());
+121:   }
+122: 
+123:   std::function<BlockID()> block_id_generator =
+124:       [block_id = BlockID{0}]() mutable { return block_id++; };
+125: 
+126:   // iterate every doc, build forward and invert indexer
+127:   roaring::Roaring delete_row_id_bitmap;
+128:   uint64_t min_doc_id{std::numeric_limits<uint64_t>::max()};
+129:   uint64_t max_doc_id{0};
+130:   uint32_t doc_count{0};
+131:   std::vector<BlockMeta> block_metas;
+132:   Status s = ReduceScalar(schema, input_segments, output_segment_path, columns,
+133:                           filter, task.forward_use_parquet_, block_id_generator,
+134:                           &delete_row_id_bitmap, &block_metas, &min_doc_id,
+135:                           &max_doc_id, &doc_count);
+136:   CHECK_RETURN_STATUS(s);
+137: 
+138:   if (doc_count == 0) {
+139:     FileHelper::RemoveDirectory(output_segment_path);
+140:     return Status::OK();
+141:   }
+142: 
+143:   // Leave row_id_filter null when there are no deletes or
+144:   // create_compaction_task with rebuild=false, so downstream merge
+145:   // can take a faster per-doc path that skips the filter callback entirely.
+146:   std::shared_ptr<RowIdFilter> row_id_filter;
+147:   if (!delete_row_id_bitmap.isEmpty()) {
+148:     row_id_filter = std::make_shared<RowIdFilter>(delete_row_id_bitmap);
+149:   }
+150: 
+151:   s = ReduceVectorIndex(schema, input_segments, output_segment_path,
+152:                         row_id_filter, block_id_generator, min_doc_id,
+153:                         max_doc_id, doc_count, task.concurrency_, &block_metas);
+154:   CHECK_RETURN_STATUS(s);
+155: 
+156:   LOG_INFO("Compacted vector index");
+157: 
+158:   s = ReduceFts(schema, input_segments, output_segment_path,
+159:                 delete_row_id_bitmap, block_id_generator, &block_metas);
+160:   CHECK_RETURN_STATUS(s);
+161: 
+162:   LOG_INFO("Compacted fts index");
+163: 
+164:   auto new_segment_meta = std::make_shared<SegmentMeta>();
+165:   new_segment_meta->set_id(task.output_segment_id_);
+166:   new_segment_meta->set_persisted_blocks(block_metas);
+167:   std::set<std::string> indexed_vector_fields;
+168:   for (auto &field : schema->vector_fields()) {
+169:     indexed_vector_fields.emplace(field->name());
+170:   }
+171:   new_segment_meta->set_indexed_vector_fields(indexed_vector_fields);

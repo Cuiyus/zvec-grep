@@ -1,0 +1,38 @@
+4152: TEST_F(CollectionTest, Feature_CreateIndex_Delete_RowMapping) {
+4153:   auto func = [&](bool enable_mmap, QuantizeType quantize_type) {
+4154:     FileHelper::RemoveDirectory(col_path);
+4155:     auto flat_params = std::make_shared<FlatIndexParams>(
+4156:         quantize_type == QuantizeType::FP16 ? MetricType::IP
+4157:                                             : MetricType::COSINE);
+4158:     auto schema = MakeRowMappingSchema(flat_params);
+4159:     auto result = Collection::CreateAndOpen(
+4160:         col_path, *schema, CollectionOptions{false, enable_mmap});
+4161:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4162:     auto collection = std::move(result.value());
+4163: 
+4164:     InsertRowMappingDocs(collection);
+4165:     std::vector<int> vector_positions(kRowMappingDocCount);
+4166:     std::iota(vector_positions.begin(), vector_positions.end(), 0);
+4167:     for (int id : {0, 4, 9}) {
+4168:       vector_positions[id] = -1;
+4169:     }
+4170:     auto deleted = collection->delete_(
+4171:         {TestHelper::MakePK(0), TestHelper::MakePK(4), TestHelper::MakePK(9)});
+4172:     ASSERT_TRUE(deleted.has_value()) << deleted.error().message();
+4173: 
+4174:     auto index_params = std::make_shared<HnswIndexParams>(
+4175:         MetricType::COSINE, 16, 200, quantize_type);
+4176:     ASSERT_TRUE(
+4177:         collection
+4178:             ->create_index("embedding", index_params, CreateIndexOptions{1})
+4179:             .ok());
+4180:     CheckRowMapping(collection, vector_positions);
+4181: 
+4182:     collection.reset();
+4183:     result = Collection::Open(col_path, CollectionOptions{true, enable_mmap});
+4184:     ASSERT_TRUE(result.has_value()) << result.error().message();
+4185:     CheckRowMapping(result.value(), vector_positions);
+4186:   };
+4187: 
+4188:   for (bool enable_mmap : {true, false}) {
+4189:     func(enable_mmap, QuantizeType::UNDEFINED);
