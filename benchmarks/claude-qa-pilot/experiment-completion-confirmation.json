@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "experiment_id": "claude-qwen-rust-zvec-completion-confirmation-20261019",
+  "protocol_version": "completion-v2",
+  "phase": "confirmation",
+  "status": "frozen before confirmation execution; execution recorded separately",
+  "base_plan": {
+    "path": "benchmarks/claude-qa-pilot/experiment-completion-v2.json",
+    "sha256": "a2f9764185d83e3c57c366a0aeb2c9c1522f22618c04f6c6bb8b7e37ee680e3e"
+  },
+  "development_selection_disclosure": "Selected for same-case replication after development run 39278383394 delivered two 9/10 passing answers and lower input/wall in zg. This is not a held-out task, independent benchmark sampling, or an estimate of generalization. Do not pool the selected development pair into confirmation estimates.",
+  "development_evidence": {
+    "run_id": 39278383394,
+    "review_path": "benchmarks/claude-qa-pilot/results/20261019/zvec-q001-completion-v2/blinded-review.json",
+    "review_sha256": "2a9bf638ce80c501d0865c89f983ca872de4b9b5c948c3534d7b82e1cf0c2303",
+    "mapping_path": "benchmarks/claude-qa-pilot/results/20261019/zvec-q001-completion-v2/review-mapping.json",
+    "baseline_score": 9,
+    "zg_score": 9,
+    "both_source_grounded_success": true
+  },
+  "task": {
+    "id": "zvec-q001",
+    "repository": "alibaba/zvec",
+    "revision": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+    "question": {
+      "path": "benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+      "sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef"
+    },
+    "rubric": {
+      "path": "benchmarks/zvec-issue-qa/evaluator/q001.json",
+      "sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9"
+    }
+  },
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.212",
+    "model": "qwen3.8-max",
+    "effort": "high",
+    "max_output_tokens": 8192,
+    "max_turns": 30,
+    "wall_limit_seconds": 900,
+    "repository_guidance": "disabled using CLAUDE_CODE_DISABLE_CLAUDE_MDS and CLAUDE_CODE_DISABLE_AUTO_MEMORY; fresh HOME, empty setting sources"
+  },
+  "retrieval": {
+    "implementation": "current upstream main Rust",
+    "source_repository": "zvec-ai/zvec-grep",
+    "source_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+    "native_package_version": "0.0.1",
+    "native_package_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "upstream_build_run": 39221698769,
+    "upstream_artifact_id": 12176409568,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_configuration_source": "current main benchmarks/swe-qa-bench/ci-config.json local default",
+    "mcp_toolset": "agent",
+    "query_policy": "Preserve native main MCP schema and instructions (including its semantic-search guidance); no additional benchmark-specific tool forcing.",
+    "index_setup": "before timed solver; cloned per trial; separately recorded",
+    "index_ignore_source": "main benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore",
+    "upstream_artifact_digest": "sha256:00873b7a5505bb4f628c5d33336c058750cb09dcccccc8ae2718fa8d0cfb0e03"
+  },
+  "completion_control": {
+    "applies_identically_to": [
+      "baseline",
+      "zg"
+    ],
+    "tool_budget": 24,
+    "counting": "Every unique repository tool_use_id consumes one admission, including tools later failing; all tools share one cap. Duplicate hook events are idempotent. Parallel calls are serialized by a file lock.",
+    "research_seconds": 600,
+    "wall_limit_seconds": 900,
+    "max_turns": 30,
+    "warning_after_admitted_calls": 18,
+    "warning_after_elapsed_seconds": 480,
+    "mechanism": "Native Claude PreToolUse command hook; after either budget limit deny new repository tools and request final answer from current evidence. Under budget omit permissionDecision, preserving ordinary permissions.",
+    "not_guaranteed": "No hard separation into a second model invocation. Already running work is not interrupted at 600 seconds. Denial leaves an opportunity to answer but the model may continue requesting denied tools or exhaust total time/turns. Such outcomes remain failures.",
+    "information_policy": "Generic budget/stop/uncertainty text only. No gold, source symbols, issue resolution, content filtering, suggested search terms or task-specific hint.",
+    "official_hook_reference": "https://code.claude.com/docs/en/hooks",
+    "hook_sha256": "8a3a39a1a45e766bf15ba258fa4a0d2f36c63c70482258c6df10e841b99af761"
+  },
+  "common_instructions_sha256": "220823c068789010a8f43aac840768b7d4ba7996d927ff58573f0b0641249325",
+  "run_plan": {
+    "workflow": ".github/workflows/claude-qa-pilot.yml",
+    "event": "workflow_dispatch",
+    "inputs": {
+      "task": "zvec-q001",
+      "workspace_root_guidance": false,
+      "completion_budget": true,
+      "completion_confirmation": true
+    },
+    "start_repeat": 2,
+    "repeats": 2,
+    "trial_count": 4,
+    "planned_trials": [
+      {
+        "repeat": 2,
+        "profile": "zg"
+      },
+      {
+        "repeat": 2,
+        "profile": "baseline"
+      },
+      {
+        "repeat": 3,
+        "profile": "baseline"
+      },
+      {
+        "repeat": 3,
+        "profile": "zg"
+      }
+    ],
+    "job_timeout_minutes": 90,
+    "runner_timeout_seconds": 4500,
+    "automatic_repeats": false,
+    "automatic_task_expansion": false,
+    "bad_outcome_replacement": false
+  },
+  "evaluation": {
+    "primary": "Per-pair final-answer source-grounded quality under unchanged q001 rubric, followed by complete input tokens including cache; report each pair individually.",
+    "quality_review": "Fresh blinded Codex source audit of anonymous final answers. Keep all criterion scores, unsupported claims and citations. Reviewers receive no profiles, metrics or prior answers/reviews.",
+    "resources": [
+      "input tokens including cache",
+      "input excluding cache read",
+      "output tokens",
+      "tool attempts and admission/execution outcomes",
+      "agent wall",
+      "separate index/preflight time"
+    ],
+    "signal_reproduced_rule": "Both planned pairs must have valid protocol and complete accounting, both answers pass the frozen quality gate, zg quality score is at least baseline in each pair, and zg uses fewer input tokens including cache in each pair. Otherwise report the mixed result, failure or quality/resource tradeoff; do not replace the pair. Wall is reported separately, without a statistical significance claim.",
+    "summary": "Report the two confirmation pairs separately and their token ratios. Never merge changed protocols or select the best run. Two replications of one preselected task cannot establish population-level benefit.",
+    "failure_policy": "Keep model failures and timeouts, continue planned later trials; infrastructure/isolation/credential failures stop the runner with retained partial evidence, not automatic reruns.",
+    "next_step": "Use confirmation evidence to decide whether the unchanged protocol merits a separately frozen issue set. No new task or tuning is part of this batch."
+  },
+  "unchanged": [
+    "question and rubric",
+    "frozen source",
+    "common agent instructions",
+    "model/provider and effort",
+    "native Claude version",
+    "current-main Rust binary and embedding",
+    "native tools, MCP schema and instructions",
+    "hook file and budgets",
+    "per-trial wall/turn/output settings",
+    "source isolation and fresh per-trial HOME/index"
+  ],
+  "changes_from_development": [
+    "two planned same-case pairs",
+    "counterbalanced execution order and explicit repeat IDs",
+    "larger outer job timeout solely to accommodate four unchanged trials",
+    "additional execution-order auditing"
+  ]
+}

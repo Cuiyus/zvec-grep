@@ -72,9 +72,10 @@ The agent toolset exposes only search. The same native tools remain available;
 native zg MCP instructions are preserved, without extra benchmark-specific
 tool forcing.
 
-The development plan is exactly one baseline/zg pair for each route. There is
-no automatic repeat or suite expansion. The generic runner supports alternating
-orders for later explicitly planned repetitions, but ci_run.py enforces one pair.
+The default development plan is exactly one baseline/zg pair for each route.
+There is no automatic repeat or suite expansion. The separate, explicitly
+selected completion confirmation phase below permits two further pairs on the
+same zvec task; all other CI modes enforce one pair.
 All planned trials remain in the manifest. Infrastructure failures and incomplete
 answers stay visible; they are never treated as efficient answers. A single pair
 is descriptive and cannot establish a general improvement.
@@ -133,6 +134,28 @@ gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
   --ref dev/claude-zvec-qa-pilot -f task=zvec-q001 \
   -f workspace_root_guidance=false -f completion_budget=true
 ```
+
+`experiment-completion-confirmation.json` freezes two further same-case pairs
+after the completion-v2 development signal. It keeps all agent, source, tool,
+hook, and per-trial settings unchanged, and runs pair 2 in zg/baseline order,
+then pair 3 in baseline/zg order. The selected development pair is excluded from
+confirmation estimates. Compare each pair's frozen source-based quality before
+complete token usage; retain failures and quality/resource tradeoffs. These are
+replications of an already selected task, not evidence of held-out generalization.
+
+```sh
+gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
+  --ref dev/claude-zvec-qa-pilot -f task=zvec-q001 \
+  -f workspace_root_guidance=false -f completion_budget=true \
+  -f completion_confirmation=true
+```
+
+This mode alone permits `--repeats 2` in `ci_run.py`, passing `--start-repeat 2`
+to the runner. Its 90-minute job and 4500-second outer runner timeout accommodate
+four unchanged 900-second trials. Setup records the confirmation plan hash;
+manifest `planned_trials` and the actual loop use the same schedule function.
+The artifact audit verifies the summary's execution order and strictly increasing
+per-trial hook start times, rather than inferring order from directory names.
 
 Run parser and source-isolation checks with:
 

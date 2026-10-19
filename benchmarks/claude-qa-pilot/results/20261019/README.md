@@ -2,7 +2,7 @@
 
 本次只验证两条路线各一个 case，使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是测试时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建，配主干默认的本地 `potion-code-16m-v2`。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
 
-**结论：完成了可复现的最小开发验证，但还没有得到明显、稳定的 zg 效率优势。** SWE-QA 的路径说明迭代有 9→10 分的质量提升，代价是 2.18 倍 input tokens；zvec closed-issue QA 的核心代码可被召回，但两组都在交付答案前耗尽预算。新题值得继续做完成性校准，当前不能作为效果展示样本。
+**结论：zvec closed-issue QA 出现了值得重复验证的效率信号。** 同一题目的 completion-v2 开发 pair 中，两组都交付答案、均为 9/10 且达到冻结质量门槛；zg 成功检索 1 次，input tokens 少 51.3%，agent wall 少 18.5%。这是单题单次、看过 V1 后校准的结果，尚不能宣称稳定或泛化优势。SWE-QA 的有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。此前 zvec 两组未完成的 V1 结果完整保留。
 
 ## 实验设计
 
@@ -23,6 +23,7 @@ Baseline 允许 Read/Grep/Glob；zg 组额外提供当前 Rust 的原生 search 
 
 - V1：[39272396793](https://github.com/Cuiyus/zvec-grep/actions/runs/39272396793)，执行 commit `fac3c96c`，两条路线各一 pair。
 - Root V2：[39275214277](https://github.com/Cuiyus/zvec-grep/actions/runs/39275214277)，执行 commit `87a8a1c1`，仅 reflex-6 一 pair。
+- Completion V2：[39278383394](https://github.com/Cuiyus/zvec-grep/actions/runs/39278383394)，执行 commit `a5d9f1ed`，仅 zvec-q001 一 pair。
 
 V1 reflex-6 的 zg 调用了 `root="/"`，得到缺失索引错误，然后使用原生工具作答。V2 因此给**两组**共同追加一条说明：仓库根路径固定为 `/workspace`，所有仓库 root 参数使用此值。其余题目、rubric、检索实现和限额不变。V2 是观察首轮问题后的开发迭代，与 V1 分开报告，不替换首轮，也不能当作独立预注册的确认实验。
 
@@ -36,8 +37,10 @@ V1 reflex-6 的 zg 调用了 `root="/"`，得到缺失索引错误，然后使�
 | Root V2 / reflex-6 | zg | 10 | 是 | 101,549 | 2,928 | 9 | 82.56 s | 1 / 1 |
 | V1 / zvec-q001 | baseline | 未完成 | 否 | 1,979,719 | 19,606 | 44 | 755.71 s | — |
 | V1 / zvec-q001 | zg | 未完成 | 否 | 不完整，不比较 | 不完整，不比较 | 54 | 900.11 s | 1 / 1 |
+| Completion V2 / zvec-q001 | baseline | 9 | 是 | 590,565 | 17,134 | 22 | 573.52 s | — |
+| Completion V2 / zvec-q001 | zg | 9 | 是 | 287,849 | 15,687 | 20 | 467.15 s | 1 / 1 |
 
-索引与 MCP 预检在 agent wall 外：V1 reflex 为 6.81 s + 1.07 s，Root V2 reflex 为 7.53 s + 1.02 s；zvec 为 28.05 s + 1.12 s。容器构建与下载也不包含在 agent wall 内，不能把该列称为首次安装到答案的总耗时。
+索引与 MCP 预检在 agent wall 外：V1 reflex 为 6.81 s + 1.07 s，Root V2 reflex 为 7.53 s + 1.02 s；V1 zvec 为 28.05 s + 1.12 s，Completion V2 zvec 为 28.23 s + 1.17 s。容器构建与下载也不包含在 agent wall 内，不能把该列称为首次安装到答案的总耗时。
 
 V1 reflex-6 的 input 少了 12.8%，但唯一 zg 调用失败，不能归因于成功检索。Root V2 正确检索后，input 增加 118.0%，wall 增加 24.6%，工具调用少 1 次。baseline 明确写成只有 `needs_update()` 才会重算，忽略缓存缺失这一独立分支，C5 因此只得 1/2；zg 回答正确区分了两者。这是 **9→10 分的质量提升与更多消耗之间的取舍**，不能仅用质量门槛的二值变化包装成大幅提升。
 
@@ -51,7 +54,17 @@ zvec baseline 用尽 30 turns，zg 在 900 秒被终止；两个答案文件均�
 
 zg 的原始 metrics 保留了 fallback 的 `139,644 input / 0 output`，但缺少最终 result 和 cache usage，已有生成内容也说明 0 不是实际零输出。汇总将其标为不可比较，不计算相对 baseline 的 token 降幅。`summary.all_planned_trials_completed=true` 仅表示两个执行都结束，不表示任务完成。
 
-下一轮建议只保留这一个 zvec case，冻结相同 source/gold，给两组相同的调查预算与预留回答阶段，停止取证后必须用现有证据作答并标注缺口。作为新的协议保留 V1 失败，再看完成率、因果准确性与消耗。该迭代已按 [completion-v2 冻结计划](../../experiment-completion-v2.json) 提交到 [39278383394](https://github.com/Cuiyus/zvec-grep/actions/runs/39278383394)：两组共用 24 次调用／600 秒取证预算，总限额仍为 30 turns／900 秒。预算拒绝会要求作答，但不保证交付。2026-10-19 15:50:48 UTC 的[状态记录](zvec-q001-completion-v2/execution.json)显示 provider 成功，QA job 仍显示排队且无日志或产物；尚无该协议的质量结果，未加入上表。没有扩大题目或重复提交。
+Completion V2 只改变两组共同的取证预算说明与 hook：最多准入 24 次工具调用、600 秒后拒绝新的取证，总限额仍为 30 turns／900 秒。阈值是在看过 V1 轨迹后选定的，详见[冻结计划](../../experiment-completion-v2.json)。题目、源码、gold、模型和检索实现均保持不变。真实容器离线探针验证了拒绝执行和后续作答机制，但本次实际 QA 两组都在预算内自行结束：22／20 次准入，最后一次分别为 354.40／344.46 秒，均没有拒绝、错误或挂起调用。因此不能声称是强制截断导致了完成。
+
+新一轮匿名源码评分均为 9/10，三个关键因果项均满分，失分点不同：baseline 缺回归测试的无崩溃对照，zg 未解释 index completeness 来自元数据。两组还有不影响该冻结门槛的次要错误：zg 错误描述了向量合并读取恢复后内存索引，baseline 的仅 Flush 后重开应计数为零的预测不成立；两组对 Optimize 后同句柄 Fetch 的概括也过强。主修复原则获分，未经证明的 guard-only 备选修复不获支持。**9/10 和通过门槛不代表每一句都正确**，完整判断见[盲审](zvec-q001-completion-v2/blinded-review.json)。
+
+本 pair 的 input（含缓存）590,565→287,849（−51.26%），output 17,134→15,687（−8.45%），工具调用 22→20，wall 573.52→467.15 秒（−18.55%）。减少的 302,716 input 中，266,046 来自 cache read 的减少；这不是经账单验证的费用降幅。两组都是完整会话 usage 和真实最终答案，不使用超时 fallback 制造节省。
+
+zg 在第 2 次调用使用 `/workspace` 搜索，将 `recover()` 排在第一；短预览并未给齐恢复因果链，后续 Read 才补全。两组 Read 都为 10 次，但工具返回字符数 198,991→71,974，重复读取源码行仅 11→3，因此较强的可观察机制是**读取范围更集中**，不是消除了大量重复调用。完整 C1–C3 源码在 baseline 第 16 次调用／第 12 个工具消息轮、zg 第 17 次调用／第 9 轮到齐；“轮”按含工具的消息定义，不能等同于 SDK num_turns。zg 没有取回完整 Stats 证据，和其 C4 失分一致。这些轨迹关联不构成单次实验的因果证明。
+
+GitHub 元数据曾在实际运行期间持续显示 queued；此前的[排队观测](zvec-q001-completion-v2/queue-observation.json)保留。完整产物及 15:52:11 UTC 的 job 清理日志确认执行结束，详见[执行记录](zvec-q001-completion-v2/execution.json)。没有因为状态延迟取消或重新提交此 pair。
+
+下一步按[独立重复验证计划](../../experiment-completion-confirmation.json)补同一 case 的两对：第 2 对 zg→baseline，第 3 对 baseline→zg。保持同一 completion-v2 协议，把已观察到的开发 pair 和后续确认结果分开；所有结果保留，不挑最好的一次。此计划是在看到当前信号后选择的，同题重复仍不代表新题泛化能力。
 
 ## 所有前置尝试
 
@@ -75,6 +88,7 @@ zg 的原始 metrics 保留了 fallback 的 `139,644 input / 0 output`，但缺�
 - [V1 reflex 证据](reflex-6/summary.json)、[盲审](reflex-6/blinded-review.json)、[解盲](reflex-6/review-mapping.json)
 - [Root V2 reflex 证据](reflex-6-root-v2/summary.json)、[盲审](reflex-6-root-v2/blinded-review.json)、[解盲](reflex-6-root-v2/review-mapping.json)、[轨迹审计](reflex-6-root-v2/trajectory-audit.json)
 - [zvec 证据](zvec-q001/summary.json)、[完成性检查](zvec-q001/completion-review.json)、[检索统计](zvec-q001/tool-outcomes.rederived.json)、[轨迹审计](zvec-q001/trajectory-audit.json)、[setup](zvec-q001/setup.json)
+- [Completion V2 zvec 证据](zvec-q001-completion-v2/summary.json)、[盲审](zvec-q001-completion-v2/blinded-review.json)、[解盲](zvec-q001-completion-v2/review-mapping.json)、[独立完整性审计](zvec-q001-completion-v2/independent-audit.json)、[轨迹审计](zvec-q001-completion-v2/trajectory-audit.json)
 
 Input tokens 包含普通输入、cache read 与 cache write；优先采用会话最终 `result.usage`。Wall time 包含容器和 MCP 启动，索引及预检单列。服务返回的美元金额未经账单验证，不用于成本结论。`zg_used` 只表示尝试过；真正成功、错误及无返回调用分别统计，成功返回也不自动代表取回了有用证据。
 

@@ -138,6 +138,7 @@ def main():
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--workspace-root-guidance', action='store_true')
     parser.add_argument('--completion-budget', action='store_true')
+    parser.add_argument('--completion-confirmation', action='store_true')
     parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
     if args.collect_only:
@@ -145,12 +146,23 @@ def main():
         return
     if not args.task:
         parser.error('--task is required unless --collect-only is used')
-    if args.repeats != 1:
-        parser.error('this iteration is frozen to one pair per task')
+    expected_repeats = 2 if args.completion_confirmation else 1
+    if args.repeats != expected_repeats:
+        parser.error(f'this phase is frozen to {expected_repeats} pair(s) per task')
     if args.workspace_root_guidance and args.task != 'reflex-6':
         parser.error('root-v2 is frozen to reflex-6 only')
     if args.completion_budget and (args.task != 'zvec-q001' or args.workspace_root_guidance):
         parser.error('completion-v2 is frozen to zvec-q001 without workspace-root guidance')
+    if args.completion_confirmation and (args.task != 'zvec-q001' or not args.completion_budget or args.workspace_root_guidance):
+        parser.error('completion confirmation requires zvec-q001 with completion-budget and without workspace-root guidance')
+    start_repeat = 2 if args.completion_confirmation else 1
+    confirmation_plan = None
+    if args.completion_confirmation:
+        plan_path = HERE / 'experiment-completion-confirmation.json'
+        confirmation_plan = {
+            'path': str(plan_path.relative_to(ROOT)),
+            'sha256': hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+        }
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
@@ -203,6 +215,14 @@ def main():
             output=reports / 'index.log')
         run(base + ['zg', '--status', '--check-ready'], output=reports / 'index-status.log')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
+                    'phase': 'confirmation' if args.completion_confirmation else 'development',
+                    'confirmation_plan': confirmation_plan,
+                    'start_repeat': start_repeat, 'planned_trial_count': args.repeats * 2,
+                    'planned_trials': [
+                        {'repeat': repeat, 'profile': profile}
+                        for repeat in range(start_repeat, start_repeat + args.repeats)
+                        for profile in (('baseline', 'zg') if repeat % 2 else ('zg', 'baseline'))
+                    ],
                     'protocol_version': 'completion-v2' if args.completion_budget else ('root-v2' if args.workspace_root_guidance else 'v1'),
                     'workspace_root_guidance': args.workspace_root_guidance,
                     'completion_budget': args.completion_budget,
@@ -222,7 +242,8 @@ def main():
                     'model_cache': 'baked runtime-image cache; query-time network download unnecessary',
                     'repeats': args.repeats,
                     'protocol_differences_from_main': [
-                        'one pair per case rather than main five trials and two infrastructure retries',
+                        ('two confirmation pairs on the same case; no automatic infrastructure retries'
+                         if args.completion_confirmation else 'one pair per case rather than main five trials and two infrastructure retries'),
                         'Claude Code high rather than main OpenCode provider-specific Qwen high/xhigh settings',
                         '8192 output tokens and 30 turns/900 seconds rather than main 32000 output tokens',
                         'Read/Grep/Glob-only native tools; fresh HOME with CLAUDE.md and auto-memory disabled',
@@ -249,8 +270,9 @@ def main():
              '--repeats', str(args.repeats), '--max-turns', '30', '--timeout', '900',
              '--max-output-tokens', '8192', '--effort', 'high']
             + (['--workspace-root-guidance'] if args.workspace_root_guidance else [])
-            + (['--tool-budget', '24', '--research-seconds', '600'] if args.completion_budget else []),
-            output=reports / 'runner.log', timeout=2000 * args.repeats, live=True)
+            + (['--tool-budget', '24', '--research-seconds', '600'] if args.completion_budget else [])
+            + (['--start-repeat', '2'] if args.completion_confirmation else []),
+            output=reports / 'runner.log', timeout=4500 if args.completion_confirmation else 2000, live=True)
     finally:
         collect_evidence(work, reports)
 

@@ -216,7 +216,11 @@ def audit_trial(trial: Path, manifest: dict, args) -> dict:
     if metrics.get("usage_complete") is not None and metrics["usage_complete"] != usage_complete:
         issues.append("metrics_usage_complete_mismatch")
     complete_input = sum(usage[key] for key in TOKEN_FIELDS if key != "output_tokens") if usage_complete else None
-    return {"profile": trial.name, "evidence": {
+    return {"profile": trial.name,
+            "execution": {"repeat": metrics.get("repeat"), "profile": metrics.get("profile"),
+                          "hook_present": isinstance(state, dict),
+                          "hook_started_at_epoch": state.get("started_at_epoch") if isinstance(state, dict) else None},
+            "evidence": {
                 "stream": file_record(stream_path), "hook_audit": file_record(hook_path),
                 "metrics": file_record(trial / "metrics.json"), "answer": file_record(answer_path),
                 "hook_state_canonical_sha256": sha(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) if state is not None else None},
@@ -241,6 +245,80 @@ def audit_trial(trial: Path, manifest: dict, args) -> dict:
             "audit_valid": not issues, "audit_issues": issues}
 
 
+def trial_identity(value) -> dict | None:
+    if (not isinstance(value, dict) or type(value.get("repeat")) is not int
+            or value["repeat"] < 1 or value.get("profile") not in ("baseline", "zg")):
+        return None
+    return {"repeat": value["repeat"], "profile": value["profile"]}
+
+
+def trial_name(value: dict) -> str:
+    return f"r{value['repeat']:02d}-{value['profile']}"
+
+
+def audit_execution_order(manifest: dict, summary: dict, trials: list[dict]) -> dict:
+    """Use the controller's chronological summary, never directory enumeration order."""
+    errors = []
+    start, repeats = manifest.get("start_repeat", 1), manifest.get("repeats")
+    valid_range = type(start) is int and type(repeats) is int and min(start, repeats) > 0
+    expected = ([{"repeat": repeat, "profile": profile}
+                 for repeat in range(start, start + repeats)
+                 for profile in (("baseline", "zg") if repeat % 2 else ("zg", "baseline"))]
+                if valid_range else [])
+    if not valid_range:
+        errors.append("invalid_manifest_repeat_range")
+    plan_source = "manifest.planned_trials" if "planned_trials" in manifest else "legacy_manifest_repeat_range_and_order"
+    planned = manifest.get("planned_trials", expected)
+    if (not isinstance(planned, list) or any(trial_identity(item) != item for item in planned)
+            or planned != expected):
+        errors.append("manifest_plan_disagrees_with_repeat_range")
+        planned = expected
+    if manifest.get("order") != [item["profile"] for item in planned]:
+        errors.append("manifest_order_disagrees_with_plan")
+    recorded = summary.get("trials")
+    if not isinstance(recorded, list):
+        errors.append("missing_summary_execution_order")
+        recorded = []
+    actual = [trial_identity(item) for item in recorded]
+    if None in actual:
+        errors.append("invalid_summary_trial_identity")
+    actual = [item for item in actual if item is not None]
+    names = [trial_name(item) for item in actual]
+    if len(names) != len(set(names)):
+        errors.append("duplicate_summary_trial_identity")
+    if actual != planned[:len(actual)]:
+        errors.append("summary_order_disagrees_with_plan")
+    if summary.get("all_planned_trials_completed") is True and actual != planned:
+        errors.append("completed_summary_missing_planned_trials")
+    if summary.get("planned_trial_count") != len(planned):
+        errors.append("summary_planned_count_disagrees_with_manifest")
+    by_name = {trial["profile"]: trial for trial in trials}
+    if set(names) != set(by_name):
+        errors.append("summary_and_stream_inventory_mismatch")
+    clock_required = manifest.get("tool_budget") is not None or any(
+        trial.get("execution", {}).get("hook_present") for trial in trials)
+    starts, previous = [], None
+    for item, name in zip(actual, names):
+        execution = by_name.get(name, {}).get("execution", {})
+        if trial_identity(execution) != item:
+            errors.append("summary_and_metrics_identity_mismatch:" + name)
+        if not clock_required:
+            continue
+        started = execution.get("hook_started_at_epoch")
+        starts.append({"trial": name, "started_at_epoch": started})
+        if not execution.get("hook_present") or not number(started):
+            errors.append("missing_or_invalid_hook_start:" + name)
+        elif previous is not None and started <= previous:
+            errors.append("hook_start_not_increasing_in_execution_order:" + name)
+        if number(started):
+            previous = started
+    return {"valid": not errors, "errors": errors, "plan_source": plan_source,
+            "execution_source": "summary.trials", "planned_trials": planned,
+            "recorded_trials": actual, "recorded_trial_names": names,
+            "hook_clock_check": "required" if clock_required else "not_applicable_without_hook",
+            "hook_starts_in_execution_order": starts}
+
+
 def safe_json(value):
     if isinstance(value, dict):
         return {key: safe_json(item) for key, item in value.items()}
@@ -253,7 +331,7 @@ def safe_json(value):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact-dir", type=Path, required=True, help="Task artifact directory containing manifest.json and r01-* subdirectories")
+    parser.add_argument("--artifact-dir", type=Path, required=True, help="Task artifact directory containing manifest.json and rNN-* subdirectories")
     parser.add_argument("--expected-limit", type=int)
     parser.add_argument("--expected-research-seconds", type=int)
     parser.add_argument("--expected-hook-sha256")
@@ -262,7 +340,13 @@ def main() -> int:
     manifest = read_json(root / "manifest.json") or {}
     summary = read_json(root / "summary.json") or {}
     scans = {name: read_json(root / name) for name in ("secret-scan.json", "collection-secret-scan.json")}
-    trials = [audit_trial(path.parent, manifest, args) for path in sorted(root.glob("r*-*/stream.jsonl"))]
+    discovered = [audit_trial(path.parent, manifest, args) for path in root.glob("r*-*/stream.jsonl")]
+    execution = audit_execution_order(manifest, summary, discovered)
+    by_name = {trial["profile"]: trial for trial in discovered}
+    # Unexpected streams remain visible but are never treated as execution-order evidence.
+    names = list(dict.fromkeys(execution["recorded_trial_names"]))
+    trials = [by_name[name] for name in names if name in by_name]
+    trials.extend(by_name[name] for name in sorted(set(by_name) - set(names)))
     source = read_json(root / "source-manifest.json") or {}
     computed_source_hash = sha(json.dumps(source["files"], sort_keys=True, separators=(",", ":")).encode()) if isinstance(source.get("files"), dict) else None
     source_hashes_match = bool(computed_source_hash and computed_source_hash == source.get("sha256") == manifest.get("source_sha256"))
@@ -271,12 +355,14 @@ def main() -> int:
               "secret_scan_passed": all(isinstance(value, dict) and value.get("passed") is True for value in scans.values()),
               "all_planned_trials_completed": summary.get("all_planned_trials_completed") is True,
               "planned_count_matches_observed": summary.get("planned_trial_count") == len(trials),
+              "execution_order_valid": execution["valid"],
               "all_trials_audited": bool(trials) and all(trial["audit_valid"] for trial in trials)}
     report = {"schema_version": 1, "read_only": True, "artifact_dir": str(root),
               "auditor_sha256": sha(Path(__file__).read_bytes()),
               "protocol_version": manifest.get("protocol_version"), "prompt_sha256": manifest.get("prompt_sha256"),
               "source_sha256": manifest.get("source_sha256"), "manifest": file_record(root / "manifest.json"),
               "source_manifest": file_record(root / "source-manifest.json"), "pair_checks": checks,
+              "execution_order": execution,
               "pair_efficiency_accounting_comparable": all(checks.values()) and all(trial["trial"]["efficiency_comparable_before_pair_checks"] for trial in trials),
               "classification_definitions": {
                   "admitted_success": "Hook admitted and matching non-error tool_result observed; usefulness is not judged.",
