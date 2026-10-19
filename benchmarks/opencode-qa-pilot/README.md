@@ -62,8 +62,26 @@ retroactively validate this phase, or change the question/rubric to obtain a
 favorable outcome. The original favorable-benchmark-set goal remains unmet.
 The separate [infrastructure repair design](provenance/infrastructure-repair-design-20261019.json)
 proposes metadata-only package compatibility and file-based evidence capture,
-with a real Docker fake-provider gate. It is a design record, not an implemented
-fix or a dispatched follow-up experiment.
+with a real Docker fake-provider gate. The versioned implementation is now in
+`repair_v2/`, under a separate [offline-only decision](repair_v2/decision.json).
+Its [fork workflow](../../.github/workflows/opencode-qa-repair-v2.yml) accepts no
+live-run input and receives no live provider secrets. Linux validation remains
+pending until a retained proof explicitly reports success.
+
+The repaired package adds only `bin: {"zg": "bin/zg"}` to the original npm
+metadata. Rust, its native library and data payloads remain byte-for-byte
+identical. Canonical uncompressed gzip blocks make the derived archive identity
+independent of the host compression library. The v2 wrapper downloads native
+exports, stderr and exit status separately, retains partial failures, and checks
+all counted root/child message and tool identities. The Docker gate exercises
+the unchanged native installer, real indexing and MCP against local scripted
+providers, plus malformed-export and timeout/cleanup cases. These synthetic
+answers are infrastructure evidence only and are never assigned QA scores.
+
+`repair_v2/inputs.json` binds the gate's code, workflow, decision, closed v1
+inputs and derived package identity. Any change requires a newly recorded input
+revision. Passing the gate would permit a separate new live-plan decision; it
+cannot retroactively validate v1 or establish a zg quality/efficiency result.
 
 The separate fork workflow defaults to offline validation; only its explicit
 `execute_pair=true` dispatch runs the two slots. Failed attempts remain evidence
