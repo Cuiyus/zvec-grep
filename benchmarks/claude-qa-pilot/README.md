@@ -21,6 +21,11 @@ searches succeeded at the correct root. Neither frozen signal appeared, so this
 q004 instruction branch has stopped. All 22 trials remain in the report; a
 stable favorable benchmark set has not been established.
 
+The later [native main OpenCode q001 experiment](../opencode-qa-pilot/README.md)
+has its own frozen plans and complete development/confirmation archives.
+Its input reductions and mixed quality results belong to a different agent
+stack; they do not change or extend the 22 Claude rows reported here.
+
 The image pins Claude Code 2.1.212 and the Rust zg binary built from upstream
 main `a424e0ce06868dc9ad8f142f57de59b8f9b58699` (package version 0.0.1).
 The native package, binary, and local potion-code model files are hash-verified.

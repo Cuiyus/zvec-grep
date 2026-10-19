@@ -1,0 +1,18 @@
+c01 C4 evidence-availability diagnostic (interim; no regrade)
+
+The retained treatment trace contains the complete C4 evidence before the final answer, but the final answer omits metadata-derived index completeness. The existing blind assessment (A=baseline 9/10, C=zg 8/10) is retained unchanged. This observation does not establish why the model omitted the explanation or a causal effect of zg.
+
+The only treatment MCP call is tool 6, part prt_155f6850e001V4C5ILFwhweoRr, with root /workspace, limit 15, and query:
+WAL recovery replay on collection open, recovered segments not flushed, optimize() drops WAL and loses recovered documents
+Its 15 returned definitions cover recovery, flush, WAL, optimize and tests. Result 2 is segment.cc:2217-2324 and directly includes the flush early-out. None directly returns CollectionImpl::Stats (collection.cc:403-442) or SegmentImpl::doc_count (segment.cc:589-600).
+
+Subsequent recorded tools nevertheless supply the missing mechanism:
+- Tool 14, prt_155f70303001VW6W7yJltJantd: segment.cc read offset 455, limit 160, includes doc_count and doc_ids_.size() at 589-600.
+- Tool 32, prt_155fa5f68001xZ9zPSOVy0PHFF: collection.cc read offset 403, limit 50, contains complete Stats. Lines 433-434 select/count segments through meta()->vector_indexed(field->name()); lines 437-438 compute indexed_doc_count / stats.doc_count. These lines are in the actual output and display, not only a filename citation.
+- Tool 63, prt_155feaeac001VFhw6bPq8sw1XG: local grep returns meta.h:340-345, where vector_indexed tests indexed_vector_fields_ and the setter inserts a metadata flag. This result is untruncated.
+
+Treatment final cites Stats:403-442 and explains live document counts but does not explain metadata-derived completeness. Baseline final explicitly names index_completeness and meta()->vector_indexed. The concrete investigation boundary is final coverage of both requested observables; there is also no direct C4 result in the recovery-focused MCP search. A source-availability failure alone does not account for the observed miss.
+
+Measured native-read windows (baseline / zg): 35 / 30 calls; 4840 / 3413 line presentations; 4776 / 3386 unique file-line positions; 64 / 27 repeated line presentations; 18 / 10 files. All retained tool-output UTF-8 byte sums are 239146 / 213847. Each native tool part is counted once, including identical text returned by different calls; the wording 'unique retained tool output strings' in read-volume.json means distinct recorded tool parts, not content deduplication. Bash/MCP line overlap is excluded; repeated lines are not automatically wasted and byte sums are not provider input tokens. No efficiency inference follows from these narrow measurements.
+
+All evidence references and hashes are in c4-diagnostic.json and trace-excerpts.json. Read-window details are in read-volume.json. Raw data, plans, audit records and quality scores were not modified; no provider/native-agent execution or additional experiment occurred. Final confirmation provenance and c02 review remain pending.

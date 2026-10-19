@@ -1,0 +1,172 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+#1 [group_coverage: Q1] matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q1#1 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#2 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#2 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#3 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#3 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#4 [global_fill] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#4 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#5 [global_fill] matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#5 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#6 [global_fill] matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:362-415
+groups: Q1#6 (fts+vector)
+source:
+362	TEST_F(CrashRecoveryTest, CrashRecoveryDuringDelete) {
+363	  {
+364	    auto schema = CreateTestSchema(collection_name_);
+365	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+366	    ASSERT_TRUE(result.has_value()) << result.error().message();
+367	    auto collection = result.value();
+368	    collection.reset();
+369	  }
+370	
+371	  RunGenerator("0", "18000", "insert", "0");
+...
+
+#7 matchedBy=fts+vector python/tests/test_hnsw_contiguous_memory.py:323-372
+groups: Q1#7 (fts+vector)
+source:
+323	def test_close_and_reopen_with_contiguous_memory(
+324	        self,
+325	        tmp_path_factory,
+326	        collection_option,
+327	        rng,
+328	    ):
+329	        """Reopening a collection must preserve the ``use_contiguous_memory`` flag.
+330	
+331	        The core property: the flag survives the schema persist/reload
+332	        round-trip so the HNSW streamer entity — constructed lazily on first
+...
+
+#8 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q1#8 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#9 matchedBy=fts+vector python/tests/test_collection_diskann.py:520-590
+groups: Q1#9 (fts+vector)
+source:
+520	def test_optimize_close_reopen_and_query(
+521	        self,
+522	        tmp_path_factory,
+523	        diskann_collection_schema,
+524	        collection_option,
+525	        multiple_docs: list[Doc],
+526	    ):
+527	        """Test inserting 100 docs, optimize, close, reopen and query."""
+528	        # Create collection and insert 100 documents
+529	        temp_dir = tmp_path_factory.mktemp("zvec_diskann_optimize")
+...
+
+#10 matchedBy=vector src/db/index/storage/wal/wal_file.h:26-29
+groups: Q1#10 (vector)
+source:
+26	struct WalOptions {
+27	  uint32_t max_docs_wal_flush{0};
+28	  bool create_new{false};
+29	}
+
+#11 matchedBy=fts+vector python/tests/test_collection_hnsw_rabitq.py:504-574
+groups: Q1#11 (fts+vector)
+source:
+504	def test_optimize_close_reopen_and_query(
+505	        self,
+506	        tmp_path_factory,
+507	        hnsw_rabitq_collection_schema,
+508	        collection_option,
+509	        multiple_docs: list[Doc],
+510	    ):
+511	        """Test inserting 100 docs, optimize, close, reopen and query."""
+512	        # Create collection and insert 100 documents
+513	        temp_dir = tmp_path_factory.mktemp("zvec_hnsw_rabitq_optimize")
+...
+
+#12 matchedBy=fts+vector python/tests/test_collection_fts.py:154-169
+groups: Q1#12 (fts+vector)
+source:
+154	def test_optimize_rebuilds_fts(self, fts_collection: Collection):
+155	        """Optimize with >30% deletes triggers ReduceFts; recall unchanged."""
+156	        fts_collection.insert(_make_docs())
+157	        # 40% delete ratio — above COMPACT_DELETE_RATIO_THRESHOLD=0.3, so
+158	        # build_compact_task picks the rebuild path and ReduceFts runs.
+159	        fts_collection.delete(["pk_0", "pk_4"])
+160	
+161	        before = {doc.id for doc in _fts_query(fts_collection, "hello")}
+162	        assert before == {"pk_1", "pk_2", "pk_3"}
+163	
+...

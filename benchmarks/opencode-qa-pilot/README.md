@@ -1,11 +1,21 @@
 # Native main OpenCode q001 pilot
 
-The repaired development pair is now complete and independently audited:
-**both answers passed at 9/10**, while zg used **48.29% less persisted-session
-input** and made one successful relevant MCP retrieval. This meets the frozen
-scoped-input candidate rule. It is one previously observed task, not evidence
-of stable benefit or a favorable benchmark set. The [v2 result archive](results/20261020-main-opencode-q001-v2/README.md)
-retains both answers, every tool call, original artifacts and independent audits.
+The two prospective confirmation pairs are complete and independently audited.
+zg used **15.27% and 45.44% less persisted-session input**, including cache.
+Quality was **9/10 → 8/10** in c01 (both pass), and **7/10 → 9/10** in c02
+(baseline fails, zg passes). Both had one relevant successful retrieval.
+The frozen scoped-input confirmation rule was **not met**: c01 lowered the
+factual score; c02 did not have two passing answers. The c02 quality improvement
+remains a positive observation, not a treatment failure. Including setup,
+outer-slot time increased **20.05% and 5.51%**; dollar savings are unknown.
+The [confirmation archive](results/20261020-main-opencode-q001-confirmation-v1/README.md)
+retains all four scheduled trials, source reviews and original artifacts.
+This is one previously observed task, not a favorable benchmark set.
+
+The preceding [v2 development pair](results/20261020-main-opencode-q001-v2/README.md)
+had two passing 9/10 answers and **48.29% less persisted-session input** with zg.
+It met the development candidate rule and motivated this separately frozen
+confirmation; it is not pooled into the confirmation result.
 
 This independent development phase runs the **original q001** once with baseline
 tools and once with zg. It borrows the exact current-main Harbor/OpenCode runner
@@ -114,8 +124,12 @@ the accepted development evidence. Both pairs must independently pass the same
 scoped-input candidate rule; the development pair is not pooled with them.
 The [confirmation workflow](../../.github/workflows/opencode-qa-confirmation-v1.yml)
 uses serial jobs with `fail-fast: false`, first performs a provider-free push
-preflight, then permits one explicit `execute_pairs=true` dispatch. Execution
-is pending at this freeze. Green CI alone is not a quality or benefit result.
+preflight, then permits one explicit `execute_pairs=true` dispatch. The sole
+live [run 39321551973](https://github.com/Cuiyus/zvec-grep/actions/runs/39321551973)
+completed at execution commit `10348d1c`, with all four valid completed slots,
+180/180 execution checks and all 293 native tool calls reviewed. Fresh blinded
+source grading produced the results above. The phase is closed; green CI alone
+is not a quality or benefit result.
 
 ## Why this phase exists
 

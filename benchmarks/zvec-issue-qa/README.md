@@ -2,6 +2,14 @@
 
 The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration pair has also completed: factual points rose from 7/10 to 9/10 with zg, but neither answer passed its frozen quality endpoint and input increased. A subsequent single pair added a shared final-answer verification instruction: both scored 9/10 and failed the same unchanged C4 gate; zg input increased 55.57%. That instruction branch has stopped under its prospective rule. This is not a representative estimate of zg's overall benefit.
 
+A separate [native current-main OpenCode follow-up](../opencode-qa-pilot/README.md)
+reused original q001 without changing its source, question or rubric. After a
+positive development pair, two prospective confirmation pairs reduced zg input
+(including cache) by 15.27% and 45.44%. Quality was 9→8 (both pass) and 7→9
+(baseline fails, zg passes); total slot time increased in both pairs. The frozen
+scoped-input confirmation rule was not met. All four trials are retained, and
+this whole-stack experiment is not pooled with the Claude results.
+
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
 A later [auxiliary native check](../claude-qa-pilot/results/20261019/zvec-q001-native-validation/README.md) exercised an already installed post-fix 0.7.0 package with crash/recovery/optimize/fresh-process reopen and a no-crash control. Both retained all 150 IDs, scalar values, and vectors within a fixed tolerance. It does not validate the frozen pre-fix commit or replace a failure/pass regression at that exact source; package publishing metadata is not binary build attestation. The initial FP32 fixture failure is retained separately. This check did not change the task, rubric, or solver corpus.

@@ -1,0 +1,549 @@
+{
+  "schema_version": 1,
+  "protocol_id": "main-opencode-q001-confirmation-v1",
+  "phase": "main-opencode-confirmation-v1",
+  "plan_sha256": "c88bdf837cd420ae0837c64ed66402b0100b02467426600fad3126d951832050",
+  "run_id": 39321551973,
+  "head_sha": "10348d1c2c863fc498f71e1dd76f04835aa92153",
+  "scheduled_slots": 4,
+  "rows": [
+    {
+      "repeat": "c01",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-A",
+      "answer_sha256": "e4afd16db27cbea404c1beaecf846a40437ac2d56e8c11aee79864c3e154cc07",
+      "completed_final_retained": true,
+      "protocol_valid": true,
+      "quality_points": 9,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "source_grounded_success": true,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim_quote": "so `Stats()` (`collection.cc:403-442`) and `Fetch` keep answering from heap.",
+          "assessment": "Overstates post-optimize readability. Stats can retain the count, but ordinary fetch routing checks has_writing_forward_block before selecting the memory store. Once switch removes that metadata, retaining memory_store_ alone does not ensure Fetch can return the rows.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:2483-2502",
+            "src/db/index/segment/segment.cc:2743-2756",
+            "src/db/collection.cc:1538-1539"
+          ],
+          "effect_on_score": "Retained as a noncritical error; A still gives the required doc_ids_ and metadata-based index-completeness explanation for C4."
+        },
+        {
+          "claim_quote": "the only caller of `segment_meta_->add_persisted_block(...)`",
+          "assessment": "False as an unqualified exclusivity claim. Other segment methods call this member method, including scalar-index block registration. The narrower statement that finish_memory_components registers the recovered forward SCALAR block on this lifecycle path is supported.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:3226",
+            "src/db/index/segment/segment.cc:3988-3990",
+            "src/db/index/segment/segment.cc:4366-4368"
+          ],
+          "effect_on_score": "Does not invalidate the correctly cited C2 causal path."
+        },
+        {
+          "claim_quote": "if Optimize instead picks a `CompactTask`",
+          "assessment": "The subsequent destruction branch is real, but selecting CompactTask alone does not establish it reaches cleanup: compaction scans inputs, and the surviving memory store can reach writing_forward_block().value() after that optional was cleared. The unconditional deletion extension is not established for this malformed segment state.",
+          "source_evidence": [
+            "src/db/index/segment/segment_helper.cc:232-235",
+            "src/db/index/segment/segment.cc:2825-2839",
+            "src/db/collection.cc:898-901"
+          ],
+          "effect_on_score": "Noncritical speculative extension; no reproduction performed."
+        },
+        {
+          "claim_quote": "on the next open (`segment.cc:4126-4132`)",
+          "assessment": "The residual-file removal exists inside init_memory_components, but the now-persisted old segment has no writing block, so the cited code is not automatically reached for it on the next reopen.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:484-510",
+            "src/db/index/segment/segment.cc:4119-4132"
+          ],
+          "effect_on_score": "Noncritical overstatement outside the main metadata-loss argument."
+        },
+        {
+          "claim_quote": "either assign it to `wal_file_` and re-seek to end, or call `open_wal_file()`",
+          "assessment": "The reopen direction is valid, but the answer does not state propagation of a failed member reopen. A direct adoption also requires changing the existing deferred close; merely assigning the local shared handle while retaining that defer would leave the member pointing at a closed handle. The answer gestures at adoption instead of close but does not spell out that lifecycle handling.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:4215",
+            "src/db/index/segment/segment.cc:4303-4322",
+            "src/db/index/storage/wal/local_wal_file.cc:115-140"
+          ],
+          "effect_on_score": "C6 receives 0 under the exact criterion requiring a usable member lifecycle with error handling; the separate comment about swallowed reader-open errors is not an instruction to propagate member-reopen failures."
+        }
+      ],
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 2590336,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 2708800,
+        "llm_calls": 46,
+        "output_tokens": 22983,
+        "reasoning_tokens": 15583,
+        "text_output_tokens": 7400,
+        "tool_calls": 69,
+        "uncached_input_tokens": 118464
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:d94d224b71443ff9fff536f8dc0fd088a142596ee6905fd2b5e0f4a707bf3a83",
+        "native_agent_execution_raw_seconds": 776.673622,
+        "native_agent_setup_seconds": 17.951907,
+        "native_environment_setup_seconds": 18.006105,
+        "native_trial_finished_at": "2026-10-19T20:56:34.503552Z",
+        "native_trial_started_at": "2026-10-19T20:42:50.059584Z",
+        "native_trial_wall_seconds": 824.443968,
+        "native_verifier_seconds": 0.194889,
+        "outer_slot_wall_seconds": 826.1099922657013,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 2417,
+          "signals": []
+        },
+        "session_export_seconds": 1.067056234000006,
+        "slot_finished_at_unix": 1792443394.6056795,
+        "slot_started_at_unix": 1792442568.4956872,
+        "solver_after_measured_collection_overhead_seconds": 772.7571986940001,
+        "source_runtime_audit_seconds": 2.069305313000001,
+        "usage_collection_seconds": 0.7800617589999774
+      },
+      "collection_errors": [],
+      "native_audit_errors": []
+    },
+    {
+      "repeat": "c01",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-C",
+      "answer_sha256": "0a1dd0e209961573ac85087318744aac1f425d26ab4d52e04b405ab5d29bd31d",
+      "completed_final_retained": true,
+      "protocol_valid": true,
+      "quality_points": 8,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 0,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "source_grounded_success": true,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim_quote": "differs from the inserting one in exactly one field",
+          "assessment": "The important field difference is correctly identified, but exact whole-object equivalence is not established. For example replay updates mem_block.max_doc_id_ in internal_insert and then separately adds recovered operation counts near the end of recover.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:874-876",
+            "src/db/index/segment/segment.cc:4285-4288"
+          ],
+          "effect_on_score": "C1 still earns full credit for the required local/member WAL and recovered-memory facts."
+        },
+        {
+          "claim_quote": "Optimize's only durability act is writing the manifest",
+          "assessment": "Overbroad: the vector-index path calls VectorColumnIndexer::Flush even in the described one-segment optimize flow, and ordinary optimize also reaches real forward/index flushes when the member WAL is armed. The manifest is the decisive loss mechanism, not the only persistence action.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:1650-1665",
+            "src/db/index/segment/segment.cc:2233-2255",
+            "src/db/collection.cc:872-877"
+          ],
+          "effect_on_score": "Noncritical error; the core no-op forward flush and metadata removal remain correct."
+        },
+        {
+          "claim_quote": "`Fetch`/`Query` read `memory_store_`.",
+          "assessment": "As an explanation of post-optimize same-handle behavior this is not established. Fetch requires writing-block metadata to route a row to the memory store, and optimize removes that metadata. Count health is supported; universal Fetch/Query health is not.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:2483-2502",
+            "src/db/index/segment/segment.cc:2743-2756",
+            "src/db/collection.cc:1538-1539"
+          ],
+          "effect_on_score": "C4 already receives 0 for omitting the index-completeness mechanism; this is an additional noncritical overstatement."
+        },
+        {
+          "claim_quote": "the id map is RocksDB write-through",
+          "assessment": "The cited Put call does not prove durable write-through. RocksdbContext explicitly disables its WAL; close does flush, so stale PK mappings after a clean close may be a reasonable conditional inference, but the provided persistence rationale and unqualified outcome are not established by that citation.",
+          "source_evidence": [
+            "src/db/index/common/id_map.cc:97-111",
+            "src/db/common/rocksdb_context.cc:93",
+            "src/db/common/rocksdb_context.cc:199",
+            "src/db/common/rocksdb_context.cc:309-359"
+          ],
+          "effect_on_score": "Retained as an unsupported auxiliary causal claim; not a listed critical contradiction."
+        },
+        {
+          "claim_quote": "or equivalently (b) replace the `wal_file_`-based dirty test with a durable-state test",
+          "assessment": "Equivalence is not proved. With wal_file_ still null, running the body can persist memory but the normal WAL-removal block remains gated on wal_file_; the answer does not prove the version/flush/WAL-cleanup invariants required for accepting an alternative persistence design. Its attach-WAL option also omits explicit failure handling.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:2220-2229",
+            "src/db/index/segment/segment.cc:2288-2315",
+            "src/db/index/segment/segment.cc:4303-4322"
+          ],
+          "effect_on_score": "C6 receives 0 under the exact no-partial-credit criterion."
+        },
+        {
+          "claim_quote": "before it reaches `collection->Flush()`",
+          "assessment": "The cited explicit Flush at data_generator.cc:247 is under __ANDROID__; on other platforms the generator returns and relies on object destruction. The proposed pre-flush abrupt termination remains a valid test idea, but this specific cross-platform harness explanation is inaccurate.",
+          "source_evidence": [
+            "tests/db/crash_recovery/data_generator.cc:242-256"
+          ],
+          "effect_on_score": "C7 retained because its required sequence is explicit; an implementation should synchronize known completed inserts before the kill rather than assume a timed kill completed exactly N."
+        }
+      ],
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 2182528,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 2295032,
+        "llm_calls": 39,
+        "output_tokens": 23779,
+        "reasoning_tokens": 16772,
+        "text_output_tokens": 7007,
+        "tool_calls": 68,
+        "uncached_input_tokens": 112504
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:d94d224b71443ff9fff536f8dc0fd088a142596ee6905fd2b5e0f4a707bf3a83",
+        "native_agent_execution_raw_seconds": 810.233853,
+        "native_agent_setup_seconds": 166.556409,
+        "native_environment_setup_seconds": 2.239068,
+        "native_trial_finished_at": "2026-10-19T21:13:06.244054Z",
+        "native_trial_started_at": "2026-10-19T20:56:35.518206Z",
+        "native_trial_wall_seconds": 990.725848,
+        "native_verifier_seconds": 0.181457,
+        "outer_slot_wall_seconds": 991.7301189899445,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 16959,
+          "signals": []
+        },
+        "session_export_seconds": 1.0830234820000442,
+        "slot_finished_at_unix": 1792444386.3361936,
+        "slot_started_at_unix": 1792443394.6060746,
+        "solver_after_measured_collection_overhead_seconds": 805.8904753719999,
+        "source_runtime_audit_seconds": 2.4784132160000354,
+        "usage_collection_seconds": 0.7819409300000189,
+        "zg_setup": {
+          "authorization_duration_seconds": 0.077,
+          "finished_at": "2026-10-19T20:59:24.362003+00:00",
+          "index_duration_seconds": 145.189,
+          "install_duration_seconds": 2.786,
+          "mcp_setup_duration_seconds": 0.129,
+          "started_at": "2026-10-19T20:56:55.352805+00:00",
+          "total_duration_seconds": 149.009
+        }
+      },
+      "collection_errors": [],
+      "native_audit_errors": []
+    },
+    {
+      "repeat": "c02",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-D",
+      "answer_sha256": "6906c399c306d4b7ede38479db3b9d7b8c8032783d297932cc670c43de749c7b",
+      "completed_final_retained": true,
+      "protocol_valid": true,
+      "quality_points": 7,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 1,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 0
+      },
+      "source_grounded_success": false,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim_quote": "any of those after a recovery-without-write loses the data too",
+          "assessment": "The shared helper makes other operations potentially affected, but not every invocation reaches it. CreateIndex can return early when the requested parameters already match; DropIndex can return early for an unindexed/default-index field. Write rollover also requires its condition. Universal loss from any such call is not established.",
+          "source_evidence": [
+            "src/db/collection.cc:480-504",
+            "src/db/collection.cc:661-677",
+            "src/db/collection.cc:1444-1447"
+          ],
+          "effect_on_score": "Noncritical overbroad blast-radius statement; the requested Optimize path remains supported."
+        },
+        {
+          "claim_quote": "replayed pk\u2192doc_id entries reach disk only through `id_map_->flush()`",
+          "assessment": "False as an exclusive persistence path. IDMap destruction calls close, and RocksdbContext::close performs flush_unlocked when writable. Skipping the segment flush therefore does not establish that a later graceful close cannot persist the idmap.",
+          "source_evidence": [
+            "src/db/index/common/id_map.h:35-38",
+            "src/db/common/rocksdb_context.cc:309-359"
+          ],
+          "effect_on_score": "Auxiliary causal claim retained; not a listed critical contradiction."
+        },
+        {
+          "claim_quote": "Equivalent alternative: an explicit `recovered_records_`/`dirty_` flag set by replay and OR-ed into the guard",
+          "assessment": "Equivalence is not proved. A dirty-only design with a null member still skips the WAL-removal branch, so cleanup invariants need additional handling. Literally OR-ing dirty=true into the existing no-op guard would also choose the early return; the proposal must distinguish a dirty predicate from the early-out predicate. The attach-WAL option omits explicit error propagation.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:2220-2222",
+            "src/db/index/segment/segment.cc:2304-2315",
+            "src/db/index/segment/segment.cc:4303-4322"
+          ],
+          "effect_on_score": "C6 receives 0; neither the required error handling nor proof of alternative lifecycle invariants is supplied."
+        },
+        {
+          "claim_quote": "`LocalWalFile::has_record()` is file-size based (`local_wal_file.h:73-75`)",
+          "assessment": "The factual statement is correct, but the cited range ends at the function declaration; the size comparison is at line 76. This is a short citation rather than an incorrect mechanism.",
+          "source_evidence": [
+            "src/db/index/storage/wal/local_wal_file.h:75-77"
+          ],
+          "effect_on_score": "No additional deduction; the relevant normal-WAL behavior is independently verified."
+        },
+        {
+          "claim_quote": "`meta()->vector_indexed()` (`collection.cc:403-431`)",
+          "assessment": "The explanation is correct, but the cited range stops just before the vector_indexed check at 433 and completeness calculation at 437-438. The reviewer verified the adjacent correct implementation.",
+          "source_evidence": [
+            "src/db/collection.cc:431-438"
+          ],
+          "effect_on_score": "C4 receives full factual credit because the metadata mechanism is explained. This noncore citation shortfall is retained; it is not silently treated as coverage of line 433."
+        }
+      ],
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 3820032,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 3949879,
+        "llm_calls": 61,
+        "output_tokens": 29437,
+        "reasoning_tokens": 21481,
+        "text_output_tokens": 7956,
+        "tool_calls": 85,
+        "uncached_input_tokens": 129847
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:054a12d522191a17f5115fcfddf18ff0c50d04b556535945d4a6f045ddbbeae5",
+        "native_agent_execution_raw_seconds": 1036.377121,
+        "native_agent_setup_seconds": 13.514065,
+        "native_environment_setup_seconds": 16.834384,
+        "native_trial_finished_at": "2026-10-19T21:31:27.780339Z",
+        "native_trial_started_at": "2026-10-19T21:13:29.305283Z",
+        "native_trial_wall_seconds": 1078.475056,
+        "native_verifier_seconds": 0.215599,
+        "outer_slot_wall_seconds": 1080.1483154296875,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 2410,
+          "signals": []
+        },
+        "session_export_seconds": 1.1964971899999455,
+        "slot_finished_at_unix": 1792445487.914517,
+        "slot_started_at_unix": 1792444407.7662015,
+        "solver_after_measured_collection_overhead_seconds": 1031.828458361,
+        "source_runtime_audit_seconds": 2.492718930000109,
+        "usage_collection_seconds": 0.8594465189999028
+      },
+      "collection_errors": [],
+      "native_audit_errors": []
+    },
+    {
+      "repeat": "c02",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-B",
+      "answer_sha256": "42c41ce5c5db8aeb11a701255349ed30bb883122abb52c676f988fa168398bd8",
+      "completed_final_retained": true,
+      "protocol_valid": true,
+      "quality_points": 9,
+      "criterion_points": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "source_grounded_success": true,
+      "critical_contradictions": [],
+      "unsupported_claims": [
+        {
+          "claim_quote": "the *visible* state is identical",
+          "assessment": "Exact object-state equality and the assertion that only the WAL field differs are too strong. Replay sets max_doc_id_ during internal_insert and adds recovered operation counts again near the end of recover; the answer itself later notices that asymmetry. The important member-WAL mismatch is correct.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:874-878",
+            "src/db/index/segment/segment.cc:4285-4288"
+          ],
+          "effect_on_score": "C1 retains full credit for the required memory and local/member handle distinction."
+        },
+        {
+          "claim_quote": "only in RAM plus an unreferenced file",
+          "assessment": "At this pre-optimize point the WAL remains reachable through the manifest's writing block. It lacks a live member handle, but it is not yet unreferenced by the recovery path. Automatic recovery reachability is lost only after switch removes the writing-block metadata.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:484-501",
+            "src/db/index/segment/segment.cc:4195-4209",
+            "src/db/collection.cc:1538-1549"
+          ],
+          "effect_on_score": "Timing overstatement retained; the later causal sequence is correct and this is not a listed critical contradiction."
+        },
+        {
+          "claim_quote": "its persisted meta now has zero blocks",
+          "assessment": "Too broad for an arbitrary schema. It has no persisted forward SCALAR block for the recovered rows, but scalar-index or FTS metadata can already exist. Zero forward blocks is the supported condition.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:3988-3990",
+            "src/db/index/segment/segment.cc:4516-4517",
+            "src/db/index/segment/segment.cc:4366-4368"
+          ],
+          "effect_on_score": "Does not invalidate C2/C3's forward-row persistence mechanism."
+        },
+        {
+          "claim_quote": "\u22652 persist segments or `rebuild`",
+          "assessment": "The planner can group segments at capacity boundaries, so total persisted-segment count of at least two does not by itself require one CompactTask. The optional-access concern is supported conditionally if a compact task actually scans the malformed recovered segment; it was not executed.",
+          "source_evidence": [
+            "src/db/collection.cc:943-1001",
+            "src/db/index/segment/segment_helper.cc:232-236",
+            "src/db/index/segment/segment.cc:2825-2839"
+          ],
+          "effect_on_score": "Noncritical generalization outside the one-small-segment scenario."
+        },
+        {
+          "claim_quote": "`Segment not found` on fetch",
+          "assessment": "The cited InternalError string belongs to internal_fetch_by_doc. Public CollectionImpl::Fetch handles a missing segment by placing a null document in its result map, so that citation does not establish the claimed public Fetch error status.",
+          "source_evidence": [
+            "src/db/collection.cc:1388-1392",
+            "src/db/collection.cc:1757-1789"
+          ],
+          "effect_on_score": "The potential absence of fetched rows remains supported; exact public error claim is not."
+        },
+        {
+          "claim_quote": "or call `open_wal_file()`, which already handles the existing-file case",
+          "assessment": "This is a valid minimal repair direction, but the answer never requires checking and propagating a failed member reopen. A successful recovery return after an open failure would leave the original broken invariant.",
+          "source_evidence": [
+            "src/db/index/segment/segment.cc:4303-4322",
+            "src/db/index/segment/segment.cc:4300"
+          ],
+          "effect_on_score": "C6 receives 0 under its explicit error-handling requirement and no-partial-credit rule."
+        }
+      ],
+      "usage_scope": "opencode-session-tree-v1",
+      "usage_complete": true,
+      "usage": {
+        "cache_read_tokens": 2045312,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 2155014,
+        "llm_calls": 36,
+        "output_tokens": 31128,
+        "reasoning_tokens": 22714,
+        "text_output_tokens": 8414,
+        "tool_calls": 71,
+        "uncached_input_tokens": 109702
+      },
+      "timing": {
+        "container_cleanup": {
+          "complete": true,
+          "remaining_running": [],
+          "stopped": []
+        },
+        "docker_force_build": false,
+        "docker_image_id": "sha256:054a12d522191a17f5115fcfddf18ff0c50d04b556535945d4a6f045ddbbeae5",
+        "native_agent_execution_raw_seconds": 952.617466,
+        "native_agent_setup_seconds": 171.83003,
+        "native_environment_setup_seconds": 2.33808,
+        "native_trial_finished_at": "2026-10-19T21:50:27.479143Z",
+        "native_trial_started_at": "2026-10-19T21:31:28.863591Z",
+        "native_trial_wall_seconds": 1138.615552,
+        "native_verifier_seconds": 0.224614,
+        "outer_slot_wall_seconds": 1139.6804721355438,
+        "process_cleanup": {
+          "complete": true,
+          "process_group_id": 19384,
+          "signals": []
+        },
+        "session_export_seconds": 1.2004951189996973,
+        "slot_finished_at_unix": 1792446627.595394,
+        "slot_started_at_unix": 1792445487.9149218,
+        "solver_after_measured_collection_overhead_seconds": 947.5902179480005,
+        "source_runtime_audit_seconds": 2.9877687929999865,
+        "usage_collection_seconds": 0.8389841399998659,
+        "zg_setup": {
+          "authorization_duration_seconds": 0.107,
+          "finished_at": "2026-10-19T21:34:23.080210+00:00",
+          "index_duration_seconds": 151.682,
+          "install_duration_seconds": 3.101,
+          "mcp_setup_duration_seconds": 0.137,
+          "started_at": "2026-10-19T21:31:47.082645+00:00",
+          "total_duration_seconds": 155.998
+        }
+      },
+      "collection_errors": [],
+      "native_audit_errors": []
+    }
+  ],
+  "pairs": [
+    {
+      "repeat": "c01",
+      "scoped_input_candidate": false,
+      "successful_relevant_correct_workspace_calls": 1,
+      "zg_relative_change_percent": {
+        "input_tokens": -15.274955699940929,
+        "uncached_input_tokens": -5.031064289573206,
+        "output_tokens": 3.463429491363179,
+        "reasoning_tokens": 7.630109734967583,
+        "tool_calls": -1.449275362318836,
+        "solver_after_measured_collection_overhead_seconds": 4.287669753707468,
+        "outer_slot_wall_seconds": 20.048193131039493
+      }
+    },
+    {
+      "repeat": "c02",
+      "scoped_input_candidate": false,
+      "successful_relevant_correct_workspace_calls": 1,
+      "zg_relative_change_percent": {
+        "input_tokens": -45.4410122436662,
+        "uncached_input_tokens": -15.514413116976133,
+        "output_tokens": 5.744471243672922,
+        "reasoning_tokens": 5.739956240398492,
+        "tool_calls": -16.470588235294116,
+        "solver_after_measured_collection_overhead_seconds": -8.163977231913833,
+        "outer_slot_wall_seconds": 5.511479845448286
+      }
+    }
+  ],
+  "scoped_input_candidate_confirmed_in_both_repeats": false,
+  "quality_review_available": true,
+  "quality_review_complete_for_retained_finals": true,
+  "analysis_status": "complete",
+  "development_pair_pooled": false,
+  "held_out_generalization_established": false,
+  "favorable_benchmark_set_established": false,
+  "phase_status": "closed_after_all_scheduled_slots",
+  "decision": "Report all four scheduled slots. No replacement, resampling, prompt change or task expansion in this phase.",
+  "limits": [
+    "One previously observed task and two prospective pairs; no held-out set or statistical population claim.",
+    "Fixed baseline-then-zg order, not counterbalanced.",
+    "Input includes cache and only persisted native session trees; embedding/background/provider totals and dollar cost are excluded or unknown.",
+    "Fresh containers, install volumes and index; Docker image/layer cache can be shared within a pair.",
+    "Blinded Codex source review, not human or official SWE-QA scoring. Unsupported claims remain disclosed.",
+    "No pooling with development, invalid prior native trials, or Claude trials."
+  ]
+}

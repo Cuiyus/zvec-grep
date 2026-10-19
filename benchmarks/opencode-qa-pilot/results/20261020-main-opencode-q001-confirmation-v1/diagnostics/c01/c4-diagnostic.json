@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "kind": "bounded_c01_C4_evidence_availability_diagnostic",
+  "protocol_id": "main-opencode-q001-confirmation-v1",
+  "repeat": "c01",
+  "run_id": 39321551973,
+  "head": "10348d1c2c863fc498f71e1dd76f04835aa92153",
+  "artifact_zip_sha256": "2cda61479b6e6ebbf9cdaa124639f6a8c1bb17ac0bdb6035325ec9517eef5a34",
+  "inputs": {
+    "native_audit_sha256": "9611b064cfa7648684dff4850e6b4a834da4709a3eab2c1062bfac42515fd208",
+    "review_part1_sha256": "df76de31b0999e51cecee564f9211b3777982b0375b0a6a59d592f1e673cdf6b",
+    "native_exports": {
+      "baseline": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-interim/c01/raw/qa-confirmation-run/runs/q001-baseline/zvec-q001__jogU2pF/qa-session-exports/ses_eaa185565ffeFQa40ibmp9KVpE.json",
+        "sha256": "0e74f7f31b12fc147bffa864c1f652b660c8f74c1734a97b886f1f9cfea67167"
+      },
+      "zvec-grep": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-interim/c01/raw/qa-confirmation-run/runs/q001-zvec-grep/zvec-q001__eNo8qdN/qa-session-exports/ses_eaa09b579ffeDm13pGs00pdQpZ.json",
+        "sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449"
+      }
+    },
+    "source_files_sha256": {
+      "src/db/collection.cc": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "src/db/index/segment/segment.cc": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "src/db/index/common/meta.h": "79d06ebfe88c46c59aaa6f44715f734657a921dcd1e9497109c3f350aa4cb074"
+    }
+  },
+  "existing_grade_context_only": [
+    {
+      "profile": "baseline",
+      "blinded_answer_id": "answer-A",
+      "points_as_previously_assessed": 9,
+      "C4_as_previously_assessed": 1,
+      "C4_rationale_as_previously_assessed": "Full credit: explicitly explains doc_ids_-based live counts and vector_indexed metadata-derived index_completeness. The added Fetch claim is not supported after metadata removal and is recorded separately.",
+      "source_grounded_success_as_previously_assessed": true
+    },
+    {
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-C",
+      "points_as_previously_assessed": 8,
+      "C4_as_previously_assessed": 0,
+      "C4_rationale_as_previously_assessed": "No credit: explains live doc_ids_-based counts but never explains how index_completeness is derived from vector_indexed metadata. A citation spanning Stats without the missing causal explanation does not satisfy this all-or-nothing criterion.",
+      "source_grounded_success_as_previously_assessed": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "fact": "The single treatment MCP query targets WAL recovery/replay and optimization loss. All15 result definitions concern recovery/flush/WAL/optimize/tests; none is Stats403-439 or doc_count589-600. It directly returned the C2 flush guard, but not the C4 stats derivation.",
+      "evidence": "trace-excerpts.json:MCP_calls"
+    },
+    {
+      "id": "F2",
+      "fact": "Treatment nevertheless received the complete Stats403-442 implementation in native read tool ordinal32 (offset403,limit50), including meta()->vector_indexed at433 and weighted completeness calculation at437-438. Native read ordinal14 supplied doc_count589-600 and doc_ids_.size().",
+      "evidence_parts": [
+        "prt_155fa5f68001xZ9zPSOVy0PHFF",
+        "prt_155f70303001VW6W7yJltJantd"
+      ]
+    },
+    {
+      "id": "F3",
+      "fact": "Treatment later received meta.h340-341 in bash tool ordinal63: vector_indexed returns indexed_vector_fields_.count(field)>0. This result is untruncated; relevant code was available before final generation.",
+      "evidence_part": "prt_155feaeac001VFhw6bPq8sw1XG"
+    },
+    {
+      "id": "F4",
+      "fact": "The treatment final answer cites Stats403-442 and explains live doc_count, but does not contain index_completeness or vector_indexed and omits the metadata-derived completeness explanation, as the existing blind review records. Baseline final explicitly names both.",
+      "interpretation": "The recorded C4 miss cannot be explained solely by unavailable source. It localizes the observed gap to carrying available evidence into final answer coverage; it does not establish why the model omitted it."
+    },
+    {
+      "id": "F5",
+      "fact": "Both arms make repeated native-read presentations; exact comparable counts are retained separately. Line overlap excludes bash/MCP, and output-byte counts are not provider input tokens. No efficiency or causal claim follows from these counts."
+    }
+  ],
+  "investigation_focus": [
+    "Inspect answer coverage for each requested observable (document counts and index completeness) during final synthesis; this trace already supplied both source mechanisms.",
+    "Inspect how recovery-focused MCP queries and partial function previews support secondary subquestions; direct C4 retrieval was absent, but later native reads closed that evidence gap."
+  ],
+  "no_changes_or_experiments": true,
+  "quality_regraded": false,
+  "causality_established": false,
+  "final_confirmation_decision": null,
+  "limits": [
+    "One c01 pair, task already observed; cannot infer causal model/tool effects or stable benefit.",
+    "Availability means text occurs in retained completed tool output, not a claim about internal comprehension.",
+    "Existing scores are copied only to bind the requested diagnostic; all original criteria remain unchanged.",
+    "Final confirmation validity remains pending overall run provenance and c02 audits."
+  ]
+}
