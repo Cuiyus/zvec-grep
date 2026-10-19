@@ -1,0 +1,28 @@
+name: Claude Qwen QA pilot
+on:
+  push:
+    branches: [dev/claude-zvec-qa-pilot]
+    paths: ['benchmarks/claude-qa-pilot/**', 'benchmarks/zvec-issue-qa/**', '.github/workflows/claude-qa-pilot.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  provider-probe:
+    if: github.repository == 'Cuiyus/zvec-grep'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify Qwen Anthropic protocol and exact model
+        env:
+          ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.GLM_API_KEY }}
+          ANTHROPIC_MODEL: qwen3.8-max
+        run: python3 benchmarks/claude-qa-pilot/probe_provider.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-probe
+          path: provider-probe.json
