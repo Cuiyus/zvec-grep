@@ -1,6 +1,6 @@
 # Zvec closed-issue QA
 
-The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration pair has also completed: factual points rose from 7/10 to 9/10 with zg, but neither answer passed its frozen quality endpoint and input increased. This is not a representative estimate of zg's overall benefit.
+The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration pair has also completed: factual points rose from 7/10 to 9/10 with zg, but neither answer passed its frozen quality endpoint and input increased. A subsequent single pair added a shared final-answer verification instruction: both scored 9/10 and failed the same unchanged C4 gate; zg input increased 55.57%. That instruction branch has stopped under its prospective rule. This is not a representative estimate of zg's overall benefit.
 
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
@@ -162,3 +162,12 @@ and [pair verdict](../claude-qa-pilot/results/20261019/architecture-v1/pair-verd
 The two-point gain and lower warm agent wall are reported alongside both quality
 failures and higher input; they do not meet the frozen efficiency signal rule or
 establish a general architecture-task benefit.
+
+A later [shared answer-verification pair](../claude-qa-pilot/results/20261019/README.md#共同答案核验提示的单次验证)
+kept this exact task, source and rubric. Both answers scored 9/10 but asserted
+exact four/two PQ workers from an unstated default-builder assumption, failing
+C4. zg input rose 55.57% and agent wall rose 21.88%. Its three actual QA searches
+all succeeded, but neither prospective quality nor efficiency signal appeared.
+The [frozen verdict](../claude-qa-pilot/results/20261019/answer-verification-v1/pair-verdict.json)
+therefore stops that instruction branch. These development pairs are reported
+separately and do not establish a favorable benchmark set.

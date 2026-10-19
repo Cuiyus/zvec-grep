@@ -8,11 +8,18 @@ are mounted. The source is read-only and its content manifest is checked after
 every trial. Existing indexes are copied before each treatment; index preparation
 is outside the agent wall-time measurement.
 
-The latest [q004 architecture pair](results/20261019/README.md#新架构题-q004)
+The original [q004 architecture pair](results/20261019/README.md#新架构题-q004)
 scored 7/10 for baseline and 9/10 for zg, but neither passed its frozen
 source-grounded quality endpoint. zg used 29.91% more input while its agent wall
 fell 30.32%; including grant, indexing and preflight removes that time advantage.
 This pair does not meet the frozen efficiency signal rule.
+
+The subsequent [shared answer-verification pair](results/20261019/README.md#共同答案核验提示的单次验证)
+scored 9/10 for both arms, with both still failing the unchanged C4 endpoint.
+zg input increased 55.57% and agent wall increased 21.88%; three actual QA
+searches succeeded at the correct root. Neither frozen signal appeared, so this
+q004 instruction branch has stopped. All 22 trials remain in the report; a
+stable favorable benchmark set has not been established.
 
 The image pins Claude Code 2.1.212 and the Rust zg binary built from upstream
 main `a424e0ce06868dc9ad8f142f57de59b8f9b58699` (package version 0.0.1).
@@ -316,6 +323,17 @@ and the existing joint conditions. Wall and setup remain separate. If neither
 signal appears, this q004 instruction branch stops: no further wording revisions,
 repeated runs to obtain a pass, or outcome-based replacement with an easier task.
 All earlier answers, failures, rules and resource comparisons remain available.
+
+This one pair completed in [run 39302184475](https://github.com/Cuiyus/zvec-grep/actions/runs/39302184475)
+at commit `fe54360c`. The [independent execution audit](results/20261019/answer-verification-v1/independent-audit.json)
+verified both actual command prompts, complete terminal usage and successful QA
+retrieval. The [fresh blind review](results/20261019/answer-verification-v1/blinded-review.json)
+scored both answers 9/10: both gave the correct PQ count formula but then asserted
+exact four/two workers using an unstated default-builder assumption. C4 factual
+and citation gates therefore failed. The [frozen verdict](results/20261019/answer-verification-v1/pair-verdict.json)
+sets both signal flags to false and `stop_this_q004_shared_instruction_branch=true`.
+No further runs or wording changes are scheduled for this branch. The command
+below records the historical invocation; it is not an instruction to repeat it.
 
 ```sh
 gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \

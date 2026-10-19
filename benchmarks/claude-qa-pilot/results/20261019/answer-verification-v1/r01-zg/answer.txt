@@ -1,0 +1,56 @@
+I have all the evidence needed. Here is the analysis, with repository-relative paths from this checkout.
+
+## Setup: what `zvec.init(optimize_threads=4)` establishes
+
+`init()` puts `optimize_threads=4` into the global config dict (`python/zvec/zvec.py:29–38, 162–163`). On first use, `GlobalResource::initialize()` lazily constructs the shared optimization pool sized from that config: `optimize_thread_pool_.reset(new ailego::ThreadPool(GlobalConfig::Instance().optimize_thread_count(), ...))` (`src/db/common/global_resource.cc:21–29`), exposed via `optimize_thread_pool()` (`src/db/common/global_resource.h:31–34`). So the process has one global optimize pool with **4 workers**.
+
+`collection.optimize(OptimizeOption(concurrency=N))` (`python/zvec/model/collection.py:231–238`) reaches `CollectionImpl::optimize` (`src/db/collection.cc:952–991`), which forwards `options.concurrency_` (`OptimizeOptions{int concurrency_{0}}`, `src/include/zvec/db/options.h:60–62`) into `build_compact_task(...)` at `src/db/collection.cc:989`.
+
+## 1. Pool and worker-count selection per invocation
+
+The compact path reaches `SegmentHelper::ReduceVectorIndex` → `MergeWithOptionalReuse` (`src/db/index/segment/segment_helper.cc:635–671, 799–811`), and the per-segment rebuild path uses the identical rule in `SegmentImpl::merge_vector_indexer` (`src/db/index/segment/segment.cc:1549–1567`):
+
+- **A (`concurrency=0`)**: `merge_options.pool = GlobalResource::Instance().optimize_thread_pool()` and `write_concurrency = pool->count()` = 4 (`segment_helper.cc:805–808`).
+- **B (`concurrency=2`)**: `write_concurrency = 2`; `merge_options.pool` stays `nullptr` (`segment_helper.cc:809–811`).
+
+`VectorColumnIndexer::merge` forwards `{write_concurrency, pool}` (`src/db/index/column/vector_column/vector_column_indexer.cc:128–131`) into `core_interface::Index::merge` (`src/core/interface/index.cc:1416–1456`), where the final selection happens:
+
+- **A**: `options.pool != nullptr` → `reducer->set_thread_pool(options.pool)` and `effective_write_concurrency = min(4, pool->count()=4) = 4` (`index.cc:1436–1439`). The **global 4-worker pool** is used.
+- **B**: `options.pool == nullptr` → a **local, per-call** `ailego::ThreadPool(options.write_concurrency=2, false)` is created, owned by a `unique_ptr` explicitly declared to outlive `reducer->reduce()` (`index.cc:1433–1446`), and set on the reducer; effective concurrency = `local_thread_pool->count()` = 2.
+
+**B does not change the global pool.** The `concurrency=2` branch never touches `GlobalResource`; it borrows nothing and mutates nothing global — the local pool is destroyed when `Index::merge` returns. A later `concurrency=0` call would again see the untouched 4-worker global pool. (`set_thread_pool` just stores a raw, non-owning pointer: `src/include/zvec/core/framework/index_reducer.h:172–183`.)
+
+## 2. Handoff to the target builder's train/build and conversion training
+
+With a target builder present, `MixedStreamerReducer::reduce` requires a pool (`mixed_streamer_reducer.cc:211–214`) and dispatches to `reduce_with_builder` (`:218–233, 672–740`), which ends in `index_build` (`src/core/mixed_reducer/mixed_streamer_reducer.cc:742–777`). The meaningful handoffs:
+
+- Line 743–744: the selected pool is wrapped once — `threads = std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_)`. This adapter **borrows** the existing `ailego::ThreadPool` without owning it and reports its worker count via `count()` (`src/include/zvec/core/framework/index_threads.h:169–225`): 4 in A, 2 in B.
+- Line 745–747: the optional conversion-training call immediately before the builder receives that same adapter: `core::IndexConverter::TrainAndTransform(target_builder_converter_, target_holder, threads)`.
+- Line 760: `target_builder_->train(threads, target_holder)`.
+- Line 768: `target_builder_->build(std::move(threads), target_holder)`.
+
+DiskAnnBuilder consumes the passed pool rather than replacing it: `train` uses it directly (a fallback `SingleQueueIndexThreads(build_thread_count_, false)` is constructed only if `threads` is null, `src/core/algorithm/diskann/diskann_builder.cc:657–665, 714–720` — not this path), and `build_internal`/`prune_internal`/`generate_quantized_data` submit exactly `threads->count()` tasks to the borrowed pool's task groups (`diskann_builder.cc:304–339, 341–376, 451–491`). To be precise about scope: the source proves the pool **is passed** to every builder's train/build and to the conversion-training call; whether a given builder implementation actually consumes it is a per-family property (DiskAnn demonstrably does; the question excludes other families). Note also that in the builder path, `num_of_add_threads_` (set from `effective_write_concurrency`, `index.cc:1448–1452`) is only validated at init (`mixed_streamer_reducer.cc:80–95`); builder-stage parallelism comes from `threads->count()` itself.
+
+## 3. DiskANN PQ training: its outer chunk-dispatch pool is **not** the caller's pool
+
+`DiskAnnBuilder::train_quantized_data(IndexThreads::Pointer threads)` (`diskann_builder.cc:378–427`) creates a `PqInt8Quantizer` and sizes it at lines 391–394:
+
+```cpp
+// The quantizer creates its own pool, so bound it by the caller's pool.
+const auto pq_thread_count = static_cast<uint32_t>(std::max<size_t>(
+    1, std::min<size_t>(build_thread_count_, threads->count())));
+qp.set("thread_count", pq_thread_count);
+```
+
+The quantizer reads that into `thread_count_` (`src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:142`; default 0 = hardware concurrency, `pq_int8_quantizer.h:215–217`), and `train_all_chunks` then constructs its **own fresh** `SingleQueueIndexThreads(thread_count_, false)` pool and distributes PQ chunks across it (`pq_int8_quantizer.cc:319–327`). So the outer training pool is created per train call, not reused/borrowed like the builder's graph-stage pool; its worker count is `max(1, min(build_thread_count_, caller_pool->count()))`, where `build_thread_count_` comes from `PARAM_DISKANN_BUILDER_THREAD_COUNT` at init, defaulting to `hardware_concurrency()` when 0 (`diskann_builder.cc:51–55`). Under the stated assumptions (hardware ≥ 4, default builder setting): **A** → `min(hw, 4) = 4` PQ workers; **B** → `min(hw, 2) = 2` PQ workers. (The `SingleQueueIndexThreads` size-0 → hardware-concurrency mapping at `index_threads.h:113–116` doesn't apply here because the builder always sets `thread_count` explicitly.) By contrast, PQ *encoding* in `generate_quantized_data` does reuse the caller's pool directly (`diskann_builder.cc:451–491`).
+
+## 4. What the settings establish — and what they don't
+
+**Established (worker-pool capacity):**
+- A: builder train/build and conversion training execute over the shared global optimize pool capped at 4 workers; DiskANN's PQ training spawns a transient pool of `min(build_thread_count_, 4)` = 4 workers.
+- B: everything runs over a per-call local pool of exactly 2 workers; PQ training is bounded to 2; the global pool's configuration (4) is untouched and the local pool dies with the merge call.
+- `effective_write_concurrency` is additionally clamped by `pool->count()` when a pool is supplied (`index.cc:1438–1439`), so a requested concurrency can never exceed the pool actually backing it.
+
+**Not established:**
+- **Whole-process thread count.** These settings bound only the pools they configure. The process simultaneously holds the global optimize pool (4), a separate query pool (`global_resource.cc:24–26`), and — during DiskANN training — an extra quantizer-owned pool created per train call, plus any threads the runtime/bindings create. Nothing here caps the sum.
+- **Actual CPU utilization.** Pool size is a concurrency ceiling, not a usage guarantee: tasks may block or idle (e.g., the borrowed adapter's submitter busy-waits when the queue exceeds `kMaxQueueSize`, `index_threads.h:194–199`), producer/iterator work in the reducer runs on the calling thread, and real CPU consumption depends on scheduling, data size, cgroups, and hyperthreading. As the question states, this is a source-reading conclusion about configuration plumbing, not a measured performance claim.

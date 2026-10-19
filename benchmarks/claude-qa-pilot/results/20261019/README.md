@@ -1,8 +1,10 @@
 # Claude Code + Qwen3.8-max QA 开发验证
 
-本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case；随后在原 q001 上单独测试一对远端 Qwen embedding，再沿用远端栈执行一对新架构题 q004。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是各次冻结时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建。前序阶段配本地 `potion-code-16m-v2`，远端阶段配 `qwen/qwen3.7-text-embedding`，分别报告。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
+本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case；随后在原 q001 上单独测试一对远端 Qwen embedding，再沿用远端栈执行一对新架构题 q004，最后对 q004 做一对共同答案核验提示的独立开发验证。共保留 22 次试验。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是各次冻结时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建。前序阶段配本地 `potion-code-16m-v2`，远端阶段配 `qwen/qwen3.7-text-embedding`，分别报告。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
 
 **结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。远端 Qwen 单题对照中，zg 8/10 且通过核心引用门槛，baseline 9/10 但未通过；zg input 和 wall 仍增加 25.7% / 48.6%。新增 q004 事实分 7→9，两组仍未通过；zg input 增加 29.9%，预建索引下的 agent wall 减少 30.3%，计入授权、索引和预检后也没有冷启动耗时优势。这反映引用、事实覆盖与资源之间的取舍。所有开发失败与不利结果保留。
+
+最新共同核验提示的 pair 中，两组均为 9/10，均未通过未改变的 C4 事实和引用门槛；zg input 增加 **55.57%**、agent wall 增加 **21.88%**。三次实际 QA 检索成功、完整用量和协议审计通过，不能替代质量收益。按事先冻结的规则，**停止这个 q004 提示迭代分支**，不继续改措辞或重复运行以追求通过。两条最小验证路线已完成，但稳定有利的 benchmark 集仍未建立。
 
 ## 实验设计
 
@@ -145,6 +147,25 @@ baseline 有两次 Read 使用 `/Users/luke/repos/proj/` 下的错误绝对路�
 授权 **0.571 s**、索引及 readiness **196.597 s**、完整预检 **4.574 s**，合计 **201.741 s**，均在 agent wall 外。把这三项加到 zg agent wall 得 **487.53 s**，高于 baseline 的 **410.16 s**，因此这次 pair 没有计入检索准备后的冷启动耗时优势。该比较仍不含安装、下载和镜像构建，不能称为从安装到答案的总耗时；QA 内的远端查询等待已经计入 agent wall，不另行扣除。
 
 [独立执行审计](architecture-v1/independent-audit.json)核对 GitHub ZIP 摘要与 40 个 QA 文件、冻结来源、remote grant、索引身份、vector-only 预检、工具 ID、预算和隔离，未发现阻断执行问题。live QA 的 HTTP 请求体没有保存，8192 是配置的每请求输出上限；源码执行后完整性只有 runner 的重新哈希报告，私有 seed/config 按设计不上传。上述限制、原始结果和全部不利观察保留。单个有目的选择的新题不能支持稳定架构题收益、embedding 因果收益或总体泛化结论。
+
+## 共同答案核验提示的单次验证
+
+[run 39302184475](https://github.com/Cuiyus/zvec-grep/actions/runs/39302184475) 在 commit `fe54360c` 按[独立冻结计划](../../experiment-answer-verification-v1.json)执行一对 q004 baseline→zg。唯一开发干预是在两组相同的公共指令后追加同一段通用提示：提交前用已经取得的证据核对确定性论断、消除与条件的矛盾、删去无依据的附加细节，并对无法支持的必要结论保留不确定性。题目、源码、rubric、Rust、Claude/Qwen、远端 embedding、工具和预算均未改变；没有增加验证模型调用。两次实际命令和 manifest 的共同提示哈希均为 `fbdb8691b4a06e4702e04301fe5b1b573428e6951b5aaf81e7ba846d9f874c66`。
+
+| 组别 | 事实分 /10 | 达到源码质量门槛 | Input（含 cache） | Output | 工具调用 | Agent wall | zg 成功 / 尝试 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 9 | 否，C4 事实与引用 | 259,135 | 9,589 | 24 | 258.16 s | — |
+| zg | 9 | 否，C4 事实与引用 | 403,125 | 8,348 | 23 | 314.66 s | 3 / 3 |
+
+[新独立盲评](answer-verification-v1/blinded-review.json)先以随机匿名 U/V 评分，再通过[字节身份核验](answer-verification-v1/review-input-verification.json)解盲为 baseline/zg。两份 C1–C5 均为 `2/2/2/1/2`：都给出了独立 PQ 外层 pool 和正确的 `max(1, min(build_thread_count_, threads->count()))` 公式，却又以题目没有指定的默认 builder 设置推导恰好 4／2 个 worker。源码允许更小的显式 builder 设置，硬件数量前提并不能排除它，因此 C4.2 不获分，关联精确数量结论的引用支持不完整。两份没有符合冻结 D1–D5 定义的明确关键矛盾；任务分配、converter 使用等附加过宽或错误说法仍完整保留，不因 9/10 隐去。
+
+完整终态 `result.usage` 与 `modelUsage` 一致。zg input 增加 **55.57%**，output 减少 **12.94%**，agent wall 增加 **21.88%**。授权 **0.385 s**、索引和 readiness **176.109 s**、预检 **3.522 s**，合计 **180.016 s** 单列；zg agent 加这些准备耗时为 **494.68 s**，高于 baseline agent 的 **258.16 s**。这仍不含安装、构建与下载，不宣称完整冷启动总耗时或经过账单核实的费用。
+
+[轨迹审计](answer-verification-v1/trajectory-audit.json)记录实际 QA 中 3 次 MCP 调用、3 条查询字符串，全部在 `/workspace` 成功。工具调用 24→23、工具消息轮次 14→12，但 Read 次数 4→10，Read 返回文本 20,473→119,192 字符，全部工具文本 75,003→146,263 字符。两组重复 Read 源码行次数均为 0，无工具错误或预算拒绝。减少调用没有降低输入量；源码命中、较少轮次和提示存在，也不证明内部执行了自检或提示造成了效果变化。
+
+[独立执行审计](answer-verification-v1/independent-audit.json)验证了 41 个 QA 文件和 provider 文件与 GitHub ZIP 字节一致、冻结配置、实际提示、隔离、工具 ID、授权和真实远端索引。保留 live HTTP 请求体未存档、私有 seed 未上传、执行后源码完整性依赖固定 runner 重新哈希报告等边界。
+
+[冻结判定](answer-verification-v1/pair-verdict.json)的质量信号和效率信号均为 false，`stop_this_q004_shared_instruction_branch=true`。此分支到此停止；本次是看过旧结果后的单次开发验证，不与旧 q004 合并，不声称提示的因果效应、确认成功或新题泛化。先前 20 行结果保持原样，两份新结果均保留。
 
 ## 所有前置尝试
 
