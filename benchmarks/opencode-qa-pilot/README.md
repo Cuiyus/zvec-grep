@@ -65,8 +65,11 @@ proposes metadata-only package compatibility and file-based evidence capture,
 with a real Docker fake-provider gate. The versioned implementation is now in
 `repair_v2/`, under a separate [offline-only decision](repair_v2/decision.json).
 Its [fork workflow](../../.github/workflows/opencode-qa-repair-v2.yml) accepts no
-live-run input and receives no live provider secrets. Linux validation remains
-pending until a retained proof explicitly reports success.
+live-run input and receives no live provider secrets. Linux validation passed in
+[run 39314027006](https://github.com/Cuiyus/zvec-grep/actions/runs/39314027006)
+at `cd0f4dbc`: 50 unit tests and the actual Harbor/Docker integration passed.
+The [retained archive](results/20261020-infrastructure-v2-r1/archive.json) includes
+the original 130-file ZIP and an independent audit with 775 checks, zero failures.
 
 The repaired package adds only `bin: {"zg": "bin/zg"}` to the original npm
 metadata. Rust, its native library and data payloads remain byte-for-byte
@@ -80,12 +83,19 @@ answers are infrastructure evidence only and are never assigned QA scores.
 
 `repair_v2/inputs.json` binds the gate's code, workflow, decision, closed v1
 inputs and derived package identity. Any change requires a newly recorded input
-revision. Passing the gate would permit a separate new live-plan decision; it
-cannot retroactively validate v1 or establish a zg quality/efficiency result.
+revision. This successful gate supports the separately recorded
+[live v2 decision](provenance/live-v2-decision-20261020.json); it cannot
+retroactively validate v1 or establish a zg quality/efficiency result.
 
-The separate fork workflow defaults to offline validation; only its explicit
-`execute_pair=true` dispatch runs the two slots. Failed attempts remain evidence
-and are not automatically retried.
+The new frozen [v2 plan](experiment-v2.json) binds the canonical install package,
+all original evaluation/stopping rules, the retained Docker proof and its exact
+GitHub provenance. `pilot_v2.py` adds whole-process-group cleanup checks and
+requires both process and container cleanup before the next slot.
+The separate [v2 fork workflow](../../.github/workflows/opencode-qa-pilot-v2.yml)
+runs controller preflight on push, including the Linux descendant cleanup test.
+Only an explicit `execute_pair=true` dispatch runs one fresh baseline then one
+fresh zg slot. No old answer is reused. Live execution remains pending at this
+freeze; failed attempts remain evidence and are not automatically retried.
 
 ## Why this phase exists
 
