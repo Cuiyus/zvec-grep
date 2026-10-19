@@ -26,6 +26,10 @@ on:
         description: Separately frozen q002 and q003 batch (completion budget required)
         type: boolean
         default: false
+      remote_embedding_pilot:
+        description: Separately frozen remote Qwen embedding single q001 pair (completion budget required)
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -48,6 +52,7 @@ jobs:
           PILOT_COMPLETION_BUDGET: ${{ inputs.completion_budget && 'true' || 'false' }}
           PILOT_COMPLETION_CONFIRMATION: ${{ inputs.completion_confirmation && 'true' || 'false' }}
           PILOT_ISSUE_EXPANSION: ${{ inputs.closed_issue_expansion && 'true' || 'false' }}
+          PILOT_REMOTE_EMBEDDING: ${{ inputs.remote_embedding_pilot && 'true' || 'false' }}
         run: |
           python3 - <<'PY'
           import json, os
@@ -55,6 +60,9 @@ jobs:
           if task not in ('both', 'reflex-6', 'zvec-q001', 'zvec-expansion'):
               raise SystemExit('unknown frozen task selection')
           expansion = os.environ['PILOT_ISSUE_EXPANSION'] == 'true'
+          remote = os.environ.get('PILOT_REMOTE_EMBEDDING', 'false') == 'true'
+          if remote and (task != 'zvec-q001' or os.environ['PILOT_COMPLETION_BUDGET'] != 'true' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true' or os.environ['PILOT_COMPLETION_CONFIRMATION'] == 'true' or expansion):
+              raise SystemExit('remote embedding requires one q001 completion-budget pair with no other phase')
           if expansion and (task != 'zvec-expansion' or os.environ['PILOT_COMPLETION_BUDGET'] != 'true' or os.environ['PILOT_ROOT_GUIDANCE'] == 'true' or os.environ['PILOT_COMPLETION_CONFIRMATION'] == 'true'):
               raise SystemExit('issue expansion requires its full task batch, completion budget, and no other phase')
           if task == 'zvec-expansion' and not expansion:
@@ -80,6 +88,20 @@ jobs:
           sys.path.insert(0, 'benchmarks/claude-qa-pilot')
           from ci_run import validate_expansion_plan
           validate_expansion_plan()
+          PY
+      - name: Verify remote embedding plan and environment before provider calls
+        if: inputs.remote_embedding_pilot
+        env:
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'benchmarks/claude-qa-pilot')
+          from ci_run import validate_remote_embedding_plan
+          from remote_embedding import validate_environment
+          validate_remote_embedding_plan()
+          validate_environment()
           PY
       - name: Verify Qwen Anthropic protocol and exact model
         env:
@@ -150,6 +172,8 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ inputs.remote_embedding_pilot && secrets.QWEN_EMBEDDING_API_KEY || '' }}
+          ZVEC_GREP_ENDPOINT: ${{ inputs.remote_embedding_pilot && vars.QWEN_EMBEDDING_ENDPOINT || '' }}
         run: >-
           python3 benchmarks/claude-qa-pilot/ci_run.py
           --task '${{ matrix.task }}'
@@ -160,11 +184,13 @@ jobs:
           ${{ inputs.completion_budget && '--completion-budget' || '' }}
           ${{ inputs.completion_confirmation && '--completion-confirmation' || '' }}
           ${{ inputs.closed_issue_expansion && '--closed-issue-expansion' || '' }}
+          ${{ inputs.remote_embedding_pilot && '--remote-embedding-pilot' || '' }}
       - name: Preserve complete or partial evidence and redact credentials
         id: collect
         if: always()
         env:
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ inputs.remote_embedding_pilot && secrets.QWEN_EMBEDDING_API_KEY || '' }}
         run: >-
           python3 benchmarks/claude-qa-pilot/ci_run.py --collect-only
           --work '${{ runner.temp }}/pilot-${{ matrix.task }}'

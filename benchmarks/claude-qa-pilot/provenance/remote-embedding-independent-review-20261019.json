@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "review_role": "Independent code/security/experiment-compatibility reviewer; not answer-quality evaluator",
+  "created_at_utc": "2026-10-19T17:07:48.486625+00:00",
+  "base_commit": "5acff36add82f9a0f76cadc8ae8fe9afeb811e4e",
+  "worktree": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep",
+  "skill": "/Users/cc/.agents/skills/cr/SKILL.md",
+  "problem_and_scope": {
+    "classification": "New experimental capability, not a demonstrated production bug fix",
+    "confirmed_need": "Existing wrapper selects local Potion and has no complete remote credential/grant/index/preflight path. The change prepares a separate remote Qwen embedding q001 pair while holding completion-v2 solver protocol fixed.",
+    "scope": [
+      ".github/workflows/claude-qa-pilot.yml",
+      "benchmarks/claude-qa-pilot/remote_embedding.py",
+      "benchmarks/claude-qa-pilot/test_remote_embedding.py",
+      "benchmarks/claude-qa-pilot/ci_run.py",
+      "benchmarks/claude-qa-pilot/run.py",
+      "benchmarks/claude-qa-pilot/probe_mcp.py",
+      "benchmarks/claude-qa-pilot/experiment-remote-embedding-v1.json",
+      "benchmarks/claude-qa-pilot/README.md",
+      "benchmarks/claude-qa-pilot/provenance/remote-embedding-configuration-20261019.json"
+    ],
+    "excluded": "Result/answer content, blind directories, mappings, judge/review files, other uncommitted result-report changes."
+  },
+  "verdict": {
+    "confirmed_findings": 0,
+    "necessary_corrections": [],
+    "summary_zh": "未发现需要修改的确定性问题。实现与所声明的准备阶段、凭据边界及既有local协议兼容。",
+    "plan_frozen": false,
+    "live_ready_claimed": false,
+    "safe_to_freeze_or_dispatch_decision": "This review does not freeze the plan or authorize execution; live provider/model/quota feasibility remains unverified."
+  },
+  "findings": [],
+  "review_comment_drafts": [],
+  "comments_published": false,
+  "checked_paths": [
+    {
+      "area": "Pre-paid gate and phase selection",
+      "result": "pass",
+      "evidence": [
+        "workflow remote flag defaults false; remote selector permits only q001 + completion_budget with all other phase flags false",
+        "workflow validate_remote_embedding_plan + validate_environment step precedes provider probe",
+        "ci_run.py validates plan/environment before creating work or upstream/index setup",
+        "remote plan is frozen:false; validator rejects before paid work",
+        "Plan checks base/question/rubric/dataset/hook/config-research hashes, task/agent/completion equality, exact model/endpoint, common instructions and one-pair order/count"
+      ]
+    },
+    {
+      "area": "Baseline isolation and local compatibility",
+      "result": "pass",
+      "evidence": [
+        "run.py copies home/index seeds only for zg, and supplies embedding env names only for non-local zg",
+        "Baseline retains empty readonly index overlay, no MCP server and no embedding env or authorization seed",
+        "Local ci_run still calls upstream_protocol(work,reports), unchanged local index_command without endpoint, unchanged probe invocation and timeout; trial model/tools/limits/common prompt/hook remain unchanged",
+        "run.py only functional diff in this scope adds a redaction secret alias; no solver protocol change"
+      ]
+    },
+    {
+      "area": "Credentials and artifacts",
+      "result": "pass",
+      "evidence": [
+        "Docker commands pass --env variable names, never key values; exact endpoint is public configuration",
+        "Both agent and embedding key env names are present in redaction and known-secret scans; always-run collector receives both actual keys",
+        "Provider keys are not explicitly embedded in MCP settings or command.json",
+        "Private seed identity rejects persisted apiKey, scans seed files before reuse, and collector allowlists trial evidence rather than runtime/index/home",
+        "Auth grant/status output on pinned Rust emits summaries and paths, not signatures or authorization.key contents",
+        "Failure collection remains in ci_run finally and workflow always-run collector; raw streams are retained and redacted"
+      ]
+    },
+    {
+      "area": "Grant, index and remote native contract",
+      "result": "pass",
+      "pinned_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "evidence": [
+        "authorization_command matches native --auth grant /workspace --capability embedding --scope workspace --embedding MODEL --endpoint ENDPOINT",
+        "Grant root/model/endpoint and signing key survive paired home/index clones because container paths remain /workspace and /root/.zvec-grep",
+        "Native build preserves authorization.json; private signing-key file is copied while transient sock/pid/lock files are excluded",
+        "Manifest serializes camelCase fields; Qwen catalog/backend yields dimension1024, cosine, maxBatchSize20, maxInputTokens128000 and exact endpoint",
+        "New index runtime does not persist environment API key; runtime resolves it from environment"
+      ]
+    },
+    {
+      "area": "MCP hybrid/vector-only preflight",
+      "result": "pass",
+      "evidence": [
+        "Existing fixed generic hybrid query and limit1 are unchanged",
+        "Remote-only additional vector input selects native Vector route; correct root is hardcoded /workspace",
+        "require_vector_result rejects isError, empty/FTS-only and snippet-only text; regex matches native vector-result header format",
+        "Probe clones original seeds and discards its query cache, so it does not warm solver seed",
+        "Two native searches do not imply two provider HTTP requests or two billed events; documentation avoids that claim"
+      ]
+    },
+    {
+      "area": "Accounting boundaries and outcome retention",
+      "result": "pass",
+      "evidence": [
+        "Grant/status, index/readiness, whole outer preflight and remote search walls are recorded separately from solver trials",
+        "Query-time remote/network work stays inside zg agent wall and shared research budget",
+        "Embedding cost and provider weight/version attestation are explicitly unavailable; no combined USD or network-only latency claim",
+        "One fresh baseline/remote-zg pair is not called a contemporaneous local/remote ablation; prior q001 outcomes remain distinct",
+        "No automatic rerun, task expansion or bad-outcome replacement introduced"
+      ]
+    }
+  ],
+  "native_source_evidence": [
+    {
+      "path": "rust/crates/zg-cli/src/lib.rs",
+      "lines": "96-121",
+      "supports": "authorization CLI flags"
+    },
+    {
+      "path": "rust/crates/zg/tests/auth.rs",
+      "lines": "44-55",
+      "supports": "same auth invocation form"
+    },
+    {
+      "path": "rust/crates/zg/src/main.rs",
+      "lines": "173-198",
+      "supports": "grant/status output path"
+    },
+    {
+      "path": "rust/crates/zg-cli/src/management.rs",
+      "lines": "157-209",
+      "supports": "authorization status emits safe summary/path fields"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/authorization.rs",
+      "lines": "273-283,486-525",
+      "supports": "signing key location and grant validation"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/workspace/build.rs",
+      "lines": "153-166,283-303,600-616",
+      "supports": "authorization grant preserved through indexing"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/models/catalog/entries.rs",
+      "lines": "269-279",
+      "supports": "Qwen remote embedding catalog identity"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/models/backends/qwen/model.rs",
+      "lines": "64-76,90-97",
+      "supports": "embedding identity and provider request model/dimensions"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/domain/model/embedding.rs",
+      "lines": "5-16",
+      "supports": "camelCase embedding fields"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/workspace/manifest.rs",
+      "lines": "42-61",
+      "supports": "manifest field serialization"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/pipelines/indexing/service.rs",
+      "lines": "606-623,746-795",
+      "supports": "runtime credential merge and persistence boundary"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/pipelines/indexed_search/service.rs",
+      "lines": "287-350",
+      "supports": "manifest model/endpoint and environment runtime credential"
+    },
+    {
+      "path": "rust/crates/zg-transport-mcp/src/lib.rs",
+      "lines": "1492-1518",
+      "supports": "vector-only input acceptance and route selection"
+    },
+    {
+      "path": "rust/crates/zg-transport-mcp/src/search_format.rs",
+      "lines": "86-102",
+      "supports": "vector result header format"
+    }
+  ],
+  "validation": {
+    "passed_tests": 32,
+    "commands": [
+      {
+        "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest test_remote_embedding -v",
+        "cwd": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot",
+        "tests": 13,
+        "result": "pass"
+      },
+      {
+        "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest test_wrapper test_trial_plan -v",
+        "cwd": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot",
+        "tests": 19,
+        "result": "pass"
+      }
+    ],
+    "method": "Reviewed test code and real implementation; tests use temporary directories and mocked subprocess/runtime/service calls. Native contracts were separately checked in local pinned Git objects, rather than inferred from handwritten fixtures.",
+    "network_calls": 0,
+    "ci_dispatches": 0,
+    "services_started": 0,
+    "repository_edits": 0
+  },
+  "limitations": [
+    "No live endpoint, API key value, quota, provider behavior or remote embedding response was tested. Frozen:false remains correct until a separate execution decision.",
+    "No Docker/Rust binary integration was run; native CLI/auth/manifest/search contracts were verified statically against pinned source.",
+    "Known-secret redaction/scans verify injected secret values, not arbitrary encoded variants; no real key values were accessed.",
+    "The full repository test suite was not rerun; only 32 relevant offline remote, wrapper and trial-plan tests were run.",
+    "MCP retrieval success is operational readiness, not useful evidence, answer quality or causal efficiency benefit.",
+    "A single fresh baseline/remote-zg pair cannot isolate an embedding-specific causal effect against historical local runs."
+  ],
+  "review_snapshot": {
+    "tracked_diff_sha256": "9d9461b25808a7ab285b914f34c3d935c633b9e6705493a4976c6f16c12095c0",
+    "final_file_hashes": [
+      {
+        "path": ".github/workflows/claude-qa-pilot.yml",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/.github/workflows/claude-qa-pilot.yml",
+        "sha256": "9cb5001b1a1a98cbff04b8ef5af9561cce73025e0e4876fb6e809be861ea4f0f",
+        "bytes": 10708
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/remote_embedding.py",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/remote_embedding.py",
+        "sha256": "822825622b47c70042f84b245305b557c2a46acb3ac3337adf804e0356adbe44",
+        "bytes": 6179
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/test_remote_embedding.py",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/test_remote_embedding.py",
+        "sha256": "53d4cbb999e1a4a65d85b4e49de6a94a067dec85771c16ba83f16d9920d8236f",
+        "bytes": 23157
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/ci_run.py",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/ci_run.py",
+        "sha256": "ee90f7a7c720aae96f100cd273eb8a375c859d2f2ba2fe3536992e6c80ab3240",
+        "bytes": 22296
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/run.py",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/run.py",
+        "sha256": "60c7e3073bfd3693f2f0573252a781d68e4536844b370f8c2ad2405ff94206e5",
+        "bytes": 31632
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/probe_mcp.py",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/probe_mcp.py",
+        "sha256": "393c67447de77a9f319e6d840b3d7b12f5773a39a3813abef8ee43894e3db27a",
+        "bytes": 10530
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/experiment-remote-embedding-v1.json",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/experiment-remote-embedding-v1.json",
+        "sha256": "dc84db9478fa41758a998db8dfcdf47d5d34436a5f5713135596f2bc6e2c9e93",
+        "bytes": 12260
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/README.md",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/README.md",
+        "sha256": "a3393972c6bf012cfdd83378edb1610bf60dde1cba271cf072348a5f385ba407",
+        "bytes": 14348
+      },
+      {
+        "path": "benchmarks/claude-qa-pilot/provenance/remote-embedding-configuration-20261019.json",
+        "absolute_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/provenance/remote-embedding-configuration-20261019.json",
+        "sha256": "ca176ccfac1da658301bb84c4023d6e757d0c5bd7dabe24c89334606d6f5fd43",
+        "bytes": 18053
+      }
+    ],
+    "hashes_are_authoritative_for_this_review": true,
+    "implementation_concurrent_edit_note": "Review is bound to these final file bytes; later edits require targeted re-review. No drift in completed q001/q002/q003 runs is inferred from this worktree.",
+    "final_hash_recheck_mismatches": [],
+    "concurrent_change_audit": "Re-read scoped diff before finalization; tracked diff hunks matched the initial review and no new code change was confirmed. Final byte hashes were rechecked successfully."
+  }
+}

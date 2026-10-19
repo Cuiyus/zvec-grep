@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ import time
 import uuid
 
 from run import cleanup_runtime, copy_seed, docker_base, redact, write_json
+import remote_embedding
 
 
 PROBE_QUERY = "source code implementation"
@@ -27,6 +29,14 @@ def require_successful_search(response: dict) -> None:
     structured = response.get("structuredContent")
     if not (isinstance(content, list) and content) and not structured:
         raise RuntimeError("native zg search returned no content")
+
+
+def require_vector_result(response: dict) -> None:
+    require_successful_search(response)
+    text = '\n'.join(block.get('text', '') for block in response.get('content', [])
+                     if isinstance(block, dict) and block.get('type') == 'text')
+    if not re.search(r'^#\d+(?: \[[^\n]*\])? matchedBy=vector [^\n]+:\S+$', text, re.MULTILINE):
+        raise RuntimeError('remote embedding vector preflight returned no vector-matched source result')
 
 
 class StdioSession:
@@ -73,6 +83,9 @@ class StdioSession:
 
 
 def probe(args) -> dict:
+    remote = getattr(args, 'embedding_model', 'local/potion-code-16m-v2') == remote_embedding.MODEL
+    if remote:
+        remote_embedding.validate_environment()
     args.source = args.source.resolve()
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +100,10 @@ def probe(args) -> dict:
     copy_seed(args.home_seed.resolve(), runtime / "home" / ".zvec-grep")
     copy_seed(args.index_seed.resolve(), runtime / "index")
     name = "zg-qa-probe-" + uuid.uuid4().hex[:12]
-    command = docker_base(args, name, private, runtime) + [
+    command = docker_base(args, name, private, runtime)
+    if remote:
+        command += [item for env in remote_embedding.ENV_NAMES for item in ('--env', env)]
+    command += [
         "--interactive", "--mount", f"type=bind,src={runtime / 'index'},dst=/workspace/.zvec-grep",
         args.image, args.zg, "--server", "--stdio", "--mcp-toolset", "agent",
     ]
@@ -96,6 +112,11 @@ def probe(args) -> dict:
               "host_uid": os.getuid(), "host_gid": os.getgid(),
               "seed_policy": "private clones discarded; original index/home seeds never mounted writable",
               "source": str(args.source), "valid": False, "errors": []}
+    if remote:
+        report.update({'embedding_model': remote_embedding.MODEL,
+                       'embedding_endpoint': remote_embedding.ENDPOINT,
+                       'remote_embedding_may_be_billed': True,
+                       'timing_boundary': 'Whole preflight and search wall are setup outside QA. Search wall includes native processing and any remote embedding/network time; no network-only latency or provider billing measurement.'})
     process = None
     start = time.monotonic()
     try:
@@ -121,10 +142,25 @@ def probe(args) -> dict:
                 if tool_names != [SEARCH_TOOL]:
                     raise RuntimeError("agent MCP tool inventory mismatch: " + repr(tool_names))
                 report["tool_schema_sha256"] = hashlib.sha256(json.dumps(listing, sort_keys=True).encode()).hexdigest()
+                search_started = time.monotonic()
                 send({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
                     "name": SEARCH_TOOL, "arguments": {"root": "/workspace", "query": PROBE_QUERY, "limit": 1}}})
                 report["search"] = session.receive(3)
+                if remote:
+                    report['search_wall_seconds'] = time.monotonic() - search_started
                 require_successful_search(report["search"])
+                if remote:
+                    # Hybrid success alone could show only FTS hits. A separate
+                    # native vector-only call checks the selected embedding path.
+                    # These clones are discarded, including any query cache.
+                    vector_started = time.monotonic()
+                    send({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {
+                        'name': SEARCH_TOOL, 'arguments': {'root': '/workspace',
+                            'vector': [PROBE_QUERY], 'limit': 1}}})
+                    report['vector_search'] = session.receive(4)
+                    report['vector_search_wall_seconds'] = time.monotonic() - vector_started
+                    require_vector_result(report['vector_search'])
+                    report['native_search_calls'] = 2
                 report["valid"] = True
             finally:
                 session.selector.close()
@@ -167,6 +203,8 @@ def main() -> int:
     parser.add_argument("--image", default="zg-claude-qa-pilot:20261019")
     parser.add_argument("--zg", default="zg")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument('--embedding-model', choices=('local/potion-code-16m-v2', remote_embedding.MODEL),
+                        default='local/potion-code-16m-v2')
     args = parser.parse_args()
     report = probe(args)
     print(json.dumps({"valid": report["valid"], "errors": report["errors"], "output": str(args.output)}))

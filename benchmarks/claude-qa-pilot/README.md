@@ -168,6 +168,46 @@ pair. The wrapper rejects an unfrozen plan or a dataset hash mismatch before
 setup, and saves both plan and dataset in the task artifact. This phase neither
 changes nor pools with q001 confirmation or the selected development results.
 
+`experiment-remote-embedding-v1.json` freezes a separate q001
+development pair to test the Qwen embedding configuration used in main's
+historical Claude + Opus protocol. Its sole solver factor is the embedding
+stack: `qwen/qwen3.7-text-embedding` replaces local Potion; Claude/Qwen3.8-max,
+the question/source/rubric, native Rust binary, common instructions, MCP schema,
+completion hook and limits remain unchanged. This is one fresh baseline/remote-zg
+pair, not a contemporaneous local/remote ablation. It cannot establish an
+embedding-specific causal gain or generalization, and unfavorable results remain.
+
+The phase requires `task=zvec-q001`, `completion_budget=true`,
+`remote_embedding_pilot=true`, and all other phase flags false. Before the
+provider probe or setup, its guard requires an explicitly frozen plan, unchanged
+question/rubric/dataset/hook/base-plan hashes, the exact endpoint, and the
+configured embedding credential. The evidence-based freeze decision is retained
+in `remote-embedding-decision-v1.json`, together with the independently reviewed
+preparation snapshot. An unfrozen or changed plan is rejected before paid calls.
+Offline preparation does not establish working remote quota or model access.
+
+The fork's `QWEN_EMBEDDING_API_KEY` secret is mapped to `ZVEC_GREP_API_KEY`, and
+its `QWEN_EMBEDDING_ENDPOINT` variable must equal the endpoint frozen in the plan;
+there is no silent catalog-endpoint fallback. Docker receives credential names,
+never values in command arguments or saved configuration. Baseline receives
+neither embedding environment nor index/authorization seed. The remote setup
+grants workspace authorization bound to `/workspace`, model and endpoint, then
+indexes using that persistent grant. Index model/endpoint/dimensions are checked,
+and private seeds are scanned before use; seeds and signing keys are never
+uploaded. The real MCP preflight runs the existing fixed hybrid query plus one
+vector-only query with the same generic text, requiring a vector-matched source
+result. It uses private seed clones that are discarded before solver trials.
+
+Authorization, index setup, whole preflight and both preflight searches have
+separate timing records. Preflight may incur embedding charges; its outer timeout
+is 600 seconds to cover the extra native request. All agent-time query network
+waits remain inside zg wall time and the investigation budget. Search wall
+includes native computation and network time; it is not a measurement of HTTP
+latency alone. Remote billing and immutable provider weight identity are not
+attested. The requested model, stored index identity, exact endpoint and pinned
+main configuration/catalog/backend hashes are recorded instead. Existing local
+phases keep their original commands and behavior.
+
 Run parser and source-isolation checks with:
 
 ```sh

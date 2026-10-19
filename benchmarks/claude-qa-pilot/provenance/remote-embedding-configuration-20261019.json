@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-10-19T16:51:59.122375+00:00",
+  "scope": "Read-only retrieval configuration research; no source/plan changes, CI dispatch, model inference, credentials read, or GitHub messages.",
+  "main_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+  "main_ref_api_revalidated": true,
+  "main_protocol": {
+    "executable_swe_qa_ci": {
+      "agent": "opencode@1.18.4",
+      "models": [
+        "glm-5.2",
+        "qwen3.8-max"
+      ],
+      "default_model": "glm-5.2",
+      "trials_per_profile": 5,
+      "max_retries": 2,
+      "embedding_models": {
+        "local": "local/potion-code-16m-v2",
+        "remote": "qwen/qwen3.7-text-embedding"
+      },
+      "default_embedding": "local",
+      "source": "benchmarks/swe-qa-bench/ci-config.json; .github/workflows/swe-qa-bench.yml"
+    },
+    "historically_published_swe_qa": {
+      "agent": "Claude Code 2.1.212",
+      "model": "claude-opus-5",
+      "effort": "high",
+      "embedding": "qwen/qwen3.7-text-embedding",
+      "tasks": 20,
+      "repositories": 11,
+      "trials_per_profile": 3,
+      "budget_usd_per_profile_run": 4,
+      "warning": "Published README protocol is historical, not equivalent to current executable default. It does not identify an exact Rust a424e0ce package identity."
+    },
+    "retrieval_only": {
+      "code_suites": [
+        "SWE-QA20",
+        "Quarry20"
+      ],
+      "local_code_model": "local/potion-code-16m-v2",
+      "text_suites": [
+        "BEIR20",
+        "DuRetrieval10"
+      ],
+      "local_text_model": "local/potion-multilingual-128m",
+      "remote_override_all_suites": "qwen/qwen3.7-text-embedding",
+      "modes": [
+        "hybrid",
+        "fts",
+        "vector"
+      ],
+      "limit": 10,
+      "calls_per_query": 5,
+      "endpoint": "public Rust MCP",
+      "quality_metrics": [
+        "File Hit@1/5/10",
+        "File MRR@10",
+        "binary file nDCG@10"
+      ],
+      "warning": "File relevance can conceal missing causal source spans. This is not an answer-quality or e2e efficiency evaluation."
+    }
+  },
+  "remote_configuration": {
+    "workflow_input": "embedding=remote",
+    "config_field": "embedding_models.remote",
+    "zg_model_ref": "qwen/qwen3.7-text-embedding",
+    "http_request_model": "qwen3.7-text-embedding",
+    "dimensions": 1024,
+    "catalog_max_input_tokens": 128000,
+    "catalog_max_batch_size": 20,
+    "metric": "cosine",
+    "encoding_format": "float",
+    "actions_secret_name": "QWEN_EMBEDDING_API_KEY",
+    "process_api_key_env": "ZVEC_GREP_API_KEY",
+    "actions_variable_name": "QWEN_EMBEDDING_ENDPOINT",
+    "process_endpoint_env": "ZVEC_GREP_ENDPOINT",
+    "swe_qa_cli_flags": [
+      "--embedding-model qwen/qwen3.7-text-embedding",
+      "--embedding-endpoint <configured endpoint>"
+    ],
+    "native_index_flags": [
+      "--endpoint <configured endpoint>",
+      "--allow-remote"
+    ],
+    "native_workspace_grant": [
+      "--auth",
+      "grant",
+      "<root>",
+      "--capability",
+      "embedding",
+      "--scope",
+      "workspace",
+      "--embedding",
+      "qwen/qwen3.7-text-embedding",
+      "--endpoint",
+      "<configured endpoint>"
+    ],
+    "fork_read_only_metadata": {
+      "repository": "Cuiyus/zvec-grep",
+      "embedding_secret_name_present": true,
+      "secret_updated_at": "2026-09-22T11:18:32Z",
+      "secret_value_read": false,
+      "endpoint_value": "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings",
+      "endpoint_updated_at": "2026-09-22T11:18:39Z",
+      "provider_request_performed": false
+    },
+    "upstream_variable_read": "HTTP 404; this does not prove absence because permissions may hide the variable.",
+    "default_catalog_endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings",
+    "warning": "Use explicit fork endpoint for reproducibility; do not silently fall back to catalog endpoint. Embedding credential differs from GLM_API_KEY used for agent requests; existence metadata is not proof of working quota/model access."
+  },
+  "pilot_isolation": {
+    "current_factor": "ci_run.upstream_protocol explicitly selects config[embedding_models][local] and asserts Potion; index_command is given that model; setup records local and endpoint null.",
+    "can_isolate_next_phase": true,
+    "must_hold_constant": [
+      "exact current-main native Rust binary/package",
+      "Claude version and qwen3.8-max identity",
+      "task prompt/source/rubric and index ignore",
+      "native MCP schema/instructions",
+      "common instructions/tools/budget/timeout",
+      "same trial count, reporting rules and frozen order policy"
+    ],
+    "current_wrapper_not_ready_for_remote": [
+      "workflow trial step supplies only agent ANTHROPIC_BASE_URL/API_KEY, not embedding secret/endpoint.",
+      "ci_run index container does not receive embedding environment or explicit remote authorization/endpoint.",
+      "probe_mcp clones seeds but does not forward embedding credentials; remote query preflight would need this and saved workspace grant.",
+      "run.py already forwards EMBEDDING_ENV_NAMES only to zg when model is non-local, but this alone is insufficient.",
+      "metadata currently claims baked offline model cache and embedding_runtime local; these must describe the actual arm accurately.",
+      "collection secret scan and all setup/preflight paths must include embedding credentials without storing their value."
+    ],
+    "accounting": "Index setup and its remote traffic/cost separate; remote query latency remains inside treatment agent wall time; report it rather than subtracting it. Changing provider/model/runtime is a declared embedding-stack factor, not proof of a pure encoder-weights effect.",
+    "comparison_design_inference": "For a next single-case development iteration, a fresh baseline/local-zg/remote-zg three-arm block with unchanged agent settings would measure both e2e benefit and incremental stack change. Keep all arms/outcomes, then confirm a frozen choice on held-out cases. Do not compare fresh remote runs with a selected historical local run."
+  },
+  "existing_results": [
+    {
+      "kind": "Historical published figure, not re-audited raw trial evidence",
+      "source": ".github/assets/benchmark-overall-retrieval-indexed-v4-light.svg",
+      "protocol": "Claude Code + Opus 5 high + Qwen3.7 embedding",
+      "displayed_coding_values": {
+        "judge": [
+          80.42,
+          81.92
+        ],
+        "input_tokens_rounded": [
+          559000,
+          294000
+        ],
+        "tool_calls": [
+          23.42,
+          9.7
+        ],
+        "agent_seconds": [
+          127.5,
+          79.7
+        ]
+      },
+      "limits": "Not same LLM as Qwen3.8; exact Rust a424 package not attested here; no Potion-versus-Qwen embedding ablation. Does not establish embedding causality."
+    },
+    {
+      "kind": "Existing local archived report inspected, no fresh execution",
+      "source": "/Users/cc/workspace/zvec-grep/output/e2e-glm-local-init-repeat-20261019/report.md",
+      "identity_source": "/Users/cc/workspace/zvec-grep/output/e2e-glm-local-init-repeat-20261019/selected-reports/reflex-6/report.json",
+      "agent": "opencode@1.18.4",
+      "model": "glm-5.2",
+      "embedding": "local/potion-code-16m-v2",
+      "rust_commit": "732a44014654c7acf08553716af67865bcfb8430",
+      "tasks": 20,
+      "trials_per_arm_per_task": 10,
+      "raw_baseline": {
+        "score": 78.52,
+        "agent_seconds": 42.58,
+        "input_tokens": 94061.65
+      },
+      "raw_rust_zg": {
+        "score": 81.3,
+        "agent_seconds": 31.04,
+        "input_tokens": 77014.57
+      },
+      "limits": "Different agent, LLM, Rust source and reporting population from current pilot; only local embeddings; not an embedding comparison. Report has separate trimmed/filtered stages, not used to justify model choice."
+    },
+    {
+      "kind": "Rust model-layer backend throughput benchmark",
+      "source": "rust/benchmarks/model-layer/RESULTS.md",
+      "date": "2026-08-28",
+      "machine": "Apple M4 Pro",
+      "limits": "Synthetic generated-input throughput/memory benchmark, different commit/platform; not retrieval quality, not Linux e2e evidence."
+    }
+  ],
+  "next_options_ranked_by_fit_not_proven_quality": [
+    {
+      "rank": 1,
+      "model": "qwen/qwen3.7-text-embedding",
+      "status": "Existing upstream remote benchmark profile; fork metadata configured",
+      "rationale_inference": "Closest already-supported bridge to historical Claude + Opus protocol while keeping current Rust and Qwen3.8 solver fixed. Best first model-stack comparison, not a guaranteed winner.",
+      "tradeoffs": "Remote content/queries, credentials and grant, latency/quota/cost, no immutable weight revision proof.",
+      "evidence_needed": "Successful fixed-root index/query preflight with exact requested model/endpoint; frozen retrieval diagnostics and fresh paired e2e results."
+    },
+    {
+      "rank": 2,
+      "model": "local/jina-embeddings-v2-base-code",
+      "status": "Supported pinned Rust ONNX Q8 catalog model; not a current workflow dropdown choice",
+      "hf_revision": "516f4baf13dec4ddddda8631e019b5737c8bc250",
+      "dimensions": 768,
+      "max_input_tokens": 8192,
+      "max_batch_size": 2,
+      "model_onnx_bytes": 161895621,
+      "rationale_inference": "Code-specific transformer alternative that keeps inference local; docs explicitly recommend it for code.",
+      "tradeoffs": "New cache and backend setup; slower/heavier CPU execution than static Potion expected but unmeasured on this case.",
+      "evidence_needed": "Native Linux package/backend smoke plus whole-corpus fresh index; fixed-query evidence-span coverage and e2e comparison."
+    },
+    {
+      "rank": 3,
+      "model": "local/qwen3-embedding-0.6b",
+      "status": "Supported pinned Rust llama.cpp GGUF Q8_0 model; not current workflow dropdown",
+      "hf_revision": "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+      "dimensions": 1024,
+      "max_input_tokens": 8192,
+      "max_batch_size": 8,
+      "gguf_bytes": 639150592,
+      "rationale_inference": "Larger local semantic encoder candidate if remote service is undesirable.",
+      "tradeoffs": "Larger memory/download and likely CPU indexing/query overhead; no verified corpus-specific gain.",
+      "evidence_needed": "Linux backend readiness, measured setup/queries, frozen quality comparison before e2e expansion."
+    },
+    {
+      "rank": 4,
+      "model": "local/potion-retrieval-32m",
+      "status": "Supported pinned same-family Model2Vec model",
+      "hf_revision": "6fc8051fab2a1e0ee76689cf08c853792ac285e7",
+      "dimensions": 512,
+      "max_input_tokens": 1024,
+      "rationale_inference": "Low implementation friction and retrieval-tuned English model; possible diagnostic for natural-language symptom questions.",
+      "tradeoffs": "Not code-specialized and not proven superior on source-code QA; does not isolate model size/dimension separately.",
+      "evidence_needed": "Measured evidence recall against all frozen tasks/queries; no generic superiority claim."
+    }
+  ],
+  "diagnostic_first": {
+    "reason": "Resource regressions alone do not show Potion retrieval is weak. Correct top-ranked locations can still lead to poor answer convergence or oversized reading.",
+    "proposed_read_only_replay": "Freeze every observed successful treatment query before trying alternatives; replay same queries/root, index ignore, native MCP defaults and limit across hybrid/fts/vector and chosen embeddings. Keep failed/missing searches and all tasks, not only favorable queries.",
+    "measure": [
+      "core evidence span coverage as actually returned in preview",
+      "gold file hit/rank and reciprocal rank",
+      "duplicate/same-file result concentration",
+      "public output chars/tokens",
+      "query latency and setup separately",
+      "whether later agent readings add necessary context absent from search preview"
+    ],
+    "interpretation": "FTS is a useful embedding-independent reference. Better vector/file retrieval alone is not e2e improvement; require frozen fresh paired answer grading and complete usage.",
+    "no_existing_neural_reranker_toggle": "Rust domain/model/reranking.rs is a future-backend contract only. Current documented reranking is rule scoring/fusion/diversity. Adding a learned reranker would be a product change, not selecting an existing configured profile."
+  },
+  "no_claims": [
+    "No verified controlled Potion-versus-Qwen embedding gain found in inspected sources.",
+    "Historical Opus gains are not evidence of Qwen3.8 + current Rust gains.",
+    "No current frozen batch was altered or rerun.",
+    "No secret values were retrieved."
+  ],
+  "sources": [
+    {
+      "path": "benchmarks/swe-qa-bench/ci-config.json",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "2818887f9124eddb3db2f36020ecff31079e7a308d0f556290fe8551c6bc038b",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/swe-qa-bench/ci-config.json"
+    },
+    {
+      "path": ".github/workflows/swe-qa-bench.yml",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "8e2b27a2270f86e4b4bc5f3ac58df1f2a74a636e346900df615491e041903acf",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/.github/workflows/swe-qa-bench.yml"
+    },
+    {
+      "path": "benchmarks/swe-qa-bench/README.md",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "c2e3dd6d69a6e660369809908b4bb638452b9de10281d4d7819b0235cfadf22c",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/swe-qa-bench/README.md"
+    },
+    {
+      "path": "benchmarks/zg-retrieval/core/embedding.mjs",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "19e0f28cbea57a0e603f8f063baa50bdf0a363114cb47897093bbccb36a3d5d5",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/zg-retrieval/core/embedding.mjs"
+    },
+    {
+      "path": "benchmarks/zg-retrieval/configs/protocol.json",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "d29aa4c76d1c35c0f9cb1cbdd7707aff3be86fc72ae9ec942a3f30f6c5891c82",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/zg-retrieval/configs/protocol.json"
+    },
+    {
+      "path": "benchmarks/zg-retrieval/expansion/README.md",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "0df4a8d2fe376fe16b446d089501c2a41061e74d9c698d0d406f6522e88e7c58",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/zg-retrieval/expansion/README.md"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/models/catalog/entries.rs",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "80f59a696350b24ee1fce8047fd825239c38a2ef929c6a7b12c3f5b3b997f076",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/rust/crates/zg-engine/src/models/catalog/entries.rs"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/models/backends/qwen/model.rs",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "203ce709ef93da1d3ee9aae464644e84aa7ee136690b507051070f2f0ec1c806",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/rust/crates/zg-engine/src/models/backends/qwen/model.rs"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/domain/model/reranking.rs",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "d473386e4e515a686a17f205be57d3b9bfdc771f15d58cbccc08d6961370ca01",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/rust/crates/zg-engine/src/domain/model/reranking.rs"
+    },
+    {
+      "path": "rust/crates/zg-engine/src/pipelines/indexed_search/ranking/README.md",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "4f0b4ba9a153a4ce7de5e38083d85832bc268411fc36b16fab7430bcb6350858",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/rust/crates/zg-engine/src/pipelines/indexed_search/ranking/README.md"
+    },
+    {
+      "path": "rust/benchmarks/model-layer/RESULTS.md",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "d8b5954add07febf3f2510713d405813e0270fd54fa0f0a34d11a0f04390fbda",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/rust/benchmarks/model-layer/RESULTS.md"
+    },
+    {
+      "path": ".github/assets/benchmark-overall-retrieval-indexed-v4-light.svg",
+      "commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "sha256": "e220964982bd37ea24206d2112522576f174373adaa130fac60ff1b7a61967a2",
+      "url": "https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/.github/assets/benchmark-overall-retrieval-indexed-v4-light.svg"
+    }
+  ],
+  "pilot_source_snapshots": [
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/ci_run.py",
+      "sha256": "093fdb990dabb0b670133187f196e1ae3239544f98fa40fa9c99ec952cdd015f"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/run.py",
+      "sha256": "0cdcdfca1df1953fb001786f618748176ec16bc78cc16b2cb713c233ec523273"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/claude-qa-pilot/probe_mcp.py",
+      "sha256": "41d54061a26057f8ea901c16b0d32da5425c6023d35ef1fffd43ee27ebdb4122"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/.github/workflows/claude-qa-pilot.yml",
+      "sha256": "adcf5b2fbf02487958493f442c806780833d99f61117ba2939e4912f135c1119"
+    }
+  ]
+}
