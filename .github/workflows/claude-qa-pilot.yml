@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   provider-probe:
-    if: github.repository == 'Cuiyus/zvec-grep'
+    if: github.repository == 'Cuiyus/zvec-grep' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run pilot]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -28,7 +29,7 @@ jobs:
           path: provider-probe.json
   paired-pilot:
     needs: provider-probe
-    if: github.repository == 'Cuiyus/zvec-grep'
+    if: github.repository == 'Cuiyus/zvec-grep' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run pilot]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -41,8 +42,25 @@ jobs:
           persist-credentials: false
       - name: Test pilot parser and isolation contracts
         run: python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py' -v
+      - name: Read the existing main Rust binary artifact
+        uses: actions/download-artifact@v8
+        with:
+          repository: zvec-ai/zvec-grep
+          run-id: 39221698769
+          name: rust-native-linux-x64-gnu
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rust-native
+      - name: Verify exact main Rust package and stage build context
+        run: >-
+          python3 benchmarks/claude-qa-pilot/prepare_rust_runtime.py
+          --artifact-dir '${{ runner.temp }}/rust-native'
+          --runtime-dir benchmarks/claude-qa-pilot/runtime
       - name: Build pinned Claude and zg runtime
         run: docker build -f benchmarks/claude-qa-pilot/Dockerfile -t zg-claude-qa-pilot:20261019 benchmarks/claude-qa-pilot
+      - name: Verify local retrieval with immutable offline model cache
+        run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,exec,size=1g
+          zg-claude-qa-pilot:20261019 sh /opt/qa/smoke_local.sh
       - name: Verify native tools, MCP and request settings offline
         run: |
           mkdir -p '${{ runner.temp }}/reports-${{ matrix.task }}'
@@ -55,16 +73,23 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
-          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: >-
           python3 benchmarks/claude-qa-pilot/ci_run.py
           --task '${{ matrix.task }}'
           --work '${{ runner.temp }}/pilot-${{ matrix.task }}'
           --reports '${{ runner.temp }}/reports-${{ matrix.task }}'
           --repeats 1
-      - uses: actions/upload-artifact@v4
+      - name: Preserve complete or partial evidence and redact credentials
+        id: collect
         if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: >-
+          python3 benchmarks/claude-qa-pilot/ci_run.py --collect-only
+          --work '${{ runner.temp }}/pilot-${{ matrix.task }}'
+          --reports '${{ runner.temp }}/reports-${{ matrix.task }}'
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.collect.outcome == 'success'
         with:
           name: qa-${{ matrix.task }}
           path: ${{ runner.temp }}/reports-${{ matrix.task }}

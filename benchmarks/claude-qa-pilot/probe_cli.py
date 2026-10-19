@@ -93,7 +93,7 @@ def probe_profile(args, profile: str, root: Path) -> dict:
     mcp = {"mcpServers": {}}
     if profile == "zg":
         command, argv = (sys.executable, [str(Path(__file__).resolve()), "--serve-mcp-fixture"]) \
-            if args.fixture_mcp else (args.zg, ["server", "--stdio", "--mcp-toolset", "agent"])
+            if args.fixture_mcp else (args.zg, ["--server", "--stdio", "--mcp-toolset", "agent"])
         mcp["mcpServers"]["zvec_grep"] = {"type": "stdio", "command": command, "args": argv}
     (root / "mcp.json").write_text(json.dumps(mcp))
     (root / "settings.json").write_text(json.dumps({"permissions": {"deny": ["Read(//root/**)"]}}))
@@ -110,7 +110,7 @@ def probe_profile(args, profile: str, root: Path) -> dict:
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:" + str(server.server_port),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
-        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(args.max_output_tokens),
         "IS_SANDBOX": "1", "NO_PROXY": "127.0.0.1,localhost", "NO_COLOR": "1",
     }

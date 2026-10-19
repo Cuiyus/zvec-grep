@@ -14,8 +14,13 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 IMAGE = 'zg-claude-qa-pilot:20261019'
-EMBEDDING = 'qwen/qwen3.7-text-embedding'
-SECRETS = ('ANTHROPIC_API_KEY', 'ZVEC_GREP_API_KEY')
+UPSTREAM_COMMIT = 'a424e0ce06868dc9ad8f142f57de59b8f9b58699'
+UPSTREAM_REPOSITORY = 'https://github.com/zvec-ai/zvec-grep.git'
+UPSTREAM_CONFIG_PATH = 'benchmarks/swe-qa-bench/ci-config.json'
+UPSTREAM_IGNORE_PATH = 'benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore'
+SECRETS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ZVEC_GREP_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY')
+TRIAL_ARTIFACT_FILES = ('stream.jsonl', 'stderr.txt', 'answer.txt', 'metrics.json', 'command.json')
+TOP_ARTIFACT_FILES = ('manifest.json', 'source-manifest.json', 'prompt.txt', 'summary.json', 'secret-scan.json')
 
 
 def clean(text):
@@ -26,27 +31,124 @@ def clean(text):
     return text
 
 
-def run(command, *, output=None, timeout=1200):
-    result = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
-    log = clean(result.stdout + result.stderr)
+def run(command, *, output=None, timeout=1200, live=False):
+    if live:
+        if output is None:
+            raise ValueError('live command output needs a log file')
+        with output.open('w') as stream:
+            proc = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, text=True)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                raise
+        raw = output.read_text(errors='replace')
+        returncode = proc.returncode
+    else:
+        result = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
+        raw, returncode = result.stdout + result.stderr, result.returncode
+    log = clean(raw)
     if output:
         output.write_text(log)
     print(log[-3000:], flush=True)
-    if result.returncode:
-        raise RuntimeError(f'command {command[0]} failed: {result.returncode}')
-    return result.stdout
+    if returncode:
+        raise RuntimeError(f'command {command[0]} failed: {returncode}')
+    return raw if live else result.stdout
+
+
+def collect_evidence(work, reports):
+    """Collect allowlisted complete or partial evidence; never runtime/index seeds."""
+    reports.mkdir(parents=True, exist_ok=True)
+    trials = work / 'trials'
+    if trials.exists():
+        for name in TOP_ARTIFACT_FILES:
+            if (trials / name).is_file():
+                shutil.copyfile(trials / name, reports / name)
+        for path in trials.iterdir():
+            if path.is_dir() and path.name.startswith('r'):
+                target = reports / path.name
+                target.mkdir(exist_ok=True)
+                for name in TRIAL_ARTIFACT_FILES:
+                    if (path / name).is_file():
+                        shutil.copyfile(path / name, target / name)
+    redacted_files, scanned_files = [], 0
+    for path in reports.rglob('*'):
+        if path.is_file():
+            data = path.read_text(errors='replace')
+            sanitized = clean(data)
+            scanned_files += 1
+            if sanitized != data:
+                path.write_text(sanitized)
+                redacted_files.append(str(path.relative_to(reports)))
+    remaining = []
+    for path in reports.rglob('*'):
+        if path.is_file():
+            data = path.read_text(errors='replace')
+            if clean(data) != data:
+                remaining.append(str(path.relative_to(reports)))
+    result = {'passed': not remaining, 'scanned_files': scanned_files,
+              'redacted_files': redacted_files, 'remaining_matches': remaining,
+              'partial_evidence_allowed': True}
+    (reports / 'collection-secret-scan.json').write_text(json.dumps(result, indent=2) + '\n')
+    if remaining:
+        raise RuntimeError('collected evidence still contains known credential values')
+    return result
+
+
+def upstream_protocol(work, reports):
+    checkout = work / 'upstream-protocol'
+    run(['git', 'init', '-q', str(checkout)])
+    run(['git', '-C', str(checkout), 'fetch', '-q', '--depth=1', UPSTREAM_REPOSITORY, UPSTREAM_COMMIT])
+    actual = run(['git', '-C', str(checkout), 'rev-parse', 'FETCH_HEAD']).strip()
+    if actual != UPSTREAM_COMMIT:
+        raise RuntimeError('upstream benchmark commit mismatch')
+    config_text = run(['git', '-C', str(checkout), 'show', f'{actual}:{UPSTREAM_CONFIG_PATH}'])
+    ignore_text = run(['git', '-C', str(checkout), 'show', f'{actual}:{UPSTREAM_IGNORE_PATH}'])
+    config = json.loads(config_text)
+    embedding = config['embedding_models']['local']
+    if embedding != 'local/potion-code-16m-v2':
+        raise RuntimeError('pinned main local embedding configuration changed unexpectedly')
+    (reports / 'upstream-ci-config.json').write_text(config_text)
+    (reports / 'upstream-index.ignore').write_text(ignore_text)
+    provenance = {
+        'repository': UPSTREAM_REPOSITORY, 'commit': actual,
+        'config_path': UPSTREAM_CONFIG_PATH,
+        'config_sha256': hashlib.sha256(config_text.encode()).hexdigest(),
+        'index_ignore_path': UPSTREAM_IGNORE_PATH,
+        'index_ignore_sha256': hashlib.sha256(ignore_text.encode()).hexdigest(),
+    }
+    return embedding, ignore_text, provenance
+
+
+def index_command(embedding):
+    return ['zg', '--index', '--embedding', embedding, '--mode', 'direct',
+            '--ignore-file', '.zg-bench-index.ignore']
+
+
+def verify_runtime_provenance(value):
+    if not isinstance(value, dict) or value.get('commit') != UPSTREAM_COMMIT:
+        raise RuntimeError('runtime does not contain the pinned current-main Rust zg candidate')
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001'], required=True)
+    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
+    if args.collect_only:
+        collect_evidence(args.work.resolve(), args.reports.resolve())
+        return
+    if not args.task:
+        parser.error('--task is required unless --collect-only is used')
+    if args.repeats != 1:
+        parser.error('this iteration is frozen to one pair per task')
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
+    embedding, ignore_text, upstream = upstream_protocol(work, reports)
     if args.task == 'reflex-6':
         repository = 'https://github.com/reflex-dev/reflex.git'
         revision = 'fe0f946dc0c240c6c1e513318c21db407e191c78'
@@ -70,6 +172,10 @@ def main():
         source.mkdir()
         with tarfile.open(archive) as tar:
             tar.extractall(source, filter='data')
+    original_source_file_count = sum(path.is_file() for path in source.rglob('*'))
+    # Gold validation above concerns the original corpus. This exact main-branch
+    # ignore file is a declared runtime auxiliary, itself excluded from indexing.
+    (source / '.zg-bench-index.ignore').write_text(ignore_text)
     # The source is read-only in every solver. This empty mountpoint holds a
     # private index overlay in treatment and an empty overlay in baseline.
     (source / '.zvec-grep').mkdir(exist_ok=True)
@@ -79,53 +185,53 @@ def main():
             '--mount', f'type=bind,src={source},dst=/workspace,readonly',
             '--mount', f'type=bind,src={index},dst=/workspace/.zvec-grep',
             '--mount', f'type=bind,src={home},dst=/root',
-            '--workdir', '/workspace', '--env', 'ZVEC_GREP_API_KEY',
-            '--env', 'ZVEC_GREP_ENDPOINT', '--env', 'HOME=/root', IMAGE]
+            '--workdir', '/workspace', '--env', 'HOME=/root', IMAGE]
     try:
-        versions = run(base + ['bash', '-lc',
-            '/opt/qa/node_modules/.bin/claude --version; /opt/qa/node_modules/.bin/zg --version; node --version'])
+        runtime_provenance = json.loads(run(base + ['cat', '/opt/qa/zg-provenance.json']))
+        verify_runtime_provenance(runtime_provenance)
+        (reports / 'zg-provenance.json').write_text(json.dumps(runtime_provenance, indent=2) + '\n')
+        versions = run(base + ['claude', '--version']) + run(base + ['zg', '--version'])
         (reports / 'versions.txt').write_text(versions)
         start = time.monotonic()
-        run(base + ['zg', 'auth', 'grant', '/workspace', '--capability', 'embedding',
-                    '--scope', 'workspace', '--embedding', EMBEDDING],
-            output=reports / 'authorization.log')
-        run(base + ['zg', 'index', '/workspace', '--mode', 'direct',
-                    '--embedding', EMBEDDING, '--allow-remote'],
+        run(base + index_command(embedding),
             output=reports / 'index.log')
+        run(base + ['zg', '--status', '--check-ready'], output=reports / 'index-status.log')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
-                    'embedding_model': EMBEDDING,
-                    'embedding_endpoint': os.environ['ZVEC_GREP_ENDPOINT'],
+                    'embedding_model': embedding, 'embedding_runtime': 'local',
+                    'embedding_endpoint': None,
+                    'upstream_benchmark': upstream, 'zg_runtime': runtime_provenance,
                     'index_setup_seconds': time.monotonic() - start,
                     'index_file_count': sum(p.is_file() for p in index.rglob('*')),
-                    'runtime_lock_sha256': hashlib.sha256((HERE / 'runtime/package-lock.json').read_bytes()).hexdigest(),
-                    'repeats': args.repeats}
+                    'original_source_file_count': original_source_file_count,
+                    'runtime_source_file_count': original_source_file_count + 1,
+                    'runtime_auxiliary_files': [{
+                        'path': '.zg-bench-index.ignore', 'sha256': upstream['index_ignore_sha256'],
+                        'purpose': 'main benchmark indexing exclusions; added after original gold validation',
+                    }],
+                    'model_cache': 'baked runtime-image cache; query-time network download unnecessary',
+                    'repeats': args.repeats,
+                    'protocol_differences_from_main': [
+                        'one pair per case rather than main five trials and two infrastructure retries',
+                        'Claude Code high rather than main OpenCode provider-specific Qwen high/xhigh settings',
+                        '8192 output tokens and 30 turns/900 seconds rather than main 32000 output tokens',
+                        'Read/Grep/Glob-only native tools; fresh HOME with CLAUDE.md and auto-memory disabled',
+                        'exact native current-main MCP schema/instructions remain exposed',
+                        'exported source without git history; new isolated index at /workspace',
+                        'explicit direct-mode index setup; startup included in measured agent wall',
+                    ]}
         (reports / 'setup.json').write_text(json.dumps(metadata, indent=2) + '\n')
+        home_seed = home / '.zvec-grep'
+        home_seed.mkdir(exist_ok=True)
         run(['python3', str(HERE / 'run.py'), '--source', str(source), '--prompt', str(prompt),
              '--output', str(work / 'trials'), '--image', IMAGE, '--model', 'qwen3.8-max',
-             '--index-seed', str(index), '--home-seed', str(home / '.zvec-grep'),
-             '--mcp-args-json', '["server","--stdio","--mcp-toolset","agent"]',
+             '--index-seed', str(index), '--home-seed', str(home_seed),
+             '--embedding-model', embedding,
+             '--mcp-args-json', '["--server","--stdio","--mcp-toolset","agent"]',
              '--repeats', str(args.repeats), '--max-turns', '30', '--timeout', '900',
              '--max-output-tokens', '8192', '--effort', 'high'],
-            output=reports / 'runner.log', timeout=2000 * args.repeats)
+            output=reports / 'runner.log', timeout=2000 * args.repeats, live=True)
     finally:
-        trials = work / 'trials'
-        if trials.exists():
-            for path in trials.iterdir():
-                if path.is_file():
-                    shutil.copyfile(path, reports / path.name)
-                elif path.name.startswith('r'):
-                    target = reports / path.name
-                    target.mkdir(exist_ok=True)
-                    for name in ['stream.jsonl', 'stderr.txt', 'answer.txt', 'metrics.json', 'command.json']:
-                        if (path / name).is_file():
-                            shutil.copyfile(path / name, target / name)
-        # Home, credentials, signing key, and index contents are never artifacts.
-        for path in reports.rglob('*'):
-            if path.is_file():
-                data = path.read_text()
-                sanitized = clean(data)
-                if sanitized != data:
-                    path.write_text(sanitized)
+        collect_evidence(work, reports)
 
 
 if __name__ == '__main__':

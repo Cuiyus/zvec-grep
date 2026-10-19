@@ -3,10 +3,14 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("pilot", Path(__file__).with_name("run.py"))
 pilot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pilot)
+ci_spec = importlib.util.spec_from_file_location("pilot_ci", Path(__file__).with_name("ci_run.py"))
+pilot_ci = importlib.util.module_from_spec(ci_spec)
+ci_spec.loader.exec_module(pilot_ci)
 MODEL = "qwen3.8-max"
 TOOL = "mcp__zvec_grep__zvec_grep_search"
 
@@ -35,6 +39,34 @@ def result():
 
 
 class MetricsTests(unittest.TestCase):
+    def test_rust_index_command_and_model_defaults(self):
+        command = pilot_ci.index_command('local/potion-code-16m-v2')
+        self.assertIn('--index', command)
+        self.assertIn('--ignore-file', command)
+        self.assertNotIn('index', command)
+        self.assertNotIn('--allow-remote', command)
+
+    def test_stale_node_or_wrong_commit_runtime_rejected(self):
+        for provenance in ({}, {'commit': 'older-commit'}, {'package': '@zvec/zvec-grep@0.2.2'}):
+            with self.assertRaises(RuntimeError):
+                pilot_ci.verify_runtime_provenance(provenance)
+        pilot_ci.verify_runtime_provenance({'commit': pilot_ci.UPSTREAM_COMMIT})
+
+    def test_cancelled_partial_stream_collected_and_redacted_without_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work, reports = root / 'work', root / 'reports'
+            trial = work / 'trials' / 'r01-baseline'
+            trial.mkdir(parents=True)
+            (trial / 'stream.jsonl').write_text('partial event secret-fixture-value')
+            (trial / 'home').mkdir()
+            (trial / 'home' / 'private').write_text('private runtime state')
+            with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'secret-fixture-value'}):
+                scan = pilot_ci.collect_evidence(work, reports)
+            self.assertTrue(scan['passed'])
+            self.assertEqual((reports / 'r01-baseline' / 'stream.jsonl').read_text(), 'partial event [REDACTED]')
+            self.assertFalse((reports / 'r01-baseline' / 'home').exists())
+
     def test_session_usage_authoritative_and_duplicate_tool_not_double_counted(self):
         metrics = pilot.parse_stream(event_stream(init_event(), assistant(), assistant(), result()), MODEL, "baseline", TOOL)
         self.assertEqual(metrics["input_tokens_including_cache"], 240)

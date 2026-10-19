@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "experiment_id": "claude-qwen-two-route-pilot-20261019",
+  "experiment_id": "claude-qwen-rust-main-two-route-pilot-20261019",
   "purpose": "Compare baseline and zg in complete read-only QA with Claude Code + Qwen3.8-Max, using one existing SWE-QA task and one new closed-issue task.",
   "upstream_configuration_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
   "upstream_configuration_path": "benchmarks/swe-qa-bench/zg_bench/settings.py",
@@ -22,12 +22,20 @@
     "probe_resolved_model": "qwen3.8-max"
   },
   "retrieval": {
-    "package": "@zvec/zvec-grep@0.2.2",
-    "embedding_model": "qwen/qwen3.7-text-embedding",
-    "embedding_credential_source": "Cuiyus/zvec-grep Actions secret QWEN_EMBEDDING_API_KEY",
+    "implementation": "current upstream main Rust",
+    "source_repository": "zvec-ai/zvec-grep",
+    "source_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+    "native_package_version": "0.0.1",
+    "native_package_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "upstream_build_run": 39221698769,
+    "upstream_artifact_id": 12176409568,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_configuration_source": "current main benchmarks/swe-qa-bench/ci-config.json local default",
     "mcp_toolset": "agent",
-    "query_policy": "optional; no forced zg call",
-    "index_setup": "before timed solver; cloned per trial; separately recorded"
+    "query_policy": "Preserve native main MCP schema and instructions (including its semantic-search guidance); no additional benchmark-specific tool forcing.",
+    "index_setup": "before timed solver; cloned per trial; separately recorded",
+    "index_ignore_source": "main benchmarks/swe-qa-bench/zg_bench/swe_qa/data/index.ignore",
+    "upstream_artifact_digest": "sha256:00873b7a5505bb4f628c5d33336c058750cb09dcccccc8ae2718fa8d0cfb0e03"
   },
   "tasks": [
     {
@@ -44,9 +52,8 @@
     }
   ],
   "run_plan": {
-    "smoke": "One pair per task; diagnose protocol/isolation/metrics failures before further paid runs.",
-    "confirmation": "After technically valid smoke, three new pairs per task using unchanged prompts/rubrics. Keep smoke separate. Retain all quality outcomes.",
-    "within_task_order": "baseline/zg for odd repeats, zg/baseline for even repeats"
+    "minimum_validation": "One case for each route, one baseline/zg pair for each. Fix infrastructure before interpreting outcomes. No automatic suite expansion.",
+    "after_validation": "Report each complete pair with source-grounded quality, full metrics and actual zg adoption; choose next development iteration based on observed mechanism rather than changing gold or selecting a winning rerun."
   },
   "scoring": {
     "primary": "Frozen claim-based source-grounded quality and citation validity, scored with profile hidden.",
@@ -63,14 +70,18 @@
     "Two development tasks, not a representative population or statistical proof.",
     "Newer public source does not establish absence from model training.",
     "Read/Grep/Glob-only isolated Claude protocol differs from published full Harbor agent; only within-pilot comparisons isolate zg availability.",
-    "Remote embedding matches the first benchmark's model family but differs from recent local-embedding OpenCode runs.",
     "Reflex source-corrected rubric is separate from official SWE-QA judge; the original needs_update wording is inaccurate.",
-    "No task removal, trimming or post-outcome prompt adjustment in confirmation trials."
+    "No task removal, trimming or post-outcome prompt adjustment in confirmation trials.",
+    "Uses current-main Rust and local embedding; earlier cancelled Node preparations are superseded and excluded from results."
   ],
   "preflight_invalid_attempts": [
     {
       "run_id": 39268696236,
       "reason": "Cancelled after offline native CLI test showed --bare suppresses Grep/Glob; no valid paired outcome. Native tool exposure is now mandatory before paid trials."
+    },
+    {
+      "run_id": 39269284319,
+      "reason": "Stopped when user clarified current main Rust requirement; Node runtime experiment superseded, no completed paired outcome accepted."
     }
   ]
 }
