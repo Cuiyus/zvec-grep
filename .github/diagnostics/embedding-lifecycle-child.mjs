@@ -76,9 +76,21 @@ try {
     traceDispose(model.model, "model.dispose");
     traceDispose(model.llama, "llama.dispose");
   }
+  let gcTimer;
+  if (mode === "gc-stress") {
+    if (typeof globalThis.gc !== "function")
+      throw new Error("GC stress requires --expose-gc");
+    gcTimer = setInterval(() => globalThis.gc(), 1);
+  }
   trace("zg.dispose:start");
-  await model.dispose();
-  trace("zg.dispose:end");
+  try {
+    const disposing = model.dispose();
+    if (mode === "gc-stress") globalThis.gc();
+    await disposing;
+    trace("zg.dispose:end");
+  } finally {
+    clearInterval(gcTimer);
+  }
   if (mode === "await-runtime" && runtimeDisposal) {
     await runtimeDisposal;
     trace("runtime:awaited");

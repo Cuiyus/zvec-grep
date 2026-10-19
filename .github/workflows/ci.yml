@@ -1,4 +1,4 @@
-name: Windows embedding runtime upgrade evaluation
+name: Windows embedding GC disposal comparison
 
 on:
   workflow_dispatch:
@@ -13,10 +13,19 @@ permissions:
 
 jobs:
   windows-lifecycle:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        runtime: ["3.18.1", "3.22.2"]
+        host: [1, 2, 3]
+    name: Windows native ${{ matrix.runtime }} / host ${{ matrix.host }}
     runs-on: windows-latest
     timeout-minutes: 35
     env:
       ZG_DIAG_REPEATS: ${{ inputs.repeats }}
+      ZG_DIAG_MODES: plain,gc-stress
+      ZG_DIAG_EXPECTED_RUNTIME: ${{ matrix.runtime }}
       ZVEC_GREP_SMOKE_MODEL: local/embeddinggemma-300m
     steps:
       - name: Set probe directories
@@ -27,10 +36,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
+      - name: Restore the exact old dependency lock for the control group
+        if: matrix.runtime == '3.18.1'
+        run: git restore --source a424e0ce06868dc9ad8f142f57de59b8f9b58699 -- package.json package-lock.json
       - run: npm ci
       - run: npm run build
         id: build
@@ -38,6 +51,7 @@ jobs:
         with:
           path: ${{ env.ZVEC_GREP_MODEL_CACHE }}
           key: local-model-v2-${{ runner.os }}-${{ runner.arch }}-local/embeddinggemma-300m-${{ hashFiles('src/engine/models/catalog.ts', 'package-lock.json') }}
+          restore-keys: local-model-v2-${{ runner.os }}-${{ runner.arch }}-local/embeddinggemma-300m-
       - name: Enable crash dumps for the probe children
         shell: pwsh
         run: |
@@ -60,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-embedding-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-embedding-${{ matrix.runtime }}-host-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.ZG_DIAG_OUTPUT }}/*.json
             ${{ env.ZG_DIAG_OUTPUT }}/*.log

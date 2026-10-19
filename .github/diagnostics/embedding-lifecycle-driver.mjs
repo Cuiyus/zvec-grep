@@ -69,19 +69,38 @@ writeFileSync(
     2,
   ),
 );
+if (
+  process.env.ZG_DIAG_EXPECTED_RUNTIME &&
+  runtime.version !== process.env.ZG_DIAG_EXPECTED_RUNTIME
+) {
+  throw new Error("Unexpected native runtime: " + runtime.version);
+}
 const rows = [];
-const modes = ["plain", "traced", "await-runtime"];
+const modes = (process.env.ZG_DIAG_MODES ?? "plain,traced,await-runtime").split(
+  ",",
+);
+if (
+  modes.some(
+    (m) => !["plain", "traced", "await-runtime", "gc-stress"].includes(m),
+  )
+) {
+  throw new Error("Unknown probe mode");
+}
 for (let repetition = 1; repetition <= repeats; repetition++) {
   for (const mode of modes) {
     const started = Date.now();
-    const result = spawnSync(process.execPath, [child], {
-      cwd: consumer,
-      encoding: "utf8",
-      timeout: 120000,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, ZG_DIAG_MODE: mode, NO_COLOR: "1" },
-      windowsHide: true,
-    });
+    const result = spawnSync(
+      process.execPath,
+      mode === "gc-stress" ? ["--expose-gc", child] : [child],
+      {
+        cwd: consumer,
+        encoding: "utf8",
+        timeout: 120000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, ZG_DIAG_MODE: mode, NO_COLOR: "1" },
+        windowsHide: true,
+      },
+    );
     const name = `${mode}-${String(repetition).padStart(2, "0")}`;
     const stdout = result.stdout ?? "";
     const stderr = result.stderr ?? "";
