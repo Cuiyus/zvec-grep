@@ -1,0 +1,67 @@
+# Root-cause analysis: delete → flush → `optimize()` corrupts vector-label↔row association
+
+## 1. What the checkout actually executes
+
+**Delete + flush.** Deletes only mark global doc ids in the collection-level `delete_store_`; the segment's forward (Arrow) block still physically holds all 28 rows. Query-time masking is done by `SegmentImpl::SegmentIndexFilter::is_filtered` (`src/db/index/segment/segment.cc:464-476`), which resolves a **segment-local row id → global doc id** (`get_global_doc_id`) and consults `delete_store_`. This establishes the contract: *vector-index labels are segment-local row ids into the forward store*.
+
+**`optimize()`** (`src/db/collection.cc:910-1084`) seals the writing segment (918-938), snapshots the one persisted segment (28 rows), clones the delete store into a doc-id filter (945-948), and calls `build_compact_task` (`collection.cc:1086-1174`).
+
+**Task selection is the pivot.** With `COMPACT_DELETE_RATIO_THRESHOLD = 0.3f` (`src/db/common/constants.h:41`), 3/28 ≈ 10.7% deleted is *below* threshold, so `rebuild = false` (`collection.cc:1100-1104`). For a single-segment group the code then takes the branch at `collection.cc:1162-1164`:
+
+```cpp
+if (current_group.size() == 1 && !rebuild) {
+  task = SegmentTask::CreateCreateVectorIndexTask(
+      CreateVectorIndexTask{current_group[0], "", nullptr, concurrency});
+}
+```
+
+i.e. **no CompactTask at all** — the forward store is never rewritten (all 28 rows stay, deletes stay masked at query time), and the maintenance is an *in-place vector-index rebuild* via `Segment::create_all_vector_index` (`segment_helper.cc:1121-1133`, declared at `segment.cc:182-195`), committed by `reload_vector_index` (`collection.cc:1063-1070`) plus a manifest update (1028-1032).
+
+## 2. Source-level cause of the wrong results
+
+The rebuilt index is written into the segment directory, its meta persisted in the version manifest, and reloaded on open — hence **read-only reopen does not heal it**.
+
+The corruption pattern (wrong live IDs for middle docs, missing tail docs, `Fetch` failures) is exactly a **label-space desynchronization of 3** between the rebuilt HNSW index and the untouched 28-row forward store:
+
+- The rebuild enumerates source vectors delete-aware — the delete-aware predicate available to a segment is `SegmentIndexFilter` (`segment.cc:464-476`) — but the *label assignment* for the new index is not filtered in the same pass. The new HNSW ends up with 25 vectors whose labels are dense 0..24 (live-only enumeration) while the forward rows they must address remain 0..27.
+- Search then resolves label *k* as forward row *k*: the vector of `doc-000n` (n ≥ 3) carries label n−3, and row n−3 holds `doc-000(n−3)` → a search with the saved reference vector of `doc-000n` returns the wrong live ID (off by 3), and for n = 3,4,5 it resolves to *deleted* rows and gets masked away → live docs "omitted". Vector-payload fetch by label (`VectorColumnIndexer::Fetch`, `vector_column_indexer.cc:150-159`; `Segment::fetch(columns, segment_doc_ids)`, `segment.cc:246-250`) fails for labels that no longer correspond to a valid row/vector pair, while all scalar fetches still read the pristine forward block.
+
+Contrast with the path that *is* correct (see §4): `MixedStreamerReducer::read_vec` (`src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326`) applies the filter to the **source** key (line 288, old row id + `id_offset`) and only then assigns dense new ids `(*next_id)++` (line 318), inserting with `add_with_id_impl` (375-377). The `CreateVectorIndexTask` rebuild lacks this coupled "filter old keys → renumber densely in the same order as the row store" discipline; because in this branch the row store is *not* renumbered at all, any filtered enumeration that renumbers labels necessarily breaks the invariant. (I exhausted my read budget before opening the body of `Segment::create_all_vector_index` in `segment.cc`; the mislabeling conclusion is inferred from the branch taken at `collection.cc:1162-1164`, the label contract in `SegmentIndexFilter`/`fetch`, and the observed symptom signature — the surrounding evidence pins the *path*, the exact divergent line inside `create_all_vector_index` is the one remaining gap.)
+
+**Why scalar/count checks agree:** `doc_count` and the scalar enumeration read the forward block + delete store (25 live rows, correct `GLOBAL_DOC_ID`/`USER_ID` columns). Only the vector label → row resolution layer is broken, and it is exercised solely by vector search and vector fetch. Counts are blind to *which* vector sits behind *which* row.
+
+## 3. The two controls
+
+- **Optimizing the empty collection first:** in Phase 1, `writing_segment_->has_record()` is false and `get_all_persist_segments()` returns nothing, so `optimize()` returns `Status::OK()` immediately (`collection.cc:929-942`). Nothing is materialized, so the later post-delete optimize still hits the same single-segment, below-threshold `CreateVectorIndexTask` branch. No protection.
+- **Optimizing the initial 28 docs before deleting:** that first optimize runs the same `CreateVectorIndexTask` with **zero deletes** — filter and label space are identical, so the rebuild is label-preserving, and it materializes the HNSW block and marks the field indexed in segment meta (`indexed_vector_fields`; cf. `segment_helper.cc:167-171`, `segment.cc:551-556`, readiness checks `vector_index_ready`/`all_vector_index_ready` at `segment.cc:209-212`). When the post-delete optimize runs, the already-built/ready index state lets the rebuild be skipped or take the reuse path (`CanReuseFirstIndexer`/file-copy base, `segment_helper.cc:767-834`), so no relabeling pass executes and the stale-but-consistent labels 0..27 keep matching the untouched forward rows, with the 3 deletes masked by `SegmentIndexFilter`. The bug only manifests when the *relabeling rebuild itself* runs while deletes are pending.
+
+## 4. The different maintenance path at high delete fraction
+
+If the deleted fraction exceeds 30% (`collection.cc:1100-1104`), `rebuild = true` and the group becomes a **CompactTask carrying the delete filter** (`collection.cc:1166-1168`; note `rebuild ? filter : nullptr`). `SegmentHelper::ExecuteCompactTask` (`segment_helper.cc:100-175`):
+
+1. `ReduceScalar` (177-322) scans every row; `FilterRecordBatch` (934-997) drops doc-id-filtered rows, records their **old** row ids in `delete_row_id_bitmap` (line 969), and writes a *renumbered* forward block (new rows 0..24) plus a renumbered inverted index (`ReduceScalarIndex` keyed by `j + doc_id_offset`, 276, 324-636).
+2. `ReduceVectorIndex` (638-759) wraps the bitmap in `RowIdFilter` (85-98) and merges via `MergeWithOptionalReuse`; reuse is **disabled whenever a filter exists** (767-772), forcing a full `VectorColumnIndexer::Merge` (103-134) → `Index::merge` (`src/core/interface/index.cc:1016-1077`) with `PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE = true` (1049-1050) → `MixedStreamerReducer::read_vec`/`add_vec`, which filter old keys and rewrite pkeys densely in the same scan order as the forward renumbering.
+3. `ReduceFts` (999-1119) consumes the same bitmap, keeping FTS postings aligned.
+
+So the heavy-delete path rewrites *all three* label spaces (forward, vector, FTS) from one shared old→new mapping and stays consistent; the light-delete path rewrites only the vector space — that asymmetry is the defect.
+
+## 5. Invariant a fix must preserve
+
+> For every persisted segment, for every row id *r* in [0, doc_count): vector-index label *r*, forward row *r*, and scalar/FTS index key *r* must resolve to the same `GLOBAL_DOC_ID`. Any maintenance that removes deleted rows must either (a) leave all spaces untouched (labels stay row-aligned, deletes stay masked), or (b) renumber **all** spaces with the same order-preserving old→new map, as `read_vec`'s filter-then-`next_id++` does. A rebuild may never filter rows in one space while numbering labels from the other.
+
+## 6. Regression check that catches wrong associations (not counts)
+
+The unit-basis fingerprint makes this cheap and exact. In the Python suite style of `python/tests/test_collection.py`:
+
+1. Insert 28 docs `doc-0000..0027`, each `e_i ∈ R^32`; delete `doc-0000..0002`; flush; `optimize()` (this reproduces the below-threshold, single-segment branch).
+2. **Association assertions** (the part counts can't see):
+   - For every live id `d`, search with its saved reference vector and assert `top1.id == d` **and** `top1.score ≈ 1.0` (cosine). A 3-shifted label space returns the wrong id at score ≈ 1.0, so id equality is the discriminator.
+   - Sweep all 25 live references and assert the union of top-1 ids equals the full live set (catches omitted tail docs 25-27).
+   - For every live id, fetch the vector payload and assert bitwise equality with the saved basis vector (catches fetch failures and cross-wired payloads).
+   - Reopen read-only and repeat (catches persisted-manifest corruption).
+3. Optionally assert the internal invariant directly via `debug_get_index()` (`vector_column_indexer.h:112-116`): for each row *r*, `Fetch(r)`'s vector must equal the vector of the doc named in forward row *r*.
+4. Parameterize the deleted fraction across the 0.3 threshold (`constants.h:41`) so both the `CreateVectorIndexTask` and `CompactTask` rebuild paths are covered.
+
+A count-only check (`count() == 25`) passes in the buggy state, because the forward store and delete mask are correct — which is precisely why the regression must pin *id ↔ vector* associations.
+
+**Scope caveat:** conclusions are limited to the paths this checkout establishes: `collection.cc:910-1174`, `constants.h:41`, `segment_helper.cc:85-175, 638-997, 1121-1133`, `vector_column_indexer.{h,cc}`, `index.cc:1016-1077`, `mixed_streamer_reducer.cc:131-326`, and `segment.cc:464-476, 182-212, 246-250`. The single unread body — `SegmentImpl::create_all_vector_index` in `segment.cc` — is where the exact divergent labeling line should be confirmed; everything upstream (branch selection, label contract, symptom signature) is evidenced above.

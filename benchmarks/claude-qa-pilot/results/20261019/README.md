@@ -1,8 +1,8 @@
 # Claude Code + Qwen3.8-max QA 开发验证
 
-本次只验证两条路线各一个 case，使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是测试时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建，配主干默认的本地 `potion-code-16m-v2`。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
+本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是测试时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建，配主干默认的本地 `potion-code-16m-v2`。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
 
-**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。所有开发失败与不利结果保留。
+**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。所有开发失败与不利结果保留。
 
 ## 实验设计
 
@@ -77,6 +77,29 @@ r02 zg input 增加 108.31%、wall 增加 47.23%；r03 分别增加 67.59%、5.5
 
 基于四次完成但效率信号未复现的结果，另行[冻结两个已选 reserve issue 的小批次](../../issue-expansion-decision-v1.json)：q002、q003 题目及 rubric 均未根据本次结果修改，沿用相同 completion-v2，保留两题全部结果。这用于探索任务差异，不假定 zg 已有优势，也不把同题重复包装成新题泛化。
 
+## 新增 issue 小批次
+
+[run 39287659748](https://github.com/Cuiyus/zvec-grep/actions/runs/39287659748) 在 commit `5acff36a` 执行预先选定的 q002、q003，各一对 baseline→zg。两题均完成执行审计与新匿名评分，四份最终答案、完整 usage 和全部不利结果均保留，不与 q001 开发或确认结果合并。冻结的[整组判定](issue-expansion-v1/set-verdict.json)为 `set_signal_rule_met=false`。
+
+| 题目 | 组别 | 质量 /10 | 达到源码质量门槛 | Input（含 cache） | Output | 工具调用 | Agent wall | zg 成功 / 尝试 |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| q002 / 零匹配标量过滤与全文检索 | baseline | 10 | 是 | 229,847 | 9,182 | 21 | 303.74 s | — |
+| q002 / 零匹配标量过滤与全文检索 | zg | 10 | 是 | 420,136 | 12,289 | 24 | 413.54 s | 2 / 2 |
+| q003 / 首次 HNSW 构建与删除后的行号错位 | baseline | 6 | 否 | 399,254 | 12,362 | 24 | 448.75 s | — |
+| q003 / 首次 HNSW 构建与删除后的行号错位 | zg | 9 | 否 | 544,094 | 19,433 | 23 | 656.74 s | 1 / 1 |
+
+q002 两组均通过，zg input 增加 82.79%、wall 增加 36.15%，没有评分提升。Read 从 9 次增至 14 次，工具返回文本从 106,091 增至 121,993 字符。两组各有 5 项非关键事实或引用问题，10/10 不代表附加内容全部正确。例如 baseline 的一个“只保留 invert_filter_”备选修复不足，zg 对 vector 路径表示和额外 NOT IN 测试分类的说法不准确。主因果解释、有效主修复和要求的测试矩阵均满足冻结 rubric；细节保留在[完整盲审](issue-expansion-v1/q002/blinded-review.json)，没有修改标准以追求分差。
+
+q003 的事实分数从 6 提升至 9，但两组都未通过。zg 正确解释了删除过滤、向量密集重编号和保留原物理行号造成的错位，却遗漏 C2 要求的 FLAT memory 向持久 vector indexer 的 flush 转移，并且 C3 对 reducer 的引用只有文件名，没有支持密集编号的行号，因此不能把 9/10 当作源码质量通过。baseline 还缺少低删除比例分支实际传入 filter 的调用点及保留物理 BlockMeta 的解释，并混淆既有索引控制中的跳过／复用路径。完整评分、核心引用门槛和附加错误见[盲审](issue-expansion-v1/q003/blinded-review.json)；均无已证实的冻结规则所列关键矛盾。
+
+q003 的 zg input 增加 36.28%、wall 增加 46.35%。总工具调用 24→23、工具调用轮次 16→13，但 Read 6→8、工具返回文本 120,701→133,047 字符；较少调用没有转化为较少输入。两题共 3 次 MCP 调用均成功且使用 `/workspace`，成功检索本身不能证明效率收益或质量通过。两题均无预算拒绝；q003 最后一次工具准入仍在 600 秒研究预算内，最终答案结束于 656.74 秒符合 900 秒总限额，不能视为强制截断。
+
+索引／预检分别为 q002 的 17.69／1.42 秒、q003 的 30.22／1.27 秒，均在 agent wall 之外。每题仅一个 baseline 先行的 pair，顺序、服务和缓存影响未被独立识别；这两道有目的选择的 issue 不能支持统计显著性、未受训练污染或总体泛化结论。两题均未达到单题信号规则，整组不满足冻结规则，不筛掉任何题目。
+
+- [q002 单题判定](issue-expansion-v1/q002/pair-verdict.json)、[执行审计](issue-expansion-v1/q002/independent-audit.json)、[轨迹审计](issue-expansion-v1/q002/trajectory-audit.json)
+- [q003 单题判定](issue-expansion-v1/q003/pair-verdict.json)、[执行审计](issue-expansion-v1/q003/independent-audit.json)、[轨迹审计](issue-expansion-v1/q003/trajectory-audit.json)、[解盲输入核验](issue-expansion-v1/q003/review-input-verification.json)
+- [两题完整判定](issue-expansion-v1/set-verdict.json)
+
 ## 所有前置尝试
 
 | Run | 结果与处理 |
@@ -104,6 +127,6 @@ r02 zg input 增加 108.31%、wall 增加 47.23%；r03 分别增加 67.59%、5.5
 
 Input tokens 包含普通输入、cache read 与 cache write；优先采用会话最终 `result.usage`。Wall time 包含容器和 MCP 启动，索引及预检单列。服务返回的美元金额未经账单验证，不用于成本结论。`zg_used` 只表示尝试过；真正成功、错误及无返回调用分别统计，成功返回也不自动代表取回了有用证据。
 
-每个开发协议每题只有一 pair；随后只有同一选中题目的两对确认，不能推断总体稳定性或泛化收益。更低 token 必须和答题质量、完成情况及真实检索使用共同解释，不能把超时、失败或错误调用当作效率收益。
+每个开发协议每题只有一 pair；随后是同一选中题目的两对确认，以及两个预选新题各一 pair，均不能推断总体稳定性或泛化收益。更低 token 必须和答题质量、完成情况及真实检索使用共同解释，不能把超时、失败或错误调用当作效率收益。
 
 本轮发现不完整 usage 的误读风险后，runner 增加 `usage_complete` 与 `efficiency_comparable` 标记；该修改只影响以后输出，不回写以上原始 metrics。包含超时、非零退出、缺失账单字段等回归场景的 26 项本地测试通过。

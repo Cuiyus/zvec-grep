@@ -1,0 +1,1661 @@
+{
+  "schema_version": 1,
+  "task_id": "q003",
+  "review_type": "independent_blinded_frozen_source_review",
+  "created_at_utc": "2026-10-19T17:07:26.853246+00:00",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/export-validation/sources/q003",
+  "source_commit_as_declared_by_rubric": "68078e55e7ae9d705b8829b5d416e022060bebf7",
+  "rubric_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q003.json",
+  "rubric_sha256": "b3d1f98d690254b9b53ceece693b11a86de35d7d9dcdf49e31c2735d7c115682",
+  "instruction_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q003/instruction.md",
+  "instruction_sha256": "2aeed87cbe2a570b242a9659d50fab0d279122a234d1ee9aaa5352787e00f669",
+  "preparation_record": "/tmp/zg-q003-expansion-judge-preparation.json",
+  "independence": {
+    "answer_labels_only": [
+      "P",
+      "R"
+    ],
+    "arm_inference_attempted": false,
+    "mapping_or_parent_directory_read": false,
+    "metrics_streams_other_answers_or_reviews_read": false,
+    "solver_or_test_run": false,
+    "post_fix_or_provenance_read": false,
+    "rubric_modified": false,
+    "source_modified": false
+  },
+  "scoring_policy_applied": {
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C2",
+      "C3"
+    ],
+    "critical_contradictions_allowed": 0,
+    "supporting_citations_required_for_core_claims": true,
+    "final_answer_required": true,
+    "required_full_credit_points": {
+      "C2": 2,
+      "C3": 2
+    },
+    "core_citation_gate": {
+      "criteria": [
+        "C2",
+        "C3"
+      ],
+      "rule": "For each core criterion, the answer must give existing pre-fix file paths and line numbers whose cited content jointly supports both awarded point units. Judge the actual frozen source, not literal equality with curated ranges. A post-fix-only, fabricated, wrong-revision, or materially unrelated citation cannot satisfy this gate. Missing core citations fail the answer even if its prose is correct.",
+      "required_record": "For each core unit record the answer citation, verified pre-fix location, and a short explanation of how it supports the unit."
+    },
+    "rule": "source_grounded_success = nonempty final answer AND total_points >= 8 AND C2 == 2 AND C3 == 2 AND all core citation gates pass AND no substantiated disqualifying overclaim or critical contradiction. Any such disqualification forces failure independently of points."
+  },
+  "reviews": [
+    {
+      "task_id": "q003",
+      "blinded_answer_id": "P",
+      "input_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/expansion-39287659748/q003-blind-answers/P.txt",
+      "input_sha256": "ed4d11a672204fb28f547be62ac0d83c81caff6348668503fcee9c41034d27ed",
+      "final_answer_present": true,
+      "criterion_scores": {
+        "C1": 1,
+        "C2": 1,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 1,
+        "C7": 1,
+        "C8": 1
+      },
+      "criterion_reviews": [
+        {
+          "criterion_id": "C1",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "physical_vs_live.1"
+          ],
+          "supporting_answer_quotes": [
+            "Delete doc-0000…0002** only records global doc ids in the collection-level `delete_store_`; segment rows are untouched.",
+            "an independent storage path that still holds 28 rows, 25 live."
+          ],
+          "rationale": "Tombstones, retained physical rows, and 28 physical versus 25 live are stated. The exact point unit does not independently require an explanation of id_map removal.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476",
+              "support": "The cited deletion predicate maps physical local rows to global IDs.",
+              "answer_citation": "segment.cc:464–476"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "616-626,933-936",
+              "support": "Evaluator verification: physical counts use doc_ids_; delete records tombstones and removes external mapping. These additional spans are not credited as answer-supplied citations."
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C2",
+          "score": 1,
+          "maximum": 2,
+          "satisfied_point_unit_ids": [
+            "maintenance_branch.1"
+          ],
+          "supporting_answer_quotes": [
+            "`current_actual_doc_count=25` is **not** `< 28 × (1 − COMPACT_DELETE_RATIO_THRESHOLD=0.3) = 19.6`",
+            "With one segment, the tail branch `current_group.size()==1 && !rebuild` creates a **CreateVectorIndexTask**",
+            "vectors sit in flat in-memory indexers whose keys are segment-local row ids 0…27",
+            "HNSW is not yet indexed (`Create` pre-marks only FLAT fields, segment.cc:551–556)"
+          ],
+          "rationale": "Unit 1 is fully supported: physical/live counts, strict comparison, and the below-threshold branch are correct. Unit 2 is incomplete under its conjunctive frozen wording: the answer names initial FLAT memory storage and first requested HNSW materialization but never explains the flush transfer into persisted vector_indexers. It receives no fractional unit.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "929-948,1093-1104,1160-1168",
+              "support": "Sealing, strict physical/live threshold, and one-segment task selection.",
+              "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1086–1174; 1100–1104; 1160–1164"
+            },
+            {
+              "verified_pre_fix_path": "src/db/common/constants.h",
+              "verified_pre_fix_lines": "41",
+              "support": "Threshold is 0.3f.",
+              "answer_citation": "src/db/common/constants.h:41"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "1121-1133",
+              "support": "Task dispatch reaches create_all_vector_index.",
+              "answer_citation": "src/db/index/segment/segment_helper.cc:1121–1133"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "551-556,1466-1489,1519-1578",
+              "support": "Initially only FLAT schema is marked indexed; requested HNSW materialization and its non-quantized branch.",
+              "answer_citation": "segment.cc:551–556; src/db/index/segment/segment.cc:1466–1489,1519–1578"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "397-398",
+              "support": "Only documents doc_ids_ mapping; does not support FLAT initialization or memory-to-persisted transfer.",
+              "answer_citation": "segment.cc:397–398"
+            }
+          ],
+          "errors_or_omissions": [
+            "Missing memory_vector_indexers_ to persisted vector_indexers_ flush transition; required by maintenance_branch.2.",
+            "The later >=30% shorthand is imprecise; the earlier explicit strict predicate is correct, so maintenance_branch.1 retains its point."
+          ]
+        },
+        {
+          "criterion_id": "C3",
+          "score": 2,
+          "maximum": 2,
+          "satisfied_point_unit_ids": [
+            "broken_mapping.1",
+            "broken_mapping.2"
+          ],
+          "supporting_answer_quotes": [
+            "merges the flat indexers into the new HNSW file passing `filter_` at **segment.cc:1511**.",
+            "Survivors are re-keyed densely: the persisted HNSW holds **25 vectors, key k = the vector of original row k+3**.",
+            "Meanwhile the scalar side is never rewritten: `create_vector_index` stamps the new `BlockMeta` with `doc_ids_.front()/back()` and `doc_count = doc_ids_.size() = 28`"
+          ],
+          "rationale": "Both factual point units are correct: filtering plus dense survivor keys, and unchanged forward rows/physical block metadata causing a coordinate mismatch. The separate C3 citation gate fails for unit 1 because no reducer line numbers establish the skip-and-next_id behavior; a reducer filename alone is not a valid substitute.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1491-1517",
+              "support": "Passes filter_ into Merge and flushes replacement index.",
+              "answer_citation": "segment.cc:1491–1517; segment.cc:1511"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476,4444-4451",
+              "support": "Filter resolves local row to doc_ids_ global ID.",
+              "answer_citation": "segment.cc:464–476,4444–4451"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+              "verified_pre_fix_lines": "103-134",
+              "support": "Converts and forwards filter into core merge.",
+              "answer_citation": "src/db/index/column/vector_column/vector_column_indexer.cc:103–134"
+            },
+            {
+              "verified_pre_fix_path": "src/core/interface/index.cc",
+              "verified_pre_fix_lines": "1016-1077",
+              "support": "Enables PK rewriting and calls reduce(filter); does not show reducer iteration/skip or next_id assignment.",
+              "answer_citation": "src/core/interface/index.cc:1016–1077; index.cc:1049–1050,1071"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1569-1576",
+              "support": "Replacement vector metadata retains physical doc_ids_ bounds and count.",
+              "answer_citation": "segment.cc:1569–1576"
+            },
+            {
+              "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "verified_pre_fix_lines": "288-291,317-323",
+              "support": "Evaluator verification of skip and dense survivor assignment; answer names the file but supplies no line numbers for it."
+            }
+          ],
+          "errors_or_omissions": [
+            "Core citation gap: dense survivor renumbering is asserted correctly but its reducer implementation is cited only by filename."
+          ]
+        },
+        {
+          "criterion_id": "C4",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "symptoms_and_persistence.1"
+          ],
+          "supporting_answer_quotes": [
+            "Search, however, treats index keys as segment-local row ids: a hit at key k is resolved through `doc_ids_[k]`.",
+            "Vector-payload fetch by row id 25–27 (`VectorColumnIndexer::Fetch`, vector_column_indexer.cc:150–165 → `index->fetch`) fails on the 25-entry index while scalar fetch succeeds.",
+            "The corrupt index file is persisted and reloaded by `Segment::Open`/`load_vector_index_blocks` (segment.cc:478–499), so a read-only reopen shows the same behavior."
+          ],
+          "rationale": "Explains wrong forward associations, tail vector fetch failures, independent live/scalar checks, and persisted reload. Exact conversion internals are not required.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+              "verified_pre_fix_lines": "150-165",
+              "support": "Fetch uses supplied vector key and returns failure if core fetch fails.",
+              "answer_citation": "vector_column_indexer.cc:150–165"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "478-499",
+              "support": "Open loads persisted scalar and vector index blocks.",
+              "answer_citation": "segment.cc:478–499"
+            },
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "1028-1040,1063-1070",
+              "support": "Manifest commit/flush and replacement-index reload occur within the cited optimize range.",
+              "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1063–1071"
+            }
+          ],
+          "errors_or_omissions": [
+            "Counts do not literally scan Arrow forward blocks: stats use deletion-filtered doc_ids_ entries. This wording does not undermine the correct physical/live explanation."
+          ]
+        },
+        {
+          "criterion_id": "C5",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "bounded_controls.1"
+          ],
+          "supporting_answer_quotes": [
+            "with no records, Phase 1 seals nothing and `persist_segments.size()==0` returns OK immediately",
+            "the second optimize again builds a CreateVectorIndexTask, but `create_vector_index` **early-returns** because `segment_meta_->vector_indexed(column)` and params match"
+          ],
+          "rationale": "Both controls are explained with the same-segment, same-parameter indexed-flag early return.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "929-942",
+              "support": "Empty optimize returns without persisted content.",
+              "answer_citation": "collection.cc:929–942"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1485,1534-1540",
+              "support": "Indexed state is recorded and same-parameter build returns early.",
+              "answer_citation": "segment.cc:1540,1485,1534–1539"
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C6",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "high_delete_path.1"
+          ],
+          "supporting_answer_quotes": [
+            "`ReduceScalar`/`FilterRecordBatch` physically drop deleted rows from the new forward file and record their positions in `delete_row_id_bitmap` keyed by cumulative input-scan position",
+            "`ReduceVectorIndex` passes a `RowIdFilter` over that same bitmap"
+          ],
+          "rationale": "Correctly distinguishes purge compaction: forward rows and vectors use matching omitted-row positions.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "100-175,934-997",
+              "support": "Scalar reduction produces filtered forward rows and shared omitted-row bitmap.",
+              "answer_citation": "segment_helper.cc:100–175,934–997"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "85-98,143-153",
+              "support": "RowIdFilter consumes that bitmap and is passed into vector reduction.",
+              "answer_citation": "segment_helper.cc:85–98,143–153"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "767-790",
+              "support": "Reuse disabled with a nonnull purge filter.",
+              "answer_citation": "segment_helper.cc:767–790"
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C7",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "repair_invariant.1"
+          ],
+          "supporting_answer_quotes": [
+            "either `merge_vector_indexer` must not apply `filter_` when the forward rows are left unrewritten (deletes stay in `delete_store_`, matching the control-2 semantics), or filtering must be paired with a full segment rewrite as in the rebuild path."
+          ],
+          "rationale": "Precisely preserves row-key alignment while retaining query-time logical deletion; permits coordinated remapping as an alternative.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1491-1517,1569-1576",
+              "support": "Existing filtered vector-only rebuild and unchanged physical metadata identify targeted repair.",
+              "answer_citation": "segment.cc:1491–1517,1569–1576"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "100-175",
+              "support": "Coordinated rewrite is the stated alternative.",
+              "answer_citation": "segment_helper.cc:100–175"
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C8",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "regression_design.1"
+          ],
+          "supporting_answer_quotes": [
+            "assert for **every live ID** that (a) `query(reference_vector, topk=1)` returns exactly that ID (exact under COSINE for basis vectors), and (b) fetching its vector payload returns the byte-identical reference vector.",
+            "Any key shift breaks the identity match even though counts stay 25."
+          ],
+          "rationale": "Saved independent unit directions plus expected live ID and payload detect associations after the trigger. Optional reopen/extra variants are not necessary for the point. The mathematical unique nearest neighbor does not by itself establish arbitrary ANN recall guarantees.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "tests/db/index/segment/segment_helper_test.cc",
+              "verified_pre_fix_lines": "738-757",
+              "support": "The optional cited existing compaction test really uses linear queries and a 1.0 non-quantized recall threshold; it is source inspection, not a claimed test run.",
+              "answer_citation": "tests/db/index/segment/segment_helper_test.cc:738–757"
+            }
+          ],
+          "errors_or_omissions": []
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          "Delete doc-0000…0002** only records global doc ids in the collection-level `delete_store_`; segment rows are untouched.",
+          "an independent storage path that still holds 28 rows, 25 live."
+        ],
+        "C2": [
+          "`current_actual_doc_count=25` is **not** `< 28 × (1 − COMPACT_DELETE_RATIO_THRESHOLD=0.3) = 19.6`",
+          "With one segment, the tail branch `current_group.size()==1 && !rebuild` creates a **CreateVectorIndexTask**",
+          "vectors sit in flat in-memory indexers whose keys are segment-local row ids 0…27",
+          "HNSW is not yet indexed (`Create` pre-marks only FLAT fields, segment.cc:551–556)"
+        ],
+        "C3": [
+          "merges the flat indexers into the new HNSW file passing `filter_` at **segment.cc:1511**.",
+          "Survivors are re-keyed densely: the persisted HNSW holds **25 vectors, key k = the vector of original row k+3**.",
+          "Meanwhile the scalar side is never rewritten: `create_vector_index` stamps the new `BlockMeta` with `doc_ids_.front()/back()` and `doc_count = doc_ids_.size() = 28`"
+        ],
+        "C4": [
+          "Search, however, treats index keys as segment-local row ids: a hit at key k is resolved through `doc_ids_[k]`.",
+          "Vector-payload fetch by row id 25–27 (`VectorColumnIndexer::Fetch`, vector_column_indexer.cc:150–165 → `index->fetch`) fails on the 25-entry index while scalar fetch succeeds.",
+          "The corrupt index file is persisted and reloaded by `Segment::Open`/`load_vector_index_blocks` (segment.cc:478–499), so a read-only reopen shows the same behavior."
+        ],
+        "C5": [
+          "with no records, Phase 1 seals nothing and `persist_segments.size()==0` returns OK immediately",
+          "the second optimize again builds a CreateVectorIndexTask, but `create_vector_index` **early-returns** because `segment_meta_->vector_indexed(column)` and params match"
+        ],
+        "C6": [
+          "`ReduceScalar`/`FilterRecordBatch` physically drop deleted rows from the new forward file and record their positions in `delete_row_id_bitmap` keyed by cumulative input-scan position",
+          "`ReduceVectorIndex` passes a `RowIdFilter` over that same bitmap"
+        ],
+        "C7": [
+          "either `merge_vector_indexer` must not apply `filter_` when the forward rows are left unrewritten (deletes stay in `delete_store_`, matching the control-2 semantics), or filtering must be paired with a full segment rewrite as in the rebuild path."
+        ],
+        "C8": [
+          "assert for **every live ID** that (a) `query(reference_vector, topk=1)` returns exactly that ID (exact under COSINE for basis vectors), and (b) fetching its vector payload returns the byte-identical reference vector.",
+          "Any key shift breaks the identity match even though counts stay 25."
+        ]
+      },
+      "verified_citations": {
+        "C1": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "464-476",
+            "support": "The cited deletion predicate maps physical local rows to global IDs.",
+            "answer_citation": "segment.cc:464–476"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "616-626,933-936",
+            "support": "Evaluator verification: physical counts use doc_ids_; delete records tombstones and removes external mapping. These additional spans are not credited as answer-supplied citations."
+          }
+        ],
+        "C2": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "929-948,1093-1104,1160-1168",
+            "support": "Sealing, strict physical/live threshold, and one-segment task selection.",
+            "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1086–1174; 1100–1104; 1160–1164"
+          },
+          {
+            "verified_pre_fix_path": "src/db/common/constants.h",
+            "verified_pre_fix_lines": "41",
+            "support": "Threshold is 0.3f.",
+            "answer_citation": "src/db/common/constants.h:41"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "1121-1133",
+            "support": "Task dispatch reaches create_all_vector_index.",
+            "answer_citation": "src/db/index/segment/segment_helper.cc:1121–1133"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "551-556,1466-1489,1519-1578",
+            "support": "Initially only FLAT schema is marked indexed; requested HNSW materialization and its non-quantized branch.",
+            "answer_citation": "segment.cc:551–556; src/db/index/segment/segment.cc:1466–1489,1519–1578"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "397-398",
+            "support": "Only documents doc_ids_ mapping; does not support FLAT initialization or memory-to-persisted transfer.",
+            "answer_citation": "segment.cc:397–398"
+          }
+        ],
+        "C3": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1491-1517",
+            "support": "Passes filter_ into Merge and flushes replacement index.",
+            "answer_citation": "segment.cc:1491–1517; segment.cc:1511"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "464-476,4444-4451",
+            "support": "Filter resolves local row to doc_ids_ global ID.",
+            "answer_citation": "segment.cc:464–476,4444–4451"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+            "verified_pre_fix_lines": "103-134",
+            "support": "Converts and forwards filter into core merge.",
+            "answer_citation": "src/db/index/column/vector_column/vector_column_indexer.cc:103–134"
+          },
+          {
+            "verified_pre_fix_path": "src/core/interface/index.cc",
+            "verified_pre_fix_lines": "1016-1077",
+            "support": "Enables PK rewriting and calls reduce(filter); does not show reducer iteration/skip or next_id assignment.",
+            "answer_citation": "src/core/interface/index.cc:1016–1077; index.cc:1049–1050,1071"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1569-1576",
+            "support": "Replacement vector metadata retains physical doc_ids_ bounds and count.",
+            "answer_citation": "segment.cc:1569–1576"
+          },
+          {
+            "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+            "verified_pre_fix_lines": "288-291,317-323",
+            "support": "Evaluator verification of skip and dense survivor assignment; answer names the file but supplies no line numbers for it."
+          }
+        ],
+        "C4": [
+          {
+            "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+            "verified_pre_fix_lines": "150-165",
+            "support": "Fetch uses supplied vector key and returns failure if core fetch fails.",
+            "answer_citation": "vector_column_indexer.cc:150–165"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "478-499",
+            "support": "Open loads persisted scalar and vector index blocks.",
+            "answer_citation": "segment.cc:478–499"
+          },
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "1028-1040,1063-1070",
+            "support": "Manifest commit/flush and replacement-index reload occur within the cited optimize range.",
+            "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1063–1071"
+          }
+        ],
+        "C5": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "929-942",
+            "support": "Empty optimize returns without persisted content.",
+            "answer_citation": "collection.cc:929–942"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1485,1534-1540",
+            "support": "Indexed state is recorded and same-parameter build returns early.",
+            "answer_citation": "segment.cc:1540,1485,1534–1539"
+          }
+        ],
+        "C6": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "100-175,934-997",
+            "support": "Scalar reduction produces filtered forward rows and shared omitted-row bitmap.",
+            "answer_citation": "segment_helper.cc:100–175,934–997"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "85-98,143-153",
+            "support": "RowIdFilter consumes that bitmap and is passed into vector reduction.",
+            "answer_citation": "segment_helper.cc:85–98,143–153"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "767-790",
+            "support": "Reuse disabled with a nonnull purge filter.",
+            "answer_citation": "segment_helper.cc:767–790"
+          }
+        ],
+        "C7": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1491-1517,1569-1576",
+            "support": "Existing filtered vector-only rebuild and unchanged physical metadata identify targeted repair.",
+            "answer_citation": "segment.cc:1491–1517,1569–1576"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "100-175",
+            "support": "Coordinated rewrite is the stated alternative.",
+            "answer_citation": "segment_helper.cc:100–175"
+          }
+        ],
+        "C8": [
+          {
+            "verified_pre_fix_path": "tests/db/index/segment/segment_helper_test.cc",
+            "verified_pre_fix_lines": "738-757",
+            "support": "The optional cited existing compaction test really uses linear queries and a 1.0 non-quantized recall threshold; it is source inspection, not a claimed test run.",
+            "answer_citation": "tests/db/index/segment/segment_helper_test.cc:738–757"
+          }
+        ]
+      },
+      "satisfied_point_unit_ids": [
+        "physical_vs_live.1",
+        "maintenance_branch.1",
+        "broken_mapping.1",
+        "broken_mapping.2",
+        "symptoms_and_persistence.1",
+        "bounded_controls.1",
+        "high_delete_path.1",
+        "repair_invariant.1",
+        "regression_design.1"
+      ],
+      "core_citation_gate_results": {
+        "C2": {
+          "passed": false,
+          "units": [
+            {
+              "point_unit_id": "maintenance_branch.1",
+              "passed": true,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/collection.cc",
+                  "verified_pre_fix_lines": "929-948,1093-1104,1160-1168",
+                  "support": "Sealing, strict physical/live threshold, and one-segment task selection.",
+                  "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1086–1174; 1100–1104; 1160–1164"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/common/constants.h",
+                  "verified_pre_fix_lines": "41",
+                  "support": "Threshold is 0.3f.",
+                  "answer_citation": "src/db/common/constants.h:41"
+                }
+              ],
+              "rationale": "Cited code and prose jointly establish strict physical/live threshold and branch selection.",
+              "missing_support": []
+            },
+            {
+              "point_unit_id": "maintenance_branch.2",
+              "passed": false,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+                  "verified_pre_fix_lines": "1121-1133",
+                  "support": "Task dispatch reaches create_all_vector_index.",
+                  "answer_citation": "src/db/index/segment/segment_helper.cc:1121–1133"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "551-556,1466-1489,1519-1578",
+                  "support": "Initially only FLAT schema is marked indexed; requested HNSW materialization and its non-quantized branch.",
+                  "answer_citation": "segment.cc:551–556; src/db/index/segment/segment.cc:1466–1489,1519–1578"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "397-398",
+                  "support": "Only documents doc_ids_ mapping; does not support FLAT initialization or memory-to-persisted transfer.",
+                  "answer_citation": "segment.cc:397–398"
+                }
+              ],
+              "rationale": "Task dispatch and initial HNSW flag are supported, but full required storage lifecycle is neither explained nor cited.",
+              "missing_support": [
+                {
+                  "needed": "Default FLAT initialization and flush transfer into persisted vector_indexers",
+                  "uncited_verifier_locations": [
+                    "src/db/index/segment/segment.cc:4117-4138",
+                    "src/include/zvec/db/index_params.h:573-578",
+                    "src/db/index/segment/segment.cc:4382-4396"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "C3": {
+          "passed": false,
+          "units": [
+            {
+              "point_unit_id": "broken_mapping.1",
+              "passed": false,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "1491-1517",
+                  "support": "Passes filter_ into Merge and flushes replacement index.",
+                  "answer_citation": "segment.cc:1491–1517; segment.cc:1511"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "464-476,4444-4451",
+                  "support": "Filter resolves local row to doc_ids_ global ID.",
+                  "answer_citation": "segment.cc:464–476,4444–4451"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+                  "verified_pre_fix_lines": "103-134",
+                  "support": "Converts and forwards filter into core merge.",
+                  "answer_citation": "src/db/index/column/vector_column/vector_column_indexer.cc:103–134"
+                },
+                {
+                  "verified_pre_fix_path": "src/core/interface/index.cc",
+                  "verified_pre_fix_lines": "1016-1077",
+                  "support": "Enables PK rewriting and calls reduce(filter); does not show reducer iteration/skip or next_id assignment.",
+                  "answer_citation": "src/core/interface/index.cc:1016–1077; index.cc:1049–1050,1071"
+                }
+              ],
+              "rationale": "Deletion-filter forwarding and PK-rewrite configuration are properly cited. The actual survivor skip plus consecutive assignment are asserted but given only a whole-file reducer reference.",
+              "missing_support": [
+                {
+                  "needed": "Line-numbered reducer evidence for filtered input skipping and next_id assignment",
+                  "uncited_verifier_locations": [
+                    "src/core/mixed_reducer/mixed_streamer_reducer.cc:288-291",
+                    "src/core/mixed_reducer/mixed_streamer_reducer.cc:317-323"
+                  ]
+                }
+              ]
+            },
+            {
+              "point_unit_id": "broken_mapping.2",
+              "passed": true,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "1569-1576",
+                  "support": "Replacement vector metadata retains physical doc_ids_ bounds and count.",
+                  "answer_citation": "segment.cc:1569–1576"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/collection.cc",
+                  "verified_pre_fix_lines": "929-948,1093-1104,1160-1168",
+                  "support": "Sealing, strict physical/live threshold, and one-segment task selection.",
+                  "answer_citation": "src/db/collection.cc:910–1084; collection.cc:1086–1174; 1100–1104; 1160–1164"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "551-556,1466-1489,1519-1578",
+                  "support": "Initially only FLAT schema is marked indexed; requested HNSW materialization and its non-quantized branch.",
+                  "answer_citation": "segment.cc:551–556; src/db/index/segment/segment.cc:1466–1489,1519–1578"
+                }
+              ],
+              "rationale": "Physical vector block count/bounds and the vector-only task path jointly support unchanged row space and its mismatch with dense vector keys.",
+              "missing_support": []
+            }
+          ]
+        }
+      },
+      "unsupported_claims": [
+        {
+          "id": "P_MINOR_THRESHOLD",
+          "severity": "minor",
+          "answer_quote": "If ≥30% of rows were deleted, `rebuild=true`",
+          "finding": "The governing expression is strict live < physical*(1-0.3f); >=30% is not an exact source-level restatement. Do not assume ideal-decimal equality behavior. Earlier correct strict formula preserves C2.1.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "1100-1104",
+              "support": "Strict test"
+            },
+            {
+              "verified_pre_fix_path": "src/db/common/constants.h",
+              "verified_pre_fix_lines": "41",
+              "support": "Float threshold"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "P_MINOR_COUNT_PATH",
+          "severity": "minor",
+          "answer_quote": "Counts and scalar enumeration read the Arrow forward blocks plus `delete_store_`",
+          "finding": "Scalar scans use forward rows; stats aggregate deletion-filtered doc_ids_ counts, not an Arrow scan. The physical/live conclusion remains correct.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "542-544",
+              "support": "Filtered counts"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "616-626",
+              "support": "Counts doc_ids_"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "P_AMBIGUOUS_UNFINDABLE",
+          "severity": "wording_ambiguity",
+          "answer_quote": "doc-0003…0005 effectively unfindable.",
+          "finding": "True for their own saved-vector best matches under the shifted mapping, not as a claim that those IDs can never appear: the answer itself shows doc-0003 returned for doc-0006. Treat as contextual wording, not an explicit denial of wrong associations.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476",
+              "support": "Delete filter masks shifted labels"
+            },
+            {
+              "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "verified_pre_fix_lines": "288-318",
+              "support": "Shifted dense keys"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "P_ANN_LIMIT",
+          "severity": "scope_caution",
+          "answer_quote": "(exact under COSINE for basis vectors)",
+          "finding": "Basis vectors give a unique exact nearest-neighbor oracle, but that alone does not prove arbitrary HNSW top-1 recall. Accepted here as regression expectation, not a universal ANN guarantee; no runtime claim is made.",
+          "source": [
+            {
+              "verified_pre_fix_path": "tests/db/index/segment/segment_helper_test.cc",
+              "verified_pre_fix_lines": "740-753",
+              "support": "Cited existing test explicitly selects linear queries"
+            }
+          ],
+          "disqualifying": false
+        }
+      ],
+      "critical_contradictions": [],
+      "disqualifications": [],
+      "critical_contradiction_audit": {
+        "C1": "Not asserted: answer says forward rows remain unchanged on vector-only path.",
+        "C2": "Not asserted: answer explicitly identifies vector/forward association errors.",
+        "C3": "Not asserted: answer says read-only reopen does not heal corruption.",
+        "C4": "Not asserted: logical deletion filtering is retained.",
+        "C5": "Not asserted: missing storage detail is scored as omission, not a denial that prior vector storage exists.",
+        "D1": "Not asserted: wrong associations are explicit, not denied.",
+        "D2": "Not asserted: controls and maintenance path distinctions bound the claimed failure.",
+        "D3": "Not asserted: no affected-index-only tail repair is proposed.",
+        "D4": "Not asserted: proposed regression steps and source-test descriptions do not claim actual local reproduction or passing upstream execution."
+      },
+      "total_points": 9,
+      "maximum_score": 10,
+      "source_grounded_success": false,
+      "failed_gates": [
+        "C2_required_full_credit",
+        "C2_core_citation_gate",
+        "C3_core_citation_gate"
+      ],
+      "reviewer_notes": [
+        "Only final answer text was graded; no process text filled omissions.",
+        "Scores are factual integer point-unit scores, separately gated by cited pre-fix source evidence. Verifier-found uncited spans do not repair answer citation gates.",
+        "Bare filenames are resolved using explicit nearby full paths when unambiguous; equivalent source spans accepted. Whole-file reducer naming alone is insufficient.",
+        "Conjunctive units were applied as frozen: P C2.2 requires the memory-to-persisted lifecycle; R C3.2 requires physical block metadata as well as forward rows. No half-points or unstated inference supplied.",
+        "Material noncritical errors are recorded separately; no listed critical contradiction or disqualifying overclaim is established.",
+        "No post-fix, solver, test or runtime evidence was accessed or generated."
+      ]
+    },
+    {
+      "task_id": "q003",
+      "blinded_answer_id": "R",
+      "input_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/expansion-39287659748/q003-blind-answers/R.txt",
+      "input_sha256": "1e925e5dfba718df807794d558888ce82aacf9815985811909d5bd65ceff0410",
+      "final_answer_present": true,
+      "criterion_scores": {
+        "C1": 1,
+        "C2": 1,
+        "C3": 0,
+        "C4": 1,
+        "C5": 0,
+        "C6": 1,
+        "C7": 1,
+        "C8": 1
+      },
+      "criterion_reviews": [
+        {
+          "criterion_id": "C1",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "physical_vs_live.1"
+          ],
+          "supporting_answer_quotes": [
+            "Deletes only mark global doc ids in the collection-level `delete_store_`; the segment's forward (Arrow) block still physically holds all 28 rows.",
+            "`doc_count` and the scalar enumeration read the forward block + delete store (25 live rows, correct `GLOBAL_DOC_ID`/`USER_ID` columns)."
+          ],
+          "rationale": "Tombstones, retained physical rows and filtered 25-live count are correctly explained. External-ID-map removal is not a separate required element of the exact point unit.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476",
+              "support": "Cited predicate maps rows to global IDs and checks tombstones.",
+              "answer_citation": "src/db/index/segment/segment.cc:464-476"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "616-626,933-936",
+              "support": "Evaluator verification of physical/live counting and actual delete behavior; not added to answer citations."
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C2",
+          "score": 1,
+          "maximum": 2,
+          "satisfied_point_unit_ids": [
+            "maintenance_branch.1"
+          ],
+          "supporting_answer_quotes": [
+            "3/28 ≈ 10.7% deleted is *below* threshold, so `rebuild = false`",
+            "If the deleted fraction exceeds 30% (`collection.cc:1100-1104`), `rebuild = true`",
+            "the maintenance is an *in-place vector-index rebuild* via `Segment::create_all_vector_index`"
+          ],
+          "rationale": "Unit 1 is satisfied by physical deletion fraction, below/above-threshold distinction, and the cited strict predicate. Unit 2 lacks the existing default FLAT memory storage and its persisted flush transfer; merely naming first HNSW materialization is insufficient.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "918-948,1093-1104,1162-1168",
+              "support": "Sealing, physical/live selection and the single-segment task are correctly cited.",
+              "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1086-1174,1100-1104,1162-1164,1166-1168"
+            },
+            {
+              "verified_pre_fix_path": "src/db/common/constants.h",
+              "verified_pre_fix_lines": "41",
+              "support": "Threshold constant.",
+              "answer_citation": "src/db/common/constants.h:41"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "1121-1133",
+              "support": "Dispatch calls create_all_vector_index.",
+              "answer_citation": "segment_helper.cc:1121-1133"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "182-195,551-556",
+              "support": "First range is declarations only; latter pre-marks only initially FLAT schemas.",
+              "answer_citation": "segment.cc:182-195,551-556"
+            }
+          ],
+          "errors_or_omissions": [
+            "No explanation or citation for initial default FLAT memory vector indexers or their transfer to persisted vector_indexers. This is an omission, not a C5 critical contradiction asserting no prior storage."
+          ]
+        },
+        {
+          "criterion_id": "C3",
+          "score": 0,
+          "maximum": 2,
+          "satisfied_point_unit_ids": [],
+          "supporting_answer_quotes": [
+            "The rebuild enumerates source vectors delete-aware",
+            "the *label assignment* for the new index is not filtered in the same pass.",
+            "The new HNSW ends up with 25 vectors whose labels are dense 0..24 (live-only enumeration) while the forward rows they must address remain 0..27.",
+            "The `CreateVectorIndexTask` rebuild lacks this coupled \"filter old keys → renumber densely in the same order as the row store\" discipline;",
+            "the exact divergent line inside `create_all_vector_index` is the one remaining gap."
+          ],
+          "rationale": "No complete frozen point unit. Unit 1 does not establish that the low-delete vector-only helper passes filter_ into the same Merge/reducer; it instead contrasts that path with the reducer and says label assignment is not filtered in the same pass. In the frozen code both paths reach that same skip-then-next_id reducer. Unit 2 correctly identifies dense vector keys versus unchanged forward rows, but omits that replacement vector block metadata also retains physical bounds/count, an explicit conjunct of the frozen unit. No half-points are allowed.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476",
+              "support": "Establishes the available segment predicate, not that vector-only Merge receives it.",
+              "answer_citation": "segment.cc:464-476"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "1121-1133",
+              "support": "Dispatch into unread helper, not its filtering behavior.",
+              "answer_citation": "segment_helper.cc:1121-1133"
+            },
+            {
+              "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "verified_pre_fix_lines": "255-326,375-377",
+              "support": "Cited reducer actually skips filtered source keys then assigns consecutive survivors; this same reducer is also used by vector-only Merge.",
+              "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318,375-377"
+            },
+            {
+              "verified_pre_fix_path": "src/core/interface/index.cc",
+              "verified_pre_fix_lines": "1016-1077",
+              "support": "Core Merge configures reducer, but answer supplies this primarily for compaction and omits low-delete Merge callsite.",
+              "answer_citation": "src/core/interface/index.cc:1016-1077"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1491-1517,1560-1576",
+              "support": "Evaluator verification of missing low-delete Merge call and physical metadata. These spans are absent from answer citations."
+            }
+          ],
+          "errors_or_omissions": [
+            "Missing/incorrect low-delete filter-to-Merge linkage.",
+            "Missing unchanged physical vector BlockMeta counts/bounds.",
+            "The generic mismatch inference is useful but does not complete either conjunctive point unit."
+          ]
+        },
+        {
+          "criterion_id": "C4",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "symptoms_and_persistence.1"
+          ],
+          "supporting_answer_quotes": [
+            "Search then resolves label *k* as forward row *k*:",
+            "Counts are blind to *which* vector sits behind *which* row.",
+            "The rebuilt index is written into the segment directory, its meta persisted in the version manifest, and reloaded on open — hence **read-only reopen does not heal it**."
+          ],
+          "rationale": "Names search label-to-forward-row access, resulting incorrect association, unaffected live/scalar checks, and committed persistence. This meets the unit without detailed conversion internals. The point-vector-offset explanation and its declaration-only citation are weak, retained below as limitations rather than a missing required wrong-association explanation.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "1028-1040,1063-1070",
+              "support": "Cited optimize range includes manifest update/flush and vector reload.",
+              "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1063-1070,1028-1032"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+              "verified_pre_fix_lines": "150-159",
+              "support": "Vector fetch delegates by supplied key.",
+              "answer_citation": "vector_column_indexer.cc:150-159"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "246-250",
+              "support": "Only forward fetch declarations; does not prove physical vector-block offset lookup.",
+              "answer_citation": "segment.cc:246-250"
+            }
+          ],
+          "errors_or_omissions": [
+            "Counts actually use doc_ids_ with deletion filter rather than literally reading Arrow forward blocks.",
+            "Point vector fetch should be described using original physical row/block offset; the cited fetch declaration does not demonstrate that implementation."
+          ]
+        },
+        {
+          "criterion_id": "C5",
+          "score": 0,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [],
+          "supporting_answer_quotes": [
+            "Nothing is materialized, so the later post-delete optimize still hits the same single-segment, below-threshold `CreateVectorIndexTask` branch.",
+            "the already-built/ready index state lets the rebuild be skipped or take the reuse path (`CanReuseFirstIndexer`/file-copy base, `segment_helper.cc:767-834`)"
+          ],
+          "rationale": "The empty control is correct. The nonempty control is not fully explained: the final answer gives skipped-or-reuse alternatives, misses the same-parameter create_vector_index early return, and cites compaction reuse code that the single-segment vector-only path does not call. The sole indivisible point requires both controls.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "929-942",
+              "support": "Empty optimize no-op is supported.",
+              "answer_citation": "collection.cc:929-942"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "167-171",
+              "support": "This sets indexed state for CompactTask, not the stated vector-only first build.",
+              "answer_citation": "segment_helper.cc:167-171"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "551-556,209-212",
+              "support": "Initial FLAT-schema flag and readiness declarations do not show post-build same-parameter early return.",
+              "answer_citation": "segment.cc:551-556,209-212"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "767-834",
+              "support": "Reuse helper belongs to ReduceVectorIndex compaction path; not the one-segment CreateVectorIndexTask route.",
+              "answer_citation": "segment_helper.cc:767-834"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1534-1539",
+              "support": "Evaluator verification of the actual same-parameter indexed-flag skip; uncited and not correctly resolved in the answer."
+            }
+          ],
+          "errors_or_omissions": [
+            "Wrong-path reuse alternative.",
+            "Missing same-parameter indexed-flag early-return mechanism."
+          ]
+        },
+        {
+          "criterion_id": "C6",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "high_delete_path.1"
+          ],
+          "supporting_answer_quotes": [
+            "`FilterRecordBatch` (934-997) drops doc-id-filtered rows, records their **old** row ids in `delete_row_id_bitmap` (line 969)",
+            "filter old keys and rewrite pkeys densely in the same scan order as the forward renumbering."
+          ],
+          "rationale": "Correct coupled high-delete compaction mechanism: omitted original-row bitmap filters vectors in the same order as the forward rewrite. An incidental reused 0..24 row-count example is erroneous for a >30% deletion variant but does not erase the complete required causal mechanism.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "1166-1168",
+              "support": "Rebuild passes deletion filter to CompactTask.",
+              "answer_citation": "collection.cc:1166-1168"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "100-175,232-280,934-997",
+              "support": "Forward filtering, bitmap recording and matched vector filter.",
+              "answer_citation": "segment_helper.cc:100-175,177-322,934-997"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "638-759,767-834",
+              "support": "Vector reducer receives shared row filter; nonnull filter prevents reuse.",
+              "answer_citation": "segment_helper.cc:638-759,767-834"
+            },
+            {
+              "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "verified_pre_fix_lines": "288-291,317-323",
+              "support": "Filtered vectors skipped and survivors assigned dense keys.",
+              "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318"
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C7",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "repair_invariant.1"
+          ],
+          "supporting_answer_quotes": [
+            "either (a) leave all spaces untouched (labels stay row-aligned, deletes stay masked), or (b) renumber **all** spaces with the same order-preserving old→new map",
+            "A rebuild may never filter rows in one space while numbering labels from the other."
+          ],
+          "rationale": "Expresses the accepted invariant-preserving alternatives and preserves logical deletion masking. Literal nullptr or targeted code spelling is not required.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "100-175,934-997",
+              "support": "Coordinated row/vector compaction is the valid alternative.",
+              "answer_citation": "segment_helper.cc:100-175,934-997"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "464-476",
+              "support": "Logical query masking remains active.",
+              "answer_citation": "segment.cc:464-476"
+            }
+          ],
+          "errors_or_omissions": []
+        },
+        {
+          "criterion_id": "C8",
+          "score": 1,
+          "maximum": 1,
+          "satisfied_point_unit_ids": [
+            "regression_design.1"
+          ],
+          "supporting_answer_quotes": [
+            "For every live id `d`, search with its saved reference vector and assert `top1.id == d`",
+            "For every live id, fetch the vector payload and assert bitwise equality with the saved basis vector (catches fetch failures and cross-wired payloads)."
+          ],
+          "rationale": "Independent saved basis references, expected IDs and vector payloads after the triggering sequence satisfy the point. The extra cosine score≈1 assertion is a separate implementation error; the required ID/payload oracle itself is correct.",
+          "verified_citations": [
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.h",
+              "verified_pre_fix_lines": "112-116",
+              "support": "Optional debug accessor exists.",
+              "answer_citation": "vector_column_indexer.h:112-116"
+            },
+            {
+              "verified_pre_fix_path": "src/ailego/math/cosine_distance_matrix.h",
+              "verified_pre_fix_lines": "38-48",
+              "support": "Evaluator verification: cosine distance is 1-ip, so an identical normalized vector has score near zero, not one."
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+              "verified_pre_fix_lines": "24-32",
+              "support": "Evaluator verification: COSINE results prefer smaller scores."
+            }
+          ],
+          "errors_or_omissions": [
+            "The extra assertion top1.score≈1.0 confuses cosine similarity with this checkout’s cosine distance. It would spuriously fail a correctly associated self-match."
+          ]
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          "Deletes only mark global doc ids in the collection-level `delete_store_`; the segment's forward (Arrow) block still physically holds all 28 rows.",
+          "`doc_count` and the scalar enumeration read the forward block + delete store (25 live rows, correct `GLOBAL_DOC_ID`/`USER_ID` columns)."
+        ],
+        "C2": [
+          "3/28 ≈ 10.7% deleted is *below* threshold, so `rebuild = false`",
+          "If the deleted fraction exceeds 30% (`collection.cc:1100-1104`), `rebuild = true`",
+          "the maintenance is an *in-place vector-index rebuild* via `Segment::create_all_vector_index`"
+        ],
+        "C3": [
+          "The rebuild enumerates source vectors delete-aware",
+          "the *label assignment* for the new index is not filtered in the same pass.",
+          "The new HNSW ends up with 25 vectors whose labels are dense 0..24 (live-only enumeration) while the forward rows they must address remain 0..27.",
+          "The `CreateVectorIndexTask` rebuild lacks this coupled \"filter old keys → renumber densely in the same order as the row store\" discipline;",
+          "the exact divergent line inside `create_all_vector_index` is the one remaining gap."
+        ],
+        "C4": [
+          "Search then resolves label *k* as forward row *k*:",
+          "Counts are blind to *which* vector sits behind *which* row.",
+          "The rebuilt index is written into the segment directory, its meta persisted in the version manifest, and reloaded on open — hence **read-only reopen does not heal it**."
+        ],
+        "C5": [
+          "Nothing is materialized, so the later post-delete optimize still hits the same single-segment, below-threshold `CreateVectorIndexTask` branch.",
+          "the already-built/ready index state lets the rebuild be skipped or take the reuse path (`CanReuseFirstIndexer`/file-copy base, `segment_helper.cc:767-834`)"
+        ],
+        "C6": [
+          "`FilterRecordBatch` (934-997) drops doc-id-filtered rows, records their **old** row ids in `delete_row_id_bitmap` (line 969)",
+          "filter old keys and rewrite pkeys densely in the same scan order as the forward renumbering."
+        ],
+        "C7": [
+          "either (a) leave all spaces untouched (labels stay row-aligned, deletes stay masked), or (b) renumber **all** spaces with the same order-preserving old→new map",
+          "A rebuild may never filter rows in one space while numbering labels from the other."
+        ],
+        "C8": [
+          "For every live id `d`, search with its saved reference vector and assert `top1.id == d`",
+          "For every live id, fetch the vector payload and assert bitwise equality with the saved basis vector (catches fetch failures and cross-wired payloads)."
+        ]
+      },
+      "verified_citations": {
+        "C1": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "464-476",
+            "support": "Cited predicate maps rows to global IDs and checks tombstones.",
+            "answer_citation": "src/db/index/segment/segment.cc:464-476"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "616-626,933-936",
+            "support": "Evaluator verification of physical/live counting and actual delete behavior; not added to answer citations."
+          }
+        ],
+        "C2": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "918-948,1093-1104,1162-1168",
+            "support": "Sealing, physical/live selection and the single-segment task are correctly cited.",
+            "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1086-1174,1100-1104,1162-1164,1166-1168"
+          },
+          {
+            "verified_pre_fix_path": "src/db/common/constants.h",
+            "verified_pre_fix_lines": "41",
+            "support": "Threshold constant.",
+            "answer_citation": "src/db/common/constants.h:41"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "1121-1133",
+            "support": "Dispatch calls create_all_vector_index.",
+            "answer_citation": "segment_helper.cc:1121-1133"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "182-195,551-556",
+            "support": "First range is declarations only; latter pre-marks only initially FLAT schemas.",
+            "answer_citation": "segment.cc:182-195,551-556"
+          }
+        ],
+        "C3": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "464-476",
+            "support": "Establishes the available segment predicate, not that vector-only Merge receives it.",
+            "answer_citation": "segment.cc:464-476"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "1121-1133",
+            "support": "Dispatch into unread helper, not its filtering behavior.",
+            "answer_citation": "segment_helper.cc:1121-1133"
+          },
+          {
+            "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+            "verified_pre_fix_lines": "255-326,375-377",
+            "support": "Cited reducer actually skips filtered source keys then assigns consecutive survivors; this same reducer is also used by vector-only Merge.",
+            "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318,375-377"
+          },
+          {
+            "verified_pre_fix_path": "src/core/interface/index.cc",
+            "verified_pre_fix_lines": "1016-1077",
+            "support": "Core Merge configures reducer, but answer supplies this primarily for compaction and omits low-delete Merge callsite.",
+            "answer_citation": "src/core/interface/index.cc:1016-1077"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1491-1517,1560-1576",
+            "support": "Evaluator verification of missing low-delete Merge call and physical metadata. These spans are absent from answer citations."
+          }
+        ],
+        "C4": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "1028-1040,1063-1070",
+            "support": "Cited optimize range includes manifest update/flush and vector reload.",
+            "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1063-1070,1028-1032"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+            "verified_pre_fix_lines": "150-159",
+            "support": "Vector fetch delegates by supplied key.",
+            "answer_citation": "vector_column_indexer.cc:150-159"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "246-250",
+            "support": "Only forward fetch declarations; does not prove physical vector-block offset lookup.",
+            "answer_citation": "segment.cc:246-250"
+          }
+        ],
+        "C5": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "929-942",
+            "support": "Empty optimize no-op is supported.",
+            "answer_citation": "collection.cc:929-942"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "167-171",
+            "support": "This sets indexed state for CompactTask, not the stated vector-only first build.",
+            "answer_citation": "segment_helper.cc:167-171"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "551-556,209-212",
+            "support": "Initial FLAT-schema flag and readiness declarations do not show post-build same-parameter early return.",
+            "answer_citation": "segment.cc:551-556,209-212"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "767-834",
+            "support": "Reuse helper belongs to ReduceVectorIndex compaction path; not the one-segment CreateVectorIndexTask route.",
+            "answer_citation": "segment_helper.cc:767-834"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "1534-1539",
+            "support": "Evaluator verification of the actual same-parameter indexed-flag skip; uncited and not correctly resolved in the answer."
+          }
+        ],
+        "C6": [
+          {
+            "verified_pre_fix_path": "src/db/collection.cc",
+            "verified_pre_fix_lines": "1166-1168",
+            "support": "Rebuild passes deletion filter to CompactTask.",
+            "answer_citation": "collection.cc:1166-1168"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "100-175,232-280,934-997",
+            "support": "Forward filtering, bitmap recording and matched vector filter.",
+            "answer_citation": "segment_helper.cc:100-175,177-322,934-997"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "638-759,767-834",
+            "support": "Vector reducer receives shared row filter; nonnull filter prevents reuse.",
+            "answer_citation": "segment_helper.cc:638-759,767-834"
+          },
+          {
+            "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+            "verified_pre_fix_lines": "288-291,317-323",
+            "support": "Filtered vectors skipped and survivors assigned dense keys.",
+            "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318"
+          }
+        ],
+        "C7": [
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+            "verified_pre_fix_lines": "100-175,934-997",
+            "support": "Coordinated row/vector compaction is the valid alternative.",
+            "answer_citation": "segment_helper.cc:100-175,934-997"
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+            "verified_pre_fix_lines": "464-476",
+            "support": "Logical query masking remains active.",
+            "answer_citation": "segment.cc:464-476"
+          }
+        ],
+        "C8": [
+          {
+            "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.h",
+            "verified_pre_fix_lines": "112-116",
+            "support": "Optional debug accessor exists.",
+            "answer_citation": "vector_column_indexer.h:112-116"
+          },
+          {
+            "verified_pre_fix_path": "src/ailego/math/cosine_distance_matrix.h",
+            "verified_pre_fix_lines": "38-48",
+            "support": "Evaluator verification: cosine distance is 1-ip, so an identical normalized vector has score near zero, not one."
+          },
+          {
+            "verified_pre_fix_path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+            "verified_pre_fix_lines": "24-32",
+            "support": "Evaluator verification: COSINE results prefer smaller scores."
+          }
+        ]
+      },
+      "satisfied_point_unit_ids": [
+        "physical_vs_live.1",
+        "maintenance_branch.1",
+        "symptoms_and_persistence.1",
+        "high_delete_path.1",
+        "repair_invariant.1",
+        "regression_design.1"
+      ],
+      "core_citation_gate_results": {
+        "C2": {
+          "passed": false,
+          "units": [
+            {
+              "point_unit_id": "maintenance_branch.1",
+              "passed": true,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/collection.cc",
+                  "verified_pre_fix_lines": "918-948,1093-1104,1162-1168",
+                  "support": "Sealing, physical/live selection and the single-segment task are correctly cited.",
+                  "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1086-1174,1100-1104,1162-1164,1166-1168"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/common/constants.h",
+                  "verified_pre_fix_lines": "41",
+                  "support": "Threshold constant.",
+                  "answer_citation": "src/db/common/constants.h:41"
+                }
+              ],
+              "rationale": "Physical deletion fraction and cited strict threshold establish correct branch selection.",
+              "missing_support": []
+            },
+            {
+              "point_unit_id": "maintenance_branch.2",
+              "passed": false,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+                  "verified_pre_fix_lines": "1121-1133",
+                  "support": "Dispatch calls create_all_vector_index.",
+                  "answer_citation": "segment_helper.cc:1121-1133"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "182-195,551-556",
+                  "support": "First range is declarations only; latter pre-marks only initially FLAT schemas.",
+                  "answer_citation": "segment.cc:182-195,551-556"
+                }
+              ],
+              "rationale": "Dispatch is cited, but default FLAT memory/persisted lifecycle is absent.",
+              "missing_support": [
+                {
+                  "needed": "Initial FLAT storage, flush transfer and distinction from requested HNSW indexed state",
+                  "uncited_verifier_locations": [
+                    "src/db/index/segment/segment.cc:4117-4138",
+                    "src/include/zvec/db/index_params.h:573-578",
+                    "src/db/index/segment/segment.cc:4382-4396"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "C3": {
+          "passed": false,
+          "units": [
+            {
+              "point_unit_id": "broken_mapping.1",
+              "passed": false,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+                  "verified_pre_fix_lines": "464-476",
+                  "support": "Establishes the available segment predicate, not that vector-only Merge receives it.",
+                  "answer_citation": "segment.cc:464-476"
+                },
+                {
+                  "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+                  "verified_pre_fix_lines": "1121-1133",
+                  "support": "Dispatch into unread helper, not its filtering behavior.",
+                  "answer_citation": "segment_helper.cc:1121-1133"
+                },
+                {
+                  "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+                  "verified_pre_fix_lines": "255-326,375-377",
+                  "support": "Cited reducer actually skips filtered source keys then assigns consecutive survivors; this same reducer is also used by vector-only Merge.",
+                  "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318,375-377"
+                },
+                {
+                  "verified_pre_fix_path": "src/core/interface/index.cc",
+                  "verified_pre_fix_lines": "1016-1077",
+                  "support": "Core Merge configures reducer, but answer supplies this primarily for compaction and omits low-delete Merge callsite.",
+                  "answer_citation": "src/core/interface/index.cc:1016-1077"
+                }
+              ],
+              "rationale": "Reducer filtering/renumbering has valid line citations, but no citation links the actual vector-only helper to filter-bearing Merge; prose also inaccurately contrasts the reducer with this path.",
+              "missing_support": [
+                {
+                  "needed": "Low-delete vector-only Merge passes segment filter to same reducer",
+                  "uncited_verifier_locations": [
+                    "src/db/index/segment/segment.cc:1491-1517",
+                    "src/db/index/segment/segment.cc:1560-1566"
+                  ]
+                }
+              ]
+            },
+            {
+              "point_unit_id": "broken_mapping.2",
+              "passed": false,
+              "verified_answer_citations": [
+                {
+                  "verified_pre_fix_path": "src/db/collection.cc",
+                  "verified_pre_fix_lines": "918-948,1093-1104,1162-1168",
+                  "support": "Sealing, physical/live selection and the single-segment task are correctly cited.",
+                  "answer_citation": "src/db/collection.cc:910-1084; collection.cc:1086-1174,1100-1104,1162-1164,1166-1168"
+                },
+                {
+                  "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+                  "verified_pre_fix_lines": "255-326,375-377",
+                  "support": "Cited reducer actually skips filtered source keys then assigns consecutive survivors; this same reducer is also used by vector-only Merge.",
+                  "answer_citation": "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326; 288,318,375-377"
+                }
+              ],
+              "rationale": "Citations support unchanged forward path and dense vector output, but not required retained physical vector block metadata, which is also omitted from the explanation.",
+              "missing_support": [
+                {
+                  "needed": "Replacement BlockMeta retains doc_ids_ physical count and bounds",
+                  "uncited_verifier_locations": [
+                    "src/db/index/segment/segment.cc:1568-1576"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "unsupported_claims": [
+        {
+          "id": "R_LOW_PATH_MECHANISM",
+          "severity": "material",
+          "answer_quote": "the *label assignment* for the new index is not filtered in the same pass.",
+          "finding": "The low-delete path calls Merge(filter_) and reaches read_vec, which performs filter/continue before next_id++. The missing operation is the coordinated forward rewrite, not a separate unfiltered label assignment inside the reducer. The answer later recognizes forward asymmetry, but its stated contrast is inaccurate.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1511",
+              "support": "Low-delete Merge(filter_)"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+              "verified_pre_fix_lines": "123-130",
+              "support": "Core forwarding"
+            },
+            {
+              "verified_pre_fix_path": "src/core/interface/index.cc",
+              "verified_pre_fix_lines": "1048-1073",
+              "support": "Same reducer"
+            },
+            {
+              "verified_pre_fix_path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+              "verified_pre_fix_lines": "288-291,317-323",
+              "support": "Same-pass filter then assignment"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "R_WRONG_REUSE_PATH",
+          "severity": "material",
+          "answer_quote": "the already-built/ready index state lets the rebuild be skipped or take the reuse path",
+          "finding": "For the specified single-segment same-parameter control the exact mechanism is create_vector_index early return. CanReuseFirstIndexer belongs to compaction and is not an alternative route for this CreateVectorIndexTask.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "1121-1133",
+              "support": "Create task dispatch"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1534-1539",
+              "support": "Indexed same-parameter skip"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "638-674,767-834",
+              "support": "Compaction-only reuse path"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "R_COSINE_SCORE",
+          "severity": "minor_regression_error",
+          "answer_quote": "`top1.score ≈ 1.0` (cosine)",
+          "finding": "This checkout returns cosine distance, so the identical normalized direction has score near 0.0. The extra score assertion would spuriously fail; the required independent ID-plus-payload oracle remains correct.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/core/interface/index.cc",
+              "verified_pre_fix_lines": "111-113",
+              "support": "Selects Cosine metric"
+            },
+            {
+              "verified_pre_fix_path": "src/core/metric/cosine_metric.cc",
+              "verified_pre_fix_lines": "178-186",
+              "support": "Uses CosineDistanceMatrix"
+            },
+            {
+              "verified_pre_fix_path": "src/ailego/math/cosine_distance_matrix.h",
+              "verified_pre_fix_lines": "38-48",
+              "support": "Computes 1-ip"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+              "verified_pre_fix_lines": "24-32",
+              "support": "COSINE lower is better"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "R_HIGH_DELETE_COUNT",
+          "severity": "minor",
+          "answer_quote": "writes a *renumbered* forward block (new rows 0..24)",
+          "finding": "25 survivors is the original 3/28-deletion case, not an above-30%-deletion variant of 28 rows. A high-delete variant must use its actual survivor count. The coordinated reduction mechanism is otherwise right.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment_helper.cc",
+              "verified_pre_fix_lines": "253-280",
+              "support": "Output count accumulates filtered survivors"
+            },
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "1100-1104",
+              "support": "High-delete condition"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "R_MINOR_COUNT_PATH",
+          "severity": "minor",
+          "answer_quote": "`doc_count` and the scalar enumeration read the forward block + delete store",
+          "finding": "Stats use filtered doc_ids_ counts; scalar enumeration reads forward data.",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/collection.cc",
+              "verified_pre_fix_lines": "542-544",
+              "support": "Stats path"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "616-626",
+              "support": "doc_ids_ count"
+            }
+          ],
+          "disqualifying": false
+        },
+        {
+          "id": "R_FETCH_CITATION",
+          "severity": "citation_limitation",
+          "answer_quote": "`Segment::fetch(columns, segment_doc_ids)`, `segment.cc:246-250`",
+          "finding": "These are forward-fetch declarations, not the implementation of point vector fetch via original physical row/block offset (segment.cc:1268-1300).",
+          "source": [
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "246-250",
+              "support": "Declaration only"
+            },
+            {
+              "verified_pre_fix_path": "src/db/index/segment/segment.cc",
+              "verified_pre_fix_lines": "1268-1300",
+              "support": "Actual physical-offset vector fetch"
+            }
+          ],
+          "disqualifying": false
+        }
+      ],
+      "critical_contradictions": [],
+      "disqualifications": [],
+      "critical_contradiction_audit": {
+        "C1": "Not asserted: answer says forward rows remain unchanged on vector-only path.",
+        "C2": "Not asserted: answer explicitly identifies vector/forward association errors.",
+        "C3": "Not asserted: answer says read-only reopen does not heal corruption.",
+        "C4": "Not asserted: logical deletion filtering is retained.",
+        "C5": "Not asserted: missing storage detail is scored as omission, not a denial that prior vector storage exists.",
+        "D1": "Not asserted: wrong associations are explicit, not denied.",
+        "D2": "Not asserted: controls and maintenance path distinctions bound the claimed failure.",
+        "D3": "Not asserted: no affected-index-only tail repair is proposed.",
+        "D4": "Not asserted: proposed regression steps and source-test descriptions do not claim actual local reproduction or passing upstream execution."
+      },
+      "total_points": 6,
+      "maximum_score": 10,
+      "source_grounded_success": false,
+      "failed_gates": [
+        "minimum_points_8",
+        "C2_required_full_credit",
+        "C2_core_citation_gate",
+        "C3_required_full_credit",
+        "C3_core_citation_gate"
+      ],
+      "reviewer_notes": [
+        "Only final answer text was graded; no process text filled omissions.",
+        "Scores are factual integer point-unit scores, separately gated by cited pre-fix source evidence. Verifier-found uncited spans do not repair answer citation gates.",
+        "Bare filenames are resolved using explicit nearby full paths when unambiguous; equivalent source spans accepted. Whole-file reducer naming alone is insufficient.",
+        "Conjunctive units were applied as frozen: P C2.2 requires the memory-to-persisted lifecycle; R C3.2 requires physical block metadata as well as forward rows. No half-points or unstated inference supplied.",
+        "Material noncritical errors are recorded separately; no listed critical contradiction or disqualifying overclaim is established.",
+        "No post-fix, solver, test or runtime evidence was accessed or generated."
+      ]
+    }
+  ],
+  "summary": {
+    "P": {
+      "total_points": 9,
+      "source_grounded_success": false
+    },
+    "R": {
+      "total_points": 6,
+      "source_grounded_success": false
+    }
+  },
+  "source_anchor_caveats_from_preparation": [
+    "E12 itself does not contain the logical deletion check; collection.cc:2001-2010 does. The core gates were evaluated against actual source content.",
+    "E29 calls the row filter; E07 and segment.cc:4444-4450 establish row-to-global-ID resolution."
+  ]
+}
