@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "source_commit": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+  "maximum_score": 10,
+  "verification_status": "Source-inspected, hashes/line spans checked; native reproduction not executed during construction.",
+  "reference_answer": "At the frozen revision, SegmentImpl::Open recovers a writing block. recover() opens the existing log into local recover_wal_file, replays records through internal_insert/internal_update/internal_upsert/internal_delete, and closes the local handle on return. Internal insertion fills memory_store_, indexes, doc_ids_, and writing-block metadata, so the recovered data can initially be fetched and counted. Recovery does not restore wal_file_. Normal Insert instead calls append_wal, which lazily opens the member WAL before internal_insert. Optimize switches any nonempty writing segment via switch_to_new_segment_for_writing; that calls dump, which calls flush. flush returns OK immediately when wal_file_ is null or reports no records. In this scenario the member is null, so it skips memory/index persistence and finish_memory_components/update_version. dump still seals the segment, and the switch removes the old writing-forward-block metadata, installs a new writing segment, and applies/flushes that version. On a subsequent open the old block no longer participates in writing-block recovery, and its memory-only documents are not represented as properly persisted blocks. Stats sums live segment doc_ids_ and derives index completeness from indexed metadata, so same-handle healthy statistics and successful status do not prove the next open can reconstruct data. Restore the member-WAL lifecycle after replay (close the reader and reopen the existing WAL into wal_file_, checking errors) so normal flush can persist replayed data before switching. A regression must crash before flush, verify recovery, immediately optimize without additional writes, then close and reopen fresh and verify the known documents; a no-crash control distinguishes this from all unflushed data being unsafe.",
+  "criteria": [
+    {
+      "id": "C1",
+      "points": 2,
+      "critical": true,
+      "claim": "Recovery reconstructs readable in-memory state from a temporary/local WAL handle but finishes without installing/reopening the member wal_file_.",
+      "full_credit": "Name the local-versus-member distinction and show replay enters internal operations that populate memory/doc ids. A generic claim of stale cache is insufficient.",
+      "evidence_sets": [
+        [
+          "E02",
+          "E03",
+          "E04",
+          "E05"
+        ]
+      ],
+      "partial_credit": "1 point for correct recovered-memory state or correct local/member WAL distinction, but not both."
+    },
+    {
+      "id": "C2",
+      "points": 2,
+      "critical": true,
+      "claim": "flush() treats a null member WAL or one with no records as no pending work, returning OK before persistence. Here the null member arm triggers.",
+      "full_credit": "State the exact null-or-no-record guard, identify the null-member cause for this scenario, and explain the skipped persistence/finalization.",
+      "evidence_sets": [
+        [
+          "E08",
+          "E09",
+          "E10"
+        ]
+      ],
+      "partial_credit": "1 point for identifying flush as the skipped step without the precise condition or lifecycle consequences."
+    },
+    {
+      "id": "C3",
+      "points": 2,
+      "critical": true,
+      "claim": "Optimize -> switch_to_new_segment_for_writing -> dump -> flush; successful early return allows sealing/switching and version persistence after old writing-block metadata is removed, so a future open cannot recover/persist the lost memory via the old writing block.",
+      "full_credit": "Connect the full call chain to removal of old writing metadata and the new persisted version, rather than blaming vector-ranking quality or claiming optimize never calls flush.",
+      "evidence_sets": [
+        [
+          "E06",
+          "E07",
+          "E08",
+          "E01"
+        ]
+      ],
+      "partial_credit": "1 point for correct call chain without the metadata/reopen consequence, or correct consequence without the chain."
+    },
+    {
+      "id": "C4",
+      "points": 1,
+      "critical": false,
+      "claim": "Same-handle Stats reads in-memory segment counts and indexed metadata; success/index completeness is not a durability or data-content check.",
+      "full_credit": "Explain doc_ids_ based counting and metadata-derived index completeness; do not invent a separate stats cache.",
+      "evidence_sets": [
+        [
+          "E11",
+          "E12"
+        ]
+      ],
+      "partial_credit": "No partial point."
+    },
+    {
+      "id": "C5",
+      "points": 1,
+      "critical": false,
+      "claim": "Normal Insert appends to/opens the member WAL before internal_insert, unlike replay, explaining the no-crash control under the stated size assumptions.",
+      "full_credit": "Cite ordinary insertion and append/open behavior; distinguish recovery bypassing append_wal.",
+      "evidence_sets": [
+        [
+          "E13",
+          "E14",
+          "E03"
+        ]
+      ],
+      "partial_credit": "No partial point."
+    },
+    {
+      "id": "C6",
+      "points": 1,
+      "critical": false,
+      "claim": "Restore the invariant that replayed pending data has an attached usable member WAL before later flush/dump; close the temporary reader and reopen/retain the existing WAL through the normal member path, handling errors.",
+      "full_credit": "A minimal lifecycle repair equivalent to attaching/reopening the existing WAL is accepted. An alternative persistence design is accepted only if the answer proves it preserves version, flush and WAL cleanup invariants.",
+      "evidence_sets": [
+        [
+          "E02",
+          "E05",
+          "E08",
+          "E14"
+        ]
+      ],
+      "partial_credit": "No partial point; simply calling public flush on the broken state is not a repair."
+    },
+    {
+      "id": "C7",
+      "points": 1,
+      "critical": false,
+      "claim": "Regression: insert known documents, force abrupt termination before flush, reopen and verify recovered data, optimize without extra writes, close, reopen from fresh process and compare count plus representative/all known documents and vectors. Include a no-crash or already-flushed control.",
+      "full_credit": "Fresh reopen after optimize and no intervening writes are required, because same-handle checks and writes that lazily open the WAL can mask the defect. Executing the test is not required.",
+      "evidence_sets": [
+        [
+          "E16",
+          "E07",
+          "E13",
+          "E14"
+        ]
+      ],
+      "partial_credit": "No partial point."
+    }
+  ],
+  "success_rule": {
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C1",
+      "C2",
+      "C3"
+    ],
+    "critical_contradictions_allowed": 0,
+    "supporting_citations_required_for_core_claims": true
+  },
+  "critical_contradictions": [
+    "Claims WAL replay itself failed and documents never existed after initial reopen.",
+    "Claims optimize never invokes a flush path.",
+    "Claims simply calling flush() on this recovered state repairs the lifecycle without further changes.",
+    "Claims vector similarity/quantization or Python garbage collection is the causal defect.",
+    "Claims same-handle statistics prove disk durability."
+  ],
+  "citation_policy": {
+    "must_resolve_in_frozen_source": true,
+    "require_claim_support_not_just_overlap": true,
+    "alternative_valid_spans_allowed": true,
+    "whole_file_hit_is_sufficient": false,
+    "evidence_sets": "All spans in one listed set establish the claim; equivalent supporting source spans accepted by blinded human audit.",
+    "score_without_evidence": "Report factual score separately if useful, but source-grounded success requires verified evidence for C1-C3.",
+    "retrieval_only_metrics": "Optional span/evidence coverage is diagnostic and never substituted for e2e QA correctness."
+  },
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 484,
+      "end_line": 501,
+      "claim_supported": "A writing block causes SegmentImpl::Open to recover it.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "779ce7d762e28e05982de1e368780654d859a4c840f17bd44e69100810bc4e1f",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L484-L501"
+    },
+    {
+      "id": "E02",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4193,
+      "end_line": 4215,
+      "claim_supported": "Recovery opens a local recover_wal_file and defers its close; it does not assign the member wal_file_.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "95fee72e702aaf4cc9105864f8eee18472fef5f743d5569676cb34caceaad7b8",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L4193-L4215"
+    },
+    {
+      "id": "E03",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4234,
+      "end_line": 4265,
+      "claim_supported": "Recovery dispatches records directly to internal insertion/update/upsert/delete methods.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "906ce9887c062fb4e15640236a434b362625d6ce9d8c52fd2e8b667a4e461d43",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L4234-L4265"
+    },
+    {
+      "id": "E04",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 837,
+      "end_line": 880,
+      "claim_supported": "Internal insertion creates/writes memory components and updates doc_ids_ and writing-block metadata.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "f5272d0e86956896f24cb66f51b2c6be475e7b8035ef426e173feafff243df27",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L837-L880"
+    },
+    {
+      "id": "E05",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4285,
+      "end_line": 4301,
+      "claim_supported": "Recovery finishes with Status::OK without attaching/reopening the member WAL.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "dfdc1347216f2c31eb96e6c22acf895d2574189b724af0e52f7426b464c356fc",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L4285-L4301"
+    },
+    {
+      "id": "E06",
+      "path": "src/db/collection.cc",
+      "start_line": 788,
+      "end_line": 816,
+      "claim_supported": "Optimize switches a nonempty writing segment before planning compaction on persisted segments.",
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "4d717fe3dfd3e5dbeec8ad0b838d3d979efef81a9bd99e984e5adacfc9513424",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/collection.cc#L788-L816"
+    },
+    {
+      "id": "E07",
+      "path": "src/db/collection.cc",
+      "start_line": 1517,
+      "end_line": 1551,
+      "claim_supported": "Segment switch dumps the old segment, removes its writing-forward-block metadata, installs new writing segment, and persists the new version.",
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "d04765f4431e25f55650974e39d788a03d8e25d97689c82a0784fe9a38b45c50",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/collection.cc#L1517-L1551"
+    },
+    {
+      "id": "E08",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2197,
+      "end_line": 2222,
+      "claim_supported": "dump calls flush before sealing; flush returns success immediately if member WAL is null or has no record.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8cf9a3abf15b43787c548efbac672fa1b102dd11a74458c3dcc5c06bb7fff5df",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L2197-L2222"
+    },
+    {
+      "id": "E09",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2224,
+      "end_line": 2255,
+      "claim_supported": "The early return skips memory-store, scalar/FTS and vector-index flushes.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "326c887bfd18c8281c263d6b93547342ef0995ee241d8d1dabbd7093cf051c70",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L2224-L2255"
+    },
+    {
+      "id": "E10",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2302,
+      "claim_supported": "The normal flush finalizes memory components into persisted-block metadata and updates/flushed version.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "3b769ee93f26622dc1a00465cf202cce6a6463f72bd93b8119a84377727308ce",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L2288-L2302"
+    },
+    {
+      "id": "E11",
+      "path": "src/db/collection.cc",
+      "start_line": 403,
+      "end_line": 439,
+      "claim_supported": "Statistics count current segment objects and derive completeness from vector-indexed metadata.",
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "36c5fb13c90a28123635d0ea28f244995139c6ac601aa8009a9db3451e2d8923",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/collection.cc#L403-L439"
+    },
+    {
+      "id": "E12",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 589,
+      "end_line": 600,
+      "claim_supported": "Per-segment count is derived from in-memory doc_ids_, minus deletions.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L589-L600"
+    },
+    {
+      "id": "E13",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 903,
+      "end_line": 917,
+      "claim_supported": "Ordinary Insert calls append_wal before internal_insert.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e5a814d864bffcb8530485f5f40accbab36adc93f2d00916ecab31d010aec78c",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L903-L917"
+    },
+    {
+      "id": "E14",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4303,
+      "end_line": 4338,
+      "claim_supported": "open_wal_file installs wal_file_; append_wal opens it lazily before appending.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b195933074a1bc80d0e40fda99b8c57500bc0264312cab7270596e1bcd40278a",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L4303-L4338"
+    },
+    {
+      "id": "E15",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4342,
+      "end_line": 4384,
+      "claim_supported": "Successful finish_memory_components registers persisted scalar/vector blocks.",
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b34740cd9252ffb6cbb860df65394aa6fcc67f33ab2d20ad529b0fa98e2e1c72",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/src/db/index/segment/segment.cc#L4342-L4384"
+    },
+    {
+      "id": "E16",
+      "path": "tests/db/crash_recovery/write_recovery_test.cc",
+      "start_line": 182,
+      "end_line": 218,
+      "claim_supported": "Existing pre-fix crash test verifies readback immediately after recovery but does not optimize and reopen.",
+      "file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "span_sha256": "fa2490e2f9b2b61b0c300af7d333d2e5ab1c6deb728a9ed22c278358ac912080",
+      "url": "https://github.com/alibaba/zvec/blob/ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d/tests/db/crash_recovery/write_recovery_test.cc#L182-L218"
+    }
+  ],
+  "judge_output_fields": [
+    "task_id",
+    "blinded_answer_id",
+    "criterion_scores",
+    "supporting_answer_quotes",
+    "verified_citations",
+    "unsupported_claims",
+    "critical_contradictions",
+    "total_points",
+    "source_grounded_success",
+    "reviewer_notes"
+  ]
+}

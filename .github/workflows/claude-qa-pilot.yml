@@ -26,3 +26,37 @@ jobs:
         with:
           name: provider-probe
           path: provider-probe.json
+  paired-pilot:
+    needs: provider-probe
+    if: github.repository == 'Cuiyus/zvec-grep'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [reflex-6, zvec-q001]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Test pilot parser and isolation contracts
+        run: python3 -m unittest discover -s benchmarks/claude-qa-pilot -p 'test_*.py' -v
+      - name: Build pinned Claude and zg runtime
+        run: docker build -f benchmarks/claude-qa-pilot/Dockerfile -t zg-claude-qa-pilot:20261019 benchmarks/claude-qa-pilot
+      - name: Run one frozen pair
+        env:
+          ANTHROPIC_BASE_URL: https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/apps/anthropic
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: >-
+          python3 benchmarks/claude-qa-pilot/ci_run.py
+          --task '${{ matrix.task }}'
+          --work '${{ runner.temp }}/pilot-${{ matrix.task }}'
+          --reports '${{ runner.temp }}/reports-${{ matrix.task }}'
+          --repeats 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-${{ matrix.task }}
+          path: ${{ runner.temp }}/reports-${{ matrix.task }}
