@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { cpus, platform, arch, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -75,6 +75,78 @@ if (
 ) {
   throw new Error("Unexpected native runtime: " + runtime.version);
 }
+async function probeChild(args, env, label) {
+  return await new Promise((resolveResult) => {
+    const childProcess = spawn(process.execPath, args, {
+      cwd: consumer,
+      env,
+      windowsHide: true,
+    });
+    let stdout = "",
+      stderr = "",
+      failure;
+    childProcess.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    childProcess.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const timer = setTimeout(() => {
+      failure = {
+        code: "ETIMEDOUT",
+        message: "Native process exceeded 60 seconds",
+      };
+      const debuggerPath = join(
+        process.env["ProgramFiles(x86)"],
+        "Windows Kits",
+        "10",
+        "Debuggers",
+        "x64",
+        "cdb.exe",
+      );
+      const debug = spawnSync(
+        debuggerPath,
+        ["-p", String(childProcess.pid), "-c", "~* kv; lm; .detach; q"],
+        {
+          encoding: "utf8",
+          timeout: 20000,
+          maxBuffer: 8 * 1024 * 1024,
+          windowsHide: true,
+        },
+      );
+      writeFileSync(
+        join(output, label + ".native-stacks.log"),
+        (debug.stdout ?? "") + (debug.stderr ?? ""),
+      );
+      childProcess.kill();
+    }, 60000);
+    childProcess.on("error", (error) => {
+      failure = error;
+    });
+    childProcess.on("close", (status, signal) => {
+      clearTimeout(timer);
+      resolveResult({ stdout, stderr, status, signal, error: failure });
+    });
+  });
+}
+const gflags = join(
+  process.env["ProgramFiles(x86)"],
+  "Windows Kits",
+  "10",
+  "Debuggers",
+  "x64",
+  "gflags.exe",
+);
+if (process.env.ZG_DIAG_PAGEHEAP === "1") {
+  const enabled = spawnSync(gflags, ["/p", "/enable", "node.exe", "/full"], {
+    encoding: "utf8",
+  });
+  writeFileSync(
+    join(output, "pageheap-enable.log"),
+    (enabled.stdout ?? "") + (enabled.stderr ?? ""),
+  );
+  if (enabled.status !== 0) throw new Error("Cannot enable page heap");
+}
 const rows = [];
 const modes = (process.env.ZG_DIAG_MODES ?? "plain,traced,await-runtime").split(
   ",",
@@ -89,17 +161,10 @@ if (
 for (let repetition = 1; repetition <= repeats; repetition++) {
   for (const mode of modes) {
     const started = Date.now();
-    const result = spawnSync(
-      process.execPath,
+    const result = await probeChild(
       mode === "gc-stress" ? ["--expose-gc", child] : [child],
-      {
-        cwd: consumer,
-        encoding: "utf8",
-        timeout: 120000,
-        maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, ZG_DIAG_MODE: mode, NO_COLOR: "1" },
-        windowsHide: true,
-      },
+      { ...process.env, ZG_DIAG_MODE: mode, NO_COLOR: "1" },
+      `${mode}-${repetition}`,
     );
     const name = `${mode}-${String(repetition).padStart(2, "0")}`;
     const stdout = result.stdout ?? "";
@@ -122,6 +187,9 @@ for (let repetition = 1; repetition <= repeats; repetition++) {
     writeFileSync(join(output, "results.json"), JSON.stringify(rows, null, 2));
     console.log(JSON.stringify(row));
   }
+}
+if (process.env.ZG_DIAG_PAGEHEAP === "1") {
+  spawnSync(gflags, ["/p", "/disable", "node.exe"], { encoding: "utf8" });
 }
 const summary = Object.fromEntries(
   modes.map((mode) => {

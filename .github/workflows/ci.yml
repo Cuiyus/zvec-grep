@@ -1,4 +1,4 @@
-name: Windows embedding GC disposal comparison
+name: Windows native disposal debug
 
 on:
   workflow_dispatch:
@@ -18,13 +18,14 @@ jobs:
       max-parallel: 3
       matrix:
         runtime: ["3.18.1", "3.22.2"]
-        host: [1, 2, 3]
+        host: [1]
     name: Windows native ${{ matrix.runtime }} / host ${{ matrix.host }}
     runs-on: windows-latest
     timeout-minutes: 35
     env:
       ZG_DIAG_REPEATS: ${{ inputs.repeats }}
-      ZG_DIAG_MODES: plain,gc-stress
+      ZG_DIAG_MODES: traced,gc-stress
+      ZG_DIAG_PAGEHEAP: "1"
       ZG_DIAG_EXPECTED_RUNTIME: ${{ matrix.runtime }}
       ZVEC_GREP_SMOKE_MODEL: local/embeddinggemma-300m
     steps:
@@ -68,6 +69,16 @@ jobs:
       - name: Probe fresh embedding processes
         timeout-minutes: 20
         run: node .github/diagnostics/embedding-lifecycle-driver.mjs
+      - name: Analyze any crash minidumps
+        if: always()
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          Get-ChildItem (Join-Path $env:ZG_DIAG_OUTPUT 'dumps') -Filter '*.dmp' | ForEach-Object {
+            $log = Join-Path $env:ZG_DIAG_OUTPUT ($_.BaseName + '.crash-stack.log')
+            & $debugger -z $_.FullName -c '.exr -1; .ecxr; kv; lm; q' 2>&1 | Out-File -FilePath $log
+          }
       - name: Validate the existing package smoke test
         if: ${{ always() && steps.build.outcome == 'success' }}
         run: npm run test:smoke:local-model
