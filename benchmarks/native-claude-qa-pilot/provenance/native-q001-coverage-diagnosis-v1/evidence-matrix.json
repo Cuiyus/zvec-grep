@@ -1,0 +1,518 @@
+{
+  "schema_version": 1,
+  "kind": "native_q001_failed_criterion_coverage_diagnosis",
+  "frozen_question": "Investigate the following behavior using only the supplied frozen source tree. This is a read-only code question: do not modify the implementation or search the web. Ground your answer in the implementation, with repository-relative file paths and line ranges for the important causal steps.\n\nA service inserts documents into a zvec collection and exits abruptly before an explicit flush. In a new process, opening the collection recovers the documents, and they can be counted and fetched. That process performs `optimize()` without inserting any additional documents. The call succeeds. Statistics from the same open handle still look healthy, but opening the collection again in another process reveals that the recovered documents are missing.\n\nA control collection populated and optimized in the original process, without a crash in between, does not show this loss. Assume the collection is small enough that automatic buffer or segment rollover does not happen while inserting or replaying these documents.\n\nExplain:\n\n1. Which internal state differs between the recovery path and the ordinary insertion path, and why the recovered data can initially be read.\n2. The call sequence and exact condition that allow optimization to succeed without preserving that data for the next reopen.\n3. Why a successful return and same-handle document/index statistics do not establish durability here.\n4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them.\n\nDistinguish what you can establish from the source from anything that would require executing a test. Do not claim to have run a reproduction unless you actually did so.\n",
+  "frozen_question_sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef",
+  "frozen_rubric_sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9",
+  "existing_grade_source": "Independent blinded model source audits already retained; not newly graded and not human or official benchmark scores.",
+  "answers": [
+    {
+      "id": "v2/baseline",
+      "repeat": "v2",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-B",
+      "existing_total_points": 9,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 1,
+        "C7": 0
+      },
+      "existing_source_grounded_success": true,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-v2/blinded-review/answer-B.md",
+        "sha256": "a6391941cda5656adf9fe9ea4087f77cbdf6c16ef1f5dfce2e1bf513508517c4",
+        "bytes": 15171
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v2-ci/raw/qa-v2-run/runs/q001-baseline/zvec-q001__8iLwZ2d/qa-session-exports/ses_eaa3df344ffeEuRq9OwAQ8pd1W.json",
+        "sha256": "5b6b004ad55e5979fd91e949abd2d666b856cebfb2c604f0955eab87cd958825",
+        "bytes": 741257
+      },
+      "native_final_message_id": "msg_155ccde08001ZXMWDkcFMHJ3zX",
+      "four_question_aligned_sections_already_present": [
+        "## 1. Which internal state differs, and why the data is still readable",
+        "## 2. Call sequence and the exact condition",
+        "## 3. Why `OK` + healthy stats prove nothing here",
+        "## 4. Smallest repair principle, and a regression test"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C7",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            },
+            {
+              "id": "control",
+              "text": "A control collection populated and optimized in the original process, without a crash in between, does not show this loss."
+            },
+            {
+              "id": "fresh_process",
+              "text": "Statistics from the same open handle still look healthy, but opening the collection again in another process reveals that the recovered documents are missing."
+            }
+          ],
+          "requirement_origin": "Explicit question wording or supplied scenario.",
+          "existing_review_rationale": "0/1: The main sequence has no intervening writes and a new handle after close, with count/document/vector comparisons. But it specifies same-process reopen rather than clearly executing the final reopen in a fresh process, and its only regression control inserts another document after recovery. That is neither a no-crash nor an already-flushed control. General prose explaining the no-crash behavior does not supply the missing test arm.",
+          "existing_review_supporting_quotes": [
+            "**Insert nothing.** Call `collection->Optimize(OptimizeOptions{2})`",
+            "`Collection::Open(dir_path_, options_)` again",
+            "a control that inserts one doc after recovery before optimizing \u2014 that one passes today and locks in the non-crash behaviour."
+          ],
+          "recorded_source_evidence_ids": [
+            "v2/baseline/prt_155c6df7b001V4Ln39Hf41puee/normal_insert_and_reopen_fixture"
+          ],
+          "evidence_availability": "question_requirement_and_supporting_fixture_present",
+          "final_gap_as_diagnosed": "Final regression reopens a handle without explicitly moving the final check to a fresh process and substitutes an extra-write-after-recovery control for the supplied no-crash control. The question contained both obligations and a normal-insert/reopen test fixture had been read.",
+          "final_section": {
+            "start_character": 9102,
+            "end_character": 9103,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    },
+    {
+      "id": "v2/zvec-grep",
+      "repeat": "v2",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-A",
+      "existing_total_points": 9,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 0,
+        "C5": 1,
+        "C6": 1,
+        "C7": 1
+      },
+      "existing_source_grounded_success": true,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-v2/blinded-review/answer-A.md",
+        "sha256": "c7e191c3a6b2ed03c24d3b94bb16673f462b8fee8606d468be18d6b6d528e28c",
+        "bytes": 8835
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v2-ci/raw/qa-v2-run/runs/q001-zvec-grep/zvec-q001__6c7rD9u/qa-session-exports/ses_eaa2e703effewhqbU6eJK6Yy00.json",
+        "sha256": "80e1e9a3bbea73326708a161ec7750af55f5dc917cd22c04181e4feca1a76b28",
+        "bytes": 487864
+      },
+      "native_final_message_id": "msg_155d96d03001WoEgj2hoz4ZpNT",
+      "four_question_aligned_sections_already_present": [
+        "## 1. Divergent internal state",
+        "## 2. Call sequence and exact condition",
+        "## 3. Why success and stats prove nothing",
+        "## 4. Smallest repair principle and regression test"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C4",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q3",
+              "text": "3. Why a successful return and same-handle document/index statistics do not establish durability here."
+            }
+          ],
+          "requirement_origin": "Explicit question wording or supplied scenario.",
+          "existing_review_rationale": "0/1: Explains live doc_ids_-based counting, but never explains how Stats computes index_completeness from vector_indexed metadata. Citing the whole Stats span and separately mentioning vector metadata is not a substitute for that causal explanation. No partial credit is allowed.",
+          "existing_review_supporting_quotes": [
+            "`Stats()` (`collection.cc:403-442`) sums `segment->doc_count(...)` over `get_all_segments()`"
+          ],
+          "recorded_source_evidence_ids": [
+            "v2/zvec-grep/prt_155d4e5ba001rPC7nP6lDvZr3U/complete_Stats_derivation",
+            "v2/zvec-grep/prt_155d29e58001DO8ni0uTYxr3si/live_doc_ids_count"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final explains live doc_ids-based counts and cites Stats, but does not connect index_completeness to meta()->vector_indexed and indexed_doc_count / stats.doc_count. The exact code was returned before the final answer.",
+          "final_section": {
+            "start_character": 4883,
+            "end_character": 4884,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    },
+    {
+      "id": "c01/baseline",
+      "repeat": "c01",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-A",
+      "existing_total_points": 9,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "existing_source_grounded_success": true,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-confirmation-v1/blinded-review/answer-A.md",
+        "sha256": "e4afd16db27cbea404c1beaecf846a40437ac2d56e8c11aee79864c3e154cc07",
+        "bytes": 12034
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-ci/c01/raw/qa-confirmation-run/runs/q001-baseline/zvec-q001__jogU2pF/qa-session-exports/ses_eaa185565ffeFQa40ibmp9KVpE.json",
+        "sha256": "0e74f7f31b12fc147bffa864c1f652b660c8f74c1734a97b886f1f9cfea67167",
+        "bytes": 730245
+      },
+      "native_final_message_id": "msg_155f1db5c001yRBDE6qElT6eWS",
+      "four_question_aligned_sections_already_present": [
+        "### 1. State that differs, and why the data is initially readable",
+        "### 2. Call sequence and the exact condition",
+        "### 3. Why OK + healthy stats prove nothing here",
+        "### 4. Smallest repair principle, and a regression test"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C6",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            }
+          ],
+          "requirement_origin": "The question asks for an intended-lifecycle repair; explicit member-reopen error handling is in the frozen rubric and is a source-informed completeness obligation, not literal question wording.",
+          "existing_review_rationale": "No credit: the member-WAL reopen principle is sound, but the required error handling is incomplete: a failed reopen must prevent a successful recovery return. The answer labels the existing reader-open error swallowing as a nearby issue but does not require propagation of member-reopen failure. Its handle-adoption variant additionally needs ownership/deferred-close handling. No partial point is available.",
+          "existing_review_supporting_quotes": [
+            "either assign it to `wal_file_` and re-seek to end, or call `open_wal_file()`",
+            "Also worth fixing nearby: `recover()` swallows a WAL-open failure by returning `Status::OK()`"
+          ],
+          "recorded_source_evidence_ids": [
+            "c01/baseline/prt_155e89634001RI3HmnRojDKXd5/reader_ownership_member_open_error_and_caller_propagation",
+            "c01/baseline/prt_155e8f786001eKc06oXgMdcBVu/persistence_and_member_gated_WAL_cleanup"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final offers member-WAL attachment/reopen but does not require checking and propagating a failed member reopen before recovery can return success. The recorded context contains the member helper InternalError return, append_wal CHECK_RETURN_STATUS, local deferred close, and member-gated cleanup. Existing review additionally rejects any unproved dirty-only alternative; its full rationale is retained below.",
+          "final_section": {
+            "start_character": 7427,
+            "end_character": 7428,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    },
+    {
+      "id": "c01/zvec-grep",
+      "repeat": "c01",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-C",
+      "existing_total_points": 8,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 0,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "existing_source_grounded_success": true,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-confirmation-v1/blinded-review/answer-C.md",
+        "sha256": "0a1dd0e209961573ac85087318744aac1f425d26ab4d52e04b405ab5d29bd31d",
+        "bytes": 9360
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-ci/c01/raw/qa-confirmation-run/runs/q001-zvec-grep/zvec-q001__eNo8qdN/qa-session-exports/ses_eaa09b579ffeDm13pGs00pdQpZ.json",
+        "sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449",
+        "bytes": 663919
+      },
+      "native_final_message_id": "msg_15600f0170017UMPYWHrCtxqsb",
+      "four_question_aligned_sections_already_present": [
+        "## 1. Recovery state vs. ordinary insertion state",
+        "## 2. Sequence and exact condition for the silent loss",
+        "## 3. Why OK + same-handle stats prove nothing",
+        "## 4. Smallest repair principle and regression test"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C4",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q3",
+              "text": "3. Why a successful return and same-handle document/index statistics do not establish durability here."
+            }
+          ],
+          "requirement_origin": "Explicit question wording or supplied scenario.",
+          "existing_review_rationale": "No credit: explains live doc_ids_-based counts but never explains how index_completeness is derived from vector_indexed metadata. A citation spanning Stats without the missing causal explanation does not satisfy this all-or-nothing criterion.",
+          "existing_review_supporting_quotes": [
+            "`Stats()` sums `doc_count()` over live in-memory `Segment` objects"
+          ],
+          "recorded_source_evidence_ids": [
+            "c01/zvec-grep/prt_155fa5f68001xZ9zPSOVy0PHFF/complete_Stats_derivation",
+            "c01/zvec-grep/prt_155f70303001VW6W7yJltJantd/live_doc_ids_count"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final explains live doc_ids-based counts and cites Stats, but does not connect index_completeness to meta()->vector_indexed and indexed_doc_count / stats.doc_count. The exact code was returned before the final answer.",
+          "final_section": {
+            "start_character": 4827,
+            "end_character": 4828,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        },
+        {
+          "criterion_id": "C6",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            }
+          ],
+          "requirement_origin": "The question asks for an intended-lifecycle repair; explicit member-reopen error handling is in the frozen rubric and is a source-informed completeness obligation, not literal question wording.",
+          "existing_review_rationale": "No credit: the attach-WAL direction is sound but lacks error handling. The offered supposedly equivalent dirty-test-only design is not shown to preserve WAL cleanup because cleanup still requires a nonnull member handle. The rubric accepts an alternate persistence design only with that proof; no partial point is available.",
+          "existing_review_supporting_quotes": [
+            "open the segment's own `wal_file_` on the same path in append mode",
+            "or equivalently (b) replace the `wal_file_`-based dirty test with a durable-state test"
+          ],
+          "recorded_source_evidence_ids": [
+            "c01/zvec-grep/prt_155f757b7001MylpyLB3H634o0/reader_ownership_member_open_error_and_caller_propagation",
+            "c01/zvec-grep/prt_155f706eb001xY0F0UtXaAeubv/persistence_and_member_gated_WAL_cleanup"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final offers member-WAL attachment/reopen but does not require checking and propagating a failed member reopen before recovery can return success. The recorded context contains the member helper InternalError return, append_wal CHECK_RETURN_STATUS, local deferred close, and member-gated cleanup. Existing review additionally rejects any unproved dirty-only alternative; its full rationale is retained below.",
+          "final_section": {
+            "start_character": 5748,
+            "end_character": 5749,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    },
+    {
+      "id": "c02/baseline",
+      "repeat": "c02",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-D",
+      "existing_total_points": 7,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 1,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 0
+      },
+      "existing_source_grounded_success": false,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-confirmation-v1/blinded-review/answer-D.md",
+        "sha256": "6906c399c306d4b7ede38479db3b9d7b8c8032783d297932cc670c43de749c7b",
+        "bytes": 9725
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-ci/c02/raw/qa-confirmation-run/runs/q001-baseline/zvec-q001__PAt5wVa/qa-session-exports/ses_ea9fc58dcffeWwPoNxiNSmK17V.json",
+        "sha256": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea",
+        "bytes": 894600
+      },
+      "native_final_message_id": "msg_156125d7b0011MQTZweTaMEFsP",
+      "four_question_aligned_sections_already_present": [
+        "## 1. Divergent internal state, and why reads still work",
+        "## 2. Sequence and exact condition",
+        "## 3. Why OK + same-handle stats prove nothing",
+        "## 4. Smallest repair principle and regression test"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C2",
+          "existing_points": 1,
+          "maximum_points": 2,
+          "question_obligations": [
+            {
+              "id": "Q2",
+              "text": "2. The call sequence and exact condition that allow optimization to succeed without preserving that data for the next reopen."
+            }
+          ],
+          "requirement_origin": "Explicit question wording or supplied scenario.",
+          "existing_review_rationale": "Partial credit (1/2): correctly identifies the null-member early return and the skipped persistence/finalization, but never states the other arm, !wal_file_->has_record(), as part of the no-op condition. The exact complete guard is required for full credit. The cited 2220-2222 span is correct and contains the omitted arm; this is incomplete explanation, not a false citation.",
+          "existing_review_supporting_quotes": [
+            "decides \"nothing to persist\" from `wal_file_ == nullptr`",
+            "**guard at `segment.cc:2220-2222` returns `Status::OK()` immediately**"
+          ],
+          "recorded_source_evidence_ids": [
+            "c02/baseline/prt_156047434001r15XBaJJP3lwno/full_predicate_and_skipped_finalization"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final causal explanation cites 2220-2222 but states only the null-member arm; it does not state the full null-or-no-record predicate. The exact predicate and complete flush body were already returned. Mentions of has_record in ordinary-insert/repair discussion are preserved and do not change the existing review.",
+          "final_section": {
+            "start_character": 2157,
+            "end_character": 2158,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        },
+        {
+          "criterion_id": "C6",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            }
+          ],
+          "requirement_origin": "The question asks for an intended-lifecycle repair; explicit member-reopen error handling is in the frozen rubric and is a source-informed completeness obligation, not literal question wording.",
+          "existing_review_rationale": "No credit: the member-WAL repair direction is sound but omits error handling. Its claimed equivalent dirty-flag alternative is also not proved to preserve WAL cleanup with a null member; literally OR-ing dirty into the early-return guard has the wrong polarity. The rubric requires proof of version/flush/WAL-cleanup invariants for an alternative and gives no partial point.",
+          "existing_review_supporting_quotes": [
+            "re-attach the WAL for append (e.g. call `open_wal_file()`",
+            "Equivalent alternative: an explicit `recovered_records_`/`dirty_` flag set by replay and OR-ed into the guard"
+          ],
+          "recorded_source_evidence_ids": [
+            "c02/baseline/prt_156050a6f00161En1TNicCCk7E/reader_ownership_member_open_error_and_caller_propagation",
+            "c02/baseline/prt_156047434001r15XBaJJP3lwno/persistence_and_member_gated_WAL_cleanup"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final offers member-WAL attachment/reopen but does not require checking and propagating a failed member reopen before recovery can return success. The recorded context contains the member helper InternalError return, append_wal CHECK_RETURN_STATUS, local deferred close, and member-gated cleanup. Existing review additionally rejects any unproved dirty-only alternative; its full rationale is retained below.",
+          "final_section": {
+            "start_character": 6474,
+            "end_character": 6475,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        },
+        {
+          "criterion_id": "C7",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            },
+            {
+              "id": "control",
+              "text": "A control collection populated and optimized in the original process, without a crash in between, does not show this loss."
+            },
+            {
+              "id": "fresh_process",
+              "text": "Statistics from the same open handle still look healthy, but opening the collection again in another process reveals that the recovered documents are missing."
+            }
+          ],
+          "requirement_origin": "Explicit question wording or supplied scenario.",
+          "existing_review_rationale": "No credit: the sequence contains the essential crash/recover/optimize-without-writes/reopen/content-check path, but its proposed regression has no no-crash or already-flushed control arm. A prose explanation of the ordinary-insert control elsewhere is not a specified regression control. C7 requires that arm and has no partial point.",
+          "existing_review_supporting_quotes": [
+            "this is `Optimize()` with no intervening insert",
+            "Reopen and assert `Stats().doc_count == N_recovered`"
+          ],
+          "recorded_source_evidence_ids": [
+            "c02/baseline/prt_156096167001tFMFA2N53rRJ6E/normal_insert_and_reopen_fixture"
+          ],
+          "evidence_availability": "question_requirement_and_supporting_fixture_present",
+          "final_gap_as_diagnosed": "Final regression sequence lacks a no-crash or already-flushed control arm, despite separate final prose explaining the ordinary-insert control, the question specifying that control, and a normal-insert/reopen fixture in the returned source.",
+          "final_section": {
+            "start_character": 6474,
+            "end_character": 6475,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    },
+    {
+      "id": "c02/zvec-grep",
+      "repeat": "c02",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-B",
+      "existing_total_points": 9,
+      "existing_criterion_scores": {
+        "C1": 2,
+        "C2": 2,
+        "C3": 2,
+        "C4": 1,
+        "C5": 1,
+        "C6": 0,
+        "C7": 1
+      },
+      "existing_source_grounded_success": true,
+      "answer": {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-confirmation-v1/blinded-review/answer-B.md",
+        "sha256": "42c41ce5c5db8aeb11a701255349ed30bb883122abb52c676f988fa168398bd8",
+        "bytes": 13039
+      },
+      "native_export": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-ci/c02/raw/qa-confirmation-run/runs/q001-zvec-grep/zvec-q001__tnfvbvw/qa-session-exports/ses_ea9e9ae5bffeIV9pyoo9zfH7rl.json",
+        "sha256": "73a413c62878a62ef92d36924c63d215f3159091d5c24456cf0e22599b8aab37",
+        "bytes": 699295
+      },
+      "native_final_message_id": "msg_156211510001ePeWM6hie3Xgvi",
+      "four_question_aligned_sections_already_present": [
+        "## 1. State that differs, and why the data is initially readable",
+        "## 2. Call sequence and the exact condition",
+        "## 3. Why \"OK\" and healthy stats prove nothing",
+        "## 4. Smallest repair principle and regression test (described, not implemented)"
+      ],
+      "failed_criteria": [
+        {
+          "criterion_id": "C6",
+          "existing_points": 0,
+          "maximum_points": 1,
+          "question_obligations": [
+            {
+              "id": "Q4",
+              "text": "4. The smallest repair principle that restores the intended lifecycle, and a regression-test sequence that would detect this failure. Describe the repair and test; do not implement them."
+            }
+          ],
+          "requirement_origin": "The question asks for an intended-lifecycle repair; explicit member-reopen error handling is in the frozen rubric and is a source-informed completeness obligation, not literal question wording.",
+          "existing_review_rationale": "No credit: adopting/reopening the existing WAL is the right minimal lifecycle direction, and the adoption wording removes the local deferred-close ownership problem. However, the answer does not require checking and propagating a failed member reopen. Error handling is explicit in C6 and there is no partial point.",
+          "existing_review_supporting_quotes": [
+            "adopt the WAL as the member handle after a non-empty replay",
+            "or call `open_wal_file()`, which already handles the existing-file case"
+          ],
+          "recorded_source_evidence_ids": [
+            "c02/zvec-grep/prt_15616bcb9001ne03ytSYT3AfVs/reader_ownership_member_open_error_and_caller_propagation",
+            "c02/zvec-grep/prt_15616c11f001uK54jym2t5Kg37/persistence_and_member_gated_WAL_cleanup"
+          ],
+          "evidence_availability": "required_source_mechanism_present_in_returned_tool_output",
+          "final_gap_as_diagnosed": "Final offers member-WAL attachment/reopen but does not require checking and propagating a failed member reopen before recovery can return success. The recorded context contains the member helper InternalError return, append_wal CHECK_RETURN_STATUS, local deferred close, and member-gated cleanup. Existing review additionally rejects any unproved dirty-only alternative; its full rationale is retained below.",
+          "final_section": {
+            "start_character": 8279,
+            "end_character": 8280,
+            "text": "#",
+            "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+          },
+          "regraded": false
+        }
+      ]
+    }
+  ],
+  "answer_count": 6,
+  "failed_criterion_cells": 9,
+  "no_recorded_source_absence_identified_for_selected_failed_mechanisms": true,
+  "caveat": "Text availability is not evidence of attention or comprehension. C7 includes question/scenario obligations and a supporting fixture, not a prewritten complete regression solution. Source availability alone does not prove why omissions occurred.",
+  "no_new_trial": true,
+  "no_provider_or_CI_call": true,
+  "no_plan_question_rubric_edit": true,
+  "quality_regraded": false,
+  "causality_established": false,
+  "counterfactual_success_established": false
+}

@@ -1,0 +1,129 @@
+{
+  "kind": "existing_C6_review_application_difference_not_a_regrade",
+  "all_six_member_open_failure_and_propagation_source_available": true,
+  "all_six_final_repair_sections_omit_explicit_member_reopen_failure_propagation": true,
+  "existing_scores_preserved": true,
+  "rubric_C6_claim": "Restore the invariant that replayed pending data has an attached usable member WAL before later flush/dump; close the temporary reader and reopen/retain the existing WAL through the normal member path, handling errors.",
+  "rubric_C6_full_credit": "A minimal lifecycle repair equivalent to attaching/reopening the existing WAL is accepted. An alternative persistence design is accepted only if the answer proves it preserves version, flush and WAL cleanup invariants.",
+  "interpretation_boundary": "The claim explicitly includes handling errors, while full_credit broadly accepts an equivalent minimal lifecycle repair. This is an application/calibration difference; neither original grader is declared wrong and no original score is corrected.",
+  "statement": "Development v2 gave both C6=1 for the lifecycle principle while expressly noting missing or under-elaborated error handling. Confirmation gave all four C6=0 for missing failed-member-reopen propagation, with additional alternate-design concerns where stated. The scores are retained as separate existing judgments; C6 cannot be pooled as a clean across-phase comparable failure rate or treatment effect.",
+  "question_explicitness": "Error handling is explicit in rubric C6. The question asks for the smallest repair principle restoring the intended lifecycle but does not literally demand checking the reopen return status. This distinction matters when proposing a question-derived structure without answer/rubric leakage.",
+  "rows": [
+    {
+      "id": "v2/baseline",
+      "existing_points": 1,
+      "existing_rationale": "1/1: Awarded specifically for alternative (a), which retains/reopens a usable member WAL and accounts for read-versus-append positioning. This is a rubric-accepted equivalent lifecycle repair; no code was requested. The recommended guard-only alternative (b) and equality guard (c) are not accepted as complete repairs and are flagged. Error handling is not explicitly elaborated and should be made explicit in implementation.",
+      "existing_quotes": [
+        "**(a) Alternative one-liner \u2014 converge the paths.**",
+        "leave the WAL open for append in the member `wal_file_` rather than closing the local `recover_wal_file`",
+        "or open the member handle after replay finishes.",
+        "Recommend (b) as the fix plus (c) as the invariant guard."
+      ],
+      "recorded_source_evidence_ids": [
+        "v2/baseline/prt_155c34991001P43nQPrRY94BzS/reader_ownership_member_open_error_and_caller_propagation",
+        "v2/baseline/prt_155c37301001rQBSzSKmDPmyBW/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 9102,
+        "end_character": 9103,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    },
+    {
+      "id": "v2/zvec-grep",
+      "existing_points": 1,
+      "existing_rationale": "1/1: The preferred repair is reopening the existing WAL into the member via open_wal_file, so normal flush/finalization/cleanup run. Accepted as the rubric-permitted lifecycle principle. Temporary-reader close ordering and propagation of the helper error should be explicit in an implementation; the answer does not claim errors may be ignored.",
+      "existing_quotes": [
+        "end recovery by calling `open_wal_file()` (`:4303-4322`) so the segment owns an open handle on the WAL it just replayed",
+        "Prefer the lifecycle fix; add the guard so any future regression fails loudly instead of losing data."
+      ],
+      "recorded_source_evidence_ids": [
+        "v2/zvec-grep/prt_155d206b5001wZDXNobXRJtLHW/reader_ownership_member_open_error_and_caller_propagation",
+        "v2/zvec-grep/prt_155d2b95b0018j8sK6VTX568km/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 5663,
+        "end_character": 5664,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    },
+    {
+      "id": "c01/baseline",
+      "existing_points": 0,
+      "existing_rationale": "No credit: the member-WAL reopen principle is sound, but the required error handling is incomplete: a failed reopen must prevent a successful recovery return. The answer labels the existing reader-open error swallowing as a nearby issue but does not require propagation of member-reopen failure. Its handle-adoption variant additionally needs ownership/deferred-close handling. No partial point is available.",
+      "existing_quotes": [
+        "either assign it to `wal_file_` and re-seek to end, or call `open_wal_file()`",
+        "Also worth fixing nearby: `recover()` swallows a WAL-open failure by returning `Status::OK()`"
+      ],
+      "recorded_source_evidence_ids": [
+        "c01/baseline/prt_155e89634001RI3HmnRojDKXd5/reader_ownership_member_open_error_and_caller_propagation",
+        "c01/baseline/prt_155e8f786001eKc06oXgMdcBVu/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 7427,
+        "end_character": 7428,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    },
+    {
+      "id": "c01/zvec-grep",
+      "existing_points": 0,
+      "existing_rationale": "No credit: the attach-WAL direction is sound but lacks error handling. The offered supposedly equivalent dirty-test-only design is not shown to preserve WAL cleanup because cleanup still requires a nonnull member handle. The rubric accepts an alternate persistence design only with that proof; no partial point is available.",
+      "existing_quotes": [
+        "open the segment's own `wal_file_` on the same path in append mode",
+        "or equivalently (b) replace the `wal_file_`-based dirty test with a durable-state test"
+      ],
+      "recorded_source_evidence_ids": [
+        "c01/zvec-grep/prt_155f757b7001MylpyLB3H634o0/reader_ownership_member_open_error_and_caller_propagation",
+        "c01/zvec-grep/prt_155f706eb001xY0F0UtXaAeubv/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 5748,
+        "end_character": 5749,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    },
+    {
+      "id": "c02/baseline",
+      "existing_points": 0,
+      "existing_rationale": "No credit: the member-WAL repair direction is sound but omits error handling. Its claimed equivalent dirty-flag alternative is also not proved to preserve WAL cleanup with a null member; literally OR-ing dirty into the early-return guard has the wrong polarity. The rubric requires proof of version/flush/WAL-cleanup invariants for an alternative and gives no partial point.",
+      "existing_quotes": [
+        "re-attach the WAL for append (e.g. call `open_wal_file()`",
+        "Equivalent alternative: an explicit `recovered_records_`/`dirty_` flag set by replay and OR-ed into the guard"
+      ],
+      "recorded_source_evidence_ids": [
+        "c02/baseline/prt_156050a6f00161En1TNicCCk7E/reader_ownership_member_open_error_and_caller_propagation",
+        "c02/baseline/prt_156047434001r15XBaJJP3lwno/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 6474,
+        "end_character": 6475,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    },
+    {
+      "id": "c02/zvec-grep",
+      "existing_points": 0,
+      "existing_rationale": "No credit: adopting/reopening the existing WAL is the right minimal lifecycle direction, and the adoption wording removes the local deferred-close ownership problem. However, the answer does not require checking and propagating a failed member reopen. Error handling is explicit in C6 and there is no partial point.",
+      "existing_quotes": [
+        "adopt the WAL as the member handle after a non-empty replay",
+        "or call `open_wal_file()`, which already handles the existing-file case"
+      ],
+      "recorded_source_evidence_ids": [
+        "c02/zvec-grep/prt_15616bcb9001ne03ytSYT3AfVs/reader_ownership_member_open_error_and_caller_propagation",
+        "c02/zvec-grep/prt_15616c11f001uK54jym2t5Kg37/persistence_and_member_gated_WAL_cleanup"
+      ],
+      "final_repair_section": {
+        "start_character": 8279,
+        "end_character": 8280,
+        "text": "#",
+        "sha256": "334359b90efed75da5f0ada1d5e6b256f4a6bd0aee7eb39c0f90182a021ffc8b"
+      }
+    }
+  ]
+}

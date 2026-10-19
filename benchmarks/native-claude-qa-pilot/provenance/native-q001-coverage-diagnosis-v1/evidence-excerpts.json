@@ -1,0 +1,588 @@
+{
+  "scope": "Only actual tool outputs and final text; model internal reasoning is not inspected.",
+  "tools": {
+    "v2/baseline/prt_155c34991001P43nQPrRY94BzS/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "v2/baseline/prt_155c34991001P43nQPrRY94BzS/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_155c34991001P43nQPrRY94BzS",
+      "profile_tool_ordinal": 18,
+      "tool_name": "read",
+      "native_message_id": "msg_155c33c380010rxvhv1c1zKqZb",
+      "native_session_id": "ses_eaa3df344ffeEuRq9OwAQ8pd1W",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 160,
+        "offset": 4185
+      },
+      "input_sha256": "f248039d7cb0e6b872809998cbb7aa663cda2875c559ae7949c97d0e9d504554",
+      "output_sha256": "810143b948777b2d5e262dd5250717b9e22ff317bdb064f51ffcc0edbc65569c",
+      "output_bytes": 6218,
+      "export_sha256": "5b6b004ad55e5979fd91e949abd2d666b856cebfb2c604f0955eab87cd958825",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "v2/baseline/prt_155c37301001rQBSzSKmDPmyBW/persistence_and_member_gated_WAL_cleanup": {
+      "id": "v2/baseline/prt_155c37301001rQBSzSKmDPmyBW/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_155c37301001rQBSzSKmDPmyBW",
+      "profile_tool_ordinal": 20,
+      "tool_name": "read",
+      "native_message_id": "msg_155c3612f001S4OxRUrc2Qset0",
+      "native_session_id": "ses_eaa3df344ffeEuRq9OwAQ8pd1W",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 180,
+        "offset": 2190
+      },
+      "input_sha256": "1146975b5c5d82225d302f21c612504d2254ac1bb7a7f821cb0d45506a43b24b",
+      "output_sha256": "f61a39fc4feaf00b651c0894c1169fdb4e17f9137431a0796658c7537b3feddc",
+      "output_bytes": 5955,
+      "export_sha256": "5b6b004ad55e5979fd91e949abd2d666b856cebfb2c604f0955eab87cd958825",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "v2/zvec-grep/prt_155d206b5001wZDXNobXRJtLHW/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "v2/zvec-grep/prt_155d206b5001wZDXNobXRJtLHW/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_155d206b5001wZDXNobXRJtLHW",
+      "profile_tool_ordinal": 9,
+      "tool_name": "bash",
+      "native_message_id": "msg_155d1f54c001RN68Gks0TVG0af",
+      "native_session_id": "ses_eaa2e703effewhqbU6eJK6Yy00",
+      "input": {
+        "command": "cd /workspace && sed -n '4180,4400p' src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "4f03b41329ee4fc04e705243fcdf9fd619606851df2415a459b3d5f3813c239c",
+      "output_sha256": "e6a7dce852782348ee322c894420070314b3dd5831b813e6020f7f2bfa33e230",
+      "output_bytes": 7518,
+      "export_sha256": "80e1e9a3bbea73326708a161ec7750af55f5dc917cd22c04181e4feca1a76b28",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "v2/zvec-grep/prt_155d2b95b0018j8sK6VTX568km/persistence_and_member_gated_WAL_cleanup": {
+      "id": "v2/zvec-grep/prt_155d2b95b0018j8sK6VTX568km/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_155d2b95b0018j8sK6VTX568km",
+      "profile_tool_ordinal": 19,
+      "tool_name": "bash",
+      "native_message_id": "msg_155d2ae13001xbkXqBUHBlGQIb",
+      "native_session_id": "ses_eaa2e703effewhqbU6eJK6Yy00",
+      "input": {
+        "command": "cd /workspace && sed -n '2197,2360p' src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "7908064876edd27360bf7921aa88cecb3160216428105788822c46964f5873f5",
+      "output_sha256": "70ac347eb6d67b2312b1a41d671e442aec6bde3e90f93aab5e0b5ff9f001c655",
+      "output_bytes": 4308,
+      "export_sha256": "80e1e9a3bbea73326708a161ec7750af55f5dc917cd22c04181e4feca1a76b28",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "c01/baseline/prt_155e89634001RI3HmnRojDKXd5/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "c01/baseline/prt_155e89634001RI3HmnRojDKXd5/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_155e89634001RI3HmnRojDKXd5",
+      "profile_tool_ordinal": 17,
+      "tool_name": "read",
+      "native_message_id": "msg_155e889e0001u1AdYGLQzDdVNT",
+      "native_session_id": "ses_eaa185565ffeFQa40ibmp9KVpE",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 260,
+        "offset": 4110
+      },
+      "input_sha256": "381aaff8e5d1731b06bbbe40e25a210381d3399c0c4a0e99d752a783ee896961",
+      "output_sha256": "af4ddd787fb9a35f3a2218209c6acd5b683cc344b5817de7021073355bdddabd",
+      "output_bytes": 10797,
+      "export_sha256": "0e74f7f31b12fc147bffa864c1f652b660c8f74c1734a97b886f1f9cfea67167",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "c01/baseline/prt_155e8f786001eKc06oXgMdcBVu/persistence_and_member_gated_WAL_cleanup": {
+      "id": "c01/baseline/prt_155e8f786001eKc06oXgMdcBVu/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_155e8f786001eKc06oXgMdcBVu",
+      "profile_tool_ordinal": 20,
+      "tool_name": "read",
+      "native_message_id": "msg_155e8e3ff001Auwz4DqB8RXPiE",
+      "native_session_id": "ses_eaa185565ffeFQa40ibmp9KVpE",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 180,
+        "offset": 2190
+      },
+      "input_sha256": "1146975b5c5d82225d302f21c612504d2254ac1bb7a7f821cb0d45506a43b24b",
+      "output_sha256": "f61a39fc4feaf00b651c0894c1169fdb4e17f9137431a0796658c7537b3feddc",
+      "output_bytes": 5955,
+      "export_sha256": "0e74f7f31b12fc147bffa864c1f652b660c8f74c1734a97b886f1f9cfea67167",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "c01/zvec-grep/prt_155f757b7001MylpyLB3H634o0/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "c01/zvec-grep/prt_155f757b7001MylpyLB3H634o0/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_155f757b7001MylpyLB3H634o0",
+      "profile_tool_ordinal": 16,
+      "tool_name": "read",
+      "native_message_id": "msg_155f70ac6001wcJLsSu2Fr7ztr",
+      "native_session_id": "ses_eaa09b579ffeDm13pGs00pdQpZ",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 240,
+        "offset": 4110
+      },
+      "input_sha256": "867d557a83fbc5e7a4cb8033a6730d5ff475748c88d74acebc2e8277f4181129",
+      "output_sha256": "228af77f0ac74e6f8452b42aa543d4533f10067e3d5f6e846054f8f4439b6e92",
+      "output_bytes": 9957,
+      "export_sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "c01/zvec-grep/prt_155f706eb001xY0F0UtXaAeubv/persistence_and_member_gated_WAL_cleanup": {
+      "id": "c01/zvec-grep/prt_155f706eb001xY0F0UtXaAeubv/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_155f706eb001xY0F0UtXaAeubv",
+      "profile_tool_ordinal": 15,
+      "tool_name": "read",
+      "native_message_id": "msg_155f6f1e00016uftt7wD5iefNS",
+      "native_session_id": "ses_eaa09b579ffeDm13pGs00pdQpZ",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 150,
+        "offset": 2190
+      },
+      "input_sha256": "da3ccb9f182df3a28fb8beeeb529200b15f6ad258e20779c462a09ae974ef65a",
+      "output_sha256": "405f9007e9ef3d620880ffbd367d1ec554a6eb7daa7edffffa6742efe73b7498",
+      "output_bytes": 4818,
+      "export_sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "c02/baseline/prt_156050a6f00161En1TNicCCk7E/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "c02/baseline/prt_156050a6f00161En1TNicCCk7E/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_156050a6f00161En1TNicCCk7E",
+      "profile_tool_ordinal": 20,
+      "tool_name": "bash",
+      "native_message_id": "msg_1560487ca001Unspf32cfSZdkw",
+      "native_session_id": "ses_ea9fc58dcffeWwPoNxiNSmK17V",
+      "input": {
+        "command": "cd /workspace && sed -n 4180,4360p src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "dadc1d491b2b22a2f705501c06b07e82a192a347f7274994837964c1f7e9533e",
+      "output_sha256": "55daa9416bfd0b3ed31fd4dfac9a87b9471e0a630fa91dd568042f859a69dfe6",
+      "output_bytes": 5834,
+      "export_sha256": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "c02/baseline/prt_156047434001r15XBaJJP3lwno/persistence_and_member_gated_WAL_cleanup": {
+      "id": "c02/baseline/prt_156047434001r15XBaJJP3lwno/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_156047434001r15XBaJJP3lwno",
+      "profile_tool_ordinal": 18,
+      "tool_name": "bash",
+      "native_message_id": "msg_1560464fe001Zkw00BUJIEqzzo",
+      "native_session_id": "ses_ea9fc58dcffeWwPoNxiNSmK17V",
+      "input": {
+        "command": "cd /workspace && sed -n 2200,2400p src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "bc90152b1a4719e2eb31c842d6be9c6ff2be805635df710086cd43974bc62e55",
+      "output_sha256": "63fb050f343ba5e74b431dd0cca9aa55ea58d91168385764538dc0542e579e02",
+      "output_bytes": 5738,
+      "export_sha256": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "c02/zvec-grep/prt_15616bcb9001ne03ytSYT3AfVs/reader_ownership_member_open_error_and_caller_propagation": {
+      "id": "c02/zvec-grep/prt_15616bcb9001ne03ytSYT3AfVs/reader_ownership_member_open_error_and_caller_propagation",
+      "part_id": "prt_15616bcb9001ne03ytSYT3AfVs",
+      "profile_tool_ordinal": 9,
+      "tool_name": "read",
+      "native_message_id": "msg_15616b291001t7YgUy3MdmNenS",
+      "native_session_id": "ses_ea9e9ae5bffeIV9pyoo9zfH7rl",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "offset": 4119,
+        "limit": 300
+      },
+      "input_sha256": "a14b04ed683dbe084a718698dc88d273d58e2db7b024fb1568e77dc672489899",
+      "output_sha256": "8d5349a27b3016376daa14b8b09cded1bb5b1533913629bf8acd8274f5ada7b7",
+      "output_bytes": 12733,
+      "export_sha256": "73a413c62878a62ef92d36924c63d215f3159091d5c24456cf0e22599b8aab37",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "reader_ownership_member_open_error_and_caller_propagation",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4206,
+          "end_line": 4215,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4206:   WalFilePtr recover_wal_file;\n4207:   WalOptions wal_option;\n4208:   wal_option.create_new = false;\n4209:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4210:       0) {\n4211:     LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:               wal_file_path.c_str());\n4213:     return Status::OK();\n4214:   }\n4215:   AILEGO_DEFER([&]() { recover_wal_file->close(); });"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4330,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "4303: Status SegmentImpl::open_wal_file() {\n4304:   auto mem_block = segment_meta_->writing_forward_block().value();\n4305:   std::string wal_file_path =\n4306:       FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:   WalOptions wal_option;\n4308:   if (std::filesystem::exists(wal_file_path)) {\n4309:     wal_option.create_new = false;\n4310:   } else {\n4311:     wal_option.create_new = true;\n4312:   }\n4313: \n4314:   if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:     LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:               wal_file_path.c_str());\n4317:     return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4318:   }\n4319: \n4320:   LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4321:   return Status::OK();\n4322: }\n4323: \n4324: Status SegmentImpl::append_wal(const Doc &doc) {\n4325:   std::vector<uint8_t> buf = doc.serialize();\n4326: \n4327:   if (!wal_file_) {\n4328:     auto s = open_wal_file();\n4329:     CHECK_RETURN_STATUS(s);\n4330:   }"
+        }
+      ]
+    },
+    "c02/zvec-grep/prt_15616c11f001uK54jym2t5Kg37/persistence_and_member_gated_WAL_cleanup": {
+      "id": "c02/zvec-grep/prt_15616c11f001uK54jym2t5Kg37/persistence_and_member_gated_WAL_cleanup",
+      "part_id": "prt_15616c11f001uK54jym2t5Kg37",
+      "profile_tool_ordinal": 10,
+      "tool_name": "read",
+      "native_message_id": "msg_15616b291001t7YgUy3MdmNenS",
+      "native_session_id": "ses_ea9e9ae5bffeIV9pyoo9zfH7rl",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "offset": 2190,
+        "limit": 160
+      },
+      "input_sha256": "00138b1d91eac6c7ecd8d114866fc4f1e07185c177c9eaeda0b4fce57f1a2e01",
+      "output_sha256": "103ac9349fdc9f67aca51ed84e4b80519146efeaf9bd1628cdf5ad521eeed9ed",
+      "output_bytes": 5184,
+      "export_sha256": "73a413c62878a62ef92d36924c63d215f3159091d5c24456cf0e22599b8aab37",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "persistence_and_member_gated_WAL_cleanup",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2315,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);\n2303: \n2304:   // clear wal file\n2305:   if (wal_file_) {\n2306:     auto ret = wal_file_->remove();\n2307:     if (ret != 0) {\n2308:       LOG_ERROR(\n2309:           \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2310:           id());\n2311:       return Status::InternalError(\"Failed to remove WAL file\");\n2312:     }\n2313:     wal_file_.reset();\n2314:     LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n2315:   }"
+        }
+      ]
+    },
+    "v2/baseline/prt_155c6df7b001V4Ln39Hf41puee/normal_insert_and_reopen_fixture": {
+      "id": "v2/baseline/prt_155c6df7b001V4Ln39Hf41puee/normal_insert_and_reopen_fixture",
+      "part_id": "prt_155c6df7b001V4Ln39Hf41puee",
+      "profile_tool_ordinal": 43,
+      "tool_name": "read",
+      "native_message_id": "msg_155c6b3eb001er7wT6UZsV6Yfx",
+      "native_session_id": "ses_eaa3df344ffeEuRq9OwAQ8pd1W",
+      "input": {
+        "filePath": "/workspace/tests/db/crash_recovery/write_recovery_test.cc",
+        "limit": 180
+      },
+      "input_sha256": "fb75f7d810a4b6aa775e17828e9a23ba01f72b9dfc9ce53970b54c25b157d749",
+      "output_sha256": "c0812e619dc8c9c16073075e583af99a483a14b41aa8ed45f5dbaa5f8c0f71b0",
+      "output_bytes": 6775,
+      "export_sha256": "5b6b004ad55e5979fd91e949abd2d666b856cebfb2c604f0955eab87cd958825",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "normal_insert_and_reopen_fixture",
+      "source_excerpts": [
+        {
+          "path": "tests/db/crash_recovery/write_recovery_test.cc",
+          "start_line": 164,
+          "end_line": 179,
+          "frozen_source_file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+          "text": "164: TEST_F(CrashRecoveryTest, BasicInsertAndReopen) {\n165:   {\n166:     auto schema = CreateTestSchema(collection_name_);\n167:     auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n168:     ASSERT_TRUE(result.has_value()) << result.error().message();\n169:     auto collection = result.value();\n170:     collection.reset();\n171:   }\n172: \n173:   RunGenerator(\"0\", \"5000\", \"insert\", \"0\");\n174:   auto result = Collection::Open(dir_path_, options_);\n175:   ASSERT_TRUE(result.has_value());\n176:   auto collection = result.value();\n177:   ASSERT_EQ(collection->Stats().value().doc_count, 5000)\n178:       << \"Document count mismatch\";\n179: }"
+        }
+      ]
+    },
+    "v2/zvec-grep/prt_155d4e5ba001rPC7nP6lDvZr3U/complete_Stats_derivation": {
+      "id": "v2/zvec-grep/prt_155d4e5ba001rPC7nP6lDvZr3U/complete_Stats_derivation",
+      "part_id": "prt_155d4e5ba001rPC7nP6lDvZr3U",
+      "profile_tool_ordinal": 34,
+      "tool_name": "bash",
+      "native_message_id": "msg_155d4cca7001HCGlTW6iGVjKjP",
+      "native_session_id": "ses_eaa2e703effewhqbU6eJK6Yy00",
+      "input": {
+        "command": "cd /workspace && grep -n \"CollectionImpl::Stats\" -A 45 src/db/collection.cc"
+      },
+      "input_sha256": "1c1e232d56e1b885514ecd9cbc2b70e08a55c910e019292fbe6c0b4798205f6f",
+      "output_sha256": "a3c4e692980c46564ae4efdcbd1c2c4589a6eeb9a4d472a4577f60877a12fe2a",
+      "output_bytes": 1438,
+      "export_sha256": "80e1e9a3bbea73326708a161ec7750af55f5dc917cd22c04181e4feca1a76b28",
+      "state_status": "completed",
+      "source_verification": "exact_numbered_grep_output_lines",
+      "role": "complete_Stats_derivation",
+      "source_excerpts": [
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 403,
+          "end_line": 439,
+          "frozen_source_file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "text": "403: Result<CollectionStats> CollectionImpl::Stats() const {\n404:   std::lock_guard lock(schema_handle_mtx_);\n405: \n406:   CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n407: \n408:   auto segments = get_all_segments();\n409: \n410:   CollectionStats stats;\n411:   auto vector_fields = schema_->vector_fields();\n412:   if (segments.empty()) {\n413:     stats.doc_count = 0;\n414:     for (auto &field : vector_fields) {\n415:       stats.index_completeness[field->name()] =\n416:           1;  // if no doc, completeness is 1\n417:     }\n418:     return stats;\n419:   }\n420: \n421:   for (auto &segment : segments) {\n422:     stats.doc_count += segment->doc_count(delete_store_->make_filter());\n423:   }\n424: \n425:   for (auto &field : vector_fields) {\n426:     if (stats.doc_count == 0) {\n427:       stats.index_completeness[field->name()] = 1;\n428:       continue;\n429:     }\n430: \n431:     uint32_t indexed_doc_count{0};\n432:     for (auto &segment : segments) {\n433:       if (segment->meta()->vector_indexed(field->name())) {\n434:         indexed_doc_count += segment->doc_count(delete_store_->make_filter());\n435:       }\n436:     }\n437:     stats.index_completeness[field->name()] =\n438:         indexed_doc_count * 1.0 / stats.doc_count;\n439:   }"
+        }
+      ]
+    },
+    "v2/zvec-grep/prt_155d29e58001DO8ni0uTYxr3si/live_doc_ids_count": {
+      "id": "v2/zvec-grep/prt_155d29e58001DO8ni0uTYxr3si/live_doc_ids_count",
+      "part_id": "prt_155d29e58001DO8ni0uTYxr3si",
+      "profile_tool_ordinal": 17,
+      "tool_name": "bash",
+      "native_message_id": "msg_155d28ffc0017j276BIfRL6HVv",
+      "native_session_id": "ses_eaa2e703effewhqbU6eJK6Yy00",
+      "input": {
+        "command": "cd /workspace && sed -n '461,620p' src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "8b57a46a3110df08cf6a8171b6ea6bd11af452cd245583ed3aeb4daa4c8c8e34",
+      "output_sha256": "575c21e6f4cd7afb7700b9a1109d84e228fc76a6d37b7da77053ce2bbf59a8bb",
+      "output_bytes": 4725,
+      "export_sha256": "80e1e9a3bbea73326708a161ec7750af55f5dc917cd22c04181e4feca1a76b28",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "live_doc_ids_count",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 589,
+          "end_line": 600,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "589: uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n590:   uint64_t doc_count = doc_ids_.size();\n591:   if (filter) {\n592:     for (const auto &doc_id : doc_ids_) {\n593:       if (filter->is_filtered(doc_id)) {\n594:         doc_count--;\n595:       }\n596:     }\n597:   }\n598: \n599:   return doc_count;\n600: }"
+        }
+      ]
+    },
+    "c01/zvec-grep/prt_155fa5f68001xZ9zPSOVy0PHFF/complete_Stats_derivation": {
+      "id": "c01/zvec-grep/prt_155fa5f68001xZ9zPSOVy0PHFF/complete_Stats_derivation",
+      "part_id": "prt_155fa5f68001xZ9zPSOVy0PHFF",
+      "profile_tool_ordinal": 32,
+      "tool_name": "read",
+      "native_message_id": "msg_155f9a54b001XPr76OUzSSUWoW",
+      "native_session_id": "ses_eaa09b579ffeDm13pGs00pdQpZ",
+      "input": {
+        "filePath": "/workspace/src/db/collection.cc",
+        "limit": 50,
+        "offset": 403
+      },
+      "input_sha256": "62de4aade54b12c641ec2c680c2e731b58dedb00cdc01bbb1ee4df076db18960",
+      "output_sha256": "0a9dbbaaed7fd7966994bd6c6e5a3e2b8d18df43f18e689dd9e53654ab44c247",
+      "output_bytes": 1731,
+      "export_sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "complete_Stats_derivation",
+      "source_excerpts": [
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 403,
+          "end_line": 439,
+          "frozen_source_file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "text": "403: Result<CollectionStats> CollectionImpl::Stats() const {\n404:   std::lock_guard lock(schema_handle_mtx_);\n405: \n406:   CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n407: \n408:   auto segments = get_all_segments();\n409: \n410:   CollectionStats stats;\n411:   auto vector_fields = schema_->vector_fields();\n412:   if (segments.empty()) {\n413:     stats.doc_count = 0;\n414:     for (auto &field : vector_fields) {\n415:       stats.index_completeness[field->name()] =\n416:           1;  // if no doc, completeness is 1\n417:     }\n418:     return stats;\n419:   }\n420: \n421:   for (auto &segment : segments) {\n422:     stats.doc_count += segment->doc_count(delete_store_->make_filter());\n423:   }\n424: \n425:   for (auto &field : vector_fields) {\n426:     if (stats.doc_count == 0) {\n427:       stats.index_completeness[field->name()] = 1;\n428:       continue;\n429:     }\n430: \n431:     uint32_t indexed_doc_count{0};\n432:     for (auto &segment : segments) {\n433:       if (segment->meta()->vector_indexed(field->name())) {\n434:         indexed_doc_count += segment->doc_count(delete_store_->make_filter());\n435:       }\n436:     }\n437:     stats.index_completeness[field->name()] =\n438:         indexed_doc_count * 1.0 / stats.doc_count;\n439:   }"
+        }
+      ]
+    },
+    "c01/zvec-grep/prt_155f70303001VW6W7yJltJantd/live_doc_ids_count": {
+      "id": "c01/zvec-grep/prt_155f70303001VW6W7yJltJantd/live_doc_ids_count",
+      "part_id": "prt_155f70303001VW6W7yJltJantd",
+      "profile_tool_ordinal": 14,
+      "tool_name": "read",
+      "native_message_id": "msg_155f6f1e00016uftt7wD5iefNS",
+      "native_session_id": "ses_eaa09b579ffeDm13pGs00pdQpZ",
+      "input": {
+        "filePath": "/workspace/src/db/index/segment/segment.cc",
+        "limit": 160,
+        "offset": 455
+      },
+      "input_sha256": "a8826dcdd03eeb9efabfc5ce4adc2194179d1bcad56b2573c63630187b5a6077",
+      "output_sha256": "cc58972c0ec25b9160f6ff8051f5293e2b7781ce80cf87cee477305fbfa60ac5",
+      "output_bytes": 5418,
+      "export_sha256": "90804469a19f0cc7a30e200a1db81b0a06bc588863ee1d20abbe6bec36ce6449",
+      "state_status": "completed",
+      "source_verification": "exact_native_read_display_window",
+      "role": "live_doc_ids_count",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 589,
+          "end_line": 600,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "589: uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n590:   uint64_t doc_count = doc_ids_.size();\n591:   if (filter) {\n592:     for (const auto &doc_id : doc_ids_) {\n593:       if (filter->is_filtered(doc_id)) {\n594:         doc_count--;\n595:       }\n596:     }\n597:   }\n598: \n599:   return doc_count;\n600: }"
+        }
+      ]
+    },
+    "c02/baseline/prt_156047434001r15XBaJJP3lwno/full_predicate_and_skipped_finalization": {
+      "id": "c02/baseline/prt_156047434001r15XBaJJP3lwno/full_predicate_and_skipped_finalization",
+      "part_id": "prt_156047434001r15XBaJJP3lwno",
+      "profile_tool_ordinal": 18,
+      "tool_name": "bash",
+      "native_message_id": "msg_1560464fe001Zkw00BUJIEqzzo",
+      "native_session_id": "ses_ea9fc58dcffeWwPoNxiNSmK17V",
+      "input": {
+        "command": "cd /workspace && sed -n 2200,2400p src/db/index/segment/segment.cc"
+      },
+      "input_sha256": "bc90152b1a4719e2eb31c842d6be9c6ff2be805635df710086cd43974bc62e55",
+      "output_sha256": "63fb050f343ba5e74b431dd0cca9aa55ea58d91168385764538dc0542e579e02",
+      "output_bytes": 5738,
+      "export_sha256": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea",
+      "state_status": "completed",
+      "source_verification": "exact_full_bare_sed_output",
+      "role": "full_predicate_and_skipped_finalization",
+      "source_excerpts": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2217,
+          "end_line": 2229,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2217: Status SegmentImpl::flush() {\n2218:   CHECK_SEGMENT_READONLY_RETURN_STATUS;\n2219: \n2220:   if (wal_file_ == nullptr || !wal_file_->has_record()) {\n2221:     return Status::OK();\n2222:   }\n2223: \n2224:   if (wal_file_) {\n2225:     if (wal_file_->flush() != 0) {\n2226:       LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n2227:       return Status::InternalError(\"Failed to flush wal\");\n2228:     }\n2229:   }"
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2302,
+          "frozen_source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "text": "2288:   if (memory_store_) {\n2289:     // update segment meta with memory components\n2290:     s = finish_memory_components();\n2291:     CHECK_RETURN_STATUS(s);\n2292: \n2293:     // set a new mem block\n2294:     auto block_id = allocate_block_id();\n2295:     segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n2296:                                               block.max_doc_id_ + 1, 0, 0,\n2297:                                               block.columns_});\n2298:   }\n2299: \n2300:   // update version and flush\n2301:   s = update_version(delete_snapshot_path_suffix);\n2302:   CHECK_RETURN_STATUS(s);"
+        }
+      ]
+    },
+    "c02/baseline/prt_156096167001tFMFA2N53rRJ6E/normal_insert_and_reopen_fixture": {
+      "id": "c02/baseline/prt_156096167001tFMFA2N53rRJ6E/normal_insert_and_reopen_fixture",
+      "part_id": "prt_156096167001tFMFA2N53rRJ6E",
+      "profile_tool_ordinal": 51,
+      "tool_name": "bash",
+      "native_message_id": "msg_1560922a1001k7nx9rpk4wH4dU",
+      "native_session_id": "ses_ea9fc58dcffeWwPoNxiNSmK17V",
+      "input": {
+        "command": "cd /workspace && cat tests/db/crash_recovery/write_recovery_test.cc"
+      },
+      "input_sha256": "6ffa9b03786aad83de58432a01570b1fcfa2256d84be6d9e79e25ed198412b85",
+      "output_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "output_bytes": 14836,
+      "export_sha256": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea",
+      "state_status": "completed",
+      "source_verification": "exact_full_cat_output",
+      "role": "normal_insert_and_reopen_fixture",
+      "source_excerpts": [
+        {
+          "path": "tests/db/crash_recovery/write_recovery_test.cc",
+          "start_line": 164,
+          "end_line": 179,
+          "frozen_source_file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+          "text": "164: TEST_F(CrashRecoveryTest, BasicInsertAndReopen) {\n165:   {\n166:     auto schema = CreateTestSchema(collection_name_);\n167:     auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n168:     ASSERT_TRUE(result.has_value()) << result.error().message();\n169:     auto collection = result.value();\n170:     collection.reset();\n171:   }\n172: \n173:   RunGenerator(\"0\", \"5000\", \"insert\", \"0\");\n174:   auto result = Collection::Open(dir_path_, options_);\n175:   ASSERT_TRUE(result.has_value());\n176:   auto collection = result.value();\n177:   ASSERT_EQ(collection->Stats().value().doc_count, 5000)\n178:       << \"Document count mismatch\";\n179: }"
+        }
+      ]
+    }
+  }
+}

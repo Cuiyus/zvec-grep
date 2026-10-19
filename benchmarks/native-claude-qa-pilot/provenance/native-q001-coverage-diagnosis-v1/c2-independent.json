@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "diagnosis_scope": "c02 answer-D existing C2 failure; supplemental C7 coverage observations only; no grading or experiments",
+  "worktree_head": "7f827f7a8755b4aebcb5d145cf179357d4684d2a",
+  "inputs": {
+    "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/results/20261020-main-opencode-q001-confirmation-v1/summary.json": "39c8d20d4093ce183de24449ae99bc3d32b4f77e1beb7fc7dacb85fbde8c3b36",
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-blind/review-part2.json": "1dd7e73c805fd008bcfc9b1e373c64149055b7abffa0c0ca01cbf98107ac8a2d",
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-blind/question.md": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef",
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-blind/rubric.json": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9",
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-blind/answer-D.md": "6906c399c306d4b7ede38479db3b9d7b8c8032783d297932cc670c43de749c7b",
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/confirmation-v1-ci/c02/raw/qa-confirmation-run/runs/q001-baseline/zvec-q001__PAt5wVa/qa-session-exports/ses_ea9fc58dcffeWwPoNxiNSmK17V.json": "965b346eea6047723f6cadb89dc8cfb4c097ab188e4cb0604eaf9c039c7fdfea"
+  },
+  "mapping": [
+    {
+      "repeat": "c02",
+      "profile": "baseline",
+      "blinded_answer_id": "answer-D",
+      "answer_sha256": "6906c399c306d4b7ede38479db3b9d7b8c8032783d297932cc670c43de749c7b"
+    },
+    {
+      "repeat": "c02",
+      "profile": "zvec-grep",
+      "blinded_answer_id": "answer-B",
+      "answer_sha256": "42c41ce5c5db8aeb11a701255349ed30bb883122abb52c676f988fa168398bd8"
+    }
+  ],
+  "hash_method": {
+    "input_canonical_json": "UTF-8 JSON with sort_keys=True, ensure_ascii=False, separators=(comma,colon)",
+    "output": "Exact native tool state.output string encoded UTF-8",
+    "source_span": "Original inclusive source lines retaining line endings",
+    "final": "Exact native final text part equals answer-D.md bytes"
+  },
+  "native_session_id": "ses_ea9fc58dcffeWwPoNxiNSmK17V",
+  "native_initial_user_text": {
+    "part_id": "prt_15603a765001iekj34y9MSj2ni",
+    "sha256": "018b73b2a283fa2b6f4d45cb9cc3737732feb070840f59a66c175fc03b679352",
+    "equals_literal_quote_plus_question_plus_quote": true
+  },
+  "native_final": {
+    "part_id": "prt_15612754b001ib29BSiTSuvfwn",
+    "sha256": "6906c399c306d4b7ede38479db3b9d7b8c8032783d297932cc670c43de749c7b",
+    "equals_answer_D_bytes": true
+  },
+  "question_demand_exact": "2. The call sequence and exact condition that allow optimization to succeed without preserving that data for the next reopen.",
+  "original_C2_rubric": {
+    "id": "C2",
+    "points": 2,
+    "critical": true,
+    "claim": "flush() treats a null member WAL or one with no records as no pending work, returning OK before persistence. Here the null member arm triggers.",
+    "full_credit": "State the exact null-or-no-record guard, identify the null-member cause for this scenario, and explain the skipped persistence/finalization.",
+    "evidence_sets": [
+      [
+        "E08",
+        "E09",
+        "E10"
+      ]
+    ],
+    "partial_credit": "1 point for identifying flush as the skipped step without the precise condition or lifecycle consequences."
+  },
+  "existing_C2_score": 1,
+  "existing_C2_rationale": "Partial credit (1/2): correctly identifies the null-member early return and the skipped persistence/finalization, but never states the other arm, !wal_file_->has_record(), as part of the no-op condition. The exact complete guard is required for full credit. The cited 2220-2222 span is correct and contains the omitted arm; this is incomplete explanation, not a false citation.",
+  "existing_C2_citation_verified": true,
+  "C2_tool_observation": {
+    "complete_guard_tool_ordinals": [
+      14,
+      18,
+      19,
+      63,
+      65
+    ],
+    "guard": "if (wal_file_ == nullptr || !wal_file_->has_record()) {",
+    "full_flush_return_and_persistence_body_in_tool_18": true,
+    "tool_18_output_exactly_matches_frozen_source_lines_2200_2400": true,
+    "tool_19_output_exactly_matches_frozen_source_lines_2100_2220": true,
+    "all_tools_before_final": true
+  },
+  "final_C2_excerpts": [
+    "`SegmentImpl::flush()` decides \"nothing to persist\" from `wal_file_ == nullptr` (`src/db/index/segment/segment.cc:2220-2222`). After a crash-recovery replay, `wal_file_` **is** null even though the segment holds N unpersisted docs, so `dump()` inside `Optimize()` silently persists nothing while `switch_to_new_segment_for_writing()` rewrites the manifest to declare that segment \"persisted, no writing block\" — which is the state that makes the WAL unreplayable on the next open.",
+    "2. `writing_segment_->dump()` (`1519` → `segment.cc:2197-2215`) → `flush()` (`2201` → `2217`) → **guard at `segment.cc:2220-2222` returns `Status::OK()` immediately**. Skipped: `memory_store_->flush()` (`2234`; the write of `scalar.<block>.{ipc,parquet}`, `memory_forward_store.cc:212-303`), `id_map_->flush()` (`2267`), delete-store snapshot (`2276-2286`), `finish_memory_components()` (`2290` → `4342-4412`, the only thing that adds a persisted `SCALAR` BlockMeta), `update_version()` (`2301` → `4414-4427`), WAL removal (`2305-2315`)."
+  ],
+  "final_C2_omission": "The final states wal_file_ == nullptr and cites 2220-2222, but does not state !wal_file_->has_record() or a null-or-no-record no-op condition. It mentions has_record() only in normal-insert/repair context. This is consistent with the existing C2 rationale; no new score is assigned.",
+  "C2_bounded_conclusion": "The required exact predicate was present in actual successful tool returns, repeatedly, including the whole flush body. The final did not include the no-record disjunct. Evidence unavailability alone cannot explain this observed coverage gap; no claim is made about model comprehension or why the omission occurred.",
+  "source_spans": [
+    {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2217,
+      "end_line": 2222,
+      "source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "29fd967362117e205d1480e2097ca6463861567e4f95f83ddba0d730482e3d08",
+      "text": "Status SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n"
+    },
+    {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2224,
+      "end_line": 2255,
+      "source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "326c887bfd18c8281c263d6b93547342ef0995ee241d8d1dabbd7093cf051c70",
+      "text": "  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n"
+    },
+    {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2302,
+      "source_file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "3b769ee93f26622dc1a00465cf202cce6a6463f72bd93b8119a84377727308ce",
+      "text": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    {
+      "path": "src/db/index/storage/wal/local_wal_file.h",
+      "start_line": 75,
+      "end_line": 77,
+      "source_file_sha256": "d39b3d5d15cfe51324c535cb1db1792e4aa851b98cffbd8861a552948783f7ae",
+      "span_sha256": "cc6de5d2fc7f4b48f9905bf8c9d7b2a21e26983edbf11a8d25030b007b26f0d6",
+      "text": "  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n"
+    },
+    {
+      "path": "tests/db/crash_recovery/write_recovery_test.cc",
+      "start_line": 163,
+      "end_line": 179,
+      "source_file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "span_sha256": "18b1d52015ae92acdfcd49c37aff5b45570be86ce4a11b726263f28884a36e4c",
+      "text": "\nTEST_F(CrashRecoveryTest, BasicInsertAndReopen) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGenerator(\"0\", \"5000\", \"insert\", \"0\");\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value());\n  auto collection = result.value();\n  ASSERT_EQ(collection->Stats().value().doc_count, 5000)\n      << \"Document count mismatch\";\n}\n"
+    },
+    {
+      "path": "tests/db/crash_recovery/data_generator.cc",
+      "start_line": 242,
+      "end_line": 257,
+      "source_file_sha256": "2da8f3242e6af60d041911a5f70c749f6614831c40e5576fff006f3cd2c23108",
+      "span_sha256": "67e4f7952b1a72303098762d7cb73c226999f4b009c3a89a25a2dbad6252d0b8",
+      "text": "#ifdef __ANDROID__\n  // On Android with c++_static STL, static destructors of glog/gflags\n  // crash during process teardown.  Use _exit() to skip them.\n  // Flush + close the collection to persist all buffered data (WAL, memtable),\n  // then sync() to ensure kernel buffers are written to disk before _exit().\n  collection->Flush();\n  collection.reset();\n  sync();\n  std::cout.flush();\n  std::cerr.flush();\n  fflush(stdout);\n  fflush(stderr);\n  _exit(0);\n#endif\n  return 0;\n}\n"
+    }
+  ],
+  "tool_evidence": [
+    {
+      "tool_ordinal_1based": 14,
+      "message_id": "msg_1560423b6001XMBHBcIcmwuMQ8",
+      "part_id": "prt_15604311f00135mAUk5iEslIP4",
+      "call_id": "call_a4b24fe2101c461687743b6e",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && grep -n \"Segment::Open\\|Segment::CreateAndOpen\\|::flush\\|recover\\|replay\\|wal_\\|Wal\\|WAL\" src/db/index/segment/segment.cc | head -100"
+      },
+      "input_canonical_json_sha256": "49c6e8b9ee2680a3a93fa3d13d43f1597b3e62933f6c0ded9ae79ddacfb467b0",
+      "output_utf8_sha256": "4e4aee2ef0f92f2f9add9d3e2e97021472b799ba5076f09a7b62a8f8160dd005",
+      "output_utf8_bytes": 4393,
+      "metadata": {
+        "output": "61:#include \"db/index/storage/wal/wal_file.h\"\n307:  Status recover();\n308:  Status open_wal_file();\n401:  WalFilePtr wal_file_{nullptr};\n499:    // recover writing block\n500:    s = recover();\n2217:Status SegmentImpl::flush() {\n2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n2224:  if (wal_file_) {\n2225:    if (wal_file_->flush() != 0) {\n2226:      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n2305:  if (wal_file_) {\n2306:    auto ret = wal_file_->remove();\n2309:          \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n2311:      return Status::InternalError(\"Failed to remove WAL file\");\n2313:    wal_file_.reset();\n2314:    LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n4193:Status SegmentImpl::recover() {\n4194:  // recover mem block meta\n4198:  std::string wal_file_path =\n4199:      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4200:  if (!std::filesystem::exists(wal_file_path)) {\n4201:    LOG_INFO(\"WAL recovery skipped: no WAL file exists [%s]\",\n4202:             wal_file_path.c_str());\n4206:  WalFilePtr recover_wal_file;\n4207:  WalOptions wal_option;\n4208:  wal_option.create_new = false;\n4209:  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4211:    LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n4212:              wal_file_path.c_str());\n4215:  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n4218:      recovered_doc_count{};\n4219:  uint64_t total_recovered_doc_count{0};\n4221:  int ret = recover_wal_file->prepare_for_read();\n4224:        \"WAL recovery failed: unable to prepare WAL file [%s] for reading\",\n4225:        wal_file_path.c_str());\n4226:    return Status::InternalError(\"Failed to prepare wal file: \", wal_file_path,\n4230:  LOG_INFO(\"WAL recovery started [%s]\", wal_file_path.c_str());\n4235:    std::string buf = recover_wal_file->next();\n4237:      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n4240:    total_recovered_doc_count++;\n4244:      LOG_ERROR(\"WAL recovery failed [%s]: doc deserialization error at %zu\",\n4245:                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n4268:        LOG_ERROR(\"WAL recovery failed [%s]: unknown operator type %d at %zu \",\n4269:                  wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n4270:                  (size_t)total_recovered_doc_count);\n4276:          \"WAL recovery failed [%s]: operation %d failed at %zu, reason: %s\",\n4277:          wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n4278:          (size_t)total_recovered_doc_count, status.message().c_str());\n4282:    recovered_doc_count[static_cast<size_t>(doc->get_operator())]++;\n4285:  const auto added_docs = recovered_doc_count[0] +  // INSERT\n4286:                          recovered_doc_count[1] +  // UPSERT\n4287:                          recovered_doc_count[2];   // UPDATE\n4291:      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n4293:      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n4294:      (size_t)recovered_doc_count[0],  // INSERT\n4295:      (size_t)recovered_doc_count[1],  // UPSERT\n4296:      (size_t)recovered_doc_count[2],  // UPDATE\n4297:      (size_t)recovered_doc_count[3]   // DELETE\n4303:Status SegmentImpl::open_wal_file() {\n4305:  std::string wal_file_path =\n4306:      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n4307:  WalOptions wal_option;\n4308:  if (std::filesystem::exists(wal_file_path)) {\n4309:    wal_option.create_new = false;\n4311:    wal_option.create_new = true;\n4314:  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4315:    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n4316:              wal_file_path.c_str());\n4317:    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4320:  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4327:  if (!wal_file_) {\n4328:    auto s = open_wal_file();\n4332:  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n4334:    LOG_ERROR(\"WAL append failed: segment[%d], pk[%s], op[%d], ret[%d]\", id(),\n4446:Result<Segment::Ptr> Segment::CreateAndOpen(\n4475:Result<Segment::Ptr> Segment::Open(const std::string &path,\n4538:Status SegmentImpl::flush_fts_indexers() {\n4680:  // Scan forward store and replay all existing documents.\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 18,
+      "message_id": "msg_1560464fe001Zkw00BUJIEqzzo",
+      "part_id": "prt_156047434001r15XBaJJP3lwno",
+      "call_id": "call_837a802d9853494784b6f4c4",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && sed -n 2200,2400p src/db/index/segment/segment.cc"
+      },
+      "input_canonical_json_sha256": "bc90152b1a4719e2eb31c842d6be9c6ff2be805635df710086cd43974bc62e55",
+      "output_utf8_sha256": "63fb050f343ba5e74b431dd0cca9aa55ea58d91168385764538dc0542e579e02",
+      "output_utf8_bytes": 5738,
+      "metadata": {
+        "output": "  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n\n  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n  }\n\n  // flush quant vector indexer\n  for (const auto &indexer : quant_memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n  }\n\n  if (id_map_) {\n    s = id_map_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  auto block = segment_meta_->writing_forward_block().value();\n\n  uint32_t delete_snapshot_path_suffix = UINT32_MAX;\n  uint32_t delete_snapshot_path_suffix_current = UINT32_MAX;\n  if (delete_store_) {\n    if (delete_store_->modified_since_last_flush()) {\n      delete_snapshot_path_suffix_current =\n          version_manager_->delete_snapshot_path_suffix();\n      delete_snapshot_path_suffix =\n          version_manager_->delete_snapshot_path_suffix() + 1;\n      std::string delete_store_path = FileHelper::MakeFilePath(\n          path_, FileID::DELETE_FILE, delete_snapshot_path_suffix);\n      s = delete_store_->flush(delete_store_path);\n      CHECK_RETURN_STATUS(s);\n    }\n  }\n\n  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n\n  // clear wal file\n  if (wal_file_) {\n    auto ret = wal_file_->remove();\n    if (ret != 0) {\n      LOG_ERROR(\n          \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n          id());\n      return Status::InternalError(\"Failed to remove WAL file\");\n    }\n    wal_file_.reset();\n    LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n  }\n\n  if (delete_snapshot_path_suffix_current != UINT32_MAX) {\n    std::string delete_store_path = FileHelper::MakeFilePath(\n        path_, FileID::DELETE_FILE, delete_snapshot_path_suffix_current);\n    FileHelper::RemoveFile(delete_store_path);\n  }\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::destroy() {\n  if (need_destroyed_) {\n    return Status::InvalidArgument(\"Segment has been marked need destroyed\");\n  }\n  need_destroyed_ = true;\n  return Status::OK();\n}\n\nStatus SegmentImpl::cleanup() {\n  auto seg_path = FileHelper::MakeSegmentPath(path_, segment_meta_->id());\n  FileHelper::RemoveDirectory(seg_path);\n  return Status::OK();\n}\n\nbool SegmentImpl::validate(const std::vector<std::string> &columns) const {\n  if (columns.empty()) {\n    LOG_ERROR(\"Empty columns\");\n    return false;\n  }\n  for (const auto &column : columns) {\n    if (column == LOCAL_ROW_ID || column == GLOBAL_DOC_ID ||\n        column == USER_ID) {\n      continue;\n    }\n    if (collection_schema_->get_forward_field(column) == nullptr) {\n      LOG_ERROR(\"Validate failed. unknown column: %s\", column.c_str());\n      return false;\n    }\n  }\n  return true;\n}\n\nTablePtr SegmentImpl::fetch_perf(\n    const std::vector<std::string> &columns,\n    const std::shared_ptr<arrow::Schema> &result_schema,\n    const std::vector<int> &segment_doc_ids) const {\n  std::vector<std::shared_ptr<arrow::ChunkedArray>> chunk_arrays;\n  chunk_arrays.resize(columns.size());\n\n  bool has_segment_row_id_column = false;\n  size_t segment_row_id_col_index = 0;\n\n  for (size_t i = 0; i < columns.size(); ++i) {\n    if (columns[i] == LOCAL_ROW_ID) {\n      has_segment_row_id_column = true;\n      segment_row_id_col_index = i;\n      chunk_arrays[i] = nullptr;\n      continue;\n    }\n    chunk_arrays[i] = persist_chunk_arrays_[col_idx_map_.at(columns[i])];\n  }\n\n  std::vector<std::shared_ptr<arrow::Array>> result_arrays(columns.size());\n\n  // Parallel to segment_doc_ids: each pair is (chunk_index, row_index_in_chunk)\n  std::vector<std::pair<int64_t, int64_t>> chunk_row_indices_for_ids;\n  for (const auto segment_doc_id : segment_doc_ids) {\n    auto it = std::upper_bound(chunk_offsets_.begin(), chunk_offsets_.end(),\n                               segment_doc_id);\n    if (it == chunk_offsets_.begin()) {\n      LOG_ERROR(\"Segment doc ID %d is out of bounds\", segment_doc_id);\n      return nullptr;\n    }\n    int chunk_index =\n        static_cast<int>(std::distance(chunk_offsets_.begin(), it) - 1);\n    int64_t row_index_in_chunk = segment_doc_id - chunk_offsets_[chunk_index];\n    chunk_row_indices_for_ids.emplace_back(chunk_index, row_index_in_chunk);\n  }\n\n  for (size_t i = 0; i < columns.size(); ++i) {\n    if (columns[i] == LOCAL_ROW_ID) {\n      continue;\n    }\n    const auto &source_column = chunk_arrays[i];\n    std::shared_ptr<arrow::Array> array;\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "  if (wal_file_ == nullptr || !wal_file_->has_record()) {"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 19,
+      "message_id": "msg_156047797001lLkfIa6bb3cJEi",
+      "part_id": "prt_156048482001e3miAiOCOGCMI7",
+      "call_id": "call_baa62729dfc44a69b656b985",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && sed -n 2100,2220p src/db/index/segment/segment.cc"
+      },
+      "input_canonical_json_sha256": "c184abc06ee81bb28c66f22f46ba085cad31b5eeef53ec995ee67819cd5f08ed",
+      "output_utf8_sha256": "b49821579a56c18ba514c49d784ef76da8404e15ef14b46c42a166ec5925a6b3",
+      "output_utf8_bytes": 3253,
+      "metadata": {
+        "output": "    }\n  }\n\n  std::vector<FieldSchema> fields;\n  std::vector<FieldSchema> drop_fields;\n  std::vector<FieldSchema> invert_fields;\n  std::vector<std::string> field_names;\n  for (const auto &field : collection_schema_->forward_fields()) {\n    if (field->index_type() == IndexType::INVERT) {\n      invert_fields.push_back(*field);\n      if (std::find(columns.begin(), columns.end(), field->name()) !=\n          columns.end()) {\n        drop_fields.push_back(*field);\n        continue;\n      }\n      fields.push_back(*field);\n      field_names.push_back(field->name());\n    }\n  }\n\n  auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n  new_segment_meta->remove_scalar_index_block();\n\n  if (fields.empty()) {\n    *segment_meta = new_segment_meta;\n    *scalar_indexer = nullptr;\n    return Status::OK();\n  }\n\n  // clone original indexer\n  auto block_id = allocate_block_id();\n  std::string new_invert_index_path =\n      FileHelper::MakeInvertIndexPath(path_, id(), block_id);\n  auto s = invert_indexers_->create_snapshot(new_invert_index_path);\n  CHECK_RETURN_STATUS(s);\n\n  // The snapshot copy is mutated below to remove dropped columns and seal.\n  auto new_scalar_indexer = InvertedIndexer::CreateAndOpen(\n      collection_schema_->name(), new_invert_index_path, false, invert_fields,\n      false);\n  if (!new_scalar_indexer) {\n    LOG_ERROR(\"Failed to create scalar indexer\");\n    return Status::InternalError(\"Failed to create scalar indexer\");\n  }\n  for (const auto &field : drop_fields) {\n    s = new_scalar_indexer->remove_column_indexer(field.name());\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = new_scalar_indexer->seal();\n  CHECK_RETURN_STATUS(s);\n\n  BlockMeta block;\n  block.set_id(block_id);\n  block.set_type(BlockType::SCALAR_INDEX);\n  block.set_columns(field_names);\n\n  new_segment_meta->add_persisted_block(block);\n\n  *segment_meta = new_segment_meta;\n  *scalar_indexer = new_scalar_indexer;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::reload_scalar_index(\n    const CollectionSchema &schema, const SegmentMeta::Ptr &segment_meta,\n    const InvertedIndexer::Ptr &scalar_indexer) {\n  collection_schema_ = std::make_shared<CollectionSchema>(schema);\n  segment_meta_ = segment_meta;\n\n  if (invert_indexers_ == scalar_indexer) {\n    return Status::OK();\n  }\n\n  if (!scalar_indexer) {\n    if (invert_indexers_) {\n      auto old_dir = invert_indexers_->working_dir();\n      invert_indexers_ = nullptr;\n      FileHelper::RemoveDirectory(old_dir);\n    }\n    return Status::OK();\n  }\n\n  fresh_persist_block_offset();\n\n  if (invert_indexers_) {\n    auto old_dir = invert_indexers_->working_dir();\n    invert_indexers_ = scalar_indexer;\n    FileHelper::RemoveDirectory(old_dir);\n  } else {\n    invert_indexers_ = scalar_indexer;\n  }\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "  if (wal_file_ == nullptr || !wal_file_->has_record()) {"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 22,
+      "message_id": "msg_156051144001ZhS4ysXhoSgWR2",
+      "part_id": "prt_15605c7be001Y4np1VRU0MLFS1",
+      "call_id": "call_741e11a58b9143ecadebcd04",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && cat src/db/index/storage/wal/wal_file.h && cat src/db/index/storage/wal/local_wal_file.h"
+      },
+      "input_canonical_json_sha256": "789548a5f0755f20ac4ee5d5c23d109d79d2583ab84ffad5392bde5462e89453",
+      "output_utf8_sha256": "70557bb987fb124cdd9bab14390c544e7aac7d15e3e5200226dd8b53f0375566",
+      "output_utf8_bytes": 3846,
+      "metadata": {
+        "output": "// Copyright 2025-present the zvec project\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n#pragma once\n\n#include <memory>\n#include <string>\n\n\nnamespace zvec {\n\nclass WalFile;\n\nusing WalFilePtr = std::shared_ptr<WalFile>;\n\nstruct WalOptions {\n  uint32_t max_docs_wal_flush{0};\n  bool create_new{false};\n};\n\nclass WalFile {\n public:\n  //! Constructor\n  WalFile() {}\n\n  //! Destructor\n  virtual ~WalFile() {}  // LCOV_EXCL_LINE\n\n  //! Create an instance\n  static WalFilePtr Create(const std::string &wal_path);\n\n  //! Crate an instance and open\n  static int CreateAndOpen(const std::string &wal_path,\n                           const WalOptions &wal_options, WalFilePtr *wal_file);\n\n public:\n  virtual int append(std::string &&data) = 0;\n  virtual int prepare_for_read() = 0;\n  virtual std::string next() = 0;\n\n public:\n  //! Open and initialize WalFile\n  virtual int open(const WalOptions &wal_options) = 0;\n\n  //! Close WalFile\n  virtual int close() = 0;\n\n  //! Remove wal disk file\n  virtual int remove() = 0;\n\n  //! Flush WalFile's memory to disk file\n  virtual int flush() = 0;\n\n  virtual bool has_record() = 0;\n};\n\n};  // namespace zvec// Copyright 2025-present the zvec project\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n#pragma once\n\n#include <atomic>\n#include <condition_variable>\n#include <deque>\n#include <fstream>\n#include <mutex>\n#include <thread>\n#include <unordered_map>\n#include <zvec/ailego/io/file.h>\n#include \"wal_file.h\"\n\nnamespace zvec {\n\n/*\n * Wal Header info\n */\nstruct WalHeader {\n  uint64_t wal_version{0U};\n  uint64_t reserved_[7];\n};\n\nstatic_assert(sizeof(WalHeader) % 64 == 0,\n              \"Wal Header must be aligned with 64 bytes\");\n\nclass WalRecord {\n public:\n  uint32_t length_;\n  uint32_t crc_;\n  std::string content_;\n};\n\nclass LocalWalFile : public WalFile {\n public:\n  LocalWalFile(const LocalWalFile &) = delete;\n  LocalWalFile &operator=(const LocalWalFile &) = delete;\n\n  //! Constructor\n  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}\n\n  //! Destructor\n  ~LocalWalFile() {\n    if (opened_) {\n      close();\n    }\n  }\n\n public:\n  int append(std::string &&data) override;\n  int prepare_for_read() override;\n  std::string next() override;\n\n public:\n  int open(const WalOptions &wal_option) override;\n\n  int close() override;\n\n  int flush() override;\n\n  int remove() override;\n\n  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n\n private:\n  int write_record(WalRecord &record);\n  int read_record(WalRecord &record);\n\n private:\n  ailego::File file_;\n  const static int32_t LENGTH_SIZE{4};\n  const static int32_t CRC_SIZE{4};\n\n private:\n  std::string wal_path_{};\n  std::mutex file_mutex_;\n  uint32_t max_docs_wal_flush_{0};\n  std::atomic<uint64_t> docs_count_{0UL};\n  WalHeader header_;\n\n  bool opened_{false};\n};\n\n\n};  // namespace zvec\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "  bool has_record() override {",
+        "    return file_.size() > sizeof(header_);",
+        "  }"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 63,
+      "message_id": "msg_1560c6c62001fViTBNamJVBM6S",
+      "part_id": "prt_1560d59bb001TCpoZAK76k05ac",
+      "call_id": "call_09b6a02f894243869340fdd4",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && grep -n \"open_wal_file\\|wal_file_\" src/db/index/segment/segment.cc"
+      },
+      "input_canonical_json_sha256": "dc96071f55a96e4c38e9a944f596af8fecad3fa8fcb1d8e43900ddb7a8b1b555",
+      "output_utf8_sha256": "b95e6ddc0cd94c435d2854309de48f0ef0faa63b7544655b5e6ee3951fb1fd64",
+      "output_utf8_bytes": 1677,
+      "metadata": {
+        "output": "308:  Status open_wal_file();\n401:  WalFilePtr wal_file_{nullptr};\n2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n2224:  if (wal_file_) {\n2225:    if (wal_file_->flush() != 0) {\n2305:  if (wal_file_) {\n2306:    auto ret = wal_file_->remove();\n2313:    wal_file_.reset();\n4198:  std::string wal_file_path =\n4200:  if (!std::filesystem::exists(wal_file_path)) {\n4202:             wal_file_path.c_str());\n4209:  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n4212:              wal_file_path.c_str());\n4225:        wal_file_path.c_str());\n4226:    return Status::InternalError(\"Failed to prepare wal file: \", wal_file_path,\n4230:  LOG_INFO(\"WAL recovery started [%s]\", wal_file_path.c_str());\n4237:      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n4245:                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n4269:                  wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n4277:          wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n4293:      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n4303:Status SegmentImpl::open_wal_file() {\n4305:  std::string wal_file_path =\n4308:  if (std::filesystem::exists(wal_file_path)) {\n4314:  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n4316:              wal_file_path.c_str());\n4317:    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n4320:  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n4327:  if (!wal_file_) {\n4328:    auto s = open_wal_file();\n4332:  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 65,
+      "message_id": "msg_1560d614a001RJfaJyBkwDrLuX",
+      "part_id": "prt_1560daa30001vFb7XgPawc1dQv",
+      "call_id": "call_8d82cb900bb74769b5ae3cc1",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && grep -n \"if (wal_file_ == nullptr\\|Status SegmentImpl::flush\\|Status SegmentImpl::dump\\|AILEGO_DEFER(\\[&\\]() { recover_wal_file->close\\|WalFilePtr recover_wal_file\\|if (!wal_file_) {\\|s = recover();\\|mem_block.max_doc_id_ += added_docs\" src/db/index/segment/segment.cc"
+      },
+      "input_canonical_json_sha256": "96184d5b6bbfd7955009ffd1946b62c30e30884414c6c2820aa1d400651b2521",
+      "output_utf8_sha256": "1164513a8364a1ca17d745cb45cccdcc149e9c6ea83f39458686c94cb1fd4e8e",
+      "output_utf8_bytes": 414,
+      "metadata": {
+        "output": "500:    s = recover();\n2197:Status SegmentImpl::dump() {\n2217:Status SegmentImpl::flush() {\n2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n4206:  WalFilePtr recover_wal_file;\n4215:  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n4288:  mem_block.max_doc_id_ += added_docs;\n4327:  if (!wal_file_) {\n4538:Status SegmentImpl::flush_fts_indexers() {\n4570:Status SegmentImpl::dump_fts_indexers() {\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "2220:  if (wal_file_ == nullptr || !wal_file_->has_record()) {"
+      ]
+    },
+    {
+      "tool_ordinal_1based": 51,
+      "message_id": "msg_1560922a1001k7nx9rpk4wH4dU",
+      "part_id": "prt_156096167001tFMFA2N53rRJ6E",
+      "call_id": "call_10a782f4ce354613a5143831",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && cat tests/db/crash_recovery/write_recovery_test.cc"
+      },
+      "input_canonical_json_sha256": "6ffa9b03786aad83de58432a01570b1fcfa2256d84be6d9e79e25ed198412b85",
+      "output_utf8_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "output_utf8_bytes": 14836,
+      "metadata": {
+        "output": "// Copyright 2025-present the zvec project\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n\n\n#include <csignal>\n#include <filesystem>\n#include <thread>\n#include <gtest/gtest.h>\n#include <zvec/db/collection.h>\n#include <zvec/db/doc.h>\n#include <zvec/db/schema.h>\n#include \"tests/test_util.h\"\n#include \"utility.h\"\n\n#ifdef _WIN32\n#include <process.h>\n#include <windows.h>\ntypedef HANDLE pid_t;\n#define SIGKILL 9\n#define WIFEXITED(status) true\n#define WEXITSTATUS(status) (status)\n#define WIFSIGNALED(status) ((status) != 0)\n#endif\n\n\nnamespace zvec {\n\n\nstatic std::string data_generator_bin_;\nconst std::string collection_name_{\"write_recovery_test\"};\nconst std::string dir_path_{\"write_recovery_test_db\"};\nconst zvec::CollectionOptions options_{false, true, 256 * 1024};\n\n\nstatic std::string LocateDataGenerator() {\n  return LocateBinary(\"data_generator\");\n}\n\n\n/**\n * Internal helper to execute the data generator process.\n * If 'kill_after_seconds' is greater than 0, the process will be forcibly\n * terminated after the specified duration to simulate a crash.\n */\nvoid ExecuteProcess(const std::string &start, const std::string &end,\n                    const std::string &op, const std::string &version,\n                    int kill_after_seconds = -1) {\n  bool should_crash = kill_after_seconds >= 0;\n\n#ifdef _WIN32\n  // 1. Build the command line string with quotes to handle paths with spaces\n  std::string cmd_str = data_generator_bin_ + \" --path \" + dir_path_ +\n                        \" --start \" + start + \" --end \" + end + \" --op \" + op +\n                        \" --version \" + version;\n\n  STARTUPINFOA si = {sizeof(si)};\n  PROCESS_INFORMATION pi;\n\n  std::cout << cmd_str << std::endl;\n\n  std::vector<char> cmd_buf(cmd_str.begin(), cmd_str.end());\n  cmd_buf.push_back('\\0');\n  if (!CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, FALSE, 0, NULL, NULL,\n                      &si, &pi)) {\n    FAIL() << \"CreateProcess failed (\" << GetLastError() << \")\";\n  }\n\n  if (should_crash) {\n    std::this_thread::sleep_for(std::chrono::seconds(kill_after_seconds));\n    // Simulate a crash by killing the process\n    TerminateProcess(pi.hProcess, 1);\n  }\n\n  WaitForSingleObject(pi.hProcess, INFINITE);\n\n  DWORD exit_code;\n  GetExitCodeProcess(pi.hProcess, &exit_code);\n  CloseHandle(pi.hProcess);\n  CloseHandle(pi.hThread);\n\n  if (should_crash) {\n    // In crash tests, we expect the process to have been terminated\n    ASSERT_NE(exit_code, 0) << \"Process was expected to crash/terminate.\";\n  } else {\n    ASSERT_EQ(exit_code, 0) << \"Process failed with exit code: \" << exit_code;\n  }\n\n#else\n  // POSIX Implementation\n  pid_t pid = fork();\n  ASSERT_GE(pid, 0);\n\n  if (pid == 0) {  // Child process\n    // Use a vector to manage arguments cleanly\n    std::vector<const char *> args = {data_generator_bin_.c_str(),\n                                      \"--path\",\n                                      dir_path_.c_str(),\n                                      \"--start\",\n                                      start.c_str(),\n                                      \"--end\",\n                                      end.c_str(),\n                                      \"--op\",\n                                      op.c_str(),\n                                      \"--version\",\n                                      version.c_str(),\n                                      nullptr};\n    execvp(args[0], const_cast<char *const *>(args.data()));\n    perror(\"execvp failed\");\n    _exit(1);\n  }\n\n  int status;\n  if (should_crash) {\n    std::this_thread::sleep_for(std::chrono::seconds(kill_after_seconds));\n    kill(pid, SIGKILL);\n    waitpid(pid, &status, 0);\n    ASSERT_TRUE(WIFSIGNALED(status)) << \"Process did not crash as expected.\";\n  } else {\n    waitpid(pid, &status, 0);\n    ASSERT_TRUE(WIFEXITED(status)) << \"Process exited abnormally.\";\n    ASSERT_EQ(WEXITSTATUS(status), 0);\n  }\n#endif\n}\n\n// Public API 1: Normal execution\nvoid RunGenerator(const std::string &start, const std::string &end,\n                  const std::string &op, const std::string &version) {\n  ExecuteProcess(start, end, op, version);\n}\n\n// Public API 2: Execution with simulated crash\nvoid RunGeneratorAndCrash(const std::string &start, const std::string &end,\n                          const std::string &op, const std::string &version,\n                          int seconds) {\n  ExecuteProcess(start, end, op, version, seconds);\n}\n\n\nclass CrashRecoveryTest : public ::testing::Test {\n protected:\n  void SetUp() override {\n    zvec::test_util::RemoveTestPath(\"./write_recovery_test_db\");\n    ASSERT_NO_THROW(data_generator_bin_ = LocateDataGenerator());\n  }\n\n  void TearDown() override {\n    zvec::test_util::RemoveTestPath(\"./write_recovery_test_db\");\n  }\n};\n\n\nTEST_F(CrashRecoveryTest, BasicInsertAndReopen) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGenerator(\"0\", \"5000\", \"insert\", \"0\");\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value());\n  auto collection = result.value();\n  ASSERT_EQ(collection->Stats().value().doc_count, 5000)\n      << \"Document count mismatch\";\n}\n\n\nTEST_F(CrashRecoveryTest, CrashRecoveryDuringInsertion) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGeneratorAndCrash(\"0\", \"10000\", \"insert\", \"0\", 3);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_GT(doc_count, 800)\n      << \"Document count is too low after 3s of insertion and recovery\";\n\n  for (uint64_t doc_id = 0; doc_id < doc_count; doc_id++) {\n    const auto expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      if (map.find(expected_doc.pk()) == map.end()) {\n        FAIL() << \"Returned map does not contain doc[\" << expected_doc.pk()\n               << \"]\";\n      }\n      const auto actual_doc = map.at(expected_doc.pk());\n      ASSERT_EQ(*actual_doc, expected_doc)\n          << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n\n\nTEST_F(CrashRecoveryTest, CrashRecoveryDuringUpsert) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGenerator(\"0\", \"5000\", \"insert\", \"0\");\n  {\n    auto result = Collection::Open(dir_path_, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    ASSERT_EQ(collection->Stats().value().doc_count, 5000)\n        << \"Document count mismatch\";\n  }\n\n  RunGeneratorAndCrash(\"4500\", \"20000\", \"upsert\", \"1\", 5);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_GT(doc_count, 6000)\n      << \"Document count is too low after 5s of insertion and recovery\";\n\n  for (uint64_t doc_id = 0; doc_id < doc_count; doc_id++) {\n    Doc expected_doc;\n    if (doc_id < 4500) {\n      expected_doc = CreateTestDoc(doc_id, 0);\n    } else {\n      expected_doc = CreateTestDoc(doc_id, 1);\n    }\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      if (map.find(expected_doc.pk()) == map.end()) {\n        FAIL() << \"Returned map does not contain doc[\" << expected_doc.pk()\n               << \"]\";\n      }\n      const auto actual_doc = map.at(expected_doc.pk());\n      ASSERT_EQ(*actual_doc, expected_doc)\n          << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n\n\nTEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGenerator(\"0\", \"18000\", \"upsert\", \"0\");\n  {\n    auto result = Collection::Open(dir_path_, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    ASSERT_EQ(collection->Stats().value().doc_count, 18000)\n        << \"Document count mismatch\";\n  }\n\n  RunGeneratorAndCrash(\"3000\", \"15000\", \"update\", \"3\", 4);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_EQ(doc_count, 18000) << \"Document count mismatch after crash recovery\";\n\n  // Verify docs before the update range are untouched\n  for (int doc_id = 0; doc_id < 3000; doc_id++) {\n    Doc expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{expected_doc.pk()};\n    auto res = collection->Fetch(pks);\n    ASSERT_TRUE(res.has_value())\n        << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    auto map = res.value();\n    ASSERT_NE(map.find(expected_doc.pk()), map.end())\n        << \"Returned map does not contain doc[\" << expected_doc.pk() << \"]\";\n    const auto actual_doc = map.at(expected_doc.pk());\n    ASSERT_EQ(*actual_doc, expected_doc)\n        << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n  }\n\n  // For docs in the update range [3000, 15000), verify consistency:\n  // Updates are sequential, so there must be a boundary where all docs\n  // before it are version 3 (updated) and all docs after are version 0.\n  bool found_boundary = false;\n  int boundary_id = -1;\n  for (int doc_id = 3000; doc_id < 15000; doc_id++) {\n    std::string pk = \"pk_\" + std::to_string(doc_id);\n    std::vector<std::string> pks{pk};\n    auto res = collection->Fetch(pks);\n    ASSERT_TRUE(res.has_value()) << \"Failed to fetch doc[\" << pk << \"]\";\n    auto map = res.value();\n    ASSERT_NE(map.find(pk), map.end())\n        << \"Returned map does not contain doc[\" << pk << \"]\";\n    const auto actual_doc = map.at(pk);\n\n    Doc version0_doc = CreateTestDoc(doc_id, 0);\n    Doc version3_doc = CreateTestDoc(doc_id, 3);\n\n    if (!found_boundary) {\n      if (*actual_doc == version0_doc) {\n        // Found the boundary: this doc was NOT updated\n        found_boundary = true;\n        boundary_id = doc_id;\n      } else {\n        ASSERT_EQ(*actual_doc, version3_doc)\n            << \"Doc[\" << pk << \"] is neither version 0 nor version 3\";\n      }\n    } else {\n      // After boundary, all docs must be version 0 (not yet updated)\n      ASSERT_EQ(*actual_doc, version0_doc)\n          << \"Doc[\" << pk << \"] after boundary (\" << boundary_id\n          << \") should be version 0 but isn't\";\n    }\n  }\n\n  // The crash happened after 4s; at least some docs should have been updated\n  if (!found_boundary) {\n    // All docs in range were updated (crash happened very late) - that's fine\n  } else {\n    ASSERT_GT(boundary_id, 3000)\n        << \"No documents were updated before crash - process may not have \"\n           \"started in time\";\n  }\n}\n\n\nTEST_F(CrashRecoveryTest, CrashRecoveryDuringDelete) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGenerator(\"0\", \"18000\", \"insert\", \"0\");\n  {\n    auto result = Collection::Open(dir_path_, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    ASSERT_EQ(collection->Stats().value().doc_count, 18000)\n        << \"Document count mismatch\";\n  }\n\n  RunGeneratorAndCrash(\"3000\", \"15000\", \"delete\", \"0\", 4);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_LT(doc_count, 18000)\n      << \"No deletes appear to have been applied before the crash\";\n  ASSERT_GT(doc_count, 6000)\n      << \"Too many documents deleted, recovery likely lost data\";\n\n  for (int doc_id = 0; doc_id < 3500; doc_id++) {\n    auto expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      auto it = map.find(expected_doc.pk());\n      ASSERT_NE(it, map.end())\n          << \"Fetch result missing requested pk[\" << expected_doc.pk() << \"]\";\n      if (doc_id < 3000) {\n        ASSERT_NE(it->second, nullptr)\n            << \"Existing doc returned as nullptr [\" << expected_doc.pk() << \"]\";\n        const auto actual_doc = map.at(expected_doc.pk());\n        ASSERT_EQ(*actual_doc, expected_doc)\n            << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n      } else {\n        ASSERT_EQ(it->second, nullptr)\n            << \"Returned doc for deleted pk[\" << expected_doc.pk() << \"]\";\n      }\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n\n\n}  // namespace zvec\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "TEST_F(CrashRecoveryTest, BasicInsertAndReopen) {",
+        "  {",
+        "    auto schema = CreateTestSchema(collection_name_);",
+        "    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);",
+        "    ASSERT_TRUE(result.has_value()) << result.error().message();",
+        "    auto collection = result.value();",
+        "    collection.reset();",
+        "  }",
+        "",
+        "  RunGenerator(\"0\", \"5000\", \"insert\", \"0\");",
+        "  auto result = Collection::Open(dir_path_, options_);",
+        "  ASSERT_TRUE(result.has_value());",
+        "  auto collection = result.value();",
+        "  ASSERT_EQ(collection->Stats().value().doc_count, 5000)",
+        "      << \"Document count mismatch\";",
+        "}",
+        "",
+        ""
+      ]
+    },
+    {
+      "tool_ordinal_1based": 67,
+      "message_id": "msg_1560dbe8b0011W8WDyowkmAU0N",
+      "part_id": "prt_1560de84b001OGcGJ6WQlqG9uM",
+      "call_id": "call_ceb3ec5e692b4c29a22714c2",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cd /workspace && sed -n 150,257p tests/db/crash_recovery/data_generator.cc"
+      },
+      "input_canonical_json_sha256": "86b1107e0b2591fcd720a4b89844b38106c8cf7d249508ef63055fbfd51cc4a9",
+      "output_utf8_sha256": "f85140ed95ede24635a211433a938fd215ebc69706a11949c0fa180345d69fd4",
+      "output_utf8_bytes": 3314,
+      "metadata": {
+        "output": "  zvec::Collection::Ptr collection;\n  {\n    auto result = zvec::Collection::Open(\n        config.path, zvec::CollectionOptions{false, true, 4 * 1024 * 1024});\n    if (!result) {\n      LOG_ERROR(\"Failed to open collection[%s]: %s\", config.path.c_str(),\n                result.error().c_str());\n#ifdef __ANDROID__\n      _exit(1);\n#endif\n      return -1;\n    }\n    collection = result.value();\n  }\n  LOG_INFO(\"Collection[%s] opened successfully\", config.path.c_str());\n\n  // Process documents in batches\n  int total_docs = config.end_id - config.start_id;\n  int processed = 0;\n  int batch_num = 0;\n  int next_progress_threshold = total_docs / 10;  // 10% increments\n  int progress_percent = 0;\n\n  while (config.start_id < config.end_id) {\n    int batch_end = std::min(config.start_id + kBatchSize, config.end_id);\n    int batch_count = batch_end - config.start_id;\n\n    std::vector<zvec::Doc> docs;\n    docs.reserve(batch_count);\n    for (int i = config.start_id; i < batch_end; i++) {\n      docs.push_back(zvec::CreateTestDoc(i, config.version));\n    }\n\n    zvec::Result<zvec::WriteResults> results;\n    if (config.operation == \"insert\") {\n      results = collection->Insert(docs);\n    } else if (config.operation == \"upsert\") {\n      results = collection->Upsert(docs);\n    } else if (config.operation == \"update\") {\n      results = collection->Update(docs);\n    } else if (config.operation == \"delete\") {\n      std::vector<std::string> pks{};\n      for (const auto &doc : docs) {\n        pks.emplace_back(doc.pk());\n      }\n      results = collection->Delete(pks);\n    }\n    if (!results) {\n      LOG_ERROR(\"Failed to perform operation[%s], reason: %s\",\n                config.operation.c_str(), results.error().message().c_str());\n#ifdef __ANDROID__\n      collection.reset();\n      sync();\n      _exit(1);\n#endif\n      return 1;\n    }\n    for (auto &s : results.value()) {\n      if (!s.ok()) {\n        LOG_ERROR(\"Failed to perform operation[%s], reason: %s\",\n                  config.operation.c_str(), s.message().c_str());\n#ifdef __ANDROID__\n        collection.reset();\n        sync();\n        _exit(1);\n#endif\n        return 1;\n      }\n    }\n\n    processed += batch_count;\n    config.start_id = batch_end;\n    batch_num++;\n\n    // Print progress every 10%\n    if (processed >= next_progress_threshold) {\n      progress_percent++;\n      LOG_INFO(\"Progress: %d (%d/%d documents)\", progress_percent * 10,\n               processed, total_docs);\n      next_progress_threshold = (progress_percent + 1) * total_docs / 10;\n    }\n\n    // Sleep between batches\n    if (config.start_id < config.end_id) {\n      std::this_thread::sleep_for(std::chrono::milliseconds(kBatchDelayMs));\n    }\n  }\n\n  std::cout << std::endl;\n  std::cout << \"Success! Processed \" << processed << \" documents in \"\n            << batch_num << \" batches.\" << std::endl;\n\n#ifdef __ANDROID__\n  // On Android with c++_static STL, static destructors of glog/gflags\n  // crash during process teardown.  Use _exit() to skip them.\n  // Flush + close the collection to persist all buffered data (WAL, memtable),\n  // then sync() to ensure kernel buffers are written to disk before _exit().\n  collection->Flush();\n  collection.reset();\n  sync();\n  std::cout.flush();\n  std::cerr.flush();\n  fflush(stdout);\n  fflush(stderr);\n  _exit(0);\n#endif\n  return 0;\n}\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "relevant_output_excerpt": [
+        "#ifdef __ANDROID__",
+        "  // On Android with c++_static STL, static destructors of glog/gflags",
+        "  // crash during process teardown.  Use _exit() to skip them.",
+        "  // Flush + close the collection to persist all buffered data (WAL, memtable),",
+        "  // then sync() to ensure kernel buffers are written to disk before _exit().",
+        "  collection->Flush();",
+        "  collection.reset();",
+        "  sync();",
+        "  std::cout.flush();",
+        "  std::cerr.flush();",
+        "  fflush(stdout);",
+        "  fflush(stderr);",
+        "  _exit(0);",
+        "#endif",
+        "  return 0;",
+        "}"
+      ]
+    }
+  ],
+  "supplemental_C7": {
+    "original_question_control_exact": "A control collection populated and optimized in the original process, without a crash in between, does not show this loss. Assume the collection is small enough that automatic buffer or segment rollover does not happen while inserting or replaying these documents.",
+    "original_rubric": {
+      "id": "C7",
+      "points": 1,
+      "critical": false,
+      "claim": "Regression: insert known documents, force abrupt termination before flush, reopen and verify recovered data, optimize without extra writes, close, reopen from fresh process and compare count plus representative/all known documents and vectors. Include a no-crash or already-flushed control.",
+      "full_credit": "Fresh reopen after optimize and no intervening writes are required, because same-handle checks and writes that lazily open the WAL can mask the defect. Executing the test is not required.",
+      "evidence_sets": [
+        [
+          "E16",
+          "E07",
+          "E13",
+          "E14"
+        ]
+      ],
+      "partial_credit": "No partial point."
+    },
+    "existing_score": 0,
+    "existing_rationale": "No credit: the sequence contains the essential crash/recover/optimize-without-writes/reopen/content-check path, but its proposed regression has no no-crash or already-flushed control arm. A prose explanation of the ordinary-insert control elsewhere is not a specified regression control. C7 requires that arm and has no partial point.",
+    "final_regression_excerpt": "**Regression test (describe only):** add a case to `tests/db/crash_recovery/` reusing the existing helpers (`data_generator`, `collection_optimizer` are already built by `tests/db/crash_recovery/CMakeLists.txt`; `utility.h` gives `CreateTestSchema`/`CreateTestDoc`/`LocateBinary`; `write_recovery_test.cc:56-137` shows the fork/SIGKILL pattern):\n\n1. Create the collection; keep doc count far below `max_doc_count_per_segment` so no rollover occurs.\n2. `RunGeneratorAndCrash(\"0\", \"N\", \"insert\", \"0\", t)` — SIGKILL the writer so no flush ever happens.\n3. Open in-process, assert `Stats().doc_count == N_recovered > 0` and `Fetch` a sample; close. (Safe today: `close_unsafe`→`flush_unsafe`→the same no-op `flush()`, so the WAL survives — `collection.cc:340-361`, `389-397`.)\n4. Run `collection_optimizer` on the path and assert exit code 0 — this is `Optimize()` with no intervening insert (`collection_optimizer.cc:105-125`; the Python/C++ bindings add no implicit flush, `python_collection.cc:164-171`, `python/zvec/model/collection.py:154-161`).\n5. Reopen and assert `Stats().doc_count == N_recovered`, `Fetch(pk_i) == CreateTestDoc(i, 0)` for all i, plus a `Query` sanity check. Today step 5 yields 0.\n\nWorth adding: the same sequence with `CreateIndex` in step 4 (covers the other `switch_to_new_segment_for_writing` callers), and a deterministic variant whose writer helper calls `_exit()`/`raise(SIGKILL)` after exactly N docs so N is exact rather than timing-derived.\n\n",
+    "final_control_prose": "Control case: without the crash, the first `append_wal` attached `wal_file_`, so `dump()`→`flush()` took the full path (block file written, `SCALAR` BlockMeta added, manifest updated, WAL removed only afterwards) — the later `remove_writing_forward_block()` is then backed by real files.",
+    "tool_51_no_crash_reopen_example": "The exact cat output contains BasicInsertAndReopen, which calls RunGenerator (not RunGeneratorAndCrash), opens the collection, and checks count 5000. It is not itself an optimize regression/control arm.",
+    "tool_67_flush_example_caveat": "The explicit Flush and reset near the end of data_generator.cc are guarded by __ANDROID__; other platforms return normally. Do not treat this as unconditional explicit flush.",
+    "observation": "The final gives a crash-path regression and explains the ordinary control in separate prose, but specifies no no-crash/already-flushed regression arm, matching the pre-existing rationale."
+  },
+  "limits": [
+    "No model internal reasoning content inspected or returned.",
+    "No quality regrade or rubric change.",
+    "No provider/network/CI invocation, new trials or source modifications.",
+    "No causality, efficiency or stable benefit claim."
+  ]
+}

@@ -1,0 +1,124 @@
+name: Native Claude q001 offline integration v1
+run-name: native Claude / fake-provider Docker integration only
+
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths: ['benchmarks/native-claude-qa-pilot/**', '.github/workflows/native-claude-qa-offline-v1.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-claude-offline-v1-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  offline-integration:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - name: Set isolated runtime paths
+        run: |
+          cat >> "$GITHUB_ENV" <<EOF
+          MAIN_ROOT=$RUNNER_TEMP/qa-main/benchmarks/swe-qa-bench
+          PREPARED_ROOT=$RUNNER_TEMP/qa-prepared
+          REPAIR_ROOT=$RUNNER_TEMP/native-claude-offline-v1
+          EOF
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Export the pinned upstream harness and source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=a424e0ce06868dc9ad8f142f57de59b8f9b58699
+          test "$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)" = "$expected"
+          git init "$RUNNER_TEMP/qa-main-git"
+          git -C "$RUNNER_TEMP/qa-main-git" fetch --depth=1 https://github.com/zvec-ai/zvec-grep.git "$expected"
+          test "$(git -C "$RUNNER_TEMP/qa-main-git" rev-parse FETCH_HEAD)" = "$expected"
+          mkdir -p "$RUNNER_TEMP/qa-main" "$REPAIR_ROOT"
+          git -C "$RUNNER_TEMP/qa-main-git" archive "$expected" benchmarks/swe-qa-bench benchmarks/shared/rust-package-cache.mjs | tar -x -C "$RUNNER_TEMP/qa-main"
+          git init "$RUNNER_TEMP/qa-zvec-git"
+          git -C "$RUNNER_TEMP/qa-zvec-git" fetch --depth=1 https://github.com/alibaba/zvec.git ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project "$MAIN_ROOT" --frozen
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/benchmarks/native-claude-qa-pilot:$GITHUB_WORKSPACE/benchmarks/opencode-qa-pilot:$MAIN_ROOT" >> "$GITHUB_ENV"
+          echo "QA_MAIN_ROOT=$MAIN_ROOT" >> "$GITHUB_ENV"
+      - name: Verify frozen inputs before integration
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -c 'import os; from pathlib import Path; from native_claude.integration import validate_inputs; validate_inputs(Path(os.environ["GITHUB_WORKSPACE"]),Path(os.environ["MAIN_ROOT"]))'
+          cp benchmarks/native-claude-qa-pilot/inputs.json "$REPAIR_ROOT/inputs.json"
+          cp benchmarks/native-claude-qa-pilot/decision.json "$REPAIR_ROOT/decision.json"
+          docker version > "$REPAIR_ROOT/docker-version.txt"
+      - name: Read the existing upstream Rust artifact
+        uses: actions/download-artifact@v8
+        with:
+          repository: zvec-ai/zvec-grep
+          run-id: 39221698769
+          name: rust-native-linux-x64-gnu
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rust-native
+      - name: Derive the install-compatible archive without rebuilding Rust
+        run: |
+          set -euo pipefail
+          export QA_ORIGINAL_TGZ="$RUNNER_TEMP/rust-native/zvec-zvec-grep-linux-x64-gnu-0.0.1.tgz"
+          echo "QA_ORIGINAL_TGZ=$QA_ORIGINAL_TGZ" >> "$GITHUB_ENV"
+          "$MAIN_ROOT/.venv/bin/python" -m repair_v2.package \
+            --source "$QA_ORIGINAL_TGZ" --output "$REPAIR_ROOT/zg-install.tgz" \
+            --manifest "$REPAIR_ROOT/package-derivation.json"
+      - name: Test the repaired boundaries without real providers
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot/native_claude -t benchmarks/native-claude-qa-pilot -p 'test_*.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/unit-tests.txt"
+      - name: Prepare the unchanged full q001 source-only image
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py \
+            --plan benchmarks/opencode-qa-pilot/experiment.json \
+            --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT" \
+            prepare --zvec-repo "$RUNNER_TEMP/qa-zvec-git" --output "$PREPARED_ROOT"
+      - name: Exercise both native adapters through real Harbor Docker
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m native_claude.integration \
+            --main-root "$MAIN_ROOT" --repo-root "$GITHUB_WORKSPACE" \
+            --prepared "$PREPARED_ROOT" --candidate-tgz "$REPAIR_ROOT/zg-install.tgz" \
+            --output "$REPAIR_ROOT/integration" \
+            2>&1 | tee "$REPAIR_ROOT/integration.log"
+      - name: Retain inputs and scan for the read-only GitHub token
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPAIR_ROOT"
+          cp benchmarks/native-claude-qa-pilot/inputs.json "$REPAIR_ROOT/inputs.json"
+          cp benchmarks/native-claude-qa-pilot/decision.json "$REPAIR_ROOT/decision.json"
+          if test -x "$MAIN_ROOT/.venv/bin/python"; then
+            "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan --secret-env GH_TOKEN --root "$REPAIR_ROOT"
+          else
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-claude-offline-v1-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-claude-offline-v1/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
