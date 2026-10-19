@@ -7,13 +7,19 @@ git clone --depth 1 --branch b8390 https://github.com/ggml-org/llama.cpp.git $so
 if ($LASTEXITCODE -ne 0) { throw 'Source clone failed' }
 git -C $source rev-parse HEAD | Out-File (Join-Path $out 'llama-source-sha.txt')
 $amx = Join-Path $source 'ggml/src/ggml-cpu/amx/amx.cpp'
-# This test entry calls the real allocation and destruction callbacks; it never runs AMX compute.
+# This test entry uses the real aligned allocator and AMX destruction callback; it never runs AMX compute.
 $entry = @'
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
-extern "C" __declspec(dllexport) int zg_test_amx_allocation(size_t size) {
-    ggml_backend_buffer_t buffer = ggml_backend_amx_buffer_type_alloc_buffer(nullptr, size);
-    if (!buffer) return 1;
-    ggml_backend_buffer_free(buffer);
+extern "C" __declspec(dllexport)
+__attribute__((target("sse2,no-avx,no-avx2,no-avx512f")))
+int zg_test_amx_allocation(size_t size) {
+    // Keep the harness itself runnable on non-AMX/AVX-512 hosts. The same
+    // production allocator and the unmodified production free callback run here.
+    struct ggml_backend_buffer buffer = {};
+    buffer.context = ggml_aligned_malloc(size);
+    buffer.size = size;
+    if (!buffer.context) return 1;
+    ggml_backend_amx_buffer_free_buffer(&buffer);
     return 0;
 }
 #endif
@@ -46,7 +52,7 @@ $rows += Run-Allocator-Probe 'original' $old
 # Apply only the allocator correction to the actual production callback.
 $text = [IO.File]::ReadAllText($amx)
 $before = '    free(buffer->context);'
-if (($text.Split($before).Count - 1) -ne 1) { throw 'Expected exactly one free callback' }
+if ([regex]::Matches($text, [regex]::Escape($before)).Count -ne 1) { throw 'Expected exactly one free callback' }
 [IO.File]::WriteAllText($amx, $text.Replace($before, '    ggml_aligned_free(buffer->context, buffer->size);'))
 git -C $source diff -- ggml/src/ggml-cpu/amx/amx.cpp | Out-File (Join-Path $out 'tested-source.diff')
 cmake --build $build --target ggml-cpu-sapphirerapids --parallel 4
@@ -57,3 +63,4 @@ Copy-Item (Join-Path $bin '*.dll') $fixed
 $rows += Run-Allocator-Probe 'patched' $fixed
 $rows | ConvertTo-Json -Depth 6 | Tee-Object -FilePath (Join-Path $out 'allocator-results.json')
 if ($rows[0].failed -ne 5 -or $rows[1].passed -ne 5) { throw 'Allocator negative/positive controls failed' }
+if (@($rows[0].exitCodes | Where-Object { $_ -ne -1073740940 -and $_ -ne 3221226356 }).Count -ne 0) { throw 'Negative control must fail with native heap corruption, not a harness/load error' }
