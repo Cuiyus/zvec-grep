@@ -1,4 +1,4 @@
-name: Windows embedding lifecycle diagnostics
+name: Windows embedding runtime upgrade evaluation
 
 on:
   workflow_dispatch:
@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 35
     env:
       ZG_DIAG_REPEATS: ${{ inputs.repeats }}
+      ZVEC_GREP_SMOKE_MODEL: local/embeddinggemma-300m
     steps:
       - name: Set probe directories
         shell: pwsh
@@ -32,6 +33,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        id: build
       - uses: actions/cache@v5
         with:
           path: ${{ env.ZVEC_GREP_MODEL_CACHE }}
@@ -50,7 +52,11 @@ jobs:
           $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
           if (Test-Path -LiteralPath $debugger) { Write-Output $debugger } else { Write-Output "cdb: not installed" }
       - name: Probe fresh embedding processes
+        timeout-minutes: 20
         run: node .github/diagnostics/embedding-lifecycle-driver.mjs
+      - name: Validate the existing package smoke test
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        run: npm run test:smoke:local-model
       - uses: actions/upload-artifact@v7
         if: always()
         with:
