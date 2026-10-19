@@ -1,0 +1,22 @@
+{
+  "scope": "Auditor expectations only; no raw/implementation/protocol change",
+  "initial_review_sha256": "2487dd9ca18a78517b477320b2722ceacae541301cdc140974a135d607a6535f",
+  "corrections": [
+    {
+      "check": "zip_exact_raw_file_set",
+      "finding": "All120 ZIP/raw files match exactly. Original auditor compared lexically sorted ZIP strings to pathlib component-sorted paths; integration.log orders differently from integration/*.",
+      "correction": "Sort both relative path lists as strings before exact sequence comparison; file-count/duplicate/unsafe-path and exact bytes checks remain."
+    },
+    {
+      "check": "package_runtime_payloads",
+      "finding": "All4 runtime hashes and byte counts equal actual retained archive members. Observed runtime maps additionally include mode.",
+      "correction": "Add each archive member POSIX permission mode to the independently computed expected mapping and require full mapping equality; permissions are validated rather than ignored."
+    },
+    {
+      "check": "independent_source_inventory_hash",
+      "finding": "The frozen corpus constructor sorts pathlib.Path objects before canonical JSON encoding, not relative strings. The expanded audit initially sorted relative strings. All1232file hashes already matched independently.",
+      "correction": "Use the exact pinned constructor Path sorting when reconstructing the canonical inventory hash; retain expanded initial report/script.",
+      "reference": "benchmarks/zvec-issue-qa/prepare_corpus.py:132-145"
+    }
+  ]
+}
