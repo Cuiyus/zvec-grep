@@ -171,3 +171,66 @@ if (
     "AMX model negative/positive controls did not match the expected result",
   );
 }
+
+// Verify the published zg CLI against the same patched native backend.
+const workspace = join(output, "cli-workspace");
+const isolatedHome = join(output, "cli-home");
+mkdirSync(workspace, { recursive: true });
+mkdirSync(isolatedHome, { recursive: true });
+writeFileSync(
+  join(workspace, "fixture.ts"),
+  'export function CrossPlatformPotionNeedle(token: string): boolean { return token.startsWith("potion-"); }\n',
+);
+const cli = join(consumer, "node_modules/@zvec/zvec-grep/dist/cli/index.js");
+const cliEnv = {
+  ...process.env,
+  HOME: isolatedHome,
+  USERPROFILE: isolatedHome,
+  NO_COLOR: "1",
+  ZVEC_GREP_HOME: isolatedHome,
+  ZVEC_GREP_EMBEDDING: "local/embeddinggemma-300m",
+  ZVEC_GREP_DEVICE: "cpu",
+};
+const cliChecks = [];
+for (const [name, args, expected] of [
+  [
+    "vector-query",
+    [
+      "--mode",
+      "direct",
+      "--vector",
+      "CrossPlatformPotionNeedle",
+      "--limit",
+      "5",
+      "-g",
+      "fixture.ts",
+      "-t",
+      "ts",
+      ".",
+    ],
+    /CrossPlatformPotionNeedle/,
+  ],
+  [
+    "status",
+    ["--status", "--mode", "direct", "."],
+    /local\/embeddinggemma-300m/,
+  ],
+]) {
+  const result = spawnSync(process.execPath, [cli, ...args], {
+    cwd: workspace,
+    env: cliEnv,
+    encoding: "utf8",
+    timeout: 180000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  writeFileSync(join(output, `cli-${name}.stdout.log`), result.stdout ?? "");
+  writeFileSync(join(output, `cli-${name}.stderr.log`), result.stderr ?? "");
+  const ok = result.status === 0 && expected.test(result.stdout ?? "");
+  cliChecks.push({ name, status: result.status, passed: ok });
+}
+writeFileSync(
+  join(output, "cli-results.json"),
+  JSON.stringify(cliChecks, null, 2),
+);
+if (cliChecks.some((r) => !r.passed))
+  throw new Error("Patched native backend CLI check failed");

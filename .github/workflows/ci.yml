@@ -2,12 +2,19 @@ name: Windows AMX allocator validation
 
 on:
   workflow_dispatch:
+    inputs:
+      nativeRunId:
+        description: Reuse the verified native DLL artifact from this fork run (empty to rebuild)
+        type: string
+        default: "39279005128"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   allocator:
+    if: inputs.nativeRunId == ''
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -32,6 +39,7 @@ jobs:
           retention-days: 7
   model:
     needs: allocator
+    if: always() && (needs.allocator.result == 'success' || inputs.nativeRunId != '')
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -68,6 +76,8 @@ jobs:
         with:
           name: amx-native-validation
           path: ${{ env.AMX_DLL_ARTIFACT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.nativeRunId || github.run_id }}
       - run: npm ci
         if: steps.cpu.outputs.eligible == 'true'
       - run: npm run build
