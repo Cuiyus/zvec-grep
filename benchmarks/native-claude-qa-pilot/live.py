@@ -24,12 +24,12 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path[:0] = [str(HERE), str(HERE.parent / 'opencode-qa-pilot')]
 import pilot
-from native_claude.accounting import analyze
+from accounting_v2 import analyze
 from native_claude.integration import (MODEL, PACKAGE_SHA, build_command,
                                       docker_info, stop_process_group, validate_inputs)
 from repair_v2.package import EXPECTED_MEMBERS, RUNTIME_PATHS
 
-PROTOCOL = 'native-claude-q001-live-v1'
+PROTOCOL = 'native-claude-q001-live-v2'
 PROFILES = ['baseline', 'zvec-grep']
 FIXED = {k: v for k, v in pilot.FIXED.items() if k not in ('protocol_id', 'phase', 'agent')}
 FIXED.update(protocol_id=PROTOCOL, phase='native-claude-development', model=MODEL,
@@ -115,7 +115,7 @@ def validate_plan(plan_path, main_root, prepared, candidate, repo_root=REPO):
         raise ValueError('question_or_rubric_changed')
     pins = plan.get('frozen_harness_sha256', {})
     workflow, decision_path = plan.get('execution_workflow', ''), plan.get('execution_decision', '')
-    required = {str(HERE.relative_to(REPO) / name) for name in ('live.py', 'test_live.py', 'inputs.json')}
+    required = {str(HERE.relative_to(REPO) / name) for name in ('live.py', 'test_live.py', 'inputs.json', 'accounting_v2.py', 'test_accounting_v2.py')}
     if not workflow.startswith('.github/workflows/') or not decision_path:
         raise ValueError('live_workflow_and_decision_required')
     if not required.union({workflow, decision_path}) <= pins.keys():
