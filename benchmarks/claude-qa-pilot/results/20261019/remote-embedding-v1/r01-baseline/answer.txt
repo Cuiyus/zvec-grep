@@ -1,0 +1,47 @@
+## Summary of the failure chain (established entirely from source reading; I did not execute anything)
+
+The bug is a state asymmetry between "WAL replayed" and "WAL owned." After a crash-recovery open, the recovered docs live **only** in the writing segment's in-memory components, while the segment's `wal_file_` member handle is still `nullptr` (replay used a separate, closed handle). `SegmentImpl::flush()` uses that handle as its "is there anything to persist" predicate, so the flush invoked by `optimize()` silently no-ops — yet `optimize()` then rewrites the version to promote the segment as *persisted* and point the writing slot at a brand-new block, orphaning the old WAL. The next open has nothing to replay.
+
+### 1. Recovery path vs. ordinary insertion path
+
+**Ordinary insert** — `SegmentImpl::Insert` (`src/db/index/segment/segment.cc:903–918`) calls `append_wal(doc)` first, which lazily opens the member handle `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`, `append_wal` at `4324–4340`), then `internal_insert` (`segment.cc:837–881`) writes the id map, `memory_store_`, scalar/FTS/vector memory indexers, bumps the mem-block counters, and pushes to `doc_ids_`. After an insert: `wal_file_ != nullptr` with records, and memory components are dirty.
+
+**Recovery replay** — `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) reopens the writing segment from `v.writing_segment_meta()` (lines 1879–1887). `SegmentImpl::recover()` (`segment.cc:4193–4301`) opens the WAL into a **separate local handle** `recover_wal_file` (lines 4206–4215) that is closed at scope exit via `AILEGO_DEFER` (line 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (lines 4250–4272) — these never touch `wal_file_` (only the public `Insert/Update/...` entry points append to WAL). It also advances `mem_block.max_doc_id_` in the in-memory meta (lines 4285–4288).
+
+Net difference: after a recovery-only open, the documents are in `memory_store_`, the memory indexers, and `doc_ids_`, and the WAL still exists on disk — but the segment's `wal_file_` member is `nullptr`.
+
+**Why reads initially work:** all read paths are served from those in-memory structures — `doc_count()` is literally `doc_ids_.size()` (`segment.cc:589–596`), and count/fetch/search go through `get_all_segments()`, which includes the writing segment (e.g. `CollectionImpl::Stats()`, `collection.cc:403–442`, and the fetch path around `collection.cc:1780–1790`).
+
+### 2. The call sequence and exact condition in `optimize()`
+
+- `CollectionImpl::Optimize` (`collection.cc:779–915`): under `write_mtx_`, it checks `writing_segment_->doc_count() != 0` (line 794) — **true**, since replay filled `doc_ids_` — and calls `switch_to_new_segment_for_writing()` (line 796).
+- `switch_to_new_segment_for_writing` (`collection.cc:1517–1552`): calls `writing_segment_->dump()` (line 1519). `SegmentImpl::dump()` (`segment.cc:2197–2215`) calls `flush()` (line 2201).
+- **The exact condition:** `SegmentImpl::flush()` (`segment.cc:2217–2222`) begins with
+  `if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`
+  Because recovery never opened the member handle and no new inserts occurred, `wal_file_ == nullptr` → flush returns **OK without persisting anything**: no `memory_store_->flush()`, no `finish_memory_components()` (`segment.cc:4342–4411`, which is what converts memory blocks into persisted-block metas), no `update_version()`, and no WAL removal.
+- `dump()` then seals and returns OK, and `switch_to_new_segment_for_writing` proceeds to **rewrite durable state**: `writing_segment_meta->remove_writing_forward_block()` (line 1538) drops the pointer to the old block/WAL; the segment is added to the version as a **persisted** segment (line 1539) even though its persisted-block list contains none of the replayed docs; a brand-new writing segment with fresh segment/block ids is created and installed (lines 1527–1543); and the version is applied and flushed to disk (lines 1546–1549). `Optimize` continues (compacting whatever persisted segments exist, or returning early at lines 807–810) and returns `Status::OK()`.
+- On the **next open**: `recovery()` loads persisted segments read-only from their persisted-block metas (`collection.cc:1861–1874`) — the replayed docs are not in any block file — and opens the *new* writing segment, whose `SegmentImpl::recover()` computes the WAL path from the new mem block (`segment.cc:4198–4204`), finds no file, logs "WAL recovery skipped," and returns OK. The old WAL is orphaned: the flushed version no longer references it. Documents are gone.
+
+(Worth noting: without the `optimize()`, a plain close in the second process would also no-op in `close_unsafe` → `flush_unsafe` → `flush()` (`collection.cc:340–361`, `389–395`) — but it would *not* rewrite the version, so the old WAL would still be found and replayed on the next open. The version rewrite inside `switch_to_new_segment_for_writing` is the step that actually severs durability.)
+
+### 3. Why success and same-handle statistics prove nothing here
+
+- Every step returns OK: the flush guard returns `Status::OK()` as a "nothing to do" signal indistinguishable from "durably flushed" (`segment.cc:2220–2222`), and the version apply/flush genuinely succeed (`collection.cc:1546–1549`). Nothing reconciles the promoted segment's persisted-block metas against its in-memory `doc_count()`/mem-block counters before or after promotion.
+- `CollectionImpl::Stats()` (`collection.cc:403–442`) computes `doc_count` from live segment objects (memory included) and `index_completeness` from meta flags on those same in-memory objects. It never inspects the version file, block files, or WAL. So a handle whose memory data was never persisted — and whose WAL pointer was just removed from the version — still reports healthy counts and completeness.
+
+### 4. Smallest repair principle and regression test (described only)
+
+**Repair principle:** the flush predicate must reflect *dirty memory state*, not merely the presence of a lazily-opened write-path handle. The minimal one-point fixes, either sufficient:
+- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**
+- Change the guard in `SegmentImpl::flush()` (`segment.cc:2220–2222`) to also proceed when memory components are dirty (e.g. `memory_store_` non-null / mem-block `doc_count_ > 0`), so recovery-replayed data is persisted, versioned, and the stale WAL removed exactly as in the ordinary path.
+
+A defensive complement (not the minimal fix): `switch_to_new_segment_for_writing` should refuse to promote a writing segment whose meta has no persisted blocks covering its `doc_count()`.
+
+**Regression test sequence** (two/three processes, as in the report):
+1. Process A: create collection, insert N docs, terminate abruptly without `Flush`/`Close` (e.g. `_exit`) so the WAL is left un-replayed.
+2. Process B: `Open` → assert `count == N` and fetch-by-pk succeeds (recovery works). Call `optimize()` → assert OK. `Close` cleanly.
+3. Process C: `Open` again → assert `count == N` and docs fetchable. **This assertion fails today** and passes after the fix.
+4. Control: single-process insert → `optimize()` → close → reopen → `count == N` (passes before and after, per the report).
+Optionally add a white-box check in step 2 that after `optimize()` the flushed version contains persisted block metas covering N docs (or that the writing segment's WAL was removed), pinning the invariant the guard violated.
+
+**Established vs. needs execution:** the entire causal chain above — the `nullptr` `wal_file_` after replay, the early-return guard, the version promotion/orphaning, and the "WAL recovery skipped" path on reopen — is established from the frozen source. I did not build or run anything; end-to-end confirmation of the data loss (and of the fix) requires executing the regression sequence described in (4).

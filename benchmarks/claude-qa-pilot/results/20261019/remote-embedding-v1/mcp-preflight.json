@@ -1,0 +1,435 @@
+{
+  "schema_version": 1,
+  "purpose": "infrastructure-only real-index MCP preflight",
+  "external_llm_calls": 0,
+  "query": "source code implementation",
+  "command": [
+    "docker",
+    "run",
+    "--rm",
+    "--name",
+    "zg-qa-probe-4c81382ba2a5",
+    "--init",
+    "--read-only",
+    "--user",
+    "1001:1001",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+    "/tmp:rw,exec,size=2g",
+    "--tmpfs",
+    "/run:rw,size=64m",
+    "--mount",
+    "type=bind,src=/home/runner/work/_temp/pilot-zvec-q001/source,dst=/workspace,readonly",
+    "--mount",
+    "type=bind,src=/tmp/zg-mcp-preflight-vvd45fcx/runtime/home,dst=/root",
+    "--mount",
+    "type=bind,src=/tmp/zg-mcp-preflight-vvd45fcx/config,dst=/pilot-config,readonly",
+    "--workdir",
+    "/workspace",
+    "--env",
+    "HOME=/root",
+    "--env",
+    "CLAUDE_CONFIG_DIR=/root/.claude",
+    "--env",
+    "ZVEC_GREP_HOME=/root/.zvec-grep",
+    "--env",
+    "ZVEC_GREP_API_KEY",
+    "--env",
+    "ZVEC_GREP_ENDPOINT",
+    "--interactive",
+    "--mount",
+    "type=bind,src=/tmp/zg-mcp-preflight-vvd45fcx/runtime/index,dst=/workspace/.zvec-grep",
+    "zg-claude-qa-pilot:20261019",
+    "zg",
+    "--server",
+    "--stdio",
+    "--mcp-toolset",
+    "agent"
+  ],
+  "host_uid": 1001,
+  "host_gid": 1001,
+  "seed_policy": "private clones discarded; original index/home seeds never mounted writable",
+  "source": "/home/runner/work/_temp/pilot-zvec-q001/source",
+  "valid": true,
+  "errors": [],
+  "embedding_model": "qwen/qwen3.7-text-embedding",
+  "embedding_endpoint": "https://llm-67x4s810wr6kl2i4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings",
+  "remote_embedding_may_be_billed": true,
+  "timing_boundary": "Whole preflight and search wall are setup outside QA. Search wall includes native processing and any remote embedding/network time; no network-only latency or provider billing measurement.",
+  "initialize": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "zvec-grep",
+      "version": "0.0.1"
+    },
+    "instructions": "Use zvec-grep with these workspace retrieval rules:\n- Use the current workspace as the evidence source when the user asks about local material, prior context establishes it as relevant, or the question concerns how the current project works—even if the workspace is not mentioned explicitly.\n- A workspace may contain any mix of code, documents, configuration, and data.\n- Do not use workspace retrieval for unrelated open-world questions, current external facts, or web content that does not depend on local evidence.\n- Use native Grep or rg first only when exact lookup alone is sufficient, such as locating one definition, literal, filename, configuration key, error message, regex match, or exhaustive occurrence list.\n- Use zvec_grep_search first when wording or location is unknown, or when the answer requires architecture, lifecycle, call relationships, dependencies, data or control flow, design rationale, comparison, or synthesis across files or components.\n- When user-provided or verified exact symbols are present but the answer spans multiple files, components, stages, implementations, or relationships, treat the task as mixed: call zvec_grep_search with the semantic intent and those anchors, then use Read, Grep, or rg for focused verification.\n- For a semantic or mixed workspace task, start discovery with focused zvec_grep_search before broad file discovery.\n- Preserve the question's concepts, relationships, and constraints from the user request and established context in semantic queries. Treat inferred names as supplemental hypotheses, not replacements for or constraints on the stated intent.\n- `query` creates one primary hybrid FTS-plus-vector group; `queries` creates one or more primary hybrid groups; `fts` and `vector` add supplemental lexical-only or semantic-only route groups. These are retrieval routes, not hard constraints. Without `fuse`, the response is one deduplicated and reranked list with query-group metadata; set `fuse: true` to collapse every group into one ranked search plan.\n- For a fused mixed search, use arguments such as {\"root\":\"/absolute/workspace\",\"query\":\"how are results ranked and fused\",\"fts\":[\"RRF\",\"score\"],\"fuse\":true}.\n- Search results include bounded source snippets by default. Set preview: \"full\" for all available content of each retrieved item; this does not retrieve the entire file or change ranking. Treat sufficient returned content as already-read evidence, and open only the cited file or range when a required detail falls outside it.\n- If semantic retrieval remains irrelevant, fall back to native Grep or rg.\n- Stop searching once the available evidence is sufficient for the requested task. Continue only to resolve a material gap or ambiguity; do not repeat similar searches or broaden the investigation merely to reconfirm what is already established.\n- Do not launch a sub-agent solely to locate workspace material.\n- Every workspace operation requires an absolute root path visible to the daemon.\n- Read freshness and background_refresh directly from zvec_grep_search responses without a status preflight.\n- When results are served_from_current_index, use them immediately when they are sufficient; do not perform extra diagnostics merely because a background refresh is active.\n- When an index is missing and literal or regex search can answer the task, use native Grep or rg. Creating or rebuilding a persistent index requires explicit user authorization."
+  },
+  "tools": {
+    "ttlMs": 3600000,
+    "cacheScope": "private",
+    "tools": [
+      {
+        "name": "zvec_grep_search",
+        "description": "Search an existing workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. Results include bounded source snippets by default and query-group metadata; set preview: \"full\" to return all available content of each retrieved item without changing retrieval or ranking. Treat sufficient returned content as already-read evidence. Use native Grep or rg instead when exact lookup alone is sufficient. Read freshness and background_refresh from the response without a status preflight; when results are served_from_current_index, use them if sufficient.",
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "$defs": {
+            "QueryListInput": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "maxItems": 32
+                }
+              ]
+            },
+            "GlobListInput": {
+              "description": "Public string/list globs plus the existing typed-rule extension.",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/GlobInput"
+                  }
+                }
+              ]
+            },
+            "GlobInput": {
+              "type": "object",
+              "properties": {
+                "pattern": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "caseInsensitive": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "pattern"
+              ]
+            },
+            "PathListInput": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "maxItems": 128
+                }
+              ]
+            },
+            "SymbolTypeInput": {
+              "type": "string",
+              "enum": [
+                "alias",
+                "class",
+                "enum",
+                "function",
+                "interface",
+                "module",
+                "value"
+              ]
+            },
+            "TimeInput": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              ]
+            },
+            "FreshnessInput": {
+              "type": "string",
+              "enum": [
+                "eventual",
+                "wait_for_fresh"
+              ]
+            }
+          },
+          "type": "object",
+          "properties": {
+            "root": {
+              "description": "Absolute workspace root visible to the daemon.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "query": {
+              "description": "One primary hybrid-search group.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4000
+            },
+            "queries": {
+              "description": "One or more primary hybrid-search groups.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/QueryListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fts": {
+              "description": "Supplemental lexical-route groups.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/QueryListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "vector": {
+              "description": "Supplemental semantic/vector-route groups.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/QueryListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit": {
+              "description": "Maximum returned items per query group or fused plan.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "preview": {
+              "description": "Source display only: short bounds snippets; full preserves all available retrieved content and outline without changing retrieval or ranking.",
+              "type": "string",
+              "enum": [
+                "short",
+                "full"
+              ],
+              "default": "short"
+            },
+            "globs": {
+              "description": "Ordered path glob rules; later matching rules take precedence.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GlobListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "insensitiveGlobs": {
+              "description": "Ordered case-insensitive rg glob rules, applied after globs.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fileTypes": {
+              "description": "Ripgrep type names, such as ts, py, h or cpp.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "excludedFileTypes": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "formats": {
+              "description": "Formats inferred from indexed file names, such as rust or markdown; source contents are not inspected.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "excludedFormats": {
+              "description": "Exclude matching file-name formats, taking precedence over formats.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "categories": {
+              "description": "Categories inferred from indexed file names, such as code or document.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "excludedCategories": {
+              "description": "Exclude matching file-name categories, taking precedence over categories.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PathListInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "embeddingConcurrency": {
+              "description": "Index-only refresh budget; query-vector inference keeps its own defaults.\nControls llama.cpp contexts or concurrent batches/requests for other backends.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 1
+            },
+            "fuse": {
+              "description": "Collapse all query groups into one ranked plan.",
+              "type": "boolean"
+            },
+            "preferSymbol": {
+              "description": "Prefer exact indexed symbols.",
+              "type": "boolean"
+            },
+            "symbolTypes": {
+              "description": "Restrict indexed results to symbol types.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SymbolTypeInput"
+              },
+              "maxItems": 7
+            },
+            "modifiedAfter": {
+              "description": "Only query files modified after this time.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimeInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "modifiedBefore": {
+              "description": "Only query files modified before this time.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimeInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "trace": {
+              "description": "Include per-hit search trace.",
+              "type": "boolean"
+            },
+            "freshness": {
+              "description": "Search now or wait for delivered workspace changes to be indexed.\nResident servers cover watcher notifications received before the refresh\nbarrier; OS notifications delivered later require a subsequent refresh.",
+              "$ref": "#/$defs/FreshnessInput"
+            },
+            "autoUpdate": {
+              "description": "Allow eventual search to schedule a background index update.",
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "root"
+          ]
+        },
+        "annotations": {
+          "title": "Search with zvec-grep",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": true
+        }
+      }
+    ]
+  },
+  "tool_schema_sha256": "7094687e4aa521c6057bd2a668ee2447d37a3fec8afaf6cb9b26f87c25132406",
+  "search": {
+    "content": [
+      {
+        "type": "text",
+        "text": "freshness: fresh\nresults: served_from_current_index\nbackground_refresh: scheduled\n#1 [group_coverage: Q1] matchedBy=fts+vector python/zvec/extension/sentence_transformer_function.py:78-81\ngroups: Q1#1 (fts+vector)\nsource:\n78\t@property\n79\t    def model_source(self) -> str:\n80\t        \"\"\"str: The model source being used (\"huggingface\" or \"modelscope\").\"\"\"\n81\t        return self._model_source"
+      }
+    ],
+    "isError": false
+  },
+  "search_wall_seconds": 1.8149154850000002,
+  "vector_search": {
+    "content": [
+      {
+        "type": "text",
+        "text": "freshness: fresh\nresults: served_from_current_index\nbackground_refresh: scheduled\n#1 [global_fill] matchedBy=vector src/include/zvec/core/interface/index.h:143-146\ngroups: Q1#1 (vector)\nsource:\n143\tvirtual int SearchWithSource(const VectorData &query,\n144\t                               const BaseIndexQueryParam::Pointer &search_param,\n145\t                               const core::VectorSource &src,\n146\t                               SearchResult *result);"
+      }
+    ],
+    "isError": false
+  },
+  "vector_search_wall_seconds": 0.5836530889999949,
+  "native_search_calls": 2,
+  "wall_seconds": 3.564718978000002,
+  "transport_exit_code": 0
+}

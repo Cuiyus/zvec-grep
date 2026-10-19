@@ -1,0 +1,1469 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "review_mode": "independent_blind_frozen_rubric_final_answers_only",
+  "preparation": {
+    "path": "/tmp/zg-remote-q001-judge-preparation.json",
+    "sha256": "6e348d1073426ac7a7e53867f5c138e50e4afdcd8dd5ea7b7ca715f1aa7d26cb",
+    "unchanged": true
+  },
+  "frozen_inputs": {
+    "instruction": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+      "sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef"
+    },
+    "rubric": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q001.json",
+      "sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9"
+    },
+    "source_files_sha256": {
+      "src/db/index/segment/segment.cc": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "src/db/collection.cc": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "tests/db/crash_recovery/write_recovery_test.cc": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "src/db/index/segment/segment.h": "21d3910cb0968d503fc286e9e1a3cf28186ad1ffe821a3585159d1546f58fdae"
+    }
+  },
+  "additional_source_files_sha256": {
+    "src/db/index/segment/segment_helper.cc": "0fe60b127e8c54932ab9c88cb47dc1c71cd45f8694ca3b996db02455cb33a320",
+    "tests/db/crash_recovery/optimize_recovery_test.cc": "d29cc0f7e1e17020192e39178b2b89461c45eb21cf9e6bc7fa10aa11e05b3e95",
+    "src/db/index/storage/wal/local_wal_file.h": "d39b3d5d15cfe51324c535cb1db1792e4aa851b98cffbd8861a552948783f7ae",
+    "src/db/index/storage/wal/local_wal_file.cc": "2f9d37ab8315bcc90fc29d68bac76832b503fe0ea7655b3a4c139fe337504ec9",
+    "src/include/zvec/db/status.h": "c5a088e8692a2e237d029dc433e17706df52f4647a7f945b779884d19e038cee"
+  },
+  "frozen_rules": {
+    "criteria": [
+      {
+        "id": "C1",
+        "points": 2,
+        "critical": true,
+        "claim": "Recovery reconstructs readable in-memory state from a temporary/local WAL handle but finishes without installing/reopening the member wal_file_.",
+        "full_credit": "Name the local-versus-member distinction and show replay enters internal operations that populate memory/doc ids. A generic claim of stale cache is insufficient.",
+        "evidence_sets": [
+          [
+            "E02",
+            "E03",
+            "E04",
+            "E05"
+          ]
+        ],
+        "partial_credit": "1 point for correct recovered-memory state or correct local/member WAL distinction, but not both."
+      },
+      {
+        "id": "C2",
+        "points": 2,
+        "critical": true,
+        "claim": "flush() treats a null member WAL or one with no records as no pending work, returning OK before persistence. Here the null member arm triggers.",
+        "full_credit": "State the exact null-or-no-record guard, identify the null-member cause for this scenario, and explain the skipped persistence/finalization.",
+        "evidence_sets": [
+          [
+            "E08",
+            "E09",
+            "E10"
+          ]
+        ],
+        "partial_credit": "1 point for identifying flush as the skipped step without the precise condition or lifecycle consequences."
+      },
+      {
+        "id": "C3",
+        "points": 2,
+        "critical": true,
+        "claim": "Optimize -> switch_to_new_segment_for_writing -> dump -> flush; successful early return allows sealing/switching and version persistence after old writing-block metadata is removed, so a future open cannot recover/persist the lost memory via the old writing block.",
+        "full_credit": "Connect the full call chain to removal of old writing metadata and the new persisted version, rather than blaming vector-ranking quality or claiming optimize never calls flush.",
+        "evidence_sets": [
+          [
+            "E06",
+            "E07",
+            "E08",
+            "E01"
+          ]
+        ],
+        "partial_credit": "1 point for correct call chain without the metadata/reopen consequence, or correct consequence without the chain."
+      },
+      {
+        "id": "C4",
+        "points": 1,
+        "critical": false,
+        "claim": "Same-handle Stats reads in-memory segment counts and indexed metadata; success/index completeness is not a durability or data-content check.",
+        "full_credit": "Explain doc_ids_ based counting and metadata-derived index completeness; do not invent a separate stats cache.",
+        "evidence_sets": [
+          [
+            "E11",
+            "E12"
+          ]
+        ],
+        "partial_credit": "No partial point."
+      },
+      {
+        "id": "C5",
+        "points": 1,
+        "critical": false,
+        "claim": "Normal Insert appends to/opens the member WAL before internal_insert, unlike replay, explaining the no-crash control under the stated size assumptions.",
+        "full_credit": "Cite ordinary insertion and append/open behavior; distinguish recovery bypassing append_wal.",
+        "evidence_sets": [
+          [
+            "E13",
+            "E14",
+            "E03"
+          ]
+        ],
+        "partial_credit": "No partial point."
+      },
+      {
+        "id": "C6",
+        "points": 1,
+        "critical": false,
+        "claim": "Restore the invariant that replayed pending data has an attached usable member WAL before later flush/dump; close the temporary reader and reopen/retain the existing WAL through the normal member path, handling errors.",
+        "full_credit": "A minimal lifecycle repair equivalent to attaching/reopening the existing WAL is accepted. An alternative persistence design is accepted only if the answer proves it preserves version, flush and WAL cleanup invariants.",
+        "evidence_sets": [
+          [
+            "E02",
+            "E05",
+            "E08",
+            "E14"
+          ]
+        ],
+        "partial_credit": "No partial point; simply calling public flush on the broken state is not a repair."
+      },
+      {
+        "id": "C7",
+        "points": 1,
+        "critical": false,
+        "claim": "Regression: insert known documents, force abrupt termination before flush, reopen and verify recovered data, optimize without extra writes, close, reopen from fresh process and compare count plus representative/all known documents and vectors. Include a no-crash or already-flushed control.",
+        "full_credit": "Fresh reopen after optimize and no intervening writes are required, because same-handle checks and writes that lazily open the WAL can mask the defect. Executing the test is not required.",
+        "evidence_sets": [
+          [
+            "E16",
+            "E07",
+            "E13",
+            "E14"
+          ]
+        ],
+        "partial_credit": "No partial point."
+      }
+    ],
+    "success_rule": {
+      "minimum_points": 8,
+      "required_full_credit": [
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "critical_contradictions_allowed": 0,
+      "supporting_citations_required_for_core_claims": true
+    },
+    "citation_policy": {
+      "must_resolve_in_frozen_source": true,
+      "require_claim_support_not_just_overlap": true,
+      "alternative_valid_spans_allowed": true,
+      "whole_file_hit_is_sufficient": false,
+      "evidence_sets": "All spans in one listed set establish the claim; equivalent supporting source spans accepted by blinded human audit.",
+      "score_without_evidence": "Report factual score separately if useful, but source-grounded success requires verified evidence for C1-C3.",
+      "retrieval_only_metrics": "Optional span/evidence coverage is diagnostic and never substituted for e2e QA correctness."
+    }
+  },
+  "scope_audit": {
+    "answers_read": [
+      "U",
+      "W"
+    ],
+    "mapping_or_arm_inferred": false,
+    "other_results_metrics_streams_reviews_or_parent_directories_read": false,
+    "solver_or_model_api_ci_or_reproduction_executed": false,
+    "source_or_rubric_modified": false,
+    "allowed_source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/export-validation/sources/q001"
+  },
+  "reviews": [
+    {
+      "task_id": "q001",
+      "blinded_answer_id": "U",
+      "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/remote-embedding-v1/blind-answers/U.txt",
+      "answer_sha256": "1f072196f1527a15a87ea69798aa3e2e8e75c314e4e56d530c6b849371d786fd",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "Explicitly distinguishes the local replay handle from null member wal_file_ and connects replayed internal_insert to memory/index/doc_ids_ state.",
+          "quote_refs": [
+            {
+              "answer_start_line": 9,
+              "answer_end_line": 9,
+              "quote": "**Ordinary insert** (`src/db/index/segment/segment.cc:903-918`): `Insert()` calls `append_wal(doc)` first, which lazily opens the *member* handle `wal_file_` if null (`append_wal` at 4324-4340, `open_wal_file` at 4303-4322), appends the record, then `internal_insert()` (837-881) populates memory components (`memory_store_`, `id_map_`, scalar/FTS/vector indexers, `doc_ids_`, writing-block meta counters). Post-condition: `wal_file_ != nullptr` **and** data in RAM."
+            },
+            {
+              "answer_start_line": 11,
+              "answer_end_line": 11,
+              "quote": "**Recovery** (`CollectionImpl::recovery`, `src/db/collection.cc:1836-1892` → `Segment::Open`, segment.cc:4475-4496 → `SegmentImpl::Open`, 461-517): because the persisted version still carries the writing-segment's forward-block meta, `Open` takes the `writing_block.has_value()` branch (484-501) and calls `recover()` (4193-4301). `recover()` opens the WAL through a **separate local handle** `recover_wal_file` (4206-4214) that is closed on scope exit (`AILEGO_DEFER`, 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` directly (4249-4272) — never `append_wal`. Post-condition: data in RAM, but **member `wal_file_ == nullptr`**, while the WAL file still sits on disk."
+            }
+          ],
+          "core_citation_gate": true
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "States exact null-or-no-record guard, identifies the null disjunct, and lists skipped store persistence, component finalization and version update.",
+          "quote_refs": [
+            {
+              "answer_start_line": 20,
+              "answer_end_line": 24,
+              "quote": "2. Line 1519: `writing_segment_->dump()` (segment.cc:2197-2215) → `flush()` (2217-2324). **The exact condition** is at segment.cc:2220-2222:\n   ```cpp\n   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n   ```\n   After recovery `wal_file_` is null (the first disjunct fires regardless of `has_record()` semantics), so flush returns OK **without** running `memory_store_->flush()` (2233-2236), `finish_memory_components()` (2288-2298; body 4342-4412 — the step that would convert the memory block/indexers into *persisted* block metas), `update_version()` (2300-2302), or WAL removal (2304-2315). `dump()` then just seals indexers and sets `sealed_ = true` (2204-2214) — still OK."
+            }
+          ],
+          "core_citation_gate": true
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "Gives full Optimize -> switch -> dump -> flush chain, successful sealing, removal of writing metadata, applied/flushed version, and the metadata-conditioned Open/recover consequence.",
+          "quote_refs": [
+            {
+              "answer_start_line": 19,
+              "answer_end_line": 25,
+              "quote": "1. Line 794: `writing_segment_->doc_count() != 0` is true (replayed docs), so line 796 calls `switch_to_new_segment_for_writing()` (1517-1552).\n2. Line 1519: `writing_segment_->dump()` (segment.cc:2197-2215) → `flush()` (2217-2324). **The exact condition** is at segment.cc:2220-2222:\n   ```cpp\n   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n   ```\n   After recovery `wal_file_` is null (the first disjunct fires regardless of `has_record()` semantics), so flush returns OK **without** running `memory_store_->flush()` (2233-2236), `finish_memory_components()` (2288-2298; body 4342-4412 — the step that would convert the memory block/indexers into *persisted* block metas), `update_version()` (2300-2302), or WAL removal (2304-2315). `dump()` then just seals indexers and sets `sealed_ = true` (2204-2214) — still OK.\n3. Lines 1522-1549 of collection.cc: the never-persisted old segment is registered via `segment_manager_->add_segment()` (1522); a new empty writing segment is created (1527-1531); **`writing_segment_meta->remove_writing_forward_block()`** (1538) deletes the meta whose block ID derives the WAL path (`MakeWalPath(path_, seg_id, block_id)`, segment.cc:4198-4199, 4305-4306); the new version is applied and flushed (1546-1549). On-disk truth now says: old segment = \"persisted\" with **no writing block and no persisted data blocks**; the WAL file is orphaned."
+            },
+            {
+              "answer_start_line": 29,
+              "answer_end_line": 29,
+              "quote": "**Next reopen loses the data:** `SegmentImpl::Open` re-enters with the persisted meta that now has no writing forward block, so `writing_block.has_value()` is false (segment.cc:484-490), `recover()` is never invoked (499-501), and the orphaned WAL is never replayed — the `else` branch (502-510) only fixes block allocators. Note that without `optimize()`, even a second crash would still replay the WAL, because the version would still carry the writing-block meta; `remove_writing_forward_block()` at collection.cc:1538 is what converts \"recoverable\" into \"permanently lost.\""
+            }
+          ],
+          "core_citation_gate": true
+        },
+        {
+          "id": "C4",
+          "points": 0,
+          "maximum_points": 1,
+          "reason": "Explains live doc_ids_/memory-based counts, but never explains index_completeness as derived from vector_indexed metadata. The rubric requires both and provides no partial point. General healthy-stats reasoning cannot fill this omission.",
+          "quote_refs": [
+            {
+              "answer_start_line": 13,
+              "answer_end_line": 13,
+              "quote": "**Why it is readable initially:** reads go through in-process memory. `doc_count()` is `doc_ids_.size()` (segment.cc:589-600), replay populated `doc_ids_`/`memory_store_`/indexers, and `get_all_segments()` includes the writing segment whenever `doc_count() > 0` (collection.cc:2076-2082). Counting and fetching work entirely from RAM."
+            },
+            {
+              "answer_start_line": 36,
+              "answer_end_line": 36,
+              "quote": "- Statistics and reads on the same handle are served from the still-live in-memory segment (`doc_ids_`, `memory_store_`) held by `segment_manager_` (collection.cc:1522, 2076-2086). They never re-read the flushed version file, so they cannot observe that on-disk state no longer references the data. (The same blind spot affects an explicit `Flush()` after recovery: collection.cc:380-395 just forwards to the early-returning `SegmentImpl::flush()`; likewise `close()` at segment.cc:551-552.) Only a fresh process, which trusts the persisted version alone, exposes the loss."
+            }
+          ]
+        },
+        {
+          "id": "C5",
+          "points": 1,
+          "maximum_points": 1,
+          "reason": "Ordinary Insert -> append_wal -> member open precedes internal_insert, whereas replay bypasses append_wal; explicitly explains the no-crash control.",
+          "quote_refs": [
+            {
+              "answer_start_line": 9,
+              "answer_end_line": 9,
+              "quote": "**Ordinary insert** (`src/db/index/segment/segment.cc:903-918`): `Insert()` calls `append_wal(doc)` first, which lazily opens the *member* handle `wal_file_` if null (`append_wal` at 4324-4340, `open_wal_file` at 4303-4322), appends the record, then `internal_insert()` (837-881) populates memory components (`memory_store_`, `id_map_`, scalar/FTS/vector indexers, `doc_ids_`, writing-block meta counters). Post-condition: `wal_file_ != nullptr` **and** data in RAM."
+            },
+            {
+              "answer_start_line": 11,
+              "answer_end_line": 11,
+              "quote": "**Recovery** (`CollectionImpl::recovery`, `src/db/collection.cc:1836-1892` → `Segment::Open`, segment.cc:4475-4496 → `SegmentImpl::Open`, 461-517): because the persisted version still carries the writing-segment's forward-block meta, `Open` takes the `writing_block.has_value()` branch (484-501) and calls `recover()` (4193-4301). `recover()` opens the WAL through a **separate local handle** `recover_wal_file` (4206-4214) that is closed on scope exit (`AILEGO_DEFER`, 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` directly (4249-4272) — never `append_wal`. Post-condition: data in RAM, but **member `wal_file_ == nullptr`**, while the WAL file still sits on disk."
+            },
+            {
+              "answer_start_line": 31,
+              "answer_end_line": 31,
+              "quote": "**Control collection:** with no crash, `wal_file_` is open with records, so `dump()`→`flush()` runs the full path (2224-2323) — memory store flushed, persisted blocks added to the meta, version updated, WAL removed — *before* the meta is stripped and the version flipped. Hence no loss."
+            }
+          ]
+        },
+        {
+          "id": "C6",
+          "points": 1,
+          "maximum_points": 1,
+          "reason": "1 point under the frozen full_credit sentence accepting a minimal repair equivalent to attaching/reopening the existing WAL: the answer explicitly proposes making the existing WAL the usable member handle before normal flush. No credit is assigned to its guard-only alternative. Neither answer spells out reader-close/defer adjustment and propagation of reopen errors; these implementation omissions are recorded, but the accepted conceptual member-reattachment principle is stated rather than inferred.",
+          "quote_refs": [
+            {
+              "answer_start_line": 42,
+              "answer_end_line": 42,
+              "quote": "- **Re-attach the WAL on recovery:** after a successful replay in `SegmentImpl::Open`/`recover()`, call `open_wal_file()` (segment.cc:4303-4322) so the existing WAL (with records) becomes the member `wal_file_`. Then the guard at 2220 evaluates `has_record() == true` and the full flush/persist path runs during optimize, exactly as in the control case (including WAL removal at 2304-2315)."
+            }
+          ]
+        },
+        {
+          "id": "C7",
+          "points": 0,
+          "maximum_points": 1,
+          "reason": "Includes abrupt pre-flush termination, recovered-data check, immediate optimize with no intervening writes in the sequence, fresh reopen, and no-crash control. However, post-reopen assertions are count/fetchability only; no comparison of known document contents and vectors is specified. The referenced harness is not used to invent missing proposed-test assertions. No partial point is allowed.",
+          "quote_refs": [
+            {
+              "answer_start_line": 49,
+              "answer_end_line": 52,
+              "quote": "1. Process A: create+open collection, insert N docs, **crash without flush** (existing `RunGeneratorAndCrash`-style kill).\n2. Process B: open (triggers WAL replay); assert count/fetch == N; call `Optimize()`; assert OK.\n3. Process C: close B's handle, open the collection again; **assert count == N and docs fetch by pk/query**. This third-process assertion is precisely what fails today (step 3 would report 0 docs).\n4. Optionally strengthen with a durability invariant after step 2: either the WAL file is gone (absorbed into persisted blocks) or the persisted segment lists blocks covering N docs. Keep the control case (insert → optimize, same process, no crash) asserting N docs on reopen."
+            }
+          ]
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          {
+            "answer_start_line": 9,
+            "answer_end_line": 9,
+            "quote": "**Ordinary insert** (`src/db/index/segment/segment.cc:903-918`): `Insert()` calls `append_wal(doc)` first, which lazily opens the *member* handle `wal_file_` if null (`append_wal` at 4324-4340, `open_wal_file` at 4303-4322), appends the record, then `internal_insert()` (837-881) populates memory components (`memory_store_`, `id_map_`, scalar/FTS/vector indexers, `doc_ids_`, writing-block meta counters). Post-condition: `wal_file_ != nullptr` **and** data in RAM."
+          },
+          {
+            "answer_start_line": 11,
+            "answer_end_line": 11,
+            "quote": "**Recovery** (`CollectionImpl::recovery`, `src/db/collection.cc:1836-1892` → `Segment::Open`, segment.cc:4475-4496 → `SegmentImpl::Open`, 461-517): because the persisted version still carries the writing-segment's forward-block meta, `Open` takes the `writing_block.has_value()` branch (484-501) and calls `recover()` (4193-4301). `recover()` opens the WAL through a **separate local handle** `recover_wal_file` (4206-4214) that is closed on scope exit (`AILEGO_DEFER`, 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` directly (4249-4272) — never `append_wal`. Post-condition: data in RAM, but **member `wal_file_ == nullptr`**, while the WAL file still sits on disk."
+          }
+        ],
+        "C2": [
+          {
+            "answer_start_line": 20,
+            "answer_end_line": 24,
+            "quote": "2. Line 1519: `writing_segment_->dump()` (segment.cc:2197-2215) → `flush()` (2217-2324). **The exact condition** is at segment.cc:2220-2222:\n   ```cpp\n   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n   ```\n   After recovery `wal_file_` is null (the first disjunct fires regardless of `has_record()` semantics), so flush returns OK **without** running `memory_store_->flush()` (2233-2236), `finish_memory_components()` (2288-2298; body 4342-4412 — the step that would convert the memory block/indexers into *persisted* block metas), `update_version()` (2300-2302), or WAL removal (2304-2315). `dump()` then just seals indexers and sets `sealed_ = true` (2204-2214) — still OK."
+          }
+        ],
+        "C3": [
+          {
+            "answer_start_line": 19,
+            "answer_end_line": 25,
+            "quote": "1. Line 794: `writing_segment_->doc_count() != 0` is true (replayed docs), so line 796 calls `switch_to_new_segment_for_writing()` (1517-1552).\n2. Line 1519: `writing_segment_->dump()` (segment.cc:2197-2215) → `flush()` (2217-2324). **The exact condition** is at segment.cc:2220-2222:\n   ```cpp\n   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n   ```\n   After recovery `wal_file_` is null (the first disjunct fires regardless of `has_record()` semantics), so flush returns OK **without** running `memory_store_->flush()` (2233-2236), `finish_memory_components()` (2288-2298; body 4342-4412 — the step that would convert the memory block/indexers into *persisted* block metas), `update_version()` (2300-2302), or WAL removal (2304-2315). `dump()` then just seals indexers and sets `sealed_ = true` (2204-2214) — still OK.\n3. Lines 1522-1549 of collection.cc: the never-persisted old segment is registered via `segment_manager_->add_segment()` (1522); a new empty writing segment is created (1527-1531); **`writing_segment_meta->remove_writing_forward_block()`** (1538) deletes the meta whose block ID derives the WAL path (`MakeWalPath(path_, seg_id, block_id)`, segment.cc:4198-4199, 4305-4306); the new version is applied and flushed (1546-1549). On-disk truth now says: old segment = \"persisted\" with **no writing block and no persisted data blocks**; the WAL file is orphaned."
+          },
+          {
+            "answer_start_line": 29,
+            "answer_end_line": 29,
+            "quote": "**Next reopen loses the data:** `SegmentImpl::Open` re-enters with the persisted meta that now has no writing forward block, so `writing_block.has_value()` is false (segment.cc:484-490), `recover()` is never invoked (499-501), and the orphaned WAL is never replayed — the `else` branch (502-510) only fixes block allocators. Note that without `optimize()`, even a second crash would still replay the WAL, because the version would still carry the writing-block meta; `remove_writing_forward_block()` at collection.cc:1538 is what converts \"recoverable\" into \"permanently lost.\""
+          }
+        ],
+        "C4": [
+          {
+            "answer_start_line": 13,
+            "answer_end_line": 13,
+            "quote": "**Why it is readable initially:** reads go through in-process memory. `doc_count()` is `doc_ids_.size()` (segment.cc:589-600), replay populated `doc_ids_`/`memory_store_`/indexers, and `get_all_segments()` includes the writing segment whenever `doc_count() > 0` (collection.cc:2076-2082). Counting and fetching work entirely from RAM."
+          },
+          {
+            "answer_start_line": 36,
+            "answer_end_line": 36,
+            "quote": "- Statistics and reads on the same handle are served from the still-live in-memory segment (`doc_ids_`, `memory_store_`) held by `segment_manager_` (collection.cc:1522, 2076-2086). They never re-read the flushed version file, so they cannot observe that on-disk state no longer references the data. (The same blind spot affects an explicit `Flush()` after recovery: collection.cc:380-395 just forwards to the early-returning `SegmentImpl::flush()`; likewise `close()` at segment.cc:551-552.) Only a fresh process, which trusts the persisted version alone, exposes the loss."
+          }
+        ],
+        "C5": [
+          {
+            "answer_start_line": 9,
+            "answer_end_line": 9,
+            "quote": "**Ordinary insert** (`src/db/index/segment/segment.cc:903-918`): `Insert()` calls `append_wal(doc)` first, which lazily opens the *member* handle `wal_file_` if null (`append_wal` at 4324-4340, `open_wal_file` at 4303-4322), appends the record, then `internal_insert()` (837-881) populates memory components (`memory_store_`, `id_map_`, scalar/FTS/vector indexers, `doc_ids_`, writing-block meta counters). Post-condition: `wal_file_ != nullptr` **and** data in RAM."
+          },
+          {
+            "answer_start_line": 11,
+            "answer_end_line": 11,
+            "quote": "**Recovery** (`CollectionImpl::recovery`, `src/db/collection.cc:1836-1892` → `Segment::Open`, segment.cc:4475-4496 → `SegmentImpl::Open`, 461-517): because the persisted version still carries the writing-segment's forward-block meta, `Open` takes the `writing_block.has_value()` branch (484-501) and calls `recover()` (4193-4301). `recover()` opens the WAL through a **separate local handle** `recover_wal_file` (4206-4214) that is closed on scope exit (`AILEGO_DEFER`, 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` directly (4249-4272) — never `append_wal`. Post-condition: data in RAM, but **member `wal_file_ == nullptr`**, while the WAL file still sits on disk."
+          },
+          {
+            "answer_start_line": 31,
+            "answer_end_line": 31,
+            "quote": "**Control collection:** with no crash, `wal_file_` is open with records, so `dump()`→`flush()` runs the full path (2224-2323) — memory store flushed, persisted blocks added to the meta, version updated, WAL removed — *before* the meta is stripped and the version flipped. Hence no loss."
+          }
+        ],
+        "C6": [
+          {
+            "answer_start_line": 42,
+            "answer_end_line": 42,
+            "quote": "- **Re-attach the WAL on recovery:** after a successful replay in `SegmentImpl::Open`/`recover()`, call `open_wal_file()` (segment.cc:4303-4322) so the existing WAL (with records) becomes the member `wal_file_`. Then the guard at 2220 evaluates `has_record() == true` and the full flush/persist path runs during optimize, exactly as in the control case (including WAL removal at 2304-2315)."
+          }
+        ],
+        "C7": [
+          {
+            "answer_start_line": 49,
+            "answer_end_line": 52,
+            "quote": "1. Process A: create+open collection, insert N docs, **crash without flush** (existing `RunGeneratorAndCrash`-style kill).\n2. Process B: open (triggers WAL replay); assert count/fetch == N; call `Optimize()`; assert OK.\n3. Process C: close B's handle, open the collection again; **assert count == N and docs fetch by pk/query**. This third-process assertion is precisely what fails today (step 3 would report 0 docs).\n4. Optionally strengthen with a durability invariant after step 2: either the WAL file is gone (absorbed into persisted blocks) or the persisted segment lists blocks covering N docs. Keep the control case (insert → optimize, same process, no crash) asserting N docs on reopen."
+          }
+        ]
+      },
+      "verified_citations": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 837,
+          "end_line": 881,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "d6179f040452d268c7868b01d18c985433e148ecb392fad6d24de05edeca98ae",
+          "supports": [
+            "C1: internal insertion populates memory components, metadata and doc_ids_"
+          ],
+          "answer_location": "U:9",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4193,
+          "end_line": 4301,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "3e7bd1d6db1a39a5d5c7f369136a7036e34db998a45c924090853c9059cbb85d",
+          "supports": [
+            "C1: local recovery WAL, deferred close, replay dispatch, no member reattachment"
+          ],
+          "answer_location": "U:11",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 903,
+          "end_line": 918,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "32e9d857f4a958f69b4ed01d03650a1acaa4908fd9c7db998d2db15e3bdbaa61",
+          "supports": [
+            "C5: append_wal precedes internal_insert"
+          ],
+          "answer_location": "U:9",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4340,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "7c320e1cf3144cb4ca72de8f0cc95666573e6822f414be569c3560dc6189b50c",
+          "supports": [
+            "C5: ordinary append lazily opens member WAL",
+            "C6: proposed member reopen uses existing WAL path"
+          ],
+          "answer_location": "U:9,42",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2197,
+          "end_line": 2324,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "53ca994d412d093f71b65379de094a9646e2dea509b8484c36534276ddfa3b3b",
+          "supports": [
+            "C2: exact guard, null branch, skipped persistence and finalization",
+            "C3: dump invokes flush and seals after successful status"
+          ],
+          "answer_location": "U:20-24",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 779,
+          "end_line": 915,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "e0d8bcd46c9f7b66ec027aa68153c57f50ac843a67a9c1c4fa212a966d558186",
+          "supports": [
+            "C3: Optimize switches nonempty writing segment and propagates successful path"
+          ],
+          "answer_location": "U:17,19",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 1517,
+          "end_line": 1552,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "e8788091780a7a9519c98b6dbc6d603525cbfafdadef786d8f87b85c13d6aac3",
+          "supports": [
+            "C3: dump, registration, writing-block removal, replacement writer, version apply/flush"
+          ],
+          "answer_location": "U:19,25",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 484,
+          "end_line": 510,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "bce7e2cbfa2dacbb96c3dcfe41c59405b6ab49db248d509a74847a8454cf4953",
+          "supports": [
+            "C3: Open invokes recovery only when writing-block metadata exists"
+          ],
+          "answer_location": "U:11,29",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 589,
+          "end_line": 600,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+          "supports": [
+            "C1: live doc_ids_ based count",
+            "C4: count half only; no explanation of index completeness in answer"
+          ],
+          "answer_location": "U:13",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 2076,
+          "end_line": 2086,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "8ccc06d0569f06c406e71d80f65375e87ae91b9ac664c35b68a03298a104ee8d",
+          "supports": [
+            "Live segment enumeration includes nonempty writer"
+          ],
+          "answer_location": "U:13,36",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4342,
+          "end_line": 4412,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "5c7acfeca0322d599f1dcb722a9299dbc0b0e495ba4c1aec4778bc989b3b3690",
+          "supports": [
+            "C2: finish_memory_components adds persisted scalar/vector block metadata"
+          ],
+          "answer_location": "U:24",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 991,
+          "end_line": 1002,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "d3f98db67e5db550cdca11de38d8ed18a90f969fb3cec0fd82caa6024748be9e",
+          "supports": [
+            "Noncritical extra: single-segment non-rebuild task selection"
+          ],
+          "answer_location": "U:26",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "tests/db/crash_recovery/write_recovery_test.cc",
+          "start_line": 182,
+          "end_line": 218,
+          "file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+          "span_sha256": "fa2490e2f9b2b61b0c300af7d333d2e5ab1c6deb728a9ed22c278358ac912080",
+          "supports": [
+            "Referenced harness tests immediate recovery; this citation does not supply omitted assertions in the proposed regression"
+          ],
+          "answer_location": "U:47",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        }
+      ],
+      "core_citation_thresholds": {
+        "C1": {
+          "passed": true,
+          "verified_edges": [
+            "local versus member WAL and recovery completion",
+            "replay internal operations",
+            "memory/doc_ids_ population"
+          ]
+        },
+        "C2": {
+          "passed": true,
+          "verified_edges": [
+            "exact null-or-no-record guard and null cause",
+            "skipped persistence",
+            "skipped component finalization and version update"
+          ]
+        },
+        "C3": {
+          "passed": true,
+          "verified_edges": [
+            "Optimize -> switch -> dump -> flush",
+            "sealing plus writing-meta removal and version persistence",
+            "Open gates recovery on writing-block metadata"
+          ],
+          "reopen_guard_answer_citation": {
+            "path": "src/db/index/segment/segment.cc",
+            "start_line": 484,
+            "end_line": 510
+          }
+        }
+      },
+      "unsupported_claims": [
+        {
+          "id": "U-N1",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 43,
+            "answer_end_line": 43,
+            "quote": "- **Or fix the guard:** make `flush()` decide \"nothing to persist\" from durable-state facts (e.g., writing forward block `doc_count_ == 0` / `memory_store_ == nullptr`) instead of `wal_file_ == nullptr`, so replayed data is dumped even without a WAL handle. This variant is more robust since it doesn't depend on handle bookkeeping at all."
+          },
+          "finding": "The guard-only alternative is presented as an equivalent and more robust fix without proving WAL cleanup and lifecycle invariants. With a null member the existing cleanup branch still cannot remove the old WAL. This alternative does not meet the rubric alternative-design acceptance rule. C6 credit comes only from the separately stated member-WAL reattachment principle.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            }
+          ],
+          "point_effect": "No extra penalty beyond the frozen rubric; invalid alternative is not credited."
+        },
+        {
+          "id": "U-N2",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 42,
+            "answer_end_line": 42,
+            "quote": "- **Re-attach the WAL on recovery:** after a successful replay in `SegmentImpl::Open`/`recover()`, call `open_wal_file()` (segment.cc:4303-4322) so the existing WAL (with records) becomes the member `wal_file_`. Then the guard at 2220 evaluates `has_record() == true` and the full flush/persist path runs during optimize, exactly as in the control case (including WAL removal at 2304-2315)."
+          },
+          "finding": "The conceptual member-reopen repair omits explicit temporary-reader close/defer sequencing and handling of open_wal_file failure. open_wal_file can return InternalError; a concrete patch must preserve that error and avoid retaining a handle closed by the existing deferred action.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4206,
+              "end_line": 4215
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4314,
+              "end_line": 4317
+            }
+          ],
+          "point_effect": "Recorded implementation-level incompleteness; accepted reattachment principle remains eligible under C6 full_credit."
+        },
+        {
+          "id": "U-N3",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 52,
+            "answer_end_line": 52,
+            "quote": "4. Optionally strengthen with a durability invariant after step 2: either the WAL file is gone (absorbed into persisted blocks) or the persisted segment lists blocks covering N docs. Keep the control case (insert → optimize, same process, no crash) asserting N docs on reopen."
+          },
+          "finding": "WAL absence alone is not a sufficient durability assertion; the OR check can pass if a WAL is deleted without corresponding persisted data. Verify persisted content after a fresh open, and if testing internals require consistent metadata plus successful cleanup.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315
+            }
+          ],
+          "point_effect": "No extra numerical deduction; C7 already fails its content/vector assertion requirement."
+        },
+        {
+          "id": "U-N4",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 5,
+            "answer_end_line": 5,
+            "quote": "The WAL-replay path deliberately does **not** re-attach the segment's member WAL handle. `SegmentImpl::flush()` uses `wal_file_ == nullptr` as its \"nothing to persist\" guard, so after a recovery the flush inside `optimize()`'s segment switch silently no-ops — yet the switch then **removes the writing-block meta from the persisted version**, which is the only thing that would have triggered WAL replay on the next open. The data survives in RAM of the optimizing process only."
+          },
+          "finding": "The word deliberately attributes intent to the missing member reattachment. Source establishes behavior, not that the omission was intentional.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4301
+            }
+          ],
+          "point_effect": "Recorded unsupported intent, no rubric penalty."
+        },
+        {
+          "id": "U-N5",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 29,
+            "answer_end_line": 29,
+            "quote": "**Next reopen loses the data:** `SegmentImpl::Open` re-enters with the persisted meta that now has no writing forward block, so `writing_block.has_value()` is false (segment.cc:484-490), `recover()` is never invoked (499-501), and the orphaned WAL is never replayed — the `else` branch (502-510) only fixes block allocators. Note that without `optimize()`, even a second crash would still replay the WAL, because the version would still carry the writing-block meta; `remove_writing_forward_block()` at collection.cc:1538 is what converts \"recoverable\" into \"permanently lost.\""
+          },
+          "finding": "Permanently lost is stronger than established: normal reopen no longer discovers the orphaned WAL, but the answer itself correctly says the WAL remains on disk. This does not establish impossibility of manual salvage.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1536,
+              "end_line": 1549
+            }
+          ],
+          "point_effect": "Wording overclaim; does not negate correct normal-reopen causality."
+        },
+        {
+          "id": "U-N6",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 57,
+            "answer_end_line": 57,
+            "quote": "- **Would require execution to confirm:** end-to-end reproduction (docs present in B, absent in C); that `create_vector_index` succeeds on a sealed, memory-only segment in a real build; `LocalWalFile::has_record()` semantics for a re-opened WAL (immaterial here — the null-handle disjunct alone fires); and that no unrelated teardown path re-persists the segment. I did not run any reproduction."
+          },
+          "finding": "LocalWalFile::has_record semantics need not be deferred to execution: the frozen implementation directly returns file_.size() > sizeof(header_), and reopening an existing WAL seeks to end. End-to-end reproduction still properly requires execution.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.h",
+              "start_line": 75,
+              "end_line": 77
+            },
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.cc",
+              "start_line": 92,
+              "end_line": 112
+            }
+          ],
+          "point_effect": "No numerical penalty; overly cautious source/execution distinction."
+        }
+      ],
+      "noncritical_additional_errors": [
+        {
+          "id": "U-N1",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 43,
+            "answer_end_line": 43,
+            "quote": "- **Or fix the guard:** make `flush()` decide \"nothing to persist\" from durable-state facts (e.g., writing forward block `doc_count_ == 0` / `memory_store_ == nullptr`) instead of `wal_file_ == nullptr`, so replayed data is dumped even without a WAL handle. This variant is more robust since it doesn't depend on handle bookkeeping at all."
+          },
+          "finding": "The guard-only alternative is presented as an equivalent and more robust fix without proving WAL cleanup and lifecycle invariants. With a null member the existing cleanup branch still cannot remove the old WAL. This alternative does not meet the rubric alternative-design acceptance rule. C6 credit comes only from the separately stated member-WAL reattachment principle.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            }
+          ],
+          "point_effect": "No extra penalty beyond the frozen rubric; invalid alternative is not credited."
+        },
+        {
+          "id": "U-N2",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 42,
+            "answer_end_line": 42,
+            "quote": "- **Re-attach the WAL on recovery:** after a successful replay in `SegmentImpl::Open`/`recover()`, call `open_wal_file()` (segment.cc:4303-4322) so the existing WAL (with records) becomes the member `wal_file_`. Then the guard at 2220 evaluates `has_record() == true` and the full flush/persist path runs during optimize, exactly as in the control case (including WAL removal at 2304-2315)."
+          },
+          "finding": "The conceptual member-reopen repair omits explicit temporary-reader close/defer sequencing and handling of open_wal_file failure. open_wal_file can return InternalError; a concrete patch must preserve that error and avoid retaining a handle closed by the existing deferred action.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4206,
+              "end_line": 4215
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4314,
+              "end_line": 4317
+            }
+          ],
+          "point_effect": "Recorded implementation-level incompleteness; accepted reattachment principle remains eligible under C6 full_credit."
+        },
+        {
+          "id": "U-N3",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 52,
+            "answer_end_line": 52,
+            "quote": "4. Optionally strengthen with a durability invariant after step 2: either the WAL file is gone (absorbed into persisted blocks) or the persisted segment lists blocks covering N docs. Keep the control case (insert → optimize, same process, no crash) asserting N docs on reopen."
+          },
+          "finding": "WAL absence alone is not a sufficient durability assertion; the OR check can pass if a WAL is deleted without corresponding persisted data. Verify persisted content after a fresh open, and if testing internals require consistent metadata plus successful cleanup.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315
+            }
+          ],
+          "point_effect": "No extra numerical deduction; C7 already fails its content/vector assertion requirement."
+        },
+        {
+          "id": "U-N4",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 5,
+            "answer_end_line": 5,
+            "quote": "The WAL-replay path deliberately does **not** re-attach the segment's member WAL handle. `SegmentImpl::flush()` uses `wal_file_ == nullptr` as its \"nothing to persist\" guard, so after a recovery the flush inside `optimize()`'s segment switch silently no-ops — yet the switch then **removes the writing-block meta from the persisted version**, which is the only thing that would have triggered WAL replay on the next open. The data survives in RAM of the optimizing process only."
+          },
+          "finding": "The word deliberately attributes intent to the missing member reattachment. Source establishes behavior, not that the omission was intentional.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4193,
+              "end_line": 4301
+            }
+          ],
+          "point_effect": "Recorded unsupported intent, no rubric penalty."
+        },
+        {
+          "id": "U-N5",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 29,
+            "answer_end_line": 29,
+            "quote": "**Next reopen loses the data:** `SegmentImpl::Open` re-enters with the persisted meta that now has no writing forward block, so `writing_block.has_value()` is false (segment.cc:484-490), `recover()` is never invoked (499-501), and the orphaned WAL is never replayed — the `else` branch (502-510) only fixes block allocators. Note that without `optimize()`, even a second crash would still replay the WAL, because the version would still carry the writing-block meta; `remove_writing_forward_block()` at collection.cc:1538 is what converts \"recoverable\" into \"permanently lost.\""
+          },
+          "finding": "Permanently lost is stronger than established: normal reopen no longer discovers the orphaned WAL, but the answer itself correctly says the WAL remains on disk. This does not establish impossibility of manual salvage.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            },
+            {
+              "path": "src/db/collection.cc",
+              "start_line": 1536,
+              "end_line": 1549
+            }
+          ],
+          "point_effect": "Wording overclaim; does not negate correct normal-reopen causality."
+        },
+        {
+          "id": "U-N6",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 57,
+            "answer_end_line": 57,
+            "quote": "- **Would require execution to confirm:** end-to-end reproduction (docs present in B, absent in C); that `create_vector_index` succeeds on a sealed, memory-only segment in a real build; `LocalWalFile::has_record()` semantics for a re-opened WAL (immaterial here — the null-handle disjunct alone fires); and that no unrelated teardown path re-persists the segment. I did not run any reproduction."
+          },
+          "finding": "LocalWalFile::has_record semantics need not be deferred to execution: the frozen implementation directly returns file_.size() > sizeof(header_), and reopening an existing WAL seeks to end. End-to-end reproduction still properly requires execution.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.h",
+              "start_line": 75,
+              "end_line": 77
+            },
+            {
+              "path": "src/db/index/storage/wal/local_wal_file.cc",
+              "start_line": 92,
+              "end_line": 112
+            }
+          ],
+          "point_effect": "No numerical penalty; overly cautious source/execution distinction."
+        }
+      ],
+      "critical_contradictions": [],
+      "total_points": 8,
+      "maximum_points": 10,
+      "factual_score": 8,
+      "factual_threshold_pass": true,
+      "core_citations_pass": true,
+      "source_grounded_success": true,
+      "reviewer_notes": [
+        "Only the final answer text is scored. No answer omission is filled using another answer, general code understanding, or referenced test implementations.",
+        "Short file basenames and nearby bare line ranges are resolved using the full repository-relative path established in the answer context.",
+        "C6 awards the explicitly accepted member-WAL attachment principle, not the unsupported guard-only alternative; error-handling/defer omissions are retained as findings.",
+        "C7 uses the frozen requirement to compare known documents and vectors, not count/fetchability alone.",
+        "No listed critical contradiction is present. The guard-only suggested code change is not a claim that merely calling the existing public flush fixes the defect.",
+        "Answer explicitly disclaims having run reproduction; evaluator also ran no reproduction."
+      ]
+    },
+    {
+      "task_id": "q001",
+      "blinded_answer_id": "W",
+      "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/remote-embedding-v1/blind-answers/W.txt",
+      "answer_sha256": "584556ac74b2931ebf9b47070d4ad53677ee1182c51dc529cd9c2f580ae44cca",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "Explicitly distinguishes local recover_wal_file from null member wal_file_ and describes replayed memory/index/doc_ids_ state.",
+          "quote_refs": [
+            {
+              "answer_start_line": 7,
+              "answer_end_line": 11,
+              "quote": "**Ordinary insert** — `SegmentImpl::Insert` (`src/db/index/segment/segment.cc:903–918`) calls `append_wal(doc)` first, which lazily opens the member handle `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`, `append_wal` at `4324–4340`), then `internal_insert` (`segment.cc:837–881`) writes the id map, `memory_store_`, scalar/FTS/vector memory indexers, bumps the mem-block counters, and pushes to `doc_ids_`. After an insert: `wal_file_ != nullptr` with records, and memory components are dirty.\n\n**Recovery replay** — `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) reopens the writing segment from `v.writing_segment_meta()` (lines 1879–1887). `SegmentImpl::recover()` (`segment.cc:4193–4301`) opens the WAL into a **separate local handle** `recover_wal_file` (lines 4206–4215) that is closed at scope exit via `AILEGO_DEFER` (line 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (lines 4250–4272) — these never touch `wal_file_` (only the public `Insert/Update/...` entry points append to WAL). It also advances `mem_block.max_doc_id_` in the in-memory meta (lines 4285–4288).\n\nNet difference: after a recovery-only open, the documents are in `memory_store_`, the memory indexers, and `doc_ids_`, and the WAL still exists on disk — but the segment's `wal_file_` member is `nullptr`."
+            }
+          ],
+          "core_citation_gate": true
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "States exact guard, identifies the null arm due to no subsequent writes, and describes skipped persistence/finalization; the cited full flush body in the repair paragraph supplies the relevant downstream support.",
+          "quote_refs": [
+            {
+              "answer_start_line": 19,
+              "answer_end_line": 21,
+              "quote": "- **The exact condition:** `SegmentImpl::flush()` (`segment.cc:2217–2222`) begins with\n  `if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`\n  Because recovery never opened the member handle and no new inserts occurred, `wal_file_ == nullptr` → flush returns **OK without persisting anything**: no `memory_store_->flush()`, no `finish_memory_components()` (`segment.cc:4342–4411`, which is what converts memory blocks into persisted-block metas), no `update_version()`, and no WAL removal."
+            },
+            {
+              "answer_start_line": 35,
+              "answer_end_line": 35,
+              "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+            }
+          ],
+          "core_citation_gate": true
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "maximum_points": 2,
+          "reason": "Factually connects the full call chain to old writing-block removal, a new writer, version persistence and the old WAL losing its normal recovery route. Citation sufficiency is evaluated separately and fails the final old-segment Open gate.",
+          "quote_refs": [
+            {
+              "answer_start_line": 17,
+              "answer_end_line": 23,
+              "quote": "- `CollectionImpl::Optimize` (`collection.cc:779–915`): under `write_mtx_`, it checks `writing_segment_->doc_count() != 0` (line 794) — **true**, since replay filled `doc_ids_` — and calls `switch_to_new_segment_for_writing()` (line 796).\n- `switch_to_new_segment_for_writing` (`collection.cc:1517–1552`): calls `writing_segment_->dump()` (line 1519). `SegmentImpl::dump()` (`segment.cc:2197–2215`) calls `flush()` (line 2201).\n- **The exact condition:** `SegmentImpl::flush()` (`segment.cc:2217–2222`) begins with\n  `if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`\n  Because recovery never opened the member handle and no new inserts occurred, `wal_file_ == nullptr` → flush returns **OK without persisting anything**: no `memory_store_->flush()`, no `finish_memory_components()` (`segment.cc:4342–4411`, which is what converts memory blocks into persisted-block metas), no `update_version()`, and no WAL removal.\n- `dump()` then seals and returns OK, and `switch_to_new_segment_for_writing` proceeds to **rewrite durable state**: `writing_segment_meta->remove_writing_forward_block()` (line 1538) drops the pointer to the old block/WAL; the segment is added to the version as a **persisted** segment (line 1539) even though its persisted-block list contains none of the replayed docs; a brand-new writing segment with fresh segment/block ids is created and installed (lines 1527–1543); and the version is applied and flushed to disk (lines 1546–1549). `Optimize` continues (compacting whatever persisted segments exist, or returning early at lines 807–810) and returns `Status::OK()`.\n- On the **next open**: `recovery()` loads persisted segments read-only from their persisted-block metas (`collection.cc:1861–1874`) — the replayed docs are not in any block file — and opens the *new* writing segment, whose `SegmentImpl::recover()` computes the WAL path from the new mem block (`segment.cc:4198–4204`), finds no file, logs \"WAL recovery skipped,\" and returns OK. The old WAL is orphaned: the flushed version no longer references it. Documents are gone."
+            }
+          ],
+          "core_citation_gate": false
+        },
+        {
+          "id": "C4",
+          "points": 1,
+          "maximum_points": 1,
+          "reason": "Explains both live doc_ids_ based counts and index_completeness from metadata flags, with verified count and Stats citations.",
+          "quote_refs": [
+            {
+              "answer_start_line": 13,
+              "answer_end_line": 13,
+              "quote": "**Why reads initially work:** all read paths are served from those in-memory structures — `doc_count()` is literally `doc_ids_.size()` (`segment.cc:589–596`), and count/fetch/search go through `get_all_segments()`, which includes the writing segment (e.g. `CollectionImpl::Stats()`, `collection.cc:403–442`, and the fetch path around `collection.cc:1780–1790`)."
+            },
+            {
+              "answer_start_line": 30,
+              "answer_end_line": 30,
+              "quote": "- `CollectionImpl::Stats()` (`collection.cc:403–442`) computes `doc_count` from live segment objects (memory included) and `index_completeness` from meta flags on those same in-memory objects. It never inspects the version file, block files, or WAL. So a handle whose memory data was never persisted — and whose WAL pointer was just removed from the version — still reports healthy counts and completeness."
+            }
+          ]
+        },
+        {
+          "id": "C5",
+          "points": 1,
+          "maximum_points": 1,
+          "reason": "Explicit normal Insert/append/member-open path contrasted with replay bypassing append_wal.",
+          "quote_refs": [
+            {
+              "answer_start_line": 7,
+              "answer_end_line": 7,
+              "quote": "**Ordinary insert** — `SegmentImpl::Insert` (`src/db/index/segment/segment.cc:903–918`) calls `append_wal(doc)` first, which lazily opens the member handle `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`, `append_wal` at `4324–4340`), then `internal_insert` (`segment.cc:837–881`) writes the id map, `memory_store_`, scalar/FTS/vector memory indexers, bumps the mem-block counters, and pushes to `doc_ids_`. After an insert: `wal_file_ != nullptr` with records, and memory components are dirty."
+            },
+            {
+              "answer_start_line": 9,
+              "answer_end_line": 9,
+              "quote": "**Recovery replay** — `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) reopens the writing segment from `v.writing_segment_meta()` (lines 1879–1887). `SegmentImpl::recover()` (`segment.cc:4193–4301`) opens the WAL into a **separate local handle** `recover_wal_file` (lines 4206–4215) that is closed at scope exit via `AILEGO_DEFER` (line 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (lines 4250–4272) — these never touch `wal_file_` (only the public `Insert/Update/...` entry points append to WAL). It also advances `mem_block.max_doc_id_` in the in-memory meta (lines 4285–4288)."
+            }
+          ]
+        },
+        {
+          "id": "C6",
+          "points": 1,
+          "maximum_points": 1,
+          "reason": "1 point under the frozen full_credit sentence accepting a minimal repair equivalent to attaching/reopening the existing WAL: the answer explicitly proposes making the existing WAL the usable member handle before normal flush. No credit is assigned to its guard-only alternative. Neither answer spells out reader-close/defer adjustment and propagation of reopen errors; these implementation omissions are recorded, but the accepted conceptual member-reattachment principle is stated rather than inferred.",
+          "quote_refs": [
+            {
+              "answer_start_line": 35,
+              "answer_end_line": 35,
+              "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+            }
+          ]
+        },
+        {
+          "id": "C7",
+          "points": 0,
+          "maximum_points": 1,
+          "reason": "Correct process ordering, fresh reopen, no added writes in the sequence, and no-crash control. Final assertions check count and fetchability, not equality of known document contents and vectors. No partial point is allowed.",
+          "quote_refs": [
+            {
+              "answer_start_line": 41,
+              "answer_end_line": 45,
+              "quote": "1. Process A: create collection, insert N docs, terminate abruptly without `Flush`/`Close` (e.g. `_exit`) so the WAL is left un-replayed.\n2. Process B: `Open` → assert `count == N` and fetch-by-pk succeeds (recovery works). Call `optimize()` → assert OK. `Close` cleanly.\n3. Process C: `Open` again → assert `count == N` and docs fetchable. **This assertion fails today** and passes after the fix.\n4. Control: single-process insert → `optimize()` → close → reopen → `count == N` (passes before and after, per the report).\nOptionally add a white-box check in step 2 that after `optimize()` the flushed version contains persisted block metas covering N docs (or that the writing segment's WAL was removed), pinning the invariant the guard violated."
+            }
+          ]
+        }
+      ],
+      "supporting_answer_quotes": {
+        "C1": [
+          {
+            "answer_start_line": 7,
+            "answer_end_line": 11,
+            "quote": "**Ordinary insert** — `SegmentImpl::Insert` (`src/db/index/segment/segment.cc:903–918`) calls `append_wal(doc)` first, which lazily opens the member handle `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`, `append_wal` at `4324–4340`), then `internal_insert` (`segment.cc:837–881`) writes the id map, `memory_store_`, scalar/FTS/vector memory indexers, bumps the mem-block counters, and pushes to `doc_ids_`. After an insert: `wal_file_ != nullptr` with records, and memory components are dirty.\n\n**Recovery replay** — `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) reopens the writing segment from `v.writing_segment_meta()` (lines 1879–1887). `SegmentImpl::recover()` (`segment.cc:4193–4301`) opens the WAL into a **separate local handle** `recover_wal_file` (lines 4206–4215) that is closed at scope exit via `AILEGO_DEFER` (line 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (lines 4250–4272) — these never touch `wal_file_` (only the public `Insert/Update/...` entry points append to WAL). It also advances `mem_block.max_doc_id_` in the in-memory meta (lines 4285–4288).\n\nNet difference: after a recovery-only open, the documents are in `memory_store_`, the memory indexers, and `doc_ids_`, and the WAL still exists on disk — but the segment's `wal_file_` member is `nullptr`."
+          }
+        ],
+        "C2": [
+          {
+            "answer_start_line": 19,
+            "answer_end_line": 21,
+            "quote": "- **The exact condition:** `SegmentImpl::flush()` (`segment.cc:2217–2222`) begins with\n  `if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`\n  Because recovery never opened the member handle and no new inserts occurred, `wal_file_ == nullptr` → flush returns **OK without persisting anything**: no `memory_store_->flush()`, no `finish_memory_components()` (`segment.cc:4342–4411`, which is what converts memory blocks into persisted-block metas), no `update_version()`, and no WAL removal."
+          },
+          {
+            "answer_start_line": 35,
+            "answer_end_line": 35,
+            "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+          }
+        ],
+        "C3": [
+          {
+            "answer_start_line": 17,
+            "answer_end_line": 23,
+            "quote": "- `CollectionImpl::Optimize` (`collection.cc:779–915`): under `write_mtx_`, it checks `writing_segment_->doc_count() != 0` (line 794) — **true**, since replay filled `doc_ids_` — and calls `switch_to_new_segment_for_writing()` (line 796).\n- `switch_to_new_segment_for_writing` (`collection.cc:1517–1552`): calls `writing_segment_->dump()` (line 1519). `SegmentImpl::dump()` (`segment.cc:2197–2215`) calls `flush()` (line 2201).\n- **The exact condition:** `SegmentImpl::flush()` (`segment.cc:2217–2222`) begins with\n  `if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();`\n  Because recovery never opened the member handle and no new inserts occurred, `wal_file_ == nullptr` → flush returns **OK without persisting anything**: no `memory_store_->flush()`, no `finish_memory_components()` (`segment.cc:4342–4411`, which is what converts memory blocks into persisted-block metas), no `update_version()`, and no WAL removal.\n- `dump()` then seals and returns OK, and `switch_to_new_segment_for_writing` proceeds to **rewrite durable state**: `writing_segment_meta->remove_writing_forward_block()` (line 1538) drops the pointer to the old block/WAL; the segment is added to the version as a **persisted** segment (line 1539) even though its persisted-block list contains none of the replayed docs; a brand-new writing segment with fresh segment/block ids is created and installed (lines 1527–1543); and the version is applied and flushed to disk (lines 1546–1549). `Optimize` continues (compacting whatever persisted segments exist, or returning early at lines 807–810) and returns `Status::OK()`.\n- On the **next open**: `recovery()` loads persisted segments read-only from their persisted-block metas (`collection.cc:1861–1874`) — the replayed docs are not in any block file — and opens the *new* writing segment, whose `SegmentImpl::recover()` computes the WAL path from the new mem block (`segment.cc:4198–4204`), finds no file, logs \"WAL recovery skipped,\" and returns OK. The old WAL is orphaned: the flushed version no longer references it. Documents are gone."
+          }
+        ],
+        "C4": [
+          {
+            "answer_start_line": 13,
+            "answer_end_line": 13,
+            "quote": "**Why reads initially work:** all read paths are served from those in-memory structures — `doc_count()` is literally `doc_ids_.size()` (`segment.cc:589–596`), and count/fetch/search go through `get_all_segments()`, which includes the writing segment (e.g. `CollectionImpl::Stats()`, `collection.cc:403–442`, and the fetch path around `collection.cc:1780–1790`)."
+          },
+          {
+            "answer_start_line": 30,
+            "answer_end_line": 30,
+            "quote": "- `CollectionImpl::Stats()` (`collection.cc:403–442`) computes `doc_count` from live segment objects (memory included) and `index_completeness` from meta flags on those same in-memory objects. It never inspects the version file, block files, or WAL. So a handle whose memory data was never persisted — and whose WAL pointer was just removed from the version — still reports healthy counts and completeness."
+          }
+        ],
+        "C5": [
+          {
+            "answer_start_line": 7,
+            "answer_end_line": 7,
+            "quote": "**Ordinary insert** — `SegmentImpl::Insert` (`src/db/index/segment/segment.cc:903–918`) calls `append_wal(doc)` first, which lazily opens the member handle `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`, `append_wal` at `4324–4340`), then `internal_insert` (`segment.cc:837–881`) writes the id map, `memory_store_`, scalar/FTS/vector memory indexers, bumps the mem-block counters, and pushes to `doc_ids_`. After an insert: `wal_file_ != nullptr` with records, and memory components are dirty."
+          },
+          {
+            "answer_start_line": 9,
+            "answer_end_line": 9,
+            "quote": "**Recovery replay** — `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) reopens the writing segment from `v.writing_segment_meta()` (lines 1879–1887). `SegmentImpl::recover()` (`segment.cc:4193–4301`) opens the WAL into a **separate local handle** `recover_wal_file` (lines 4206–4215) that is closed at scope exit via `AILEGO_DEFER` (line 4215), and replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (lines 4250–4272) — these never touch `wal_file_` (only the public `Insert/Update/...` entry points append to WAL). It also advances `mem_block.max_doc_id_` in the in-memory meta (lines 4285–4288)."
+          }
+        ],
+        "C6": [
+          {
+            "answer_start_line": 35,
+            "answer_end_line": 35,
+            "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+          }
+        ],
+        "C7": [
+          {
+            "answer_start_line": 41,
+            "answer_end_line": 45,
+            "quote": "1. Process A: create collection, insert N docs, terminate abruptly without `Flush`/`Close` (e.g. `_exit`) so the WAL is left un-replayed.\n2. Process B: `Open` → assert `count == N` and fetch-by-pk succeeds (recovery works). Call `optimize()` → assert OK. `Close` cleanly.\n3. Process C: `Open` again → assert `count == N` and docs fetchable. **This assertion fails today** and passes after the fix.\n4. Control: single-process insert → `optimize()` → close → reopen → `count == N` (passes before and after, per the report).\nOptionally add a white-box check in step 2 that after `optimize()` the flushed version contains persisted block metas covering N docs (or that the writing segment's WAL was removed), pinning the invariant the guard violated."
+          }
+        ]
+      },
+      "verified_citations": [
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 837,
+          "end_line": 881,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "d6179f040452d268c7868b01d18c985433e148ecb392fad6d24de05edeca98ae",
+          "supports": [
+            "C1: internal insertion populates memory components, metadata and doc_ids_"
+          ],
+          "answer_location": "W:7",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4193,
+          "end_line": 4301,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "3e7bd1d6db1a39a5d5c7f369136a7036e34db998a45c924090853c9059cbb85d",
+          "supports": [
+            "C1: local recovery WAL, deferred close, replay dispatch, no member reattachment"
+          ],
+          "answer_location": "W:9",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 903,
+          "end_line": 918,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "32e9d857f4a958f69b4ed01d03650a1acaa4908fd9c7db998d2db15e3bdbaa61",
+          "supports": [
+            "C5: append_wal precedes internal_insert"
+          ],
+          "answer_location": "W:7",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4340,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "7c320e1cf3144cb4ca72de8f0cc95666573e6822f414be569c3560dc6189b50c",
+          "supports": [
+            "C5: ordinary append lazily opens member WAL",
+            "C6: existing-WAL member-open path"
+          ],
+          "answer_location": "W:7,35",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2197,
+          "end_line": 2215,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "a4e7172d6656b9cb60a11754229e706bfabd78b2a68cfb4c2566a8961b19f0e6",
+          "supports": [
+            "C3: dump invokes flush then seals"
+          ],
+          "answer_location": "W:18",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2217,
+          "end_line": 2222,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "29fd967362117e205d1480e2097ca6463861567e4f95f83ddba0d730482e3d08",
+          "supports": [
+            "C2: exact null-or-no-record early success guard"
+          ],
+          "answer_location": "W:19-21",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2224,
+          "end_line": 2323,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "530ca9de27e46325e43b3f58e3025754400a3a3ebab6be31606b507c0a77a2c3",
+          "supports": [
+            "C2: skipped persistence/finalization/WAL cleanup body; cited in repair paragraph"
+          ],
+          "answer_location": "W:35",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4342,
+          "end_line": 4411,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "09176b64e287edf194e0ce37ca5fbc0a67cf5d0d7bcd807003db2ace33cf2b52",
+          "supports": [
+            "C2: finish_memory_components adds persisted block metadata"
+          ],
+          "answer_location": "W:21",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 779,
+          "end_line": 915,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "e0d8bcd46c9f7b66ec027aa68153c57f50ac843a67a9c1c4fa212a966d558186",
+          "supports": [
+            "C3: Optimize switches nonempty writing segment"
+          ],
+          "answer_location": "W:17",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 1517,
+          "end_line": 1552,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "e8788091780a7a9519c98b6dbc6d603525cbfafdadef786d8f87b85c13d6aac3",
+          "supports": [
+            "C3: dump, writing-block removal, replacement writer and applied/flushed version"
+          ],
+          "answer_location": "W:18,22",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 1836,
+          "end_line": 1892,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "0449a0a234c1e1c3b0bc38c10479cb26685f884d88b4d149a8c015aa5a614461",
+          "supports": [
+            "C3 partial: fresh collection reconstructs persisted and writing segments from version metadata; does not show SegmentImpl::Open gating recover on writing-block presence"
+          ],
+          "answer_location": "W:9,23",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4198,
+          "end_line": 4204,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "eecc805d52e6565e3499f080b8a319c666b6151418e33429361853caa4f7c39e",
+          "supports": [
+            "C3 partial: recover derives WAL path from current writing block and skips missing WAL; does not show the old persisted segment skips recover when writing-block metadata is absent"
+          ],
+          "answer_location": "W:23",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/collection.cc",
+          "start_line": 403,
+          "end_line": 442,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "85b1fa622b9f13ac485b3047215b0eea8c159ad5e921b29ecfd3a2ef06027bbf",
+          "supports": [
+            "C4: Stats sums segment counts and derives index completeness from vector_indexed metadata"
+          ],
+          "answer_location": "W:13,30",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        },
+        {
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 589,
+          "end_line": 596,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "660a0174a37371cc1b9e6f8b672a6c6653d2d4e007ab522cf8c5824f3761ebca",
+          "supports": [
+            "C4: doc_ids_ count, adjusted by deletion filter"
+          ],
+          "answer_location": "W:13",
+          "resolves_in_frozen_source": true,
+          "claim_support_verified": true
+        }
+      ],
+      "core_citation_thresholds": {
+        "C1": {
+          "passed": true,
+          "verified_edges": [
+            "local versus member WAL and recovery completion",
+            "replay internal operations",
+            "memory/doc_ids_ population"
+          ]
+        },
+        "C2": {
+          "passed": true,
+          "verified_edges": [
+            "exact null-or-no-record guard and null cause",
+            "skipped persistence",
+            "skipped component finalization and version update"
+          ]
+        },
+        "C3": {
+          "passed": false,
+          "verified_edges": [
+            "Optimize -> switch -> dump -> flush",
+            "sealing plus writing-meta removal and version persistence",
+            "collection recovery selects segments from persisted version"
+          ],
+          "missing_supported_edge": "No cited span establishes that SegmentImpl::Open invokes recover only when writing_forward_block exists, or equivalently establishes the old promoted segment cannot take the writing-block recovery path.",
+          "why_cited_alternatives_do_not_close_gap": "collection.cc:1836-1892/1861-1874 dispatches Segment::Open for persisted and writing metadata but does not show the conditional inside SegmentImpl::Open. segment.cc:4193-4301/4198-4204 describes recover after it has been entered and dereferences writing metadata; it does not show when recover is called. Supplying segment.cc:484-501 from the reviewer knowledge would fill an omitted core citation, contrary to the frozen threshold.",
+          "required_example_not_present_in_answer": {
+            "path": "src/db/index/segment/segment.cc",
+            "start_line": 484,
+            "end_line": 501
+          },
+          "factual_claim_correct": true
+        }
+      },
+      "unsupported_claims": [
+        {
+          "id": "W-N1",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 36,
+            "answer_end_line": 36,
+            "quote": "- Change the guard in `SegmentImpl::flush()` (`segment.cc:2220–2222`) to also proceed when memory components are dirty (e.g. `memory_store_` non-null / mem-block `doc_count_ > 0`), so recovery-replayed data is persisted, versioned, and the stale WAL removed exactly as in the ordinary path."
+          },
+          "finding": "The claim that changing only the initial flush guard also removes the stale WAL exactly as in the ordinary path is false. wal_file_ remains null, so the later if (wal_file_) cleanup branch is skipped. The alternative is not proven to preserve cleanup invariants. C6 credit comes only from the separate member-adoption repair.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            }
+          ],
+          "point_effect": "No invented extra penalty; invalid alternative is not credited."
+        },
+        {
+          "id": "W-N2",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 35,
+            "answer_end_line": 35,
+            "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+          },
+          "finding": "The member-adoption principle omits explicit adjustment of the temporary reader deferred close and propagation of reopen failures. Keeping that same handle without changing the defer would leave it closed, and reopening can fail.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4206,
+              "end_line": 4215
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4314,
+              "end_line": 4317
+            }
+          ],
+          "point_effect": "Recorded implementation-level incompleteness; accepted member-adoption principle remains eligible under C6 full_credit."
+        },
+        {
+          "id": "W-N3",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 45,
+            "answer_end_line": 45,
+            "quote": "Optionally add a white-box check in step 2 that after `optimize()` the flushed version contains persisted block metas covering N docs (or that the writing segment's WAL was removed), pinning the invariant the guard violated."
+          },
+          "finding": "The optional OR assertion treats WAL removal as sufficient durability evidence. WAL absence alone cannot prove persisted blocks/content are correct.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315
+            }
+          ],
+          "point_effect": "No extra deduction; C7 already fails content/vector verification."
+        },
+        {
+          "id": "W-N4",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 23,
+            "answer_end_line": 23,
+            "quote": "- On the **next open**: `recovery()` loads persisted segments read-only from their persisted-block metas (`collection.cc:1861–1874`) — the replayed docs are not in any block file — and opens the *new* writing segment, whose `SegmentImpl::recover()` computes the WAL path from the new mem block (`segment.cc:4198–4204`), finds no file, logs \"WAL recovery skipped,\" and returns OK. The old WAL is orphaned: the flushed version no longer references it. Documents are gone."
+          },
+          "finding": "The phrase not in any block file is broader than required. create_vector_index can write vector-index files and register vector blocks during optimize; the established failure is missing persisted forward/scalar block coverage and the old writing-block recovery route, not necessarily absence of every data-bearing block file.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1696,
+              "end_line": 1727
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 3913,
+              "end_line": 3959
+            }
+          ],
+          "point_effect": "Record overstatement without reducing the otherwise correct C3 factual chain."
+        }
+      ],
+      "noncritical_additional_errors": [
+        {
+          "id": "W-N1",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 36,
+            "answer_end_line": 36,
+            "quote": "- Change the guard in `SegmentImpl::flush()` (`segment.cc:2220–2222`) to also proceed when memory components are dirty (e.g. `memory_store_` non-null / mem-block `doc_count_ > 0`), so recovery-replayed data is persisted, versioned, and the stale WAL removed exactly as in the ordinary path."
+          },
+          "finding": "The claim that changing only the initial flush guard also removes the stale WAL exactly as in the ordinary path is false. wal_file_ remains null, so the later if (wal_file_) cleanup branch is skipped. The alternative is not proven to preserve cleanup invariants. C6 credit comes only from the separate member-adoption repair.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2304,
+              "end_line": 2315,
+              "fact": "WAL removal is still guarded by if (wal_file_); merely weakening the initial flush guard while leaving member null does not execute remove()."
+            }
+          ],
+          "point_effect": "No invented extra penalty; invalid alternative is not credited."
+        },
+        {
+          "id": "W-N2",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 35,
+            "answer_end_line": 35,
+            "quote": "- In `SegmentImpl::recover()` (`segment.cc:4193–4301`), after a successful replay, have the segment adopt its WAL (call `open_wal_file()` / keep the handle), so `flush()`'s guard sees `wal_file_` with records and runs the real persistence path (`segment.cc:2224–2323`); **or**"
+          },
+          "finding": "The member-adoption principle omits explicit adjustment of the temporary reader deferred close and propagation of reopen failures. Keeping that same handle without changing the defer would leave it closed, and reopening can fail.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4206,
+              "end_line": 4215
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 4314,
+              "end_line": 4317
+            }
+          ],
+          "point_effect": "Recorded implementation-level incompleteness; accepted member-adoption principle remains eligible under C6 full_credit."
+        },
+        {
+          "id": "W-N3",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 45,
+            "answer_end_line": 45,
+            "quote": "Optionally add a white-box check in step 2 that after `optimize()` the flushed version contains persisted block metas covering N docs (or that the writing segment's WAL was removed), pinning the invariant the guard violated."
+          },
+          "finding": "The optional OR assertion treats WAL removal as sufficient durability evidence. WAL absence alone cannot prove persisted blocks/content are correct.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 2288,
+              "end_line": 2315
+            }
+          ],
+          "point_effect": "No extra deduction; C7 already fails content/vector verification."
+        },
+        {
+          "id": "W-N4",
+          "severity": "noncritical",
+          "answer_quote": {
+            "answer_start_line": 23,
+            "answer_end_line": 23,
+            "quote": "- On the **next open**: `recovery()` loads persisted segments read-only from their persisted-block metas (`collection.cc:1861–1874`) — the replayed docs are not in any block file — and opens the *new* writing segment, whose `SegmentImpl::recover()` computes the WAL path from the new mem block (`segment.cc:4198–4204`), finds no file, logs \"WAL recovery skipped,\" and returns OK. The old WAL is orphaned: the flushed version no longer references it. Documents are gone."
+          },
+          "finding": "The phrase not in any block file is broader than required. create_vector_index can write vector-index files and register vector blocks during optimize; the established failure is missing persisted forward/scalar block coverage and the old writing-block recovery route, not necessarily absence of every data-bearing block file.",
+          "source_evidence": [
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 1696,
+              "end_line": 1727
+            },
+            {
+              "path": "src/db/index/segment/segment.cc",
+              "start_line": 3913,
+              "end_line": 3959
+            }
+          ],
+          "point_effect": "Record overstatement without reducing the otherwise correct C3 factual chain."
+        }
+      ],
+      "critical_contradictions": [],
+      "total_points": 9,
+      "maximum_points": 10,
+      "factual_score": 9,
+      "factual_threshold_pass": true,
+      "core_citations_pass": false,
+      "source_grounded_success": false,
+      "reviewer_notes": [
+        "Only the final answer text is scored. No answer omission is filled using another answer, general code understanding, or referenced test implementations.",
+        "Short file basenames and nearby bare line ranges are resolved using the full repository-relative path established in the answer context.",
+        "C6 awards the explicitly accepted member-WAL attachment principle, not the unsupported guard-only alternative; error-handling/defer omissions are retained as findings.",
+        "C7 uses the frozen requirement to compare known documents and vectors, not count/fetchability alone.",
+        "No listed critical contradiction is present. The guard-only suggested code change is not a claim that merely calling the existing public flush fixes the defect.",
+        "Answer explicitly disclaims having run reproduction; evaluator also ran no reproduction."
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "blinded_answer_id": "U",
+      "factual_score": 8,
+      "source_grounded_success": true,
+      "critical_contradictions": 0,
+      "core_citation_gates": {
+        "C1": true,
+        "C2": true,
+        "C3": true
+      }
+    },
+    {
+      "blinded_answer_id": "W",
+      "factual_score": 9,
+      "source_grounded_success": false,
+      "critical_contradictions": 0,
+      "core_citation_gates": {
+        "C1": true,
+        "C2": true,
+        "C3": false
+      }
+    }
+  ],
+  "reviewer_limitations": [
+    "Source-only evaluation; no native reproduction or fix execution was performed.",
+    "The source-grounded gate is deliberately separate from factual points; W meets the factual threshold but omits a required citation edge."
+  ]
+}

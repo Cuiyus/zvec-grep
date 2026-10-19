@@ -1,8 +1,8 @@
 # Claude Code + Qwen3.8-max QA 开发验证
 
-本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是测试时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建，配主干默认的本地 `potion-code-16m-v2`。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
+本次先验证两条路线各一个 case，再对 q001 做两对确认，并冻结扩展两个新 issue case；随后在原 q001 上单独测试一对远端 Qwen embedding。使用 `Claude Code 2.1.212 + qwen3.8-max`。zg 是各次冻结时上游主干 `a424e0ce06868dc9ad8f142f57de59b8f9b58699` 的 Rust 构建。前序阶段配本地 `potion-code-16m-v2`，远端阶段配 `qwen/qwen3.7-text-embedding`，分别报告。全部新增 CI 在 `Cuiyus/zvec-grep` 执行。
 
-**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。所有开发失败与不利结果保留。
+**结论：此前单题开发 pair 的效率信号没有在两对确认试验中复现。** 开发 pair 的 zg input 曾少 51.3%、wall 少 18.5%，两组均为 9/10 且通过；随后冻结的两对确认试验中，zg input 分别增加 108.3% 和 67.6%。第 2 对两组均为 8/10 且通过；第 3 对 baseline 为 9/10，但核心引用不完整而未通过，zg 为 8/10 且通过。四次均完成，不能宣称稳定效率优势。新增 q002 两组 10/10 且通过，但 zg input 增加 82.8%；q003 从 baseline 6/10 提升到 zg 9/10，两组仍未达到核心源码证据门槛，zg input 增加 36.3%。两题整组信号规则未通过。SWE-QA 有效检索迭代仍是质量 9→10 分、input 增加 118% 的取舍。远端 Qwen 单题对照中，zg 8/10 且通过核心引用门槛，baseline 9/10 但未通过；zg input 和 wall 仍增加 25.7% / 48.6%。这反映引用、事实覆盖与资源之间的取舍。所有开发失败与不利结果保留。
 
 ## 实验设计
 
@@ -99,6 +99,29 @@ q003 的 zg input 增加 36.28%、wall 增加 46.35%。总工具调用 24→23�
 - [q002 单题判定](issue-expansion-v1/q002/pair-verdict.json)、[执行审计](issue-expansion-v1/q002/independent-audit.json)、[轨迹审计](issue-expansion-v1/q002/trajectory-audit.json)
 - [q003 单题判定](issue-expansion-v1/q003/pair-verdict.json)、[执行审计](issue-expansion-v1/q003/independent-audit.json)、[轨迹审计](issue-expansion-v1/q003/trajectory-audit.json)、[解盲输入核验](issue-expansion-v1/q003/review-input-verification.json)
 - [两题完整判定](issue-expansion-v1/set-verdict.json)
+
+## 远端 Qwen embedding 单题验证
+
+[run 39291972422](https://github.com/Cuiyus/zvec-grep/actions/runs/39291972422) 使用 commit `af244e04`，按[独立冻结计划](../../experiment-remote-embedding-v1.json)执行一对原 q001。相对于 completion-v2，唯一改变的因素是 embedding 整套配置：换用主干支持的 `qwen/qwen3.7-text-embedding` 及其远端服务、授权和查询等待。题目、源码、rubric、agent、原生 Rust、工具 schema、提示和预算均保持不变。
+
+| 组别 | 事实分 /10 | 达到源码质量门槛 | Input（含 cache） | Output | 工具调用 | Agent wall | zg 成功 / 尝试 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 9 | 否，C3 核心引用缺失 | 262,149 | 9,421 | 24 | 284.16 s | — |
+| zg | 8 | 是 | 329,622 | 13,989 | 22 | 422.41 s | 1 / 1 |
+
+两组均完成，usage 完整，工具无错误、预算无拒绝。zg input 增加 **25.74%**、wall 增加 **48.65%**。[冻结联合规则](remote-embedding-v1/pair-verdict.json)未通过：两份答案没有同时通过，zg 事实分低于 baseline，input 也未降低。数据集主指标与各分项仍单独报告：zg 的核心引用更完整，但这不是事实分全面改善或效率收益。
+
+盲评中 baseline 正确描述了恢复和持久化的因果过程，却没有引用旧 segment 的 `Open` 如何按 writing-block 元数据决定调用 `recover`，因此 C3 引用门槛失败。zg 给出了这条边的引用，但缺少 `index_completeness` 如何从 metadata 推导的说明，失去 C4 一分。两组都未在回归步骤中比较已知文档内容和向量，C7 均失分。双方备选“只改 guard”的修复说明仍存在 WAL 清理问题，所有非关键错误保留在[完整盲评](remote-embedding-v1/blinded-review.json)；高分或通过不等于全部附加说法正确。
+
+真实远端索引身份为指定 Qwen 模型、endpoint 和 1024 维；hybrid 和 vector-only 预检均返回有效结果，QA 中的一次调用也成功使用 `/workspace`。镜像 provenance 中仍列出用于离线 smoke 的内置 Potion cache；实际本轮索引和查询模型以 [index identity](remote-embedding-v1/embedding-index-identity.json)、[setup](remote-embedding-v1/setup.json)、[MCP preflight](remote-embedding-v1/mcp-preflight.json) 和试验命令为准，不能把镜像包含的模型当作实际使用的模型。
+
+授权耗时 **0.365 s**，索引和 readiness **151.00 s**，整个预检 **3.72 s**，都在 agent wall 之外。预检的 hybrid / vector-only 搜索分别为 1.815 / 0.584 s；这些数值包含原生处理和网络等待，并非纯网络延迟。QA 中的查询等待已计入 zg wall。没有经过验证的 embedding 账单或不可变权重版本证明，不报告合并美元成本。
+
+[工具轨迹](remote-embedding-v1/trajectory-audit.json)显示调用数 24→22、工具消息轮次 17→12，但 Read 6→11，Read 返回文本 34,220→70,112 字符，全部工具文本 75,722→93,390 字符。MCP 第 6 名预览包含空 WAL guard，未直接返回 `SegmentImpl::recover` 函数体；随后仍需更多读取。zg 获取保守完整证据跨度不代表已经正确使用，baseline 没有读取完整 curated span 也不自动构成答题失败。增加的上下文与 input 上升一致，不能从单 pair 推断 embedding 的因果效应。
+
+逐消息 usage 不完整，未用于推算总账；完整 reported 用量以终端 `result.usage` 为准。8192 是配置的每请求输出上限，不能从会话输出总量或模型能力 metadata 推断每次实际请求。
+
+这是同一已观察题目上的一个 baseline 先行 pair，历史 local 结果不是同期 embedding 对照。远端链路可用性已验证；稳定收益、模型替换的因果收益及新题泛化均未建立。[独立执行审计](remote-embedding-v1/independent-audit.json)完成 64 项核对，未发现执行失败；[匿名输入核验](remote-embedding-v1/review-input-verification.json)已确认原始、匿名和保存的答案字节一致。
 
 ## 所有前置尝试
 

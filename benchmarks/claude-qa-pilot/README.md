@@ -208,6 +208,13 @@ attested. The requested model, stored index identity, exact endpoint and pinned
 main configuration/catalog/backend hashes are recorded instead. Existing local
 phases keep their original commands and behavior.
 
+The frozen remote pair has completed real indexing, hybrid/vector preflight and
+QA. Its [audited result](results/20261019/README.md#远端-qwen-embedding-单题验证)
+shows a passing core source gate for zg, but lower factual points and greater
+input/time. The frozen joint signal rule failed. The plan remains an immutable
+pre-run record; `remote-embedding-v1/live-validation.json` in the result directory
+records the subsequent live validation.
+
 Run parser and source-isolation checks with:
 
 ```sh
