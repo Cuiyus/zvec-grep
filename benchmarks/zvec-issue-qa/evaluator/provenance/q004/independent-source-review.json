@@ -1,0 +1,513 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-10-19T17:43:30.926221+00:00",
+  "status": "independent source and q004 asset review complete; no blocking finding for this exact scoped revision; ready for parent freeze decision",
+  "scope": {
+    "mode": "read-only independent source/design review",
+    "source_checkout": "/tmp/zg-zvec-architecture-selection-20261019",
+    "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+    "source_clean": true,
+    "candidate_selection": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/architecture-pilot/candidate-selection.json",
+    "candidate_selection_sha256": "913c5c3fc93044000fd01238bb1777969becb2a3278b78f16cbf1796d36027e1",
+    "solver_answers_read": false,
+    "new_task_results_read": false,
+    "models_api_ci_or_runtime_invoked": false,
+    "repository_files_changed": [],
+    "independence_limit": "历史父上下文及先前允许读取的 README 含既有任务结果摘要；未读取本候选 solver 答案或进行检索试验。新候选当前未运行。"
+  },
+  "candidate_anchor_integrity": {
+    "checked": 20,
+    "file_hash_mismatches": 0,
+    "span_hash_mismatches": 0,
+    "limitation": "预选 span 哈希正确不等于其组合证明完整端到端语义；下列遗漏是实际源码语义问题。"
+  },
+  "verified_source_semantics": [
+    {
+      "id": "V1",
+      "claim": "fresh-process successful initialization 把 Python optimize_threads 写入 optimize_thread_count，再创建一次全局优化线程池；query pool 是另一个池。",
+      "evidence_ids": [
+        "S01",
+        "S02",
+        "S03",
+        "S04"
+      ]
+    },
+    {
+      "id": "V2",
+      "claim": "operation concurrency=0 在 rebuild/merge 的 DB 层选择全局 optimize pool，并把实际 pool.count() 作为 write_concurrency。global requested=4 仅在 hardware_concurrency>=4 且创建成功时得到实际4。",
+      "evidence_ids": [
+        "S03",
+        "S05",
+        "S06",
+        "S07",
+        "S08"
+      ]
+    },
+    {
+      "id": "V3",
+      "claim": "positive operation concurrency=2 不改写全局配置；DB 层不提供外部pool，core Index::merge 在该 merge 调用内创建local pool，其实际count受硬件上限限制。不能解释为全进程改为2，或所有 optimize 子任务永久共用一个新池。",
+      "evidence_ids": [
+        "S05",
+        "S06",
+        "S07",
+        "S09"
+      ]
+    },
+    {
+      "id": "V4",
+      "claim": "builder-backed MixedStreamerReducer::index_build 创建 BorrowedSingleQueueIndexThreads；它存引用、复用池及task groups，无新worker池，传给target converter的TrainAndTransform及builder train/build。",
+      "evidence_ids": [
+        "S11",
+        "S13",
+        "S14"
+      ]
+    },
+    {
+      "id": "V5",
+      "claim": "这不能推广为所有 converter 都使用该池。generic threaded converter默认实现忽略threads后调用旧重载；Index::merge另有converter_&&!reformer_前置 train(holder)不传threads。",
+      "evidence_ids": [
+        "S10",
+        "S15"
+      ]
+    },
+    {
+      "id": "V6",
+      "claim": "当前 HNSW_RABITQ 预处理在 PrepareQuantizeField 创建RabitqConverter并用无threads旧重载训练；该重载给nullptr，converter fallback新建hardware-default SingleQueueIndexThreads。此路径未接operation concurrency。",
+      "evidence_ids": [
+        "S16",
+        "S17",
+        "S18",
+        "S19",
+        "S12"
+      ]
+    },
+    {
+      "id": "V7",
+      "claim": "IVF_RABITQ 在 PrepareQuantizeField 直接返回，因为builder内部负责训练；IvfRabitqBuilder的converter_->train(holder,threads)明确传入调用者线程资源。",
+      "evidence_ids": [
+        "S16",
+        "S20"
+      ]
+    },
+    {
+      "id": "V8",
+      "claim": "DiskANN builder已有threads时不新建builder池，PQ quantizer另建外层池，其thread_count=max(1,min(build_thread_count,threads->count()))。这是池容量上限关系，不是同一池身份。",
+      "evidence_ids": [
+        "S21",
+        "S22",
+        "S23",
+        "S25"
+      ]
+    },
+    {
+      "id": "V9",
+      "claim": "DiskANN PQ outer pool每个chunk训练又创建1-worker SingleQueueIndexThreads；另有query pool、调用线程等。因此容量4/2不能推定总OS线程数、瞬时活跃线程或CPU利用率。无需为QA补充运行时线程计数。",
+      "evidence_ids": [
+        "S24",
+        "S25",
+        "S03"
+      ]
+    }
+  ],
+  "findings_for_author": [
+    {
+      "id": "F1",
+      "severity": "must resolve before freeze",
+      "topic": "HNSW_RABITQ current path differs from historical PR topic",
+      "description": "candidate-selection将HNSW_RABITQ列为共享池端到端例子，但当前源码的PrepareQuantizeField在reducer之前训练且不传线程池。不能把旧PR描述或RabitqConverter支持threaded overload等同于实际调用它。",
+      "resolution_options": [
+        "自然限定问题为builder-backed target preparation/train/build，明确不泛化所有converter；若要具体算法例子可用当前源码已证实的IVF_RABITQ。",
+        "若坚持询问HNSW_RABITQ，明确把此例外作为答案事实并给题面足够范围；不可将“共用池”冻结成gold。"
+      ],
+      "evidence_ids": [
+        "S16",
+        "S17",
+        "S18",
+        "S19",
+        "S20"
+      ],
+      "resolution": "Resolved by limiting prompt Q2 and C3 to target-builder-stage argument propagation; HNSW_RABITQ end-to-end use expressly excluded; original selection preserved with correction.",
+      "resolved_in_reviewed_revision": true
+    },
+    {
+      "id": "F2",
+      "severity": "must resolve before freeze",
+      "topic": "4/2 numeric pool sizes require hardware premise",
+      "description": "ThreadPool会clamp到max(hardware_concurrency,1)。为保留简单数值问题，题面需声明hardware_concurrency>=4且操作成功；否则gold应描述实际min值。",
+      "evidence_ids": [
+        "S05",
+        "S12"
+      ],
+      "resolution": "Resolved by explicit hardware_concurrency>=4, fresh successful initialization and successful worker creation in question.",
+      "resolved_in_reviewed_revision": true
+    },
+    {
+      "id": "F3",
+      "severity": "must resolve before freeze",
+      "topic": "shared versus bounded extra pool",
+      "description": "DiskANN PQ outer pool是独立池；其count被caller count限制不意味着整个PQ训练总线程受相同上限，更不意味着进程总线程数受限。题目与rubric应精确写pool层级，不能让正确指出nested pools的答案被判错。",
+      "evidence_ids": [
+        "S21",
+        "S24",
+        "S25"
+      ],
+      "resolution": "Resolved by naming outer chunk-dispatch pool throughout Q3/C4 and excluding total PQ/process thread bounds; per-chunk evidence retained as optional caveat.",
+      "resolved_in_reviewed_revision": true
+    },
+    {
+      "id": "F4",
+      "severity": "wording refinement",
+      "topic": "local lifetime granularity",
+      "description": "显式 concurrency 创建的pool在每次Index::merge内，生命期覆盖reduce；准确表述为本次merge局部池，不强制solver枚举全部转发层。",
+      "evidence_ids": [
+        "S09"
+      ],
+      "resolution": "Resolved by per-reached-core-merge question wording, C2, reference answer and not-required exclusions.",
+      "resolved_in_reviewed_revision": true
+    }
+  ],
+  "asset_review": {
+    "question_available": true,
+    "rubric_available": true,
+    "reviewed_assets": [
+      {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q004/instruction.md",
+        "sha256": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3"
+      },
+      {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q004.json",
+        "sha256": "2040e092818867e68aa63f953ecc6642ee65a3b3b73b715a3f5b4d611f286a07"
+      },
+      {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/dataset-architecture-v1.json",
+        "sha256": "71a94c3947f821642abc0fdf93a87cb076567cdb01e9433be7cb1d7bf3af5003"
+      },
+      {
+        "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/provenance/q004/source-review-clarifications.json",
+        "sha256": "ea3bedbd9908ad5ac650f1a432825ae990a34732dc5b8c7c53ae9aea8657501c"
+      }
+    ],
+    "recommendation": "accept this scoped task for the parent’s pre-execution freeze decision",
+    "source_accuracy": "All required factual units and the reference answer are supported by the fixed implementation under the explicit assumptions. No runtime result is required or claimed.",
+    "evidence_integrity": {
+      "gold_spans_checked": 21,
+      "hash_errors": [],
+      "clarification_spans_checked": 10,
+      "dataset_prompt_and_rubric_hashes_match": true,
+      "original_candidate_snapshot_hash_preserved": true
+    },
+    "prompt_to_rubric_review": [
+      {
+        "criterion": "C1",
+        "request": "Q1 default branch",
+        "verdict": "pass",
+        "reason": "Two units cover shared global pool identity and actual four-worker count. Hardware >=4 and successful initialization are explicit; no hidden defaults or runtime measurement are needed."
+      },
+      {
+        "criterion": "C2",
+        "request": "Q1 explicit override",
+        "verdict": "pass",
+        "reason": "Two units cover local pool creation per reached core merge and no global resize. Prompt expressly asks per core merge, so the lifetime granularity is requested rather than a hidden extra; exact destructor internals/total pool count are excluded."
+      },
+      {
+        "criterion": "C3",
+        "request": "Q2 selected pool propagation",
+        "verdict": "pass",
+        "reason": "Two units cover same borrowed resources passed to builder train/build and optional immediately preceding converter train. The prompt explicitly asks argument propagation versus actual implementation consumption and excludes earlier preparation. No HNSW_RABITQ coverage is silently required."
+      },
+      {
+        "criterion": "C4",
+        "request": "Q3 DiskANN outer PQ pool",
+        "verdict": "pass",
+        "reason": "Separate outer pool identity and caller/builder cap are directly requested. Formula and positive count implications match source; a semantically equivalent explanation is allowed. Per-chunk pool counts and all PQ internals are explicitly optional."
+      },
+      {
+        "criterion": "C5",
+        "request": "Q4 inference limits",
+        "verdict": "pass",
+        "reason": "Two units distinguish capacities from process-wide OS-thread limits and actual CPU/worker activity. It does not require measured numbers, exhaustive background-worker enumeration or a regression test."
+      }
+    ],
+    "critical_gate_review": {
+      "verdict": "pass",
+      "core_criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ],
+      "rationale": "These four criteria are the concrete configuration/propagation/exception answers requested by Q1–Q3. Their essentiality reasons are specific; there is no gate for irrelevant wrappers, naming every source span, historical repair, negative concurrency or extra algorithms.",
+      "threshold_effect": "Requiring C1–C4 full credit already establishes the numerical minimum of 8. C5 omission can therefore yield an 8-point pass if the core citation gates pass; explicit opposite assertions are separately material contradictions. This is transparent in the frozen formula, not a hidden requirement to score all 10.",
+      "separate_axes": "Correct facts retain points when citations are missing; source-grounded success additionally requires sufficient supplied citations for C1–C4.",
+      "contradictions": "D1–D5 name explicit materially incorrect answers to asked questions. Omission/ambiguity is not disqualification. Required answer quotation, source evidence and impact prevent interpretation-based automatic failure."
+    },
+    "citation_policy_review": {
+      "verdict": "pass",
+      "reason": "Equivalent implementation locations, combined caller/callee support, broad but relevant resolvable ranges and one citation supporting several claims are allowed. Curated spans and ordinary forwarding wrappers are not mandatory. Missing references cannot be repaired invisibly by the judge.",
+      "minimal_sufficiency_examples_for_reviewers_only": [
+        "C1 can use binding/global-pool creation plus either DB zero-selection branch; no need to cite every Python/native wrapper.",
+        "C2 can use either explicit-count DB branch and the core local-pool branch; a citation covering default-null MergeOptions is helpful but must not be a mandatory ID if the submitted evidence otherwise establishes no external pool.",
+        "C3 should substantiate selected reducer pool and same borrowed adapter at the builder/converter call sites; a compact range can establish several related calls. It need not trace every algorithm or all converter actual-use implementations.",
+        "C4 needs the cap calculation and separate outer pool construction; source can support these in equivalent spans, not only E13/E16."
+      ]
+    },
+    "scope_change_review": {
+      "verdict": "appropriate evidence-based correction before execution",
+      "reason": "The issue topic is still optimization-thread configuration across components. The original candidate sketch overgeneralized HNSW_RABITQ use. The final question narrows to a naturally described builder-side stage and explicitly distinguishes propagation from consumption, rather than requiring a false whole-pipeline claim. Original selection bytes remain preserved with a correction record.",
+      "publication_limit": "Describe this as scoped implemented-behavior/configuration QA derived from issue #758. It does not prove that all original issue paths are fixed or that all optimization work obeys the selected pool."
+    },
+    "remaining_blocking_findings": [],
+    "not_covered_by_this_review": [
+      "A full corpus-export/inventory or solver-isolation execution audit",
+      "Current zg binary/runner identity or experiment-resource controls",
+      "Runtime tests, thread measurements, actual performance or an e2e benefit",
+      "Admission/freeze metadata that may be edited after these asset hashes; changed prompt/rubric must be rechecked"
+    ]
+  },
+  "review_principles_file": {
+    "path": "/tmp/zg-architecture-quality-design.json",
+    "sha256": "98633f0ea7fbe3dc5b1f4e3592834a1d54c015a89884cd031fbfa3d3170c1a2b"
+  },
+  "source_evidence": [
+    {
+      "id": "S01",
+      "path": "python/zvec/zvec.py",
+      "start_line": 158,
+      "end_line": 173,
+      "file_sha256": "358bbbf3a42ab6a9ec36d727c142df13d05dca954a5168dfc270fdfce911b6f1",
+      "span_sha256": "14b8c79f5b1003fd56ad59f385ddbe5703517c8ce0a4c2846e06d56f4a2bb631"
+    },
+    {
+      "id": "S02",
+      "path": "src/binding/python/model/common/python_config.cc",
+      "start_line": 153,
+      "end_line": 158,
+      "file_sha256": "89c975b2d3e17fd8b06cb4ea37ba93d5fe2cf5d8f10c7b6db5216e9475172116",
+      "span_sha256": "b3f04c24beec426044686dc96fbfbceeddca683ba444b55fe9cf2752db46a972"
+    },
+    {
+      "id": "S03",
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 21,
+      "end_line": 32,
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "a527bfc17117a13a6633aa0f73e60a26fa7d02ca863d1f50b5a54f8b0d02d688"
+    },
+    {
+      "id": "S04",
+      "path": "src/db/common/config.cc",
+      "start_line": 119,
+      "end_line": 141,
+      "file_sha256": "0042114505887ade51f80f67c1fc35e35befd64d17e3ae49ec9f67e87f2910db",
+      "span_sha256": "9e2abb5fa17f709295c0cfb57d67994d41f70ff8f6094e92c09cf73f2ca1e776"
+    },
+    {
+      "id": "S05",
+      "path": "src/ailego/parallel/thread_pool.cc",
+      "start_line": 85,
+      "end_line": 109,
+      "file_sha256": "d8d0d7640c3a2a6eefb4d4a6f404e214c4de2ea43afb91879297d2a35b2c928e",
+      "span_sha256": "61468d8550388a40c3e002d8b4561566603bdf4fd22259d1dab276c8677454fd"
+    },
+    {
+      "id": "S06",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1549,
+      "end_line": 1574,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "4a149c40568580d7c5f3ca483ee0c8345299618624c873a31bdd65532fb3e2c7"
+    },
+    {
+      "id": "S07",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 799,
+      "end_line": 811,
+      "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+      "span_sha256": "b8e30bca91e7268b72712f54a42270aa24e0877694ed1ecb009285193aa27b3f"
+    },
+    {
+      "id": "S08",
+      "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+      "start_line": 123,
+      "end_line": 132,
+      "file_sha256": "f69ece7d53509eebff6b844ae3a5ba1e9e18e606e6711b9a876e03047a86e5e8",
+      "span_sha256": "6162cdba427d0265d3d73914afcf26b4262708265ccf53401d4ed26e9229c42b"
+    },
+    {
+      "id": "S09",
+      "path": "src/core/interface/index.cc",
+      "start_line": 1429,
+      "end_line": 1452,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "deaefd25d6a2ac5122722e75649168e253dc73c7e46a25223f3e34bbc9856f51"
+    },
+    {
+      "id": "S10",
+      "path": "src/core/interface/index.cc",
+      "start_line": 1457,
+      "end_line": 1508,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "35efeb1b12d219c0c9d26cf0a0272c717b955e3ec8120e37bace75f8366293ea"
+    },
+    {
+      "id": "S11",
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 742,
+      "end_line": 768,
+      "file_sha256": "1b614674c5b206658a5fd6ebe00c2640bffdfe792ccec5dcc49f6d4a394e1e04",
+      "span_sha256": "14a86c81e15082a2d40ab33c8e5f5b3c4dcb616dfca49379c1fdc5bf785d3339"
+    },
+    {
+      "id": "S12",
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 113,
+      "end_line": 130,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "cfa8af901c308925e83d42c7dc59e6a6289493398875345771c3a437439162c6"
+    },
+    {
+      "id": "S13",
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 169,
+      "end_line": 224,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "6fd47a8fa06b5c7528bec9853c05d09bd56e87a657a03d0265b56b79b8e9cf35"
+    },
+    {
+      "id": "S14",
+      "path": "src/core/framework/index_converter.cc",
+      "start_line": 22,
+      "end_line": 35,
+      "file_sha256": "130554868620aa1aa68e9ba4c4e1de320be04854bcdd746541b96d251e4b8ccb",
+      "span_sha256": "c638f06f487f61dee657e60872de6a63bb998dbe09384366aacef8b3ecf26d4c"
+    },
+    {
+      "id": "S15",
+      "path": "src/include/zvec/core/framework/index_converter.h",
+      "start_line": 179,
+      "end_line": 189,
+      "file_sha256": "e5769fc54595169e1b2bbac8e6a7f26b0bf16d292c31f5faf219fdf75fd9d3cd",
+      "span_sha256": "dbc2d1170e16bad5874145d1148807af73c0e22eaf1d96ddb851eb1533a1bebd"
+    },
+    {
+      "id": "S16",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 860,
+      "end_line": 934,
+      "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+      "span_sha256": "a6c8dd38ce8bb2ed8836d5cc8080fccbb0e52621a31e4f779dabca07c359700a"
+    },
+    {
+      "id": "S17",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1713,
+      "end_line": 1725,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "996f1f9511e0e650d80658bce349bc5099321318c469c6e86b05c91c76800673"
+    },
+    {
+      "id": "S18",
+      "path": "src/core/algorithm/hnsw_rabitq/rabitq_converter.cc",
+      "start_line": 120,
+      "end_line": 125,
+      "file_sha256": "d409df18e829aac72b8def5d79a3a7881050a56b0a77c8fa3d9f100d5409244d",
+      "span_sha256": "b6a3f3aacd1ae31b7cbfa5eaa5cd787babba6c38b2d38a0da7692c6a7f110508"
+    },
+    {
+      "id": "S19",
+      "path": "src/core/algorithm/hnsw_rabitq/rabitq_converter.cc",
+      "start_line": 189,
+      "end_line": 199,
+      "file_sha256": "d409df18e829aac72b8def5d79a3a7881050a56b0a77c8fa3d9f100d5409244d",
+      "span_sha256": "0c55fede9909516d159c8909c82a420ea10d47556e3fb629879f7b4b2b9942a6"
+    },
+    {
+      "id": "S20",
+      "path": "src/core/algorithm/ivf_rabitq/ivf_rabitq_builder.cc",
+      "start_line": 394,
+      "end_line": 417,
+      "file_sha256": "bfba672ffa7720bcb09f1d1f19044e5647092cc7f45c184e195825a03fb58cd4",
+      "span_sha256": "88e0626417b5966c706cd62be60f102b44fd0295994f6d3305f1258f55196a00"
+    },
+    {
+      "id": "S21",
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 389,
+      "end_line": 406,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "74e7cd736883b452553d0f7569c381acdf743d29e01a2656915257f8cd4d7e4d"
+    },
+    {
+      "id": "S22",
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 657,
+      "end_line": 668,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "f1623f10afc607a4b5e4a5ee1b9168399a8e797e6c0c8bba6ecfe66bf1529b72"
+    },
+    {
+      "id": "S23",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 141,
+      "end_line": 145,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "cbc9964c52a734afce550c0ccb4b32f7ef9db473dcc13857501d5616823e6c6a"
+    },
+    {
+      "id": "S24",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 179,
+      "end_line": 211,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "1dfe092c31b5ab8b152a7f7eac5056cfa48d4dee7ac87a492eec75f687823449"
+    },
+    {
+      "id": "S25",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 319,
+      "end_line": 356,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "bebc91a7e13ef66b45fa1c513f8ede9f362c6ec308a47b794910b433e31af560"
+    }
+  ],
+  "review_completed_utc": "2026-10-19T17:46:34.618768+00:00",
+  "metadata_followup": {
+    "completed_utc": "2026-10-19T17:46:34.618768+00:00",
+    "prior_review_report_sha256": "b23cc48247c8dfb38ea23499af5e98b0e2241cbed95c67f1273e3b7c355abaa3",
+    "prior_gold_sha256": "ae3e400f7d0745105aeb3f8ceb09613049a411c4211871b56a4cc017b5e6fcd7",
+    "final_gold_sha256": "2040e092818867e68aa63f953ecc6642ee65a3b3b73b715a3f5b4d611f286a07",
+    "final_prompt_sha256": "47d9ab3110be6e0f4fa6c91efdbefcfb19dc50e0b07374d2d8c0adcfe35d26f3",
+    "final_dataset_sha256": "71a94c3947f821642abc0fdf93a87cb076567cdb01e9433be7cb1d7bf3af5003",
+    "gold_change_verified": "Replacing only the new verification_status string with the previously reviewed string exactly reconstructs prior ae3e400f… bytes/hash. Prompt and all question/rubric facts, criteria, gates and 21 evidence spans are unchanged. No repeated span review was needed.",
+    "dataset_changes_verified": [
+      "status key renamed to status_at_authoring and moved to the end; value unchanged.",
+      "evaluator_sha256 updated from ae3e400f… to 2040e092….",
+      "source_inventory_sha256 changed from 57f373fc… to 129579aa…. This is additional to the authoring-status change. Reversing those three field changes and restoring prior key order exactly reconstructs prior dataset 69221426… bytes/hash."
+    ],
+    "inventory_correction_basis": {
+      "author_explanation": "Initial inventory used lexicographic full-path sorting; shared exporter uses pathlib component ordering. Author reports identical 1596-entry path-to-content maps and preserved failed first export.",
+      "author_records": [
+        {
+          "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/provenance/q004/export-attempts.json",
+          "sha256": "5e9ca39dcbec31b9d1a0f26b7a4d794e8e79f54dd9f499c711b0f8747f61837e"
+        },
+        {
+          "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/provenance/q004/export-validation.json",
+          "sha256": "ff8094100d04faff4185ecbd313a32c8b60190fb2f4f9c7a647171438d48d257"
+        },
+        {
+          "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/provenance/q004/validated-source-manifest.json.gz",
+          "sha256": "75541f16a95d8252cfd0efc5a342020ea663d52b353d9a81beebfd7d96db908e"
+        }
+      ],
+      "root_independent_export_check": {
+        "path": "/tmp/zg-architecture-source-export-recheck.json",
+        "sha256": "904f4fe7a6cec6d8352a606341e080f8042fe3d0eb391d5a6ec018b0985b351a",
+        "role": "Parent separately verified actual 1596 exported files, bytes/hashes, exact file set and 21 source spans. This is independent execution evidence for corpus validation, not a second answer-quality judgment."
+      },
+      "reviewer_scope": "Read the preserved author export records and parent recheck record. This follow-up did not rerun source export, models, CI or the unchanged 21-span audit. Source-content identity remains attributed to the parent export recheck rather than mislabeled as this semantic review."
+    },
+    "semantic_conclusion": "Unchanged: no blocking source/question/rubric issue for the exact final prompt and gold hashes; ready for parent freeze decision. Historical authoring status is now unambiguous.",
+    "new_solver_result_access": false
+  }
+}

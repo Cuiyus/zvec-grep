@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-19T17:44:18.436740+00:00",
+  "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+  "original_selection_sha256": "913c5c3fc93044000fd01238bb1777969becb2a3278b78f16cbf1796d36027e1",
+  "original_selection_record_unchanged": true,
+  "reason": "Independent source review found boundaries that the original candidate sketch did not establish. Selection remains #758; formal task is narrowed to actual current-source handoff contracts before any solver run.",
+  "findings": [
+    {
+      "claim": "Global requested count is hardware-clamped.",
+      "evidence": [
+        {
+          "path": "src/ailego/parallel/thread_pool.cc",
+          "start_line": 85,
+          "end_line": 100,
+          "file_sha256": "d8d0d7640c3a2a6eefb4d4a6f404e214c4de2ea43afb91879297d2a35b2c928e",
+          "span_sha256": "e1ad2cbec734bb77bf8484db09061a041d0312588bd1f3f7834c94f179fa865a"
+        }
+      ],
+      "task_response": "State hardware_concurrency >=4, successful init and worker construction, before first pool creation."
+    },
+    {
+      "claim": "Explicit positive concurrency creates a local pool per core merge invocation, not necessarily a single pool for the whole optimize operation.",
+      "evidence": [
+        {
+          "path": "src/core/interface/index.cc",
+          "start_line": 1433,
+          "end_line": 1446,
+          "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+          "span_sha256": "3bdbcd758573ce1c28b87139808384ad55097324110e677d0b1890a4be5bd55d"
+        }
+      ],
+      "task_response": "Ask per reached core merge and avoid whole-operation unique-pool assertions."
+    },
+    {
+      "claim": "Builder-side converter gets a threads argument, but generic converter overload may ignore it; earlier Index::merge converter training also uses threadless train.",
+      "evidence": [
+        {
+          "path": "src/include/zvec/core/framework/index_converter.h",
+          "start_line": 179,
+          "end_line": 188,
+          "file_sha256": "e5769fc54595169e1b2bbac8e6a7f26b0bf16d292c31f5faf219fdf75fd9d3cd",
+          "span_sha256": "280468021cb974bb11ce2ee390c9606c92d861270342a302843856ac6c09b578"
+        },
+        {
+          "path": "src/core/interface/index.cc",
+          "start_line": 1457,
+          "end_line": 1495,
+          "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+          "span_sha256": "d22d43baee1590d8aab6d8d9176e40893f20e49938632846ac7687f99f89d240"
+        },
+        {
+          "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+          "start_line": 742,
+          "end_line": 768,
+          "file_sha256": "1b614674c5b206658a5fd6ebe00c2640bffdfe792ccec5dcc49f6d4a394e1e04",
+          "span_sha256": "14a86c81e15082a2d40ab33c8e5f5b3c4dcb616dfca49379c1fdc5bf785d3339"
+        }
+      ],
+      "task_response": "Limit question to argument propagation at target-builder stage, distinguish passing resources from implementation consumption."
+    },
+    {
+      "claim": "The historical PR summary does not establish current end-to-end HNSW_RABITQ pool reuse. Current PrepareQuantizeField invokes converter->train(raw_vector_provider) without threads; RabitqConverter null fallback uses a hardware-default pool.",
+      "evidence": [
+        {
+          "path": "src/db/index/segment/segment_helper.cc",
+          "start_line": 860,
+          "end_line": 934,
+          "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+          "span_sha256": "a6c8dd38ce8bb2ed8836d5cc8080fccbb0e52621a31e4f779dabca07c359700a"
+        },
+        {
+          "path": "src/core/algorithm/hnsw_rabitq/rabitq_converter.cc",
+          "start_line": 120,
+          "end_line": 125,
+          "file_sha256": "d409df18e829aac72b8def5d79a3a7881050a56b0a77c8fa3d9f100d5409244d",
+          "span_sha256": "b6a3f3aacd1ae31b7cbfa5eaa5cd787babba6c38b2d38a0da7692c6a7f110508"
+        },
+        {
+          "path": "src/core/algorithm/hnsw_rabitq/rabitq_converter.cc",
+          "start_line": 189,
+          "end_line": 196,
+          "file_sha256": "d409df18e829aac72b8def5d79a3a7881050a56b0a77c8fa3d9f100d5409244d",
+          "span_sha256": "5f2763c5bdc5f22a410cfcf1d99ab1c393b2a1fe95bc2c5910a4f2d2592b8111"
+        }
+      ],
+      "task_response": "Do not ask or assert HNSW_RABITQ end-to-end same-pool behavior; preserve historical source sketches as provenance, not gold."
+    },
+    {
+      "claim": "DiskANN PQ cap applies to outer chunk-dispatch pool; per-chunk training can create one-worker pools.",
+      "evidence": [
+        {
+          "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+          "start_line": 179,
+          "end_line": 209,
+          "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+          "span_sha256": "ef59e9e7d1352774e05501ef6945a3d07d058322d0fac877864b79007e4c68aa"
+        },
+        {
+          "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+          "start_line": 319,
+          "end_line": 340,
+          "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+          "span_sha256": "318ac1eb3821d25c3860d43e6e57b12c7156d379e1ba7d2ce2ac4f58d1fed8f5"
+        }
+      ],
+      "task_response": "Name outer dispatch pool in prompt/gold and do not convert its count into total PQ/process thread bound."
+    }
+  ],
+  "runtime_executed": false,
+  "formal_independent_asset_review": "Pending complete q004 prompt/rubric review; these messages alone do not establish final approval."
+}

@@ -12,6 +12,7 @@ import tarfile
 import time
 
 import remote_embedding
+import architecture_phase
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -97,7 +98,7 @@ def collect_evidence(work, reports):
     return result
 
 
-def upstream_protocol(work, reports, *, remote=False):
+def upstream_protocol(work, reports, *, remote=False, remote_plan_path=None):
     checkout = work / 'upstream-protocol'
     run(['git', 'init', '-q', str(checkout)])
     run(['git', '-C', str(checkout), 'fetch', '-q', '--depth=1', UPSTREAM_REPOSITORY, UPSTREAM_COMMIT])
@@ -120,7 +121,7 @@ def upstream_protocol(work, reports, *, remote=False):
         'index_ignore_sha256': hashlib.sha256(ignore_text.encode()).hexdigest(),
     }
     if remote:
-        plan = json.loads((HERE / remote_embedding.PLAN_NAME).read_text())
+        plan = json.loads((remote_plan_path or HERE / remote_embedding.PLAN_NAME).read_text())
         sources = []
         for entry in plan['retrieval']['configuration_sources']:
             if entry['commit'] != actual:
@@ -165,9 +166,13 @@ def validate_remote_embedding_plan():
     return remote_embedding.validate_plan(ROOT, HERE)
 
 
+def validate_architecture_plan():
+    return architecture_phase.validate_plan(ROOT, HERE)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001', 'zvec-q002', 'zvec-q003'])
+    parser.add_argument('--task', choices=['reflex-6', 'zvec-q001', 'zvec-q002', 'zvec-q003', 'zvec-q004'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=1)
@@ -176,6 +181,7 @@ def main():
     parser.add_argument('--completion-confirmation', action='store_true')
     parser.add_argument('--closed-issue-expansion', action='store_true')
     parser.add_argument('--remote-embedding-pilot', action='store_true')
+    parser.add_argument('--architecture-pilot', action='store_true')
     parser.add_argument('--collect-only', action='store_true', help='Always-run safe collection, including cancelled partial trials')
     args = parser.parse_args()
     if args.collect_only:
@@ -188,6 +194,12 @@ def main():
         parser.error(f'this phase is frozen to {expected_repeats} pair(s) per task')
     if args.workspace_root_guidance and args.task != 'reflex-6':
         parser.error('root-v2 is frozen to reflex-6 only')
+    if args.architecture_pilot:
+        if (args.task != 'zvec-q004' or not args.completion_budget or args.workspace_root_guidance
+                or args.completion_confirmation or args.closed_issue_expansion or args.remote_embedding_pilot):
+            parser.error('architecture phase requires one q004 completion-budget pair with no other phase')
+    elif args.task == 'zvec-q004':
+        parser.error('q004 requires the separately frozen architecture phase')
     if args.remote_embedding_pilot and (args.task != 'zvec-q001' or not args.completion_budget
             or args.workspace_root_guidance or args.completion_confirmation or args.closed_issue_expansion):
         parser.error('remote embedding requires one q001 completion-budget pair with no other phase')
@@ -198,8 +210,8 @@ def main():
     elif args.task in ('zvec-q002', 'zvec-q003'):
         parser.error('q002/q003 require the separately frozen issue expansion phase')
     if args.completion_budget and (args.workspace_root_guidance
-            or (args.task != 'zvec-q001' and not args.closed_issue_expansion)):
-        parser.error('completion-v2 requires zvec-q001 or the separate issue expansion phase')
+            or (args.task != 'zvec-q001' and not args.closed_issue_expansion and not args.architecture_pilot)):
+        parser.error('completion-v2 requires zvec-q001 or a separate issue expansion/architecture phase')
     if args.completion_confirmation and (args.task != 'zvec-q001' or not args.completion_budget or args.workspace_root_guidance):
         parser.error('completion confirmation requires zvec-q001 with completion-budget and without workspace-root guidance')
     start_repeat = 2 if args.completion_confirmation else 1
@@ -225,13 +237,28 @@ def main():
             remote_embedding.validate_environment()
         except (ValueError, KeyError, OSError) as error:
             parser.error(str(error))
+    architecture_plan = None
+    architecture_dataset_path = ROOT / architecture_phase.DATASET_PATH
+    if args.architecture_pilot:
+        try:
+            architecture_plan = validate_architecture_plan()
+            remote_embedding.validate_environment()
+        except (ValueError, KeyError, OSError) as error:
+            parser.error(str(error))
+    use_remote_embedding = args.remote_embedding_pilot or args.architecture_pilot
+    selected_remote_plan_path = HERE / (architecture_phase.PLAN_NAME if args.architecture_pilot else remote_embedding.PLAN_NAME)
     work, reports = args.work.resolve(), args.reports.resolve()
     work.mkdir(parents=True, exist_ok=False)
     reports.mkdir(parents=True, exist_ok=True)
     if args.closed_issue_expansion:
         shutil.copyfile(plan_path, reports / 'experiment-plan.json')
         shutil.copyfile(expansion_dataset_path, reports / 'dataset-manifest.json')
-    if args.remote_embedding_pilot:
+    if args.architecture_pilot:
+        shutil.copyfile(selected_remote_plan_path, reports / 'experiment-plan.json')
+        shutil.copyfile(architecture_dataset_path, reports / 'dataset-manifest.json')
+        embedding, ignore_text, upstream = upstream_protocol(work, reports, remote=True,
+                                                           remote_plan_path=selected_remote_plan_path)
+    elif args.remote_embedding_pilot:
         shutil.copyfile(HERE / remote_embedding.PLAN_NAME, reports / 'experiment-plan.json')
         embedding, ignore_text, upstream = upstream_protocol(work, reports, remote=True)
     else:
@@ -240,13 +267,14 @@ def main():
         repository = 'https://github.com/reflex-dev/reflex.git'
         revision = 'fe0f946dc0c240c6c1e513318c21db407e191c78'
         prompt = ROOT / 'benchmarks/swe-qa-bench/datasets/reflex-6/instruction.md'
-    elif args.closed_issue_expansion:
-        dataset = json.loads(expansion_dataset_path.read_text())
+    elif args.closed_issue_expansion or args.architecture_pilot:
+        selected_dataset_path = architecture_dataset_path if args.architecture_pilot else expansion_dataset_path
+        dataset = json.loads(selected_dataset_path.read_text())
         selected = [task for task in dataset['tasks'] if 'zvec-' + task['id'] == args.task]
         if len(selected) != 1:
-            raise RuntimeError('issue expansion task must occur exactly once in the frozen dataset')
+            raise RuntimeError('selected task must occur exactly once in its frozen dataset')
         repository, revision = selected[0]['source_repository'], selected[0]['source_commit']
-        prompt = expansion_dataset_path.parent / selected[0]['instruction']
+        prompt = selected_dataset_path.parent / selected[0]['instruction']
     else:
         repository = 'https://github.com/alibaba/zvec.git'
         revision = 'ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d'
@@ -260,8 +288,8 @@ def main():
         run(['python3', str(ROOT / 'benchmarks/zvec-issue-qa/prepare_corpus.py'),
              '--repo', str(repo), '--output', str(source),
              '--manifest', str(reports / 'corpus-validation.json')]
-            + (['--dataset', str(expansion_dataset_path), '--task', selected[0]['id']]
-               if args.closed_issue_expansion else []))
+            + (['--dataset', str(selected_dataset_path), '--task', selected[0]['id']]
+               if args.closed_issue_expansion or args.architecture_pilot else []))
     else:
         archive = work / 'source.tar'
         run(['git', '-C', str(repo), 'archive', '--format=tar', '--output', str(archive), revision])
@@ -289,7 +317,7 @@ def main():
         versions = run(base + ['claude', '--version']) + run(base + ['zg', '--version'])
         (reports / 'versions.txt').write_text(versions)
         embedding_base, endpoint, authorization_seconds = base, None, None
-        if args.remote_embedding_pilot:
+        if use_remote_embedding:
             endpoint = remote_embedding.ENDPOINT
             embedding_base = base[:-1] + [item for name in remote_embedding.ENV_NAMES
                                          for item in ('--env', name)] + base[-1:]
@@ -302,13 +330,14 @@ def main():
             output=reports / 'index.log')
         run(embedding_base + ['zg', '--status', '--check-ready'], output=reports / 'index-status.log')
         index_setup_seconds = time.monotonic() - start
-        if args.remote_embedding_pilot:
+        if use_remote_embedding:
             identity = remote_embedding.verify_index_identity(index)
             (reports / 'embedding-index-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
             seed_scan = remote_embedding.scan_seed_credentials([index, home], SECRETS)
             (reports / 'private-seed-secret-scan.json').write_text(json.dumps(seed_scan, indent=2) + '\n')
         metadata = {'task': args.task, 'repository': repository, 'revision': revision,
-                    'phase': ('remote-embedding-development' if args.remote_embedding_pilot else
+                    'phase': ('architecture-development' if args.architecture_pilot else
+                              'remote-embedding-development' if args.remote_embedding_pilot else
                               'issue-expansion' if args.closed_issue_expansion else
                               'confirmation' if args.completion_confirmation else 'development'),
                     'confirmation_plan': confirmation_plan,
@@ -324,7 +353,7 @@ def main():
                     'completion_budget': args.completion_budget,
                     'tool_budget': 24 if args.completion_budget else None,
                     'research_seconds': 600 if args.completion_budget else None,
-                    'embedding_model': embedding, 'embedding_runtime': 'remote' if args.remote_embedding_pilot else 'local',
+                    'embedding_model': embedding, 'embedding_runtime': 'remote' if use_remote_embedding else 'local',
                     'embedding_endpoint': endpoint,
                     'upstream_benchmark': upstream, 'zg_runtime': runtime_provenance,
                     'index_setup_seconds': index_setup_seconds,
@@ -336,7 +365,7 @@ def main():
                         'purpose': 'main benchmark indexing exclusions; added after original gold validation',
                     }],
                     'model_cache': ('Remote service for index/query embeddings; no local embedding cache used'
-                                    if args.remote_embedding_pilot else 'baked runtime-image cache; query-time network download unnecessary'),
+                                    if use_remote_embedding else 'baked runtime-image cache; query-time network download unnecessary'),
                     'repeats': args.repeats,
                     'protocol_differences_from_main': [
                         ('two confirmation pairs on the same case; no automatic infrastructure retries'
@@ -348,11 +377,12 @@ def main():
                         'exported source without git history; new isolated index at /workspace',
                         'explicit direct-mode index setup; startup included in measured agent wall',
                     ]}
-        if args.remote_embedding_pilot:
-            metadata.update({'remote_embedding_plan': remote_plan,
+        if use_remote_embedding:
+            metadata.update({'architecture_plan' if args.architecture_pilot else 'remote_embedding_plan':
+                                 architecture_plan if args.architecture_pilot else remote_plan,
                              'embedding_authorization_seconds': authorization_seconds,
                              'embedding_index_identity': 'embedding-index-identity.json',
-                             'embedding_accounting': json.loads((HERE / remote_embedding.PLAN_NAME).read_text())['accounting'],
+                             'embedding_accounting': json.loads(selected_remote_plan_path.read_text())['accounting'],
                              'embedding_authorization_command': remote_embedding.authorization_command(),
                              'embedding_index_command': index_command(embedding, endpoint)})
         (reports / 'setup.json').write_text(json.dumps(metadata, indent=2) + '\n')
@@ -362,8 +392,8 @@ def main():
         run(['python3', str(HERE / 'probe_mcp.py'), '--source', str(source),
              '--index-seed', str(index), '--home-seed', str(home_seed), '--image', IMAGE,
              '--output', str(reports / 'mcp-preflight.json')]
-            + (['--embedding-model', embedding] if args.remote_embedding_pilot else []),
-            output=reports / 'mcp-preflight-run.log', timeout=600 if args.remote_embedding_pilot else 450, live=True)
+            + (['--embedding-model', embedding] if use_remote_embedding else []),
+            output=reports / 'mcp-preflight-run.log', timeout=600 if use_remote_embedding else 450, live=True)
         metadata['mcp_preflight_seconds'] = time.monotonic() - probe_started
         metadata['mcp_preflight'] = 'mcp-preflight.json; private seed clones; excluded from QA metrics'
         (reports / 'setup.json').write_text(json.dumps(metadata, indent=2) + '\n')

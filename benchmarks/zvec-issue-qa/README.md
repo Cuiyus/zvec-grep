@@ -1,6 +1,6 @@
 # Zvec closed-issue QA
 
-This is a three-task development QA set built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. This is not a representative estimate of zg's overall benefit.
+The completed three-task development set was built in two separately frozen stages. The first task was selected before running either retrieval arm and tests code-grounded causal explanation across recovery, flushing, segment switching, and statistics. The later two-task stage covers scalar/full-text filtering and vector/forward row alignment. A separate q004 architecture/configuration task is now frozen below. This is not a representative estimate of zg's overall benefit.
 
 The source repository is `alibaba/zvec`. The pilot uses the parent of the fixing commit, `ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d` (2026-07-16). The fix and its newly added regression test are absent. The source has been inspected, but the native bug reproduction has not been executed as part of constructing this task.
 
@@ -39,7 +39,7 @@ Repository recency may reduce some memorization risk, but it does not prove abse
 ## Design references and outcome interpretation
 
 - [zg main's benchmark design](https://github.com/zvec-ai/zvec-grep/blob/a424e0ce06868dc9ad8f142f57de59b8f9b58699/benchmarks/README.md) distinguishes retrieval evaluation from agent e2e evaluation. This set follows the latter: fixed source and questions, paired tool exposure, separate setup accounting, and final-answer assessment.
-- [Semble's benchmark](https://github.com/MinishLab/semble/blob/8ee6463efbb1ff755c339e965c7298b7afd7db5b/benchmarks/README.md) supplies useful retrieval diagnostics and semantic/architecture/symbol categories. Its simulated search/read token results are not agent-QA outcomes. The present tasks cover causal debugging, not all of those categories.
+- [Semble's benchmark](https://github.com/MinishLab/semble/blob/8ee6463efbb1ff755c339e965c7298b7afd7db5b/benchmarks/README.md) supplies useful retrieval diagnostics and semantic/architecture/symbol categories. Its simulated search/read token results are not agent-QA outcomes. q001–q003 cover causal debugging; q004 adds one architecture/configuration question, not full category coverage.
 - [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph/blob/437b5c329fbdb8fe53a4440005168d463b1073e3/README.md), linked from Semble's methods discussion, is a relevant CodeGraph reference candidate; the user's intended same-name project is not confirmed. Its same-question MCP comparison and independent repeats inform the pairing design. The inspected README does not establish a blinded answer-quality rubric, so completion or lower tool usage alone cannot establish equivalent quality here.
 
 The dataset's primary endpoint remains source-grounded success. Report quality
@@ -106,3 +106,35 @@ The unchanged default q001 export remains byte-identical to its earlier manifest
 
 Run the offline exporter checks with
 `python3 -m unittest discover -s benchmarks/zvec-issue-qa -p 'test_*.py'`.
+
+## Separate architecture development case
+
+`dataset-architecture-v1.json` freezes q004 from closed issue
+[#758](https://github.com/alibaba/zvec/issues/758), using immutable source
+`1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa`. This is current implementation
+behavior, including fixes, rather than a hidden-patch reconstruction. The issue
+has no body or comments: its title supplies the thread-configuration topic,
+while every question premise and scored claim must be verified from source.
+No historical workload, observed thread count, or native runtime reproduction
+is asserted.
+
+The saved selection policy precedes candidate inspection. It orders a bounded
+100-issue search pool by closing time and selects the first source-verified
+eligible architecture question. #794 was rejected as a single test-helper
+compiler regression; #758 was next. The policy, raw pool, ordering and source
+checks are retained in `evaluator/provenance/q004/`. Prior task results were
+known during design, but no q004 solver outcome existed. This is purposive
+workload coverage, not random sampling or proof of no training contamination.
+
+The question compares global optimization threads with explicit operation
+concurrency and traces their effect on index-building/training components.
+The rubric separates factual points from citation support and accepts equivalent
+source evidence. It does not require every curated evidence span to be cited.
+The independent [architecture plan](../claude-qa-pilot/experiment-architecture-v1.json)
+is frozen for one baseline/zg pair; it keeps the previously
+validated remote embedding stack and completion budget. Quality, retrieval
+adoption and resources are reported separately, and every outcome is retained.
+Older datasets, rubrics and phase-specific success rules remain unchanged.
+Independent source and execution reviews found no blocking issues. The exporter
+verified all 1,596 source files and 21 evidence spans; 93 offline checks passed.
+These checks validate preparation, not a solver-quality or performance result.

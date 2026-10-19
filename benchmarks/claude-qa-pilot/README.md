@@ -114,6 +114,27 @@ Quality is deliberately not inferred from completion. Judge the saved answers
 separately using a source-verified rubric outside the agent workspace, with
 profile labels hidden. Report correctness and evidence before efficiency.
 
+The independent `experiment-architecture-v1.json` plan is frozen for exactly one
+`zvec-q004` baseline/zg pair from a closed zvec issue about optimization-thread
+configuration. It uses the same executable Rust, Claude/Qwen, remote Qwen
+embedding, authorization, preflight and completion-budget settings as the remote
+q001 phase. The task and its source corpus change. The new plan has its own
+source-grounded quality endpoint; factual points, citation support and resource
+costs stay separate. It cannot establish a stable suite benefit from one pair.
+The workflow rejects this phase until the plan is frozen and its question,
+rubric, dataset, protocol and retrieval identities match. The explicit inputs
+are `task=zvec-q004`, `architecture_pilot=true`, `completion_budget=true`, with
+all other phase flags false. There is no automatic repeat or outcome replacement.
+The q001-only remote phase and every older frozen phase retain their identities.
+
+```sh
+gh workflow run claude-qa-pilot.yml --repo Cuiyus/zvec-grep \
+  --ref dev/claude-zvec-qa-pilot -f task=zvec-q004 \
+  -f workspace_root_guidance=false -f completion_budget=true \
+  -f completion_confirmation=false -f closed_issue_expansion=false \
+  -f remote_embedding_pilot=false -f architecture_pilot=true
+```
+
 The separate `experiment-completion-v2.json` plan calibrates completion on the
 same zvec-q001 task after both V1 arms obtained core evidence but failed to
 deliver an answer. Both arms receive identical generic budget instructions and

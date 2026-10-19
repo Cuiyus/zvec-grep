@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-10-19T17:39:21.805362+00:00",
+  "status": "principles_only_for_a_future_task; no issue selected, no question or gold invented",
+  "scope": {
+    "worktree": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep",
+    "head_at_inspection": "8985de20b68a34989a7e0f74c4d3e850ea1684c9",
+    "purpose": "为尚未选定的真实 closed-issue 架构/行为 QA 制定评分审查原则。不是已冻结 q001–q003 的重评规则。",
+    "repository_files_changed": [],
+    "solver_answer_files_opened": false,
+    "trial_result_directories_opened": false,
+    "blind_review_files_opened": false,
+    "streams_opened": false,
+    "model_api_or_ci_invoked": false,
+    "exposure_limit": "父上下文含历史结果；允许读取的 README 当前正文也含少量既有结果摘要，读取时被动看到。未打开所链接的结果文件。因此不声称本原则设计完全 outcome-blind；不根据这些结果修改旧规则或制定有利于某一工具的标准。"
+  },
+  "nonnegotiable_boundaries": [
+    "q001–q003 的题目、rubric、门槛、既有判定一律保持原样。任何新规则只适用于另行选定、审查并在首次 solver 运行前冻结的新题。",
+    "未选定 issue、精确源码版本和证据前不产出具体 question、reference answer 或分数门槛。当前模板内的占位符不是题目事实。",
+    "评分不奖励工具选择、zg 调用、token 更少、回答更长或与参考答案相同的术语；资源消耗与质量结果分别报告。",
+    "闭合 issue 是问题来源，不能独自证明报告者根因、全部运行前提或修复结论正确；源码与可用的执行证据需要独立核实。"
+  ],
+  "review_checklist": [
+    {
+      "id": "R1",
+      "check": "问题边界",
+      "pass_when": "题目给出必要版本/配置/前提并列出少量明确问题；可以仅靠提供的源码回答，不依赖隐藏 issue、补丁、日志或执行结果。"
+    },
+    {
+      "id": "R2",
+      "check": "一问一评分映射",
+      "pass_when": "每个计分单元对应题目中的明确请求，或回答该请求不可缺少且可说明理由的事实；没有无人询问的实现细节、修复或测试矩阵。"
+    },
+    {
+      "id": "R3",
+      "check": "最小充分解释",
+      "pass_when": "reference answer 能用少量行为/状态变化说明组件如何交互；每个关键因果关系有证据，普通转发调用和不改变结论的内部细节不强制枚举。"
+    },
+    {
+      "id": "R4",
+      "check": "原子计分",
+      "pass_when": "每个点的正确、部分正确、缺失/错误条件清楚，不把多个独立要求捆成一个全有或全无的长句；同一事实不重复扣分。"
+    },
+    {
+      "id": "R5",
+      "check": "引用可替代",
+      "pass_when": "评分按引用文本是否支持该主张，不按预选证据 ID、跨度或文件数量打分；独立审查确认至少一条充分证据路径，允许等价源码路径。"
+    },
+    {
+      "id": "R6",
+      "check": "双轴和核心门槛",
+      "pass_when": "事实得分与引用支持逐项独立记录；核心引用门槛只覆盖支撑所问结论必不可少的主张，且其范围、理由和最终成功公式在运行前冻结。"
+    },
+    {
+      "id": "R7",
+      "check": "数字和边界",
+      "pass_when": "若题目要求具体数量/分支/集合，gold 核实默认值、单位、分母、比较符及影响结果的取整/精度；不要求与所问结论无关的边界推演。"
+    },
+    {
+      "id": "R8",
+      "check": "运行事实限度",
+      "pass_when": "报告现象、静态推导和已执行结果分别标识；未经精确版本复现不声称复现成功，也不用未经证明的确定性排序、耗时或崩溃结果作评分前提。"
+    },
+    {
+      "id": "R9",
+      "check": "冻结和可审查性",
+      "pass_when": "独立评审确认任务前提、计分映射与证据后再冻结 prompt、rubric、源码及哈希；新题的评审看不到该题 solver 答案、工具臂、消耗或收益。"
+    }
+  ],
+  "rubric_construction": {
+    "recommended_size": "通常 3–5 个评分项即可；这是可读性建议，不是配额。只保留题目实际请求的范围，不为凑 10 分扩展内容。",
+    "start_from": "先将题目各项请求映射为可验证的答案义务，再写最短充分参考答案，最后制定 point units、引用义务和门槛。不要先堆证据跨度再要求答案逐个覆盖。",
+    "point_units": "一个计分单元表达一个独立可判定的行为/条件/关系。允许 0/1，或在 0/1/2 中明确两个独立点；若使用其他标度须事先写明锚点。",
+    "architecture_scope": "重点是所问入口、状态/数据如何跨组件传递、决定行为的条件，以及题目明确要求的边界。无需默认加入修复代码、回归方案、全部维护分支或公共 API 全面介绍。",
+    "causal_sufficiency": "必要的跨组件关系不能只列函数名。正确说明传递的值/状态如何改变下游行为即可；不要求复述每层包装函数或所有副作用。",
+    "critical_units": "核心单元必须能回答“缺少或错误会怎样改变题目主要结论”。将便利性的定位信息、非必要默认参数或补充实现细节设成一票否决需要拒绝。",
+    "additional_details": "缺少题目未要求的细节不得扣分。额外正确细节不加分；额外错误单独记录，只有明确改变已评分主张、使主要结论错误或构成预先定义的实质性误导时才影响相关评分/门槛。",
+    "contradictions": "遗漏不等于矛盾；模糊措辞不能自动解释成最坏断言。重大矛盾必须给出答案原句、冲突源码和对所问结论的影响。不得使用无限扩张的“任何错误都失败”规则。"
+  },
+  "two_axes": {
+    "factual_quality": {
+      "fields": [
+        "criterion_id",
+        "point_unit_id",
+        "answer_quote",
+        "factual_points",
+        "maximum_points",
+        "reason"
+      ],
+      "rule": "依据冻结源码评价答案事实与解释本身。引用缺失/不完整不自动清零正确的事实分；引用暴露的事实错误按相应事实单元评分。",
+      "numerical_claims": "对题目明确要求的数值、数量、ID 集合或比较结果核实计算；等价表示、合理精度可接受。若浮点/取整影响分支则记录实际语义；否则不设隐藏数值边界考题。"
+    },
+    "citation_support": {
+      "fields": [
+        "claim_id",
+        "citation_as_submitted",
+        "resolved_frozen_location",
+        "support_status",
+        "support_explanation",
+        "core_required"
+      ],
+      "support_status": [
+        "sufficient",
+        "partial",
+        "missing",
+        "unrelated_or_wrong_revision",
+        "unresolvable"
+      ],
+      "rule": "检查提交答案实际给出的引用是否共同支持该项主张。评分者查到了正确证据，不等于答案引用了它；可在点评中补充，但不能悄悄修复答案引用。",
+      "coverage_unit": "按主张/行为关系的支持情况记录，不能用命中几个预选片段或覆盖多少行替代引用完整性。"
+    },
+    "joint_outcome": "在新题冻结时明确 factual threshold、必要事实单元、必要引用单元及重大矛盾规则。分别报告两轴和失败原因；高事实分但缺少核心引用仍应按该题已冻结公式判定，不能事后放宽。",
+    "not_implicitly_joint_with_cost": "QA 成功与效率改善是不同结论。未来实验可以预先声明质量优先或效率优先假设；既有 phase 的联合收益规则不变。"
+  },
+  "equivalent_citation_policy": [
+    "按源码内容与主张的关系判断；同一行为可由另一实现位置、调用方与被调用方组合、或充分的等价源码证据支持，不要求精确复用 gold 路径/行号。",
+    "允许一个清楚关联的引用支持多个相邻主张，也允许多个引用共同支持一个跨组件主张；无需每句话机械附上引用。",
+    "题目应提前说明引用格式。可要求 repo-relative path + line range；若未来题目允许 path + uniquely resolvable symbol，则按该规则接受。不得运行后新增格式要求。",
+    "宽但明确可定位、实际包含支持代码的范围可接受；仅文件命中、无关一行、同名符号或注释中的意图不足以证明实现行为。无需机械设定最大行数。",
+    "不因某个普通转发层未单独引用而否定已被调用点与行为实现充分支持的关系；但对结论必要的状态改变/条件不能仅靠函数名推断。",
+    "测试可支持其明确断言的有限行为；测试缺失不证明功能不支持，测试名也不证明机制。架构或因果主张仍需相应实现证据。",
+    "不能用修复后源码、外部 issue 评论或 evaluator 私有材料替代 solver 可见冻结源码上的引用。",
+    "若出现合理的等价解释或证据路径，审查者记录如何支持原先冻结的主张即可；这不是新增评分要求或修改规则。存在实质争议则先仲裁，再宣布 pass。"
+  ],
+  "without_exact_runtime_reproduction": {
+    "acceptable_question_forms": [
+      "基于精确源码版本询问某入口在明确条件下经过哪些组件，以及数据/状态如何影响结果；将结论标为静态推导。",
+      "有真实 issue 依据的 reported behavior 可作为有限研究背景，但必须与研究者已执行的事实分开；只以源码充分支持的部分作为必答前提。",
+      "对无法静态确定的效果明确询问限制或所需验证；给出不确定性的正确答案可以得分，不能强迫模型声称已知运行结果。"
+    ],
+    "do_not_use_as_asserted_fact_or_gold_requirement": [
+      "在指定平台/依赖/精确 commit 已经复现、修复后测试通过或所有版本都受影响。",
+      "从旧 issue 换成新造输入后仍一定产生相同崩溃、固定缺失 ID、固定排名或精确结果数量，除非独立静态证明足以确定该行为。",
+      "近似检索必定命中某个 top-k/排序，未定义精度和容差的向量数值相等，或具体概率、吞吐、内存、延迟。",
+      "异步、并发、崩溃恢复或持久化路径在未明确同步点/持久化前提时的必然时序结果。",
+      "将 post-fix 包上的检查当成 pre-fix 源码复现，或以包版本元数据充当二进制来源证明。",
+      "将 closed 状态、报告者根因猜测、PR 描述或新仓库公开时间当成已经验证的因果事实或无训练污染证据。"
+    ],
+    "candidate_rejection_rule": "若关键问题前提既未在精确版本执行验证，也无法通过完整静态路径或可信有限报告支撑，应缩窄为能够回答的源码行为问题，或不录用该候选；不得编造确定性故障现象来制造题目。",
+    "later_runtime_evidence": "后续精确版本复现可加强前提验证，但必须单独记录环境、命令、原始观察及独立 oracle；若改变题目或评分事实，需新版本，不能重写已冻结旧试验。"
+  },
+  "uninstantiated_template": {
+    "task_id": "<after candidate selection>",
+    "source_identity": "<exact commit and corpus hash>",
+    "premise_evidence": "<separate static, reported and executed support>",
+    "question_request_map": [
+      {
+        "request_id": "<Qn>",
+        "request_text": "<verbatim requested obligation>",
+        "criterion_ids": [
+          "<Cn>"
+        ]
+      }
+    ],
+    "criteria": [
+      {
+        "id": "<Cn>",
+        "request_id": "<Qn>",
+        "claim": "<one bounded behavior or relationship>",
+        "point_units": [
+          {
+            "id": "<Cn.u1>",
+            "points": "<frozen value>",
+            "required_fact": "<minimal factual content>",
+            "zero_anchor": "<missing or wrong>",
+            "full_anchor": "<sufficient correct statement>"
+          }
+        ],
+        "core": "<true only with essentiality rationale>",
+        "essentiality_reason": "<effect on main answer>",
+        "reference_support": "<one sufficient source route; alternatives allowed>",
+        "citation_obligation": "<exact claim to support, not mandatory span list>",
+        "not_required": [
+          "<optional implementation details or extensions>"
+        ]
+      }
+    ],
+    "success_rule": "<freeze numeric factual threshold, necessary factual units, citation units and material contradictions before solving>",
+    "judge_record": "<answer hash, blinded ID, per-unit facts and citation support, exact quoted contradictions, independent reasons, final outcome>",
+    "not_a_gold_answer": true
+  },
+  "design_reference_application": {
+    "zg_main": "沿用 frozen source、paired tool exposure、独立 final-answer 质量判断；检索覆盖和资源消耗不是答案质量。",
+    "semble": "可借鉴 architecture/behavior 类问题和检索支持诊断；不把搜索模拟或 evidence recall 当完整 agent QA 结果。",
+    "codegraph_candidate": "同题 MCP 对照可借鉴；既有参考未证明有可直接复用的盲评质量 rubric，因此仍需本题独立评分。确切同名项目身份保留原 audit 的限定。",
+    "scope_limit": "这里只使用已保存的设计参考 audit，不重新验证远端文档、当前 Rust 或实验执行。"
+  },
+  "inspected_files": [
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/README.md",
+      "sha256": "5e2e268191b808c16d299c59e49541b57fdb1b7c0d980ea405f965397e9b71ea"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+      "sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q002/instruction.md",
+      "sha256": "5efcf9a84884cdc02647167ee794dca0ae3eda0a9bd04c13ef4c5909169326c6"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q003/instruction.md",
+      "sha256": "2aeed87cbe2a570b242a9659d50fab0d279122a234d1ee9aaa5352787e00f669"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q001.json",
+      "sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q002.json",
+      "sha256": "e04ddba1591d26f0a100655cc8ff63b6468ff59190dda0ef69d2ae1ed73c2ada"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q003.json",
+      "sha256": "b3d1f98d690254b9b53ceece693b11a86de35d7d9dcdf49e31c2735d7c115682"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/provenance/design-reference-audit-20261019.json",
+      "sha256": "c9dbff13b592a9e0f35c75db44d31b8829941a134c11bcdf40a2a141524e23ba"
+    }
+  ]
+}
