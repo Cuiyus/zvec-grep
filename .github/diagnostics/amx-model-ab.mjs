@@ -91,7 +91,7 @@ const debug = join(
   "Windows Kits/10/Debuggers/x64/cdb.exe",
 );
 function probe(phase, repetition, mode = "traced", debuggerLaunch = false) {
-  const name = `${phase}-${mode}-${repetition}`;
+  const name = `${phase}-${mode}-${repetition}${debuggerLaunch ? "-debugger" : ""}`;
   const started = Date.now();
   const command = debuggerLaunch ? debug : process.execPath;
   const args = debuggerLaunch
@@ -129,8 +129,27 @@ function probe(phase, repetition, mode = "traced", debuggerLaunch = false) {
   writeFileSync(join(output, "ab-results.json"), JSON.stringify(rows, null, 2));
   console.log(JSON.stringify(row));
 }
-// Control A: the exact published 3.18.1 native binary.
-for (let i = 1; i <= 5; i++) probe("prebuilt-original", i);
+// Control A: verify the selected backend, since a CPU model name alone is insufficient.
+probe("prebuilt-original", 1);
+const firstTrace = readFileSync(
+  join(output, "prebuilt-original-traced-1.stderr.log"),
+  "utf8",
+);
+const coverage = {
+  covered: firstTrace.includes("ggml-cpu-sapphirerapids.dll"),
+  requiredBackend: "ggml-cpu-sapphirerapids.dll",
+  selectedBackends: [
+    ...new Set(firstTrace.match(/ggml-cpu-[a-z0-9-]+\.dll/g) ?? []),
+  ],
+};
+writeFileSync(join(output, "coverage.json"), JSON.stringify(coverage, null, 2));
+if (!coverage.covered) {
+  throw new Error(
+    "AMX model A/B not covered: this VM selected " +
+      coverage.selectedBackends.join(", "),
+  );
+}
+for (let i = 2; i <= 5; i++) probe("prebuilt-original", i);
 // Capture one native crash under the debugger, without changing the published DLL.
 probe("prebuilt-original", 1, "traced", true);
 // Control B: same llama.cpp b8390 rebuilt, retaining the faulty callback.
