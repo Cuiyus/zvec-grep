@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "status": "design_only_not_authorization_or_implementation",
+  "scope": "Bounded repair of two demonstrated infrastructure boundaries; no repository edits, provider/CI/network calls, new benchmark selection, answer reading or outcome regrading in this review.",
+  "failed_phase": {
+    "protocol": "main-opencode-q001-v1",
+    "run_id": 39308807224,
+    "plan_sha256": "ce13c13785117c49c515a79cfbba13ad70eaf7113dbcb3d6e91b29ec3a8dcc43",
+    "classification": "invalid infrastructure attempt; retain both slots and all evidence",
+    "baseline": "Answer completion reported by parent; source before/after passed, required recursive export failed JSON parsing. This design does not read or reuse its answer.",
+    "treatment": "Native setup failed before agent execution: ZG_BIN_PATH was not absolute because command -v zg was empty. Harbor CLI returncode 0 did not mean the trial succeeded; result.json contains the setup exception.",
+    "immutable_retention": "Never overwrite this phase, synthesize its missing live exports, replace its failed treatment or reuse its completed baseline in a later pair."
+  },
+  "confirmed_boundaries": [
+    {
+      "boundary": "npm installation versus extracted-binary smoke",
+      "observed": "The original platform tgz has 7 regular members and no package.json bin field. Its Rust binary is executable when extracted, but native main installs it with npm -g then resolves command -v zg. Those are different contracts.",
+      "main_behavior": "a424 npm-local.mjs produces a local CLI package with bin:{zg:bin/zg}; the composite Rust-candidate action uses pack:local. The v1 pilot instead supplied the published platform leaf tarball, which lacks that declaration.",
+      "implication": "Preserve the native installer; make its input satisfy the actual npm CLI contract. A bare extracted --version smoke is insufficient."
+    },
+    {
+      "boundary": "Harbor Docker exec multiplexing versus host subprocess capture",
+      "observed": "Harbor Docker routes stderr to STDOUT. All 12 saved native export fixture pairs have valid JSON stdout and an Exporting session diagnostic on stderr; concatenation fails JSON parsing. v1 wrapper parses environment.exec.stdout directly and saves nothing before JSON parsing.",
+      "uncertainty": "The failed live merged bytes were not retained, so the exact live prefix/additional diagnostics cannot be reconstructed. This is a reproduced boundary incompatibility consistent with the live error, not recovered live evidence.",
+      "implication": "Export to explicit files and download their bytes, not strip diagnostics or search for the first brace. The usage-snapshot cat and inventory JSON paths have the same transport assumption and should use the same small capture helper."
+    }
+  ],
+  "recommended_packaging_repair": {
+    "choice": "Deterministic metadata-only install-compatibility tgz derived from the verified original platform artifact; do not rebuild Rust or rewrite native install logic.",
+    "source_archive_sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d",
+    "binary_sha256": "645ef8b62d62ff604c06f3c8aa34790c3c28bc65c946714ecdbf7175131b61dd",
+    "steps": [
+      "Validate original archive SHA, safe regular-only member allowlist and every checksums.json payload hash/length before reading payloads.",
+      "Copy all 7 members. Change only package/package.json by adding bin:{zg:\"bin/zg\"}; retain its package name/version/platform metadata and all other members byte-for-byte. No lifecycle script, JS launcher, source compilation, new dependency or registry publication.",
+      "Normalize tar metadata/gzip timestamps deterministically, preserve executable mode and paths, produce a new separately named local tgz. Record original/derived package SHA, package.json before/after SHA and semantic diff, all payload hashes and derivation-tool SHA. The derived tgz is not the unmodified upstream archive.",
+      "Pass the derived tgz and its new SHA to unchanged native build_harbor_command/prepare_setup_cache/ZvecGrepMixin. This naturally gives a distinct install-cache marker. Record original artifact SHA separately from install-package SHA in the future plan.",
+      "In a fresh real Linux npm global prefix, actually run the native installation path. Assert npm creates zg, command -v and realpath locate the packaged ELF, binary hash remains exact, lib/data hashes and relative layout are unchanged, --version succeeds, and native index/MCP work. Install bindings exactly as main currently does."
+    ],
+    "why_not_install_override": "A custom _install_zvec_grep implementation would duplicate native credential upload, cache marker, symlink and readiness behavior. Adding the missing npm bin declaration is a smaller explicit compatibility change and matches the main local-pack contract.",
+    "frozen_invariants": [
+      "Same upstream main harness and Rust commit/binary, subject to the existing fresh-current-main check before any later freeze.",
+      "Same q001 question/source/rubric/index-ignore bytes; same OpenCode/model/request config/native tools/prompts, 1800-second solver and existing setup/build/verifier/whole-slot budgets.",
+      "Only infrastructure packaging and machine-evidence transport change; no quality/rubric change and no extra model verifier."
+    ]
+  },
+  "recommended_evidence_transport_repair": {
+    "mechanism": [
+      "For each selected root/descendant session, execute native opencode export with stdout redirected to a unique container JSON file and stderr to a separate file. Write the command exit status to a third file even on nonzero exit; a missing status is incomplete, never success. Include shell/bootstrap diagnostics in the stderr capture where possible.",
+      "Use environment.download_file for JSON, stderr and status bytes into a host-only trial evidence directory. Attempt all downloads before parsing or raising so partial/truncated/failing exports survive. Keep transport stdout/stderr separately as diagnostic evidence; never parse it as the exported JSON.",
+      "Parse only the downloaded JSON after confirming exit status 0 and complete file capture; validate root/parent IDs, exact selected sessions/message IDs/tool IDs, root final terminal text and ATIF consistency with existing gates. Record hashes/bytes for every file and measured collection overhead.",
+      "Download the already-file-backed native usage snapshot directly rather than cat+json.loads. Capture the inventory/runtime script JSON and stderr through the same helper. Keep the existing native usage collector unchanged.",
+      "Retain failed and partial outputs under their original attempt IDs; never replace a malformed result with fixture data, filter away warnings to force success, or use a partial answer as complete."
+    ],
+    "file_scope": "Only explicit source-audit/runtime reports, selected root-tree exports and associated stderr/status files. Never export all HOME, credentials, the complete DB, unselected sessions or runtime index. Known-secret scan remains mandatory before upload.",
+    "required_negative_cases": [
+      "stderr warning plus valid stdout JSON succeeds while stderr is retained",
+      "nonzero exit plus valid-looking JSON remains invalid",
+      "malformed/truncated JSON remains invalid with raw bytes retained",
+      "missing status/download failure remains invalid",
+      "one missing child export or mismatched tool/message IDs remains invalid",
+      "timeout preserves files already produced and stops all slot containers"
+    ]
+  },
+  "linux_offline_integration_gate": {
+    "requirement": "A new retained integration test must run real Harbor 0.18.0 Docker environments on Linux x86_64 with OpenCode 1.18.4 and the actual unchanged native adapters plus revised QA evidence mixin. A mocked BaseEnvironment, a host subprocess fixture or an extracted-binary --version check does not satisfy this gate.",
+    "inputs": "Use the full frozen q001 1232-file export/image, exact main index.ignore, derived installation tgz, locked upstream main Python/dependencies, native model request options/tools/prompts/budgets, and isolated baseline/treatment containers/cache volumes. Linux binary identity is attested in both arms.",
+    "fake_services": [
+      "A local OpenAI-compatible scripted chat endpoint serving only custom-openai/qwen3.8-max. It returns deterministic read/task calls, at least one child session, a treatment MCP search when advertised, and a tool-free final transport sentinel with explicit usage. It performs no learned reasoning or q001 grading.",
+      "A separate local embedding stub serving the exact remote embedding request/response contract with deterministic nonzero 1024-dimensional vectors for every input, retaining request count/batch shape and setup/query boundaries. It enables the real Rust remote index/grant/MCP path without any remote embedding provider call.",
+      "Only fake credentials enter integration processes/containers. Live secrets are absent. Restrict provider traffic to the stub addresses and fail on unexpected provider destinations; retain stub request logs proving model/body fields and absence of real provider requests. OS/npm dependency downloads, if necessary, happen in a separately identified dependency stage or are explicitly registry-only; do not call such a job fully airgapped unless network evidence supports that statement."
+    ],
+    "execution": [
+      "Exercise the actual package installation from a prefix with no zg executable/marker, not a prelinked binary or warmed successful install. Use the actual Harbor Docker exec/download implementation.",
+      "Run both baseline and zg through normal setup, native agent.run, native recursive usage capture, file-based export, source before/after audit, raw artifact retention and the real collector. Both adapters must structurally pass; baseline must remain free of zg/index/MCP/embedding credentials.",
+      "Validate treatment native grant, index ready, MCP ready, one successful real MCP query and its embedding request against the local stub. Check that the expected source corpus is indexed descriptively; no rubric-span coverage shortcut.",
+      "Assert root/child transcript exports, JSON/stderr/status preservation, actual model/provider IDs for every stored assistant message, final root/ATIF agreement, full usage-tree sums and installed executable hashes. Fake sentinel output is infrastructure evidence only, never a benchmark score.",
+      "Include one bounded failing export case and one bounded timeout/failed-setup cleanup case through the Docker transport. Verify failure is retained and later slots are not started when prior container cleanup cannot be confirmed."
+    ],
+    "proof_output": [
+      "Exact git/package/binary/source/dependency/config hashes, Linux/Docker/Harbor/OpenCode versions and sanitized mount/container identity.",
+      "Both setup reports, stub request/audit logs, native streams, root/child exports plus separate stderr/status, native usage snapshot/summary, source/runtime audits, structural collector result and cleanup records.",
+      "Explicit zero live-provider credential exposure/calls assertion with supporting network/endpoint configuration; no real endpoint probe.",
+      "Machine-readable gate status bound to all relevant input hashes. Any change to package, wrapper, main, source, dependency/runtime or request config invalidates this proof and requires the bounded offline gate again."
+    ],
+    "test_budget": "One normal synthetic pair plus narrowly targeted export/cleanup failure scenarios; no QA scoring, candidate selection, repeat-until-favorable metric or live call. Fix infrastructure only until this bounded contract is met; stop and report a concrete blocker if the required Linux/Docker proof cannot be produced."
+  },
+  "fail_closed_order_before_any_future_live_baseline": [
+    "Archive v1 run39308807224 as invalid and verify its retained bytes before proposing a new live phase; do not reinterpret the baseline completion as a valid pair.",
+    "Offline static validation: immutable q001 identities, original payload checksums, derived package manifest/byte diff, exact upstream main/lock files, evidence-helper negative tests and no references in the source image.",
+    "Run the real Linux Harbor/Docker provider-offline gate above for BOTH adapters, including actual npm installation, full remote-index/MCP setup against fake embedding, recursive export and collector. Fail closed on any skipped/missing/invalid boundary proof. Do this with no live secrets available.",
+    "Review and freeze a separate infrastructure revision with the proof hash. Only after an explicit subsequent decision to run live, create a new named/frozen development plan (suggested main-opencode-q001-v2), recheck current upstream main, and bind the exact new wrapper/install-package/proof hashes. This design does not authorize that dispatch.",
+    "A later authorized live workflow must revalidate proof identity plus all inputs and validate both model and embedding credentials/configuration locally before starting either slot. No live health/probe requests. Make secrets available only after the offline gate passes.",
+    "Run exactly one fresh baseline then one fresh treatment in the new phase, with unchanged native budgets and no replacement. Retain failures and stop if cleanup is uncertain. Do not import v1 source sessions/indexes/answers or reuse its baseline.",
+    "Keep structural_valid distinct from pending source-only tool audit and unchanged blind quality grading; infrastructure success and fake-provider sentinel completion do not demonstrate zg benefit."
+  ],
+  "honest_limit": "Offline proof establishes both installation/setup and evidence-collection paths before any new paid call; it cannot prove the future live service credential/quota/network or semantic behavior without contacting it. No real endpoint probe is proposed. Keeping native sequential live execution therefore cannot guarantee treatment will never fail after baseline; that residual failure is retained, not repaired by reusing or replacing a slot. Do not introduce cross-trial waiting inside native solver budgets to claim a readiness barrier.",
+  "minimum_future_edit_surface": [
+    "Add a versioned repair directory or new v2 modules; leave frozen v1 pilot.py, qa_agents.py, plan, fixture assets and run artifacts unchanged. Reuse unchanged pure helpers where practical rather than patching v1 behavior in place.",
+    "One deterministic compatibility-package builder and checksum/metadata-diff tests. The new plan records upstream_archive_sha256, install_package_sha256, unchanged binary/runtime payload hashes and the builder SHA separately.",
+    "One v2 file-capture/download helper and QA adapter that delegates model execution to the exact native main classes. Use it for inventory JSON, native usage snapshot reading and recursive export; no fork of native main agent code.",
+    "One Linux Docker fake-provider integration runner/fixture services with retained evidence and a proof validator. Exercise the v2 adapter and actual npm installer, not only unit fakes.",
+    "A separately named future plan/controller/workflow gate and provenance entries, owned by root. Any necessary v2 controller selection must be explicit and cannot reuse the stopped v1 phase name."
+  ],
+  "evidence": [
+    {
+      "path": "/tmp/zg-opencode-baseline-export-diagnosis.json",
+      "bytes": 11838,
+      "sha256": "36baf4fdd3bf4cedf5238b56fbaede10191bf46315e3af17991d02c7106b2a4a"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v1/raw/qa-run/execution.json",
+      "bytes": 7226,
+      "sha256": "40170ef72177cab865fd6cbf9a486e450e36ffae9064bdbf5f4993a0ba70e8ba"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v1/raw/qa-run/runs/q001-baseline/zvec-q001__AWjMY7j/qa-source-audit.json",
+      "bytes": 552146,
+      "sha256": "021da45ed342e77b63473575ebeb73139328be1cf94323bc6047c24935448101"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v1/raw/qa-run/runs/q001-zvec-grep/zvec-q001__XWvyzhA/agent/zvec-grep-setup.json",
+      "bytes": 703,
+      "sha256": "b3e32962332b3da3ae0874888c37f0d9948bb0c313ba6e14325579eb5187a6ee"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v1/raw/qa-run/runs/q001-zvec-grep/zvec-q001__XWvyzhA/result.json",
+      "bytes": 10803,
+      "sha256": "34ccfc1fcb9f53859e0bde5bb1195857be04ae99af0b76ab8a8d43b3fcb658cc"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/runtime/zg-native.tgz",
+      "bytes": 40228623,
+      "sha256": "470c2a11b8b19a9e6458c977918260ee6f535595488ed8b44233db5aa032ad4d"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/zg_bench/agents/zvec_grep.py",
+      "bytes": 33862,
+      "sha256": "09653f8bb4f88bf36e3d383f403df44f90e071c4db6cfe78c424bdaedee7b1fc"
+    },
+    {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/upstream-main/benchmarks/swe-qa-bench/.venv/lib/python3.12/site-packages/harbor/environments/docker/docker.py",
+      "bytes": 46604,
+      "sha256": "96bfc277c69735d5bda40359237b780dbb77d058a9b0c0342806c85bbcad75a4"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/qa_agents.py",
+      "bytes": 8997,
+      "sha256": "140b6512a3a9308c90e4b6006c2d73d5cf03920f500a586e8ff2db461b39d17c"
+    },
+    {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/opencode-qa-pilot/pilot.py",
+      "bytes": 32106,
+      "sha256": "3a27904041c3a93f7ee5d35740c6d85cbf1ad862fe19f02609821f0ad87991b8"
+    },
+    {
+      "git_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "path": "rust/scripts/npm-local.mjs",
+      "bytes": 8128,
+      "sha256": "dc3079dfde5d677e594da034d81e23e849ab6db597c71a25375b1d3e5f5a18f2"
+    },
+    {
+      "git_commit": "a424e0ce06868dc9ad8f142f57de59b8f9b58699",
+      "path": ".github/actions/rust-candidate-package/action.yml",
+      "bytes": 2881,
+      "sha256": "ad5712314525f97ed8a9c72388504a469c8297b4c6cd762eafe1a17920215e87"
+    }
+  ],
+  "actions_this_review": {
+    "repo_edits": 0,
+    "provider_calls": 0,
+    "CI_calls": 0,
+    "network_calls": 0,
+    "live_answers_read": 0,
+    "new_tests_run": 0,
+    "dispatch_authorized": false
+  }
+}

@@ -5,10 +5,69 @@ tools and once with zg. It borrows the exact current-main Harbor/OpenCode runner
 at `a424e0ce06868dc9ad8f142f57de59b8f9b58699` and the Rust package from that
 commit. The question, pre-fix source and seven-criterion rubric are unchanged.
 
-The plan in `experiment.json` is frozen for this single development pair.
-No live result or favorable benchmark set is claimed at preparation time. The separate fork workflow defaults to offline validation; only
-its explicit `execute_pair=true` dispatch runs the two slots. Failed attempts
-remain evidence and are not automatically retried.
+The plan in `experiment.json` remains the unchanged frozen record of this single
+development pair. Its only live dispatch, [run 39308807224](https://github.com/Cuiyus/zvec-grep/actions/runs/39308807224),
+finished with **zero valid completed pairs** at commit `5ccf5380`. Both scheduled
+slots were attempted once and cleaned up. Collection rejected the evidence;
+the artifact was still scanned and retained. This phase is closed without a
+quality or efficiency conclusion, and has not been rerun.
+
+## Observed infrastructure failures
+
+- Baseline delivered a final answer and complete persisted-session usage, with
+  unchanged source hashes before and after execution. The required native
+  session export failed JSON parsing, leaving the protocol invalid. Native
+  OpenCode writes an export diagnostic to stderr; Harbor merges stderr into
+  stdout, which this wrapper attempted to parse as JSON. Existing native mock
+  stdout/stderr captures reproduce this incompatibility. The exact failing
+  live export output was not retained, so additional live diagnostics remain
+  unknown.
+- The zg slot failed installation before embedding authorization, indexing,
+  MCP setup or QA. The frozen artifact is a native platform package containing
+  `bin/zg` but no npm `bin` declaration. Main's global npm installer therefore
+  cannot establish the `zg` command it expects. The earlier Rust smoke test
+  executed the extracted binary directly and did not test that installation
+  boundary. Actual live npm output was not retained.
+
+The completed baseline text received **9/10** in a fresh blinded Codex source
+review: C1–C6 full credit, C7 missing explicit final validation in a new process.
+Its core citations pass, with noncritical overclaims retained in the report.
+This is a diagnostic text score, not a valid trial or a paired quality result.
+There is no treatment answer or comparable treatment usage; missing values are
+not zero scores or zero cost. Baseline persisted-session input was 2,590,012
+(2,461,568 cached), output 23,825 including 15,125 reasoning tokens, with 77 tool
+calls. None of these values establishes a relative benefit.
+
+[Machine-readable summary](results/20261019-main-opencode-q001-v1/summary.json),
+[original artifact ZIP](results/20261019-main-opencode-q001-v1/artifact.zip),
+[diagnostic blind review](results/20261019-main-opencode-q001-v1/diagnostic-blinded-review.json)
+and [independent execution audit](results/20261019-main-opencode-q001-v1/independent-execution-audit.json)
+retain the failed attempt. The ZIP SHA-256 matches GitHub's artifact digest and
+all 43 extracted files. The prior 22 Claude rows remain unchanged and separate.
+The [export diagnosis](results/20261019-main-opencode-q001-v1/baseline-export-diagnosis.json)
+and [installation diagnosis](results/20261019-main-opencode-q001-v1/treatment-install-diagnosis.json)
+describe the two integration defects and the remaining evidence limits.
+The archive's `report-results.py` rebuilds its summary, and
+`reproduce-export-merge.py` replays the saved mock output without model calls.
+The original execution-audit scripts also depend on the recorded absolute paths,
+pinned upstream modules and Harbor environment; the full execution audit is not
+a standalone rerunnable bundle. The relevant Harbor Docker source and license
+are retained with the diagnostic fixtures.
+
+The 61 offline tests and Linux loader smoke passed before dispatch, but did not
+cover these two real adapter/container boundaries. Any future repair must be a
+separate infrastructure revision with actual Harbor/Docker fake-provider
+integration before a newly frozen live pair. It cannot reuse this baseline,
+retroactively validate this phase, or change the question/rubric to obtain a
+favorable outcome. The original favorable-benchmark-set goal remains unmet.
+The separate [infrastructure repair design](provenance/infrastructure-repair-design-20261019.json)
+proposes metadata-only package compatibility and file-based evidence capture,
+with a real Docker fake-provider gate. It is a design record, not an implemented
+fix or a dispatched follow-up experiment.
+
+The separate fork workflow defaults to offline validation; only its explicit
+`execute_pair=true` dispatch runs the two slots. Failed attempts remain evidence
+and are not automatically retried.
 
 ## Why this phase exists
 

@@ -1,0 +1,274 @@
+{
+  "errors": [],
+  "plan_sha256": "ce13c13785117c49c515a79cfbba13ad70eaf7113dbcb3d6e91b29ec3a8dcc43",
+  "profiles": [
+    {
+      "errors": [
+        "ValueError: source/isolation audit incomplete or invalid"
+      ],
+      "metrics": {
+        "agent_wall_seconds": 947.7498016429998,
+        "answer": "## Root cause in one line\n\n`SegmentImpl::recover()` replays the WAL through a **local** file handle and never assigns the member `wal_file_`; `SegmentImpl::flush()` treats `wal_file_ == nullptr` as \"nothing to do\" and returns `OK`. So on a recovered writing segment, `flush()`/`dump()` is a silent no-op \u2014 yet `Optimize` still promotes that segment to \"persisted\" in the manifest, with zero blocks.\n\n---\n\n## 1. Which internal state differs, and why the data is initially readable\n\n**Ordinary insert path** \u2014 `src/db/index/segment/segment.cc:903-989` (`Insert`/`Update`/`Upsert`/`Delete`) all call `append_wal(doc)` *before* mutating memory. `append_wal` (`segment.cc:4324-4340`) lazily calls `open_wal_file()` (`segment.cc:4303-4322`), which is the **only** place that assigns the member `wal_file_` (`segment.cc:4314`; member declared `{nullptr}` at `segment.cc:401`). Then `internal_insert` (`segment.cc:837-881`) fills `memory_store_`, `doc_ids_`, memory vector indexers, and bumps `mem_block.max_doc_id_/doc_count_` (`874-878`).\n\n**Recovery path** \u2014 `CollectionImpl::recovery()` (`src/db/collection.cc:1836-1892`) \u2192 `Segment::Open` \u2192 `SegmentImpl::Open` (`segment.cc:461-517`). Because the manifest still carries a `writing_forward_block` (`segment.cc:484-490`), it calls `recover()` (`segment.cc:500`). `recover()` (`segment.cc:4193-4301`):\n\n- opens the WAL into a **local** `recover_wal_file` (`4206-4214`) and closes it on scope exit (`4215`);\n- replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (`4250-4272`), i.e. bypassing `append_wal`;\n- advances `mem_block.max_doc_id_` (`4288`).\n\n\u21d2 **The single differing piece of state is `wal_file_ == nullptr` after recovery.** Everything else (`doc_ids_`, `memory_store_`, memory indexers, id map) is identical to the ordinary path.\n\n**Why it reads fine:** all reads are served from those live in-memory objects \u2014 `doc_count()` is `doc_ids_.size()` (`segment.cc:589-600`), `Fetch` walks `doc_ids_` (`segment.cc:1096-1119`), and `scan()` explicitly unions persisted stores with `memory_store_` (`segment.cc:2788-2840`). Crucially, **nothing on disk has changed yet**: the manifest still names the writing block and `<coll>/<seg_id>/<block_id>.wal` (`src/db/common/file_helper.h:74-78`) is intact (`LocalWalFile::close` does not truncate, `src/db/index/storage/wal/local_wal_file.cc:115-121`). So merely reopening/closing is still safe \u2014 `Close`\u2192`flush_unsafe`\u2192`flush()` (`collection.cc:331-395`) is *also* a no-op, but harmlessly.\n\n---\n\n## 2. Call sequence and the exact condition\n\n`CollectionImpl::Optimize` (`src/db/collection.cc:779-915`):\n\n1. **`collection.cc:794`** \u2014 `if (writing_segment_->doc_count() != 0)`: **true**, because replay filled `doc_ids_`. (Had it been 0, Optimize returns at `807-810` and nothing is lost. This is the gate that makes \"recovered docs present\" the trigger.)\n2. **`collection.cc:796`** \u2192 `switch_to_new_segment_for_writing()` (`collection.cc:1517-1552`):\n   - **`collection.cc:1519`** \u2192 `dump()` (`segment.cc:2197-2215`) \u2192 `flush()` at `2201`.\n   - **THE EXACT CONDITION \u2014 `segment.cc:2220-2222`:**\n     ```cpp\n     if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n     ```\n     `wal_file_` is `nullptr` \u21d2 early `OK`. Skipped: `memory_store_->flush()` (`2233-2236`), **`finish_memory_components()`** (`2288-2298`) \u2014 the only code that converts the memory block into persisted `BlockMeta`s (`segment.cc:4342-4412`, `add_persisted_block` at `4366-4368`, vector blocks `4371-4402`) \u2014 and `update_version()` (`2300-2302`). The WAL is also *not* removed (`2304-2315`), so it stays on disk, now unreferenced.\n   - `dump()` still sets `sealed_ = true` (`segment.cc:2212`) and returns OK.\n   - **`collection.cc:1522`** segment object registered as persisted; **`collection.cc:1538`** `remove_writing_forward_block()` \u2190 *point of no return*; **`1539/1543/1546-1549`** version applied + flushed to a new manifest (`src/db/index/common/version_manager.cc:282-301`, `Version::Save` `77-116`).\n3. **`collection.cc:802-803`** \u2014 `get_all_persist_segments()` now returns that block-less segment.\n4. **`collection.cc:813-819`** \u2014 with one persisted segment and no deletes, `build_compact_task` (`917-1005`) takes the `991-1000` branch \u2192 `CreateVectorIndexTask` \u2192 `create_all_vector_index` (`segment.cc:1617-1640`): for FLAT it early-returns (`1685-1690`); otherwise `merge_vector_indexer` (`1642-1668`) merges `vector_indexers_[column]`, which is **empty** because memory indexers were never promoted. Either way it returns OK, and `reload_vector_index` (`1882-1890`) installs a meta that still has **no SCALAR block**.\n5. **`collection.cc:872-877`** version applied + flushed; **`914`** returns `OK`.\n\n**Reopen:** `recovery()` (`collection.cc:1858-1874`) opens that meta as a persisted segment; `SegmentImpl::Open` sees `writing_forward_block() == nullopt` (`segment.cc:484-490`), takes the else branch (`502-510`), and **never calls `recover()`** \u2014 `recover()` has exactly one caller (`segment.cc:500`). `load_persist_scalar_blocks()` (`segment.cc:3913-3960`) iterates `persisted_blocks()`, finds no SCALAR block, leaves `doc_ids_` empty \u21d2 `doc_count() == 0`. The `.wal` is orphaned. (Had a `CompactTask` run instead \u2014 \u22652 persisted segments, or delete-heavy rebuild \u2014 `collection.cc:898-901` `destroy_segment` \u2192 `~SegmentImpl` (`segment.cc:112-117`) \u2192 `cleanup()` (`2334-2338`) `RemoveDirectory` would physically delete the orphaned WAL as well; also `segment_helper.cc:138-141` drops the output when `doc_count == 0` while `collection.cc:859-862` still removes the inputs from the version.)\n\n**Control case:** identical `Optimize`, but `wal_file_` is non-null with records, so `flush()` runs the full body and `finish_memory_components()` adds the SCALAR/vector `BlockMeta`s **before** `remove_writing_forward_block()`. The promoted segment really is persisted \u21d2 no loss.\n\nThe same hazard exists at the other six `switch_to_new_segment_for_writing()` sites: `collection.cc:502` (CreateIndex), `675` (DropIndex), `1155/1227/1311` (Add/Alter/DropColumn), `1446` (write rollover).\n\n---\n\n## 3. Why `OK` + healthy stats prove nothing here\n\n- The `Status::OK()` is manufactured by the early return at `segment.cc:2220-2222`. It means *\"I found no WAL handle\"*, not *\"data is on disk\"*. Nothing in `switch_to_new_segment_for_writing` (`collection.cc:1519-1549`) validates the post-condition that the promoted meta actually contains a forward block.\n- `Stats()` (`collection.cc:403-442`) sums `segment->doc_count(...)` over `get_all_segments()` (`collection.cc:2076-2086`), and `doc_count()` is `doc_ids_.size()` (`segment.cc:589-600`) \u2014 a pure RAM counter on **the same live object** that was just promoted. `index_completeness` reads `segment->meta()->vector_indexed(...)` (`collection.cc:433`), which `create_all_vector_index` set (`segment.cc:1636`, `1691`). Both can be perfect while the manifest references zero blocks.\n- Durability is defined solely by the manifest (`version_manager.cc:95-103`) and what `SegmentImpl::Open` + `load_persist_scalar_blocks` can read back (`segment.cc:484-510`, `3913-3960`). The Optimize path never cross-checks against that.\n- Note also: an explicit `Collection::Flush()` after recovery is **equally** a no-op (`collection.cc:389-395` \u2192 `segment.cc:2220`), so \"flush, then optimize\" would not have saved it.\n- Secondary inconsistency: replay's `id_map_->upsert` (`segment.cc:853`) is an immediate RocksDB `Put` (`src/db/index/common/id_map.cc:97-112`), independent of `flush()`. So pk\u2192doc_id entries can outlive the forward/vector data they point to.\n\n---\n\n## 4. Smallest repair principle, and a regression test\n\n**Repair (describe only).** Make the WAL handle an invariant of *opening* a recovered writing segment, not of the next write. Smallest change: at the end of `SegmentImpl::recover()` (`segment.cc:4193-4301`), adopt the file just replayed as the live WAL \u2014 either reuse `recover_wal_file` instead of a local, or call `open_wal_file()` after replay. No other code needs to change: `open_wal_file()` already opens an existing file with `create_new=false` and seeks to End (`local_wal_file.cc:92-105`), and `has_record()` is `file_.size() > sizeof(header_)` (`local_wal_file.h:75-77`), so the guard at `segment.cc:2220` then evaluates real state and the rest of `flush()` \u2014 including WAL removal at `2304-2315` \u2014 behaves exactly as in the ordinary path. `Optimize` needs no edit.\n\nOptional second layer (not the minimal fix): have `switch_to_new_segment_for_writing` refuse to promote a segment with `doc_count() != 0` but no persisted SCALAR block (`collection.cc:1519-1540`), converting silent loss into a loud error.\n\n**Regression test (describe only).** Reuse the existing harness \u2014 `tests/db/crash_recovery/CMakeLists.txt` already builds `data_generator` and `collection_optimizer`; `tests/db/crash_recovery/utility.h` supplies `CreateTestSchema`/`CreateTestDoc`/`LocateBinary`. Add e.g. `OptimizeAfterCrashRecovery` to `tests/db/crash_recovery/optimize_recovery_test.cc`:\n\n1. `Collection::CreateAndOpen(dir_path_, schema, options_)`, then `collection.reset()` (clean empty collection) \u2014 as in `write_recovery_test.cc:183-189`.\n2. `RunGeneratorAndCrash(\"0\", \"N\", \"insert\", \"0\", k)` \u2014 SIGKILL mid-insert so the WAL is dirty and the manifest was never advanced (`write_recovery_test.cc:191`). Keep N small / `max_buffer_size` large so no rollover occurs.\n3. Reopen; record `d0 = Stats().doc_count`, assert `d0 > 0`, and Fetch-verify all `d0` docs (pattern at `write_recovery_test.cc:196-217`). Baseline \"recovered and readable\".\n4. **On that same handle**, call `Optimize(...)`, assert OK, assert `Stats().doc_count == d0`. *This passes today* \u2014 which is precisely why step 5 must exist.\n5. `collection.reset()`, `Collection::Open(dir_path_, options_)` again, assert `Stats().doc_count == d0`, Fetch-verify every doc, plus a `Query` sanity check (as `optimize_recovery_test.cc:195-205`). **This is the assertion that fails today** (`d0` \u2192 0).\n6. Control arm: identical sequence but let the generator exit normally (`RunGenerator`, no crash) before optimizing; assert the reopened count is unchanged. Pins the difference to the recovery path.\n7. Stronger variant: force the `CompactTask` branch (\u22652 persisted segments, or delete-heavy so `rebuild` is true at `collection.cc:931-935`) to also cover the `destroy_segment`\u2192`cleanup()` deletion of the orphaned WAL.\n\nCheap unit-level guard (no fork/kill), in `tests/db/index/segment/segment_test.cc`: open a segment that has a WAL on disk, call `flush()`, and assert the invariants that fail today \u2014 the `.wal` file is gone (`segment.cc:2304-2315`) **and** `meta()->persisted_blocks()` gained a `BlockType::SCALAR` entry (`segment.cc:4366-4368`).\n\n---\n\n## Established from source vs. requires execution\n\n**Established statically (I read the code; high confidence):** `wal_file_` is assigned only in `open_wal_file()` (`segment.cc:4314`), called only from `append_wal()` (`4328`); `recover()` uses a local handle and closes it (`4206-4215`); the `flush()` early return and everything it skips (`2220-2315`, `4342-4412`); the unconditional promotion + `remove_writing_forward_block()` + version flush (`collection.cc:1519-1549`); reopen replays a WAL only when a writing block exists (`segment.cc:484-501`, sole caller at `500`) and rebuilds `doc_ids_` only from persisted SCALAR blocks (`3913-3960`); `Stats`/`doc_count` are in-memory (`collection.cc:403-442`, `segment.cc:589-600`).\n\n**Would require executing a test (I did not build or run anything, and did not reproduce this):**\n- Which task type `Optimize` actually builds for a given schema/segment count. I reasoned `CreateVectorIndexTask` for a single persisted segment with no deletes (`collection.cc:991-1000`), and that `merge_vector_indexer` over an empty `vector_indexers_[column]` returns OK for non-FLAT indexes. If it instead errored, `Optimize` would fail rather than silently lose data \u2014 but the loss already happened at `collection.cc:1519-1549`, so the manifest is block-less either way.\n- Whether a *subsequent* in-process `scan()` on the promoted segment throws `std::bad_optional_access` at `segment.cc:2837` (`writing_forward_block().value()` on a now-empty optional, with `memory_store_` still holding rows). That is a latent second defect visible in the source; whether it fires is runtime-dependent.\n- The exact reopen behavior of Fetch-by-pk given the surviving RocksDB id-map entries (`id_map.cc:97-112`).\n- Crash-window timing/doc counts needed to make the regression test deterministic.\n\nNo files were modified.",
+        "cache_read_tokens": 2461568,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 2590012,
+        "job_name": "q001-baseline",
+        "llm_calls": 50,
+        "model": "qwen3.8-max",
+        "output_tokens": 23825,
+        "profile": "baseline",
+        "reasoning_tokens": 15125,
+        "session_usage": {
+          "collection_wall_seconds": 1.205752357000165,
+          "complete": true,
+          "descendants": {
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cost_usd": 0,
+            "input_tokens": 0,
+            "llm_calls": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "text_output_tokens": 0,
+            "tool_calls": 0,
+            "uncached_input_tokens": 0
+          },
+          "root": {
+            "cache_read_tokens": 2461568,
+            "cache_write_tokens": 0,
+            "cost_usd": null,
+            "input_tokens": 2590012,
+            "llm_calls": 50,
+            "output_tokens": 23825,
+            "reasoning_tokens": 15125,
+            "text_output_tokens": 8700,
+            "tool_calls": 77,
+            "uncached_input_tokens": 128444
+          },
+          "root_session_id": "ses_eaa6ba34bffemCuidSv2V1X3Z0",
+          "schema_version": 1,
+          "scope": "opencode-session-tree-v1",
+          "total": {
+            "cache_read_tokens": 2461568,
+            "cache_write_tokens": 0,
+            "cost_usd": null,
+            "input_tokens": 2590012,
+            "llm_calls": 50,
+            "output_tokens": 23825,
+            "reasoning_tokens": 15125,
+            "text_output_tokens": 8700,
+            "tool_calls": 77,
+            "uncached_input_tokens": 128444
+          }
+        },
+        "text_output_tokens": 8700,
+        "tool_calls": 77,
+        "trial_index": 1,
+        "trial_name": "zvec-q001__AWjMY7j",
+        "uncached_input_tokens": 128444,
+        "usage_collection_wall_seconds": 1.205752357000165,
+        "usage_scope": "opencode-session-tree-v1"
+      },
+      "profile": "baseline",
+      "protocol_status": "pending_tool_audit",
+      "protocol_valid": null,
+      "retained_trials": [
+        "zvec-q001__AWjMY7j"
+      ],
+      "structural_valid": false
+    },
+    {
+      "errors": [
+        "SweQaError: zvec-grep trial ended with an exception: zvec-q001__XWvyzhA"
+      ],
+      "profile": "zvec-grep",
+      "protocol_status": "pending_tool_audit",
+      "protocol_valid": null,
+      "retained_trials": [
+        "zvec-q001__XWvyzhA"
+      ],
+      "structural_valid": false
+    }
+  ],
+  "protocol_id": "main-opencode-q001-v1",
+  "protocol_status": "pending_tool_audit",
+  "protocol_valid": null,
+  "quality_evaluated": false,
+  "raw_files": [
+    {
+      "bytes": 1551,
+      "path": "baseline-containers.json",
+      "sha256": "dace21ad4504fc250f8d92baab201a50e6b55186cfc82318621a2331804e978e"
+    },
+    {
+      "bytes": 1174,
+      "path": "baseline-job.log",
+      "sha256": "becf77f3f18dd46ad5b5a3691faf1f60db34f7c69e02130e68ab9757b7482fb5"
+    },
+    {
+      "bytes": 2645,
+      "path": "baseline-slot.json",
+      "sha256": "5548a378c7dadc3bfa75efe049016286e973b1c7f5a737964e043460560e8665"
+    },
+    {
+      "bytes": 7226,
+      "path": "execution.json",
+      "sha256": "40170ef72177cab865fd6cbf9a486e450e36ffae9064bdbf5f4993a0ba70e8ba"
+    },
+    {
+      "bytes": 5609,
+      "path": "runs/q001-baseline/config.json",
+      "sha256": "77f6de1d371603d8b57566aa76e5470967c574ef6705af3c3e7161f7d4a61f7a"
+    },
+    {
+      "bytes": 7550,
+      "path": "runs/q001-baseline/job.log",
+      "sha256": "8ec4145e48d1fa19d6ffaafb547e7251edbc8322673cccc288e55afa823e90b3"
+    },
+    {
+      "bytes": 7671,
+      "path": "runs/q001-baseline/lock.json",
+      "sha256": "6372a96464a86592f8b013fde3afbc7b23e52cebaea3a96754aa2f679685d9dd"
+    },
+    {
+      "bytes": 1122,
+      "path": "runs/q001-baseline/result.json",
+      "sha256": "855011760cd664fcf617ae7e5b98f9e958763452c16ba9ed08d255da0df9e612"
+    },
+    {
+      "bytes": 41153,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/agent/opencode-session-snapshot.json",
+      "sha256": "38984705abf532cdcfa94589e705f836d0a60f8c71a970e731dcddd5af3ca67d"
+    },
+    {
+      "bytes": 652716,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/agent/opencode.txt",
+      "sha256": "730c191f920440c853b0df7b3474b1f4e8347fd43a40a7843ef67ce87b6df824"
+    },
+    {
+      "bytes": 7033,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/agent/session-usage.json",
+      "sha256": "30e61a418d143e6d4104dbb71291007528c2f2b7e48b0b41182fc5c91402db14"
+    },
+    {
+      "bytes": 370759,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/agent/trajectory.json",
+      "sha256": "d238172f5580f4aa7f20c021beddaecda5806babd97caf6854aa799a4d3bd372"
+    },
+    {
+      "bytes": 159,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/artifacts/manifest.json",
+      "sha256": "c1db653f487fb773c4f9247162ab3314e7f0584a486914b9874c4b3d6949e42d"
+    },
+    {
+      "bytes": 5101,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/config.json",
+      "sha256": "4e32df2cf9e33c3311397fa4e45691012e47c33b341e6098b16e9dc89604046f"
+    },
+    {
+      "bytes": 5798,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/lock.json",
+      "sha256": "fce0e0ddd8deef5fa68f0e1771f574fff38330909260b7f543d1a5ff2352a73f"
+    },
+    {
+      "bytes": 552146,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/qa-source-audit.json",
+      "sha256": "021da45ed342e77b63473575ebeb73139328be1cf94323bc6047c24935448101"
+    },
+    {
+      "bytes": 19403,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/result.json",
+      "sha256": "de8932719a1d0d59825791fa120f55d1ea32d497a4574f75ba94d3bd4dd34eb4"
+    },
+    {
+      "bytes": 7550,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/trial.log",
+      "sha256": "8ec4145e48d1fa19d6ffaafb547e7251edbc8322673cccc288e55afa823e90b3"
+    },
+    {
+      "bytes": 2,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/verifier/reward.txt",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 0,
+      "path": "runs/q001-baseline/zvec-q001__AWjMY7j/verifier/test-stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 6550,
+      "path": "runs/q001-zvec-grep/config.json",
+      "sha256": "bf514e6a0060b924d3c24ac0c15821b1dd364575e6e638a70fee9e5ad099db78"
+    },
+    {
+      "bytes": 2418,
+      "path": "runs/q001-zvec-grep/job.log",
+      "sha256": "7169604ea0bfd5b0fd787e87fc3ea2a24ad107c7b6fa30dfa8273d41af85135c"
+    },
+    {
+      "bytes": 8676,
+      "path": "runs/q001-zvec-grep/lock.json",
+      "sha256": "d4e71a5623086639c629be2213845738a07f715845cd623d8e54c8fbbd4ba8e5"
+    },
+    {
+      "bytes": 1058,
+      "path": "runs/q001-zvec-grep/result.json",
+      "sha256": "23dec961d1d2c8659287df407f035707ded97557ae5c2b016574c5fc90f77348"
+    },
+    {
+      "bytes": 703,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/agent/zvec-grep-setup.json",
+      "sha256": "b3e32962332b3da3ae0874888c37f0d9948bb0c313ba6e14325579eb5187a6ee"
+    },
+    {
+      "bytes": 159,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/artifacts/manifest.json",
+      "sha256": "c1db653f487fb773c4f9247162ab3314e7f0584a486914b9874c4b3d6949e42d"
+    },
+    {
+      "bytes": 5978,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/config.json",
+      "sha256": "ace36d4c83d00ed4c83a68bfdb9c54f7786c3933102746bb4037af6961b79c99"
+    },
+    {
+      "bytes": 1398,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/exception.txt",
+      "sha256": "6d057fff2a9c4b842f61eddf11cdd4f2317538f9ed5a0e0d9b572e8012135c35"
+    },
+    {
+      "bytes": 6675,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/lock.json",
+      "sha256": "931ccee49bf20d18834d9c2697ff6634388a84087015f7077f2b899a3e3c5ddc"
+    },
+    {
+      "bytes": 10803,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/result.json",
+      "sha256": "34ccfc1fcb9f53859e0bde5bb1195857be04ae99af0b76ab8a8d43b3fcb658cc"
+    },
+    {
+      "bytes": 2344,
+      "path": "runs/q001-zvec-grep/zvec-q001__XWvyzhA/trial.log",
+      "sha256": "c8afd2181eb5f4621265a7af87eca29e1311452b23703a313f826afa15c67e9f"
+    },
+    {
+      "bytes": 2034,
+      "path": "zvec-grep-containers.json",
+      "sha256": "270a6928883140f4734fdc6977e87e492c555745e885c0d6573ef4a986a678dd"
+    },
+    {
+      "bytes": 1117,
+      "path": "zvec-grep-job.log",
+      "sha256": "a9157a045f28ac4da7b1e8f1ca8e5ac819f9087314d45bc6fc182b8074f232b9"
+    },
+    {
+      "bytes": 3403,
+      "path": "zvec-grep-slot.json",
+      "sha256": "200d57b740f042306848332777b1c8f2ce092d34864eeda9a8ed9517873909ff"
+    }
+  ],
+  "schema_version": 1,
+  "source_only_tool_audit_required": true,
+  "structural_valid": false,
+  "usage_scope": "opencode-session-tree-v1"
+}

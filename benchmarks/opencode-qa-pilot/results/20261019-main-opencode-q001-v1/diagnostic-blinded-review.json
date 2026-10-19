@@ -1,0 +1,697 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "evaluation_scope": "Diagnostic-only independent blind grading of answer text K. No run-validity or comparative-benefit adjudication.",
+  "question_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+  "rubric_path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q001.json",
+  "rubric_sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/prepared-v2/tasks/zvec-q001/environment/source",
+  "source_commit_from_rubric": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+  "rubric_unchanged": true,
+  "all_reference_file_and_span_hashes_verified": true,
+  "answers": [
+    {
+      "blinded_answer_id": "K",
+      "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/live-v1/blinded-answers/K.txt",
+      "answer_sha256": "b3ed9ecceb70cca4946519b5980c16c3eb2b199c8e913908e49a630f02368529",
+      "criterion_scores": [
+        {
+          "id": "C1",
+          "points": 2,
+          "maximum_points": 2,
+          "full_credit": true,
+          "reason": "Correctly distinguishes local recover_wal_file from the null member wal_file_, describes direct internal-operation replay, and identifies memory_store_, doc_ids_, indexers and writing-block metadata as the reconstructed readable state. Its broader claim that every other state value is identical is overstrong, but does not negate either required C1 element.",
+          "supporting_answer_quotes": [
+            "opens the WAL into a **local** `recover_wal_file` (`4206-4214`) and closes it on scope exit (`4215`);",
+            "replays each record by calling `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (`4250-4272`), i.e. bypassing `append_wal`;",
+            "Then `internal_insert` (`segment.cc:837-881`) fills `memory_store_`, `doc_ids_`, memory vector indexers, and bumps `mem_block.max_doc_id_/doc_count_` (`874-878`)."
+          ],
+          "verified_citation_ids": [
+            "E01",
+            "E02",
+            "E03",
+            "E04",
+            "E05",
+            "E12",
+            "X01"
+          ]
+        },
+        {
+          "id": "C2",
+          "points": 2,
+          "maximum_points": 2,
+          "full_credit": true,
+          "reason": "States the exact null-or-no-record guard, selects the null member arm for recovered data, and explains the skipped memory flush, finish_memory_components and update_version. The cited normal flush body and finish helper support persistence and metadata finalization consequences.",
+          "supporting_answer_quotes": [
+            "if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();",
+            "`wal_file_` is `nullptr` ⇒ early `OK`. Skipped: `memory_store_->flush()` (`2233-2236`), **`finish_memory_components()`** (`2288-2298`)",
+            "and `update_version()` (`2300-2302`)."
+          ],
+          "verified_citation_ids": [
+            "E08",
+            "E09",
+            "E10",
+            "E15",
+            "X19"
+          ]
+        },
+        {
+          "id": "C3",
+          "points": 2,
+          "maximum_points": 2,
+          "full_credit": true,
+          "reason": "Connects Optimize, the nonzero doc-count switch gate, switch_to_new_segment_for_writing, dump and flush; then explicitly follows sealing, removal of writing-forward-block metadata, manifest apply/flush, and the absence of recovery and scalar-block doc-id reconstruction on reopen. These are complete and correctly supported core causal steps.",
+          "supporting_answer_quotes": [
+            "**`collection.cc:796`** → `switch_to_new_segment_for_writing()`",
+            "**`collection.cc:1519`** → `dump()` (`segment.cc:2197-2215`) → `flush()` at `2201`.",
+            "**`collection.cc:1538`** `remove_writing_forward_block()`",
+            "**`1539/1543/1546-1549`** version applied + flushed to a new manifest",
+            "`SegmentImpl::Open` sees `writing_forward_block() == nullopt` (`segment.cc:484-490`), takes the else branch (`502-510`), and **never calls `recover()`**"
+          ],
+          "verified_citation_ids": [
+            "E06",
+            "E07",
+            "E08",
+            "E01",
+            "X02",
+            "X03",
+            "X07",
+            "X08",
+            "X09"
+          ]
+        },
+        {
+          "id": "C4",
+          "points": 1,
+          "maximum_points": 1,
+          "full_credit": true,
+          "reason": "Explains that current segment doc_ids_ determine counts and indexed-vector metadata determines completeness; explicitly rejects successful status or same-handle stats as disk durability validation. No separate statistics cache is invented.",
+          "supporting_answer_quotes": [
+            "`Stats()` (`collection.cc:403-442`) sums `segment->doc_count(...)` over `get_all_segments()` (`collection.cc:2076-2086`), and `doc_count()` is `doc_ids_.size()` (`segment.cc:589-600`)",
+            "`index_completeness` reads `segment->meta()->vector_indexed(...)` (`collection.cc:433`)"
+          ],
+          "verified_citation_ids": [
+            "E11",
+            "E12",
+            "X10",
+            "X20"
+          ]
+        },
+        {
+          "id": "C5",
+          "points": 1,
+          "maximum_points": 1,
+          "full_credit": true,
+          "reason": "Correct ordinary Insert → append_wal → lazy open_wal_file → member WAL sequence, contrasted with replay bypassing append_wal. Explicitly uses the non-null WAL with records to explain why the no-crash control persists before metadata removal.",
+          "supporting_answer_quotes": [
+            "all call `append_wal(doc)` *before* mutating memory. `append_wal` (`segment.cc:4324-4340`) lazily calls `open_wal_file()` (`segment.cc:4303-4322`)",
+            "**Control case:** identical `Optimize`, but `wal_file_` is non-null with records, so `flush()` runs the full body"
+          ],
+          "verified_citation_ids": [
+            "E13",
+            "E14",
+            "E03",
+            "E08",
+            "E15"
+          ]
+        },
+        {
+          "id": "C6",
+          "points": 1,
+          "maximum_points": 1,
+          "full_credit": true,
+          "reason": "The requested repair principle is present: adopt/retain the existing replayed WAL as the live member or reopen it through open_wal_file before later flush. This meets the original full-credit acceptance of a minimal lifecycle repair equivalent to attaching/reopening the existing WAL. No implementation was requested. The answer could be more explicit about cancelling/transferring the temporary-reader close and propagating reopen errors; those are recorded as repair-description limitations, without imposing an extra implementation-level scoring gate.",
+          "supporting_answer_quotes": [
+            "Make the WAL handle an invariant of *opening* a recovered writing segment, not of the next write.",
+            "adopt the file just replayed as the live WAL — either reuse `recover_wal_file` instead of a local, or call `open_wal_file()` after replay.",
+            "`open_wal_file()` already opens an existing file with `create_new=false` and seeks to End (`local_wal_file.cc:92-105`)"
+          ],
+          "verified_citation_ids": [
+            "E02",
+            "E05",
+            "E08",
+            "E14",
+            "X04",
+            "X05",
+            "X06",
+            "X19"
+          ]
+        },
+        {
+          "id": "C7",
+          "points": 0,
+          "maximum_points": 1,
+          "full_credit": false,
+          "reason": "The proposed test includes crash-before-flush, recovered-data verification, optimize with no intervening writes, count/content checks, and a no-crash control. However its final validation explicitly resets the collection and reopens again in the same test process; it never requires the fresh process specified in the original C7 claim. C7 has no partial credit. This withholds only the existing C7 point and does not require an executed reproduction.",
+          "supporting_answer_quotes": [
+            "**On that same handle**, call `Optimize(...)`, assert OK, assert `Stats().doc_count == d0`.",
+            "`collection.reset()`, `Collection::Open(dir_path_, options_)` again, assert `Stats().doc_count == d0`, Fetch-verify every doc",
+            "Control arm: identical sequence but let the generator exit normally (`RunGenerator`, no crash) before optimizing"
+          ],
+          "verified_citation_ids": [
+            "E16",
+            "E07",
+            "E13",
+            "E14",
+            "X15"
+          ],
+          "missing_required_element": "Explicit final validation from a fresh process after optimization."
+        }
+      ],
+      "verified_citations": [
+        {
+          "id": "E01",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 484,
+          "end_line": 501,
+          "supports": "A writing block causes SegmentImpl::Open to recover it.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "779ce7d762e28e05982de1e368780654d859a4c840f17bd44e69100810bc4e1f",
+          "source_excerpt": "  auto writing_block = segment_meta_->writing_forward_block();\n  if (!writing_block.has_value() && !options_.read_only_) {\n    return Status::InternalError(\n        \"No writing block found when in writing mode.\");\n  }\n\n  if (writing_block.has_value()) {\n    // init doc_id_allocator and block_id_allocator\n    doc_id_allocator_ = writing_block.value().min_doc_id();\n    BlockID max_block_id{writing_block.value().id()};\n    for (auto &block : segment_meta_->persisted_blocks()) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_ = max_block_id + 1;\n\n    // recover writing block\n    s = recover();\n    CHECK_RETURN_STATUS(s);\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E02",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4193,
+          "end_line": 4215,
+          "supports": "Recovery opens a local recover_wal_file and defers its close; it does not assign the member wal_file_.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "95fee72e702aaf4cc9105864f8eee18472fef5f743d5569676cb34caceaad7b8",
+          "source_excerpt": "Status SegmentImpl::recover() {\n  // recover mem block meta\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  doc_id_allocator_.store(mem_block.min_doc_id());\n\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  if (!std::filesystem::exists(wal_file_path)) {\n    LOG_INFO(\"WAL recovery skipped: no WAL file exists [%s]\",\n             wal_file_path.c_str());\n    return Status::OK();\n  }\n\n  WalFilePtr recover_wal_file;\n  WalOptions wal_option;\n  wal_option.create_new = false;\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n      0) {\n    LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::OK();\n  }\n  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E03",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4234,
+          "end_line": 4265,
+          "supports": "Recovery dispatches records directly to internal insertion/update/upsert/delete methods.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "906ce9887c062fb4e15640236a434b362625d6ce9d8c52fd2e8b667a4e461d43",
+          "source_excerpt": "  while (true) {\n    std::string buf = recover_wal_file->next();\n    if (buf.empty()) {\n      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n      break;\n    }\n    total_recovered_doc_count++;\n    auto doc = Doc::deserialize(reinterpret_cast<const uint8_t *>(buf.data()),\n                                buf.size());\n    if (doc == nullptr) {\n      LOG_ERROR(\"WAL recovery failed [%s]: doc deserialization error at %zu\",\n                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n      continue;\n    }\n\n    Status status;\n    switch (doc->get_operator()) {\n      case Operator::INSERT: {\n        internal_insert(*doc);\n        break;\n      }\n      case Operator::UPDATE: {\n        internal_update(*doc);\n        break;\n      }\n      case Operator::UPSERT: {\n        internal_upsert(*doc);\n        break;\n      }\n      case Operator::DELETE: {\n        internal_delete(*doc);\n        break;\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E04",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 837,
+          "end_line": 880,
+          "supports": "Internal insertion creates/writes memory components and updates doc_ids_ and writing-block metadata.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "f5272d0e86956896f24cb66f51b2c6be475e7b8035ef426e173feafff243df27",
+          "source_excerpt": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  mem_block.max_doc_id_ = g_doc_id;\n  mem_block.doc_count_ = mem_block.doc_count_ + 1;\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E05",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4285,
+          "end_line": 4301,
+          "supports": "Recovery finishes with Status::OK without attaching/reopening the member WAL.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "dfdc1347216f2c31eb96e6c22acf895d2574189b724af0e52f7426b464c356fc",
+          "source_excerpt": "  const auto added_docs = recovered_doc_count[0] +  // INSERT\n                          recovered_doc_count[1] +  // UPSERT\n                          recovered_doc_count[2];   // UPDATE\n  mem_block.max_doc_id_ += added_docs;\n\n  LOG_INFO(\n      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n      \"(insert[%zu], upsert[%zu], update[%zu], delete[%zu])\",\n      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n      (size_t)recovered_doc_count[0],  // INSERT\n      (size_t)recovered_doc_count[1],  // UPSERT\n      (size_t)recovered_doc_count[2],  // UPDATE\n      (size_t)recovered_doc_count[3]   // DELETE\n  );\n\n  return Status::OK();\n}\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E06",
+          "path": "src/db/collection.cc",
+          "start_line": 788,
+          "end_line": 816,
+          "supports": "Optimize switches a nonempty writing segment before planning compaction on persisted segments.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "4d717fe3dfd3e5dbeec8ad0b838d3d979efef81a9bd99e984e5adacfc9513424",
+          "source_excerpt": "  std::vector<Segment::Ptr> persist_segments;\n\n  {\n    // forbidden writing for a while\n    std::lock_guard write_lock(write_mtx_);\n\n    if (writing_segment_->doc_count() != 0) {\n      // flush and create new segment\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n    // after leave this scope, writing action is allowed\n  }\n\n  if (persist_segments.size() == 0) {\n    // no need to optimize\n    return Status::OK();\n  }\n\n  // build segment compact task\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E07",
+          "path": "src/db/collection.cc",
+          "start_line": 1517,
+          "end_line": 1551,
+          "supports": "Segment switch dumps the old segment, removes its writing-forward-block metadata, installs new writing segment, and persists the new version.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "d04765f4431e25f55650974e39d788a03d8e25d97689c82a0784fe9a38b45c50",
+          "source_excerpt": "Status CollectionImpl::switch_to_new_segment_for_writing(\n    const CollectionSchema::Ptr &schema) {\n  auto s = writing_segment_->dump();\n  CHECK_RETURN_STATUS(s);\n\n  s = segment_manager_->add_segment(writing_segment_);\n  CHECK_RETURN_STATUS(s);\n\n  // when create new segment, segment meta should create a first new block\n  // meta\n  auto new_segment = Segment::CreateAndOpen(\n      path_, schema == nullptr ? *schema_ : *schema, allocate_segment_id(),\n      writing_segment_->meta()->max_doc_id() + 1, id_map_, delete_store_,\n      version_manager_,\n      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_});\n  if (!new_segment) {\n    return new_segment.error();\n  }\n\n  Version version = version_manager_->get_current_version();\n  auto writing_segment_meta = writing_segment_->meta();\n  writing_segment_meta->remove_writing_forward_block();\n  s = version.add_persisted_segment_meta(writing_segment_meta);\n  CHECK_RETURN_STATUS(s);\n\n  writing_segment_ = new_segment.value();\n  version.reset_writing_segment_meta(writing_segment_->meta());\n  version.set_next_segment_id(segment_id_allocator_.load());\n\n  s = version_manager_->apply(version);\n  CHECK_RETURN_STATUS(s);\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  return Status::OK();\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E08",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2197,
+          "end_line": 2222,
+          "supports": "dump calls flush before sealing; flush returns success immediately if member WAL is null or has no record.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "8cf9a3abf15b43787c548efbac672fa1b102dd11a74458c3dcc5c06bb7fff5df",
+          "source_excerpt": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E09",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2224,
+          "end_line": 2255,
+          "supports": "The early return skips memory-store, scalar/FTS and vector-index flushes.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "326c887bfd18c8281c263d6b93547342ef0995ee241d8d1dabbd7093cf051c70",
+          "source_excerpt": "  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E10",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2288,
+          "end_line": 2302,
+          "supports": "The normal flush finalizes memory components into persisted-block metadata and updates/flushed version.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "3b769ee93f26622dc1a00465cf202cce6a6463f72bd93b8119a84377727308ce",
+          "source_excerpt": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E11",
+          "path": "src/db/collection.cc",
+          "start_line": 403,
+          "end_line": 439,
+          "supports": "Statistics count current segment objects and derive completeness from vector-indexed metadata.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "36c5fb13c90a28123635d0ea28f244995139c6ac601aa8009a9db3451e2d8923",
+          "source_excerpt": "Result<CollectionStats> CollectionImpl::Stats() const {\n  std::lock_guard lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n\n  auto segments = get_all_segments();\n\n  CollectionStats stats;\n  auto vector_fields = schema_->vector_fields();\n  if (segments.empty()) {\n    stats.doc_count = 0;\n    for (auto &field : vector_fields) {\n      stats.index_completeness[field->name()] =\n          1;  // if no doc, completeness is 1\n    }\n    return stats;\n  }\n\n  for (auto &segment : segments) {\n    stats.doc_count += segment->doc_count(delete_store_->make_filter());\n  }\n\n  for (auto &field : vector_fields) {\n    if (stats.doc_count == 0) {\n      stats.index_completeness[field->name()] = 1;\n      continue;\n    }\n\n    uint32_t indexed_doc_count{0};\n    for (auto &segment : segments) {\n      if (segment->meta()->vector_indexed(field->name())) {\n        indexed_doc_count += segment->doc_count(delete_store_->make_filter());\n      }\n    }\n    stats.index_completeness[field->name()] =\n        indexed_doc_count * 1.0 / stats.doc_count;\n  }\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E12",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 589,
+          "end_line": 600,
+          "supports": "Per-segment count is derived from in-memory doc_ids_, minus deletions.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+          "source_excerpt": "uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n  uint64_t doc_count = doc_ids_.size();\n  if (filter) {\n    for (const auto &doc_id : doc_ids_) {\n      if (filter->is_filtered(doc_id)) {\n        doc_count--;\n      }\n    }\n  }\n\n  return doc_count;\n}\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E13",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 903,
+          "end_line": 917,
+          "supports": "Ordinary Insert calls append_wal before internal_insert.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "e5a814d864bffcb8530485f5f40accbab36adc93f2d00916ecab31d010aec78c",
+          "source_excerpt": "Status SegmentImpl::Insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append wal\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n  return internal_insert(doc);\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E14",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4338,
+          "supports": "open_wal_file installs wal_file_; append_wal opens it lazily before appending.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "b195933074a1bc80d0e40fda99b8c57500bc0264312cab7270596e1bcd40278a",
+          "source_excerpt": "Status SegmentImpl::open_wal_file() {\n  auto mem_block = segment_meta_->writing_forward_block().value();\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  WalOptions wal_option;\n  if (std::filesystem::exists(wal_file_path)) {\n    wal_option.create_new = false;\n  } else {\n    wal_option.create_new = true;\n  }\n\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n  }\n\n  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n  return Status::OK();\n}\n\nStatus SegmentImpl::append_wal(const Doc &doc) {\n  std::vector<uint8_t> buf = doc.serialize();\n\n  if (!wal_file_) {\n    auto s = open_wal_file();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n  if (ret != 0) {\n    LOG_ERROR(\"WAL append failed: segment[%d], pk[%s], op[%d], ret[%d]\", id(),\n              doc.pk().c_str(), static_cast<int>(doc.get_operator()), ret);\n    return Status::InternalError(\"Failed to append wal\");\n  }\n\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E15",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4342,
+          "end_line": 4384,
+          "supports": "Successful finish_memory_components registers persisted scalar/vector blocks.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "b34740cd9252ffb6cbb860df65394aa6fcc67f33ab2d20ad529b0fa98e2e1c72",
+          "source_excerpt": "Status SegmentImpl::finish_memory_components() {\n  auto block = segment_meta_->writing_forward_block().value();\n\n  // close for loading persist block\n  auto s = memory_store_->close();\n  CHECK_RETURN_STATUS(s);\n  memory_store_.reset();\n\n  // load forward store\n  auto persist_forward_store_path = FileHelper::MakeForwardBlockPath(\n      path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n  BaseForwardStore::Ptr persist_store;\n  if (options_.enable_mmap_) {\n    persist_store =\n        std::make_shared<MmapForwardStore>(persist_forward_store_path);\n  } else {\n    persist_store =\n        std::make_shared<BufferPoolForwardStore>(persist_forward_store_path);\n  }\n  s = persist_store->Open();\n  CHECK_RETURN_STATUS(s);\n  persist_stores_.push_back(persist_store);\n\n  BlockMeta b{block.id_,         block.type_,      block.min_doc_id_,\n              block.max_doc_id_, block.doc_count_, block.columns_};\n  segment_meta_->add_persisted_block(b);\n\n  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "E16",
+          "path": "tests/db/crash_recovery/write_recovery_test.cc",
+          "start_line": 182,
+          "end_line": 218,
+          "supports": "Existing pre-fix crash test verifies readback immediately after recovery but does not optimize and reopen.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+          "span_sha256": "fa2490e2f9b2b61b0c300af7d333d2e5ab1c6deb728a9ed22c278358ac912080",
+          "source_excerpt": "TEST_F(CrashRecoveryTest, CrashRecoveryDuringInsertion) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGeneratorAndCrash(\"0\", \"10000\", \"insert\", \"0\", 3);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_GT(doc_count, 800)\n      << \"Document count is too low after 3s of insertion and recovery\";\n\n  for (uint64_t doc_id = 0; doc_id < doc_count; doc_id++) {\n    const auto expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      if (map.find(expected_doc.pk()) == map.end()) {\n        FAIL() << \"Returned map does not contain doc[\" << expected_doc.pk()\n               << \"]\";\n      }\n      const auto actual_doc = map.at(expected_doc.pk());\n      ASSERT_EQ(*actual_doc, expected_doc)\n          << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n",
+          "answer_support_status": "Supported by an explicit answer citation to this span or an inclusive function span."
+        },
+        {
+          "id": "X01",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 401,
+          "end_line": 401,
+          "supports": "Member WAL starts null.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "ec1759866022a3f993918d190a8ad7072d4889c46d63fb9881771e4f2b8e9711",
+          "source_excerpt": "  WalFilePtr wal_file_{nullptr};\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X02",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 502,
+          "end_line": 510,
+          "supports": "No writing block means no recovery call in this branch.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "66c316c4cb9f7c5c7435e723d79f8e3b9dfa603764c1e7a32159d273cbb9037d",
+          "source_excerpt": "  } else {\n    // Update block_id_allocator_\n    BlockID max_block_id{0};\n    auto &persist_blocks = segment_meta_->persisted_blocks();\n    for (const auto &block : persist_blocks) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_.store(max_block_id + 1);\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X03",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 3913,
+          "end_line": 3960,
+          "supports": "Persisted scalar blocks reconstruct doc_ids_ on a fresh segment object.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "7ae8f88b5800b137cd0fdcc31e11bdce5c7027a78ec5bb2c920219a5f7034373",
+          "source_excerpt": "Status SegmentImpl::load_persist_scalar_blocks() {\n  doc_ids_.reserve(segment_meta_->doc_count());\n  for (const auto &block : segment_meta_->persisted_blocks()) {\n    if (block.type() == BlockType::SCALAR) {\n      auto forward_path = FileHelper::MakeForwardBlockPath(\n          path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n      BaseForwardStore::Ptr forward_store;\n      if (options_.enable_mmap_) {\n        forward_store = std::make_shared<MmapForwardStore>(forward_path);\n      } else {\n        forward_store = std::make_shared<BufferPoolForwardStore>(forward_path);\n      }\n      auto s = forward_store->Open();\n      CHECK_RETURN_STATUS(s);\n      persist_stores_.push_back(forward_store);\n\n      if (!block.contain_column(GLOBAL_DOC_ID)) {\n        continue;\n      }\n      auto rb_reader = forward_store->scan({GLOBAL_DOC_ID});\n      while (true) {\n        std::shared_ptr<arrow::RecordBatch> batch;\n        auto status = rb_reader->ReadNext(&batch);\n        if (!status.ok()) {\n          LOG_ERROR(\"Read batch failed: %s\", status.message().c_str());\n          return Status::InternalError(status.message());\n        }\n\n        if (batch == nullptr) {\n          break;\n        }\n\n        auto uint64_array =\n            std::dynamic_pointer_cast<arrow::UInt64Array>(batch->column(0));\n        if (!uint64_array) {\n          LOG_ERROR(\"Failed to cast column to UInt64Array\");\n          return Status::InternalError(\"Array type mismatch\");\n        }\n        auto *values = uint64_array->raw_values();\n        doc_ids_.insert(doc_ids_.end(), values,\n                        values + uint64_array->length());\n      }\n    }\n  }\n\n  return Status::OK();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X04",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4303,
+          "end_line": 4322,
+          "supports": "Existing WAL is opened into member wal_file_ and open errors return InternalError.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "d4438b427b83cdf8650d46b4997d638267b2038c255f6c6cd85fee31d1b9049e",
+          "source_excerpt": "Status SegmentImpl::open_wal_file() {\n  auto mem_block = segment_meta_->writing_forward_block().value();\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  WalOptions wal_option;\n  if (std::filesystem::exists(wal_file_path)) {\n    wal_option.create_new = false;\n  } else {\n    wal_option.create_new = true;\n  }\n\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n  }\n\n  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n  return Status::OK();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X05",
+          "path": "src/db/index/storage/wal/local_wal_file.cc",
+          "start_line": 92,
+          "end_line": 121,
+          "supports": "Opening an existing WAL seeks to end; close closes without truncating.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "2f9d37ab8315bcc90fc29d68bac76832b503fe0ea7655b3a4c139fe337504ec9",
+          "span_sha256": "4a7805a7d760f3b0a2ad85ad970becb056dd5320cc41acf3116906152400074d",
+          "source_excerpt": "  } else {\n    if (!FileHelper::FileExists(wal_path_)) {\n      WLOG_ERROR(\"Wal open error. file is not exist create_new[%d]\",\n                 wal_option.create_new);\n      return -1;\n    }\n\n    if (!file_.open(wal_path_.c_str(), false)) {\n      WLOG_ERROR(\"Wal open error. create_new[%d]\", wal_option.create_new);\n      return -1;\n    }\n\n    // open default for write\n    file_.seek(0, ailego::File::Origin::End);\n  }\n\n  max_docs_wal_flush_ = wal_option.max_docs_wal_flush;\n  opened_ = true;\n\n  WLOG_INFO(\"Wal open success. create_new[%d]\", wal_option.create_new);\n  return 0;\n}\n\nint LocalWalFile::close() {\n  CHECK_STATUS(opened_, true);\n  file_.close();\n  WLOG_INFO(\"Wal close success\");\n  opened_ = false;\n  return 0;\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X06",
+          "path": "src/db/index/storage/wal/local_wal_file.h",
+          "start_line": 75,
+          "end_line": 77,
+          "supports": "has_record is based on file size beyond the header.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "d39b3d5d15cfe51324c535cb1db1792e4aa851b98cffbd8861a552948783f7ae",
+          "span_sha256": "cc6de5d2fc7f4b48f9905bf8c9d7b2a21e26983edbf11a8d25030b007b26f0d6",
+          "source_excerpt": "  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X07",
+          "path": "src/db/collection.cc",
+          "start_line": 1836,
+          "end_line": 1888,
+          "supports": "Manifest recovery opens persisted segments read-only and the writing segment separately.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "959aae112b04b20f3c31a44cb30385a43b32b5848ba8268a5d08b0d32aa71898",
+          "source_excerpt": "Status CollectionImpl::recovery() {\n  if (!FileHelper::DirectoryExists(path_.c_str())) {\n    return Status::InvalidArgument(\"collection path{\", path_, \"} not exist.\");\n  }\n\n  // get lock file\n  auto s = acquire_file_lock(false);\n  CHECK_RETURN_STATUS(s);\n\n  // recovery version first\n  auto version_manager = VersionManager::Recovery(path_);\n  if (!version_manager.has_value()) {\n    return version_manager.error();\n  }\n\n  version_manager_ = version_manager.value();\n  const auto v = version_manager_->get_current_version();\n  schema_ = std::make_shared<CollectionSchema>(v.schema());\n  options_.enable_mmap_ = v.enable_mmap();\n  s = recover_idmap_and_delete_store();\n  CHECK_RETURN_STATUS(s);\n\n  // recover persist segments\n  segment_manager_ = std::make_shared<SegmentManager>();\n\n  auto segment_metas = v.persisted_segment_metas();\n\n  SegmentOptions seg_options;\n  seg_options.read_only_ = true;\n  seg_options.enable_mmap_ = options_.enable_mmap_;\n  for (size_t i = 0; i < segment_metas.size(); ++i) {\n    auto segment = Segment::Open(path_, *schema_, *segment_metas[i], id_map_,\n                                 delete_store_, version_manager_, seg_options);\n    if (!segment) {\n      return segment.error();\n    }\n\n    segment_manager_->add_segment(segment.value());\n  }\n\n  seg_options.read_only_ = options_.read_only_;\n  seg_options.max_buffer_size_ = options_.max_buffer_size_;\n\n  // recover writing segment\n  auto writing_segment =\n      Segment::Open(path_, *schema_, *v.writing_segment_meta(), id_map_,\n                    delete_store_, version_manager_, seg_options);\n  if (!writing_segment) {\n    return writing_segment.error();\n  }\n\n  writing_segment_ = writing_segment.value();\n  segment_id_allocator_.store(v.next_segment_id());\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X08",
+          "path": "src/db/index/common/version_manager.cc",
+          "start_line": 77,
+          "end_line": 116,
+          "supports": "Version save serializes both persisted and writing segment metadata.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "bd41e8887f9ee6fd09f3341beea8fe774604198a2b00f1b408c071e3ae948230",
+          "span_sha256": "590ee216c5b31111ce2c676ade47c44a72a7d659886ba96dc0d765e97ce54fb2",
+          "source_excerpt": "Status Version::Save(const std::string &path, const Version &version) {\n  std::ofstream ofs;\n  ailego::FileHelper::OpenOfstream(ofs, path, std::ios::binary);\n  if (!ofs.is_open()) {\n    LOG_ERROR(\"Failed to open file: %s, err: %s\", path.c_str(),\n              ailego::FileHelper::GetLastErrorString().c_str());\n    return Status::InternalError(\"Failed to open file: %s\", path.c_str());\n  }\n\n  proto::Manifest manifest;\n\n  // set schema\n  auto schema = ProtoConverter::ToPb(version.schema());\n  manifest.mutable_schema()->Swap(&schema);\n\n  manifest.set_enable_mmap(version.enable_mmap());\n\n  // set segments meta\n  for (auto &meta : version.persisted_segment_metas()) {\n    auto meta_pb = ProtoConverter::ToPb(*meta);\n    manifest.add_persisted_segment_metas()->Swap(&meta_pb);\n  }\n\n  if (version.writing_segment_meta()) {\n    auto meta_pb = ProtoConverter::ToPb(*version.writing_segment_meta());\n    manifest.mutable_writing_segment_meta()->Swap(&meta_pb);\n  }\n\n  manifest.set_id_map_path_suffix(version.id_map_path_suffix());\n  manifest.set_delete_snapshot_path_suffix(\n      version.delete_snapshot_path_suffix());\n  manifest.set_next_segment_id(version.next_segment_id());\n\n  if (!manifest.SerializeToOstream(&ofs)) {\n    LOG_ERROR(\"Failed to serialize manifest to file: %s\", path.c_str());\n    return Status::InternalError(\"Failed to serialize manifest to file\");\n  }\n\n  return Status::OK();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X09",
+          "path": "src/db/index/common/version_manager.cc",
+          "start_line": 282,
+          "end_line": 301,
+          "supports": "Version flush saves the next manifest and removes the preceding manifest.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "bd41e8887f9ee6fd09f3341beea8fe774604198a2b00f1b408c071e3ae948230",
+          "span_sha256": "3170c931d3f42f407773142491ef5e041230466cd8a7e1d1662b9b1021261c11",
+          "source_excerpt": "Status VersionManager::flush() {\n  std::lock_guard lock(mtx_);\n\n  std::string current_path;\n  if (version_id_ != 0) {\n    current_path =\n        FileHelper::MakeFilePath(path_, FileID::MANIFEST_FILE, version_id_ - 1);\n  }\n\n  auto s = Version::Save(\n      FileHelper::MakeFilePath(path_, FileID::MANIFEST_FILE, version_id_++),\n      current_version_);\n  CHECK_RETURN_STATUS(s);\n\n  if (!current_path.empty()) {\n    FileHelper::RemoveFile(current_path);\n  }\n\n  return Status::OK();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X10",
+          "path": "src/db/collection.cc",
+          "start_line": 2076,
+          "end_line": 2086,
+          "supports": "Stats enumerates current segment objects through these helpers.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "8ccc06d0569f06c406e71d80f65375e87ae91b9ac664c35b68a03298a104ee8d",
+          "source_excerpt": "std::vector<Segment::Ptr> CollectionImpl::get_all_segments() const {\n  std::vector<Segment::Ptr> segments = get_all_persist_segments();\n  if (writing_segment_->doc_count() > 0) {\n    segments.push_back(writing_segment_);\n  }\n  return segments;\n}\n\nstd::vector<Segment::Ptr> CollectionImpl::get_all_persist_segments() const {\n  return segment_manager_->get_segments();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X11",
+          "path": "src/db/index/common/id_map.cc",
+          "start_line": 97,
+          "end_line": 112,
+          "supports": "Replay invokes an actual RocksDB Put through IDMap::upsert.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "9266c8d89f64795dc4e788988b8157d3bec19136df1127feef34da6b8ef1dadb",
+          "span_sha256": "c0c09ba7642e968488bf1188cf5034d4646c1965be70b95f12f19fed6eda1b77",
+          "source_excerpt": "Status IDMap::upsert(const std::string &key, uint64_t doc_id) {\n  if (!opened_) {\n    return Status::InternalError();\n  }\n\n  rocksdb::Slice value((const char *)&doc_id, sizeof(uint64_t));\n  auto s = rocksdb_context_.db_->Put(rocksdb_context_.write_opts_, key, value);\n  if (s.ok()) {\n    return Status::OK();\n  } else {\n    LOG_ERROR(\"Failed to put [%s, %zu] into IDMap[%s], code[%d], reason[%s]\",\n              key.c_str(), (size_t)doc_id, working_dir_.c_str(), s.code(),\n              s.ToString().c_str());\n    return Status::InternalError();\n  }\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X12",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 4119,
+          "end_line": 4138,
+          "supports": "Recovery memory setup may remove a crash-residue forward-block file and opens its store.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "3a8c8d8eddea1f295b28c3c64b28c92a604d3d93171e50845ef8de299fa1c5d8",
+          "source_excerpt": "Status SegmentImpl::init_memory_components() {\n  // init memory block id\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n\n  // create and open memory forward block\n  auto mem_path = FileHelper::MakeForwardBlockPath(seg_path_, mem_block.id_,\n                                                   !options_.enable_mmap_);\n  if (FileHelper::FileExists(mem_path)) {\n    LOG_WARN(\n        \"ForwardBlock file[%s] already exists (possible crash residue); \"\n        \"cleaning and overwriting.\",\n        mem_path.c_str());\n    FileHelper::RemoveFile(mem_path);\n  }\n  memory_store_ = std::make_shared<MemForwardStore>(\n      collection_schema_, mem_path,\n      options_.enable_mmap_ ? FileFormat::IPC : FileFormat::PARQUET,\n      options_.max_buffer_size_);\n  auto s = memory_store_->Open();\n  CHECK_RETURN_STATUS(s);\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X13",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 1696,
+          "end_line": 1729,
+          "supports": "Successful nonquantized vector-index creation can add a VECTOR_INDEX persisted block even when no scalar block was persisted.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "06f739e7ad7dafc1b948330553f9b8a06c85c063ab312c83fff45984575e1b5b",
+          "source_excerpt": "  if (vector_index_params->quantize_type() == QuantizeType::UNDEFINED) {\n    auto block_id = allocate_block_id();\n\n    auto field_with_new_index_params = std::make_shared<FieldSchema>(*field);\n    field_with_new_index_params->set_index_params(index_params);\n\n    std::string index_file_path = FileHelper::MakeVectorIndexPath(\n        path_, column, segment_meta_->id(), block_id);\n    if (FileHelper::FileExists(index_file_path)) {\n      LOG_WARN(\n          \"Index file[%s] already exists (possible crash residue); cleaning \"\n          \"and overwriting.\",\n          index_file_path.c_str());\n      FileHelper::RemoveFile(index_file_path);\n    }\n    auto vector_indexer = merge_vector_indexer(\n        index_file_path, column, *field_with_new_index_params, concurrency);\n    if (!vector_indexer.has_value()) {\n      return vector_indexer.error();\n    }\n\n    vector_indexers->insert({column, vector_indexer.value()});\n\n    new_segment_meta->remove_vector_persisted_block(column);\n    BlockMeta block;\n    block.set_id(block_id);\n    block.set_type(BlockType::VECTOR_INDEX);\n    block.set_columns({column});\n    block.set_min_doc_id(doc_ids_.front());\n    block.set_max_doc_id(doc_ids_.back());\n    block.set_doc_count(doc_ids_.size());\n    new_segment_meta->add_persisted_block(block);\n\n    *segment_meta = new_segment_meta;\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X14",
+          "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+          "start_line": 103,
+          "end_line": 113,
+          "supports": "An opened vector index with an empty merge-input list returns OK from Merge; later Flush is a separate operation.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "f275090d4314bb2621d5cb261c8e210e57790ad643094f9466bdb6c3521d7c70",
+          "span_sha256": "6b8e54f4c6cdc97226f815bdda282129faaf51c90ab00f91ba90bb20f374a1f5",
+          "source_excerpt": "Status VectorColumnIndexer::Merge(\n    const std::vector<VectorColumnIndexer::Ptr> &indexers,\n    const IndexFilter::Ptr &filter,\n    const vector_column_params::MergeOptions &merge_options) {\n  if (index == nullptr) {\n    return Status::InvalidArgument(\"Index not opened\");\n  }\n\n  if (indexers.empty()) {\n    return Status::OK();\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X15",
+          "path": "tests/db/crash_recovery/utility.h",
+          "start_line": 137,
+          "end_line": 155,
+          "supports": "The deterministic test documents include dense and sparse vector values.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "454671024b37ba76c6d84e31ad85d2aaa9fdaf906e563220f81071eadbf75f33",
+          "span_sha256": "4741a9c4757f058d354e84d8802c5ff82ffe95fc8bdccbaf22dea9754decec55",
+          "source_excerpt": "  // dense_fp32_field: deterministic pattern\n  std::vector<float> dense(128);\n  for (int i = 0; i < 128; i++) {\n    dense[i] = static_cast<float>(doc_id + i) / 1000.0f;\n  }\n  doc.set<std::vector<float>>(\"dense_fp32_field\", dense);\n\n  // sparse_fp32_field: sparse vector with indices [0, 10, 20, ..., 100]\n  // Values based on doc_id: value = (doc_id + index) / 1000.0\n  std::vector<uint32_t> sparse_indices;\n  std::vector<float> sparse_values;\n  for (uint32_t idx = 0; idx <= 100; idx += 10) {\n    sparse_indices.push_back(idx);\n    sparse_values.push_back(static_cast<float>(doc_id + idx) / 1000.0f);\n  }\n  doc.set<std::pair<std::vector<uint32_t>, std::vector<float>>>(\n      \"sparse_fp32_field\", std::make_pair(sparse_indices, sparse_values));\n\n  return doc;\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X16",
+          "path": "src/db/collection.cc",
+          "start_line": 1219,
+          "end_line": 1229,
+          "supports": "Line 1227 belongs to dropping a column, not altering one.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "45bfb2fbf115808b442fe881356dbb689a3cdbaee05ed3a6fce2d986a2011f19",
+          "source_excerpt": "  // forbidden writing until index is ready\n  std::lock_guard write_lock(write_mtx_);\n\n  auto new_schema = std::make_shared<CollectionSchema>(*schema_);\n  s = new_schema->drop_field(column_name);\n  CHECK_RETURN_STATUS(s);\n\n  if (writing_segment_->doc_count() > 0) {\n    s = switch_to_new_segment_for_writing();\n    CHECK_RETURN_STATUS(s);\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X17",
+          "path": "src/db/collection.cc",
+          "start_line": 1305,
+          "end_line": 1313,
+          "supports": "Line 1311 belongs to altering a column, not dropping one.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "e6b063092abe2e767ca97833c9d951cf37b227f6d76a2aa3c5b8fc9ab1db322e",
+          "source_excerpt": "\n  auto new_schema = std::make_shared<CollectionSchema>(*schema_);\n  s = new_schema->alter_field(column_name, new_field_schema);\n  CHECK_RETURN_STATUS(s);\n\n  if (writing_segment_->doc_count() > 0) {\n    s = switch_to_new_segment_for_writing();\n    CHECK_RETURN_STATUS(s);\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X18",
+          "path": "src/db/collection.cc",
+          "start_line": 794,
+          "end_line": 810,
+          "supports": "The empty-persisted-segment return is a separate condition from zero writing-segment doc_count.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+          "span_sha256": "796d79a83a4a3d48aa9e324e494a74fab47f61bc8cccb27cd61ed2fd7d0e601d",
+          "source_excerpt": "    if (writing_segment_->doc_count() != 0) {\n      // flush and create new segment\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n    // after leave this scope, writing action is allowed\n  }\n\n  if (persist_segments.size() == 0) {\n    // no need to optimize\n    return Status::OK();\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X19",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 2304,
+          "end_line": 2315,
+          "supports": "Successful normal flush removes and resets the member WAL.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "8b940b7c816c59f0c5e2d8823569e6c1fbb0c72f4a768a4554e1776a3439ad76",
+          "source_excerpt": "  // clear wal file\n  if (wal_file_) {\n    auto ret = wal_file_->remove();\n    if (ret != 0) {\n      LOG_ERROR(\n          \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n          id());\n      return Status::InternalError(\"Failed to remove WAL file\");\n    }\n    wal_file_.reset();\n    LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n  }\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        },
+        {
+          "id": "X20",
+          "path": "src/db/index/segment/segment.cc",
+          "start_line": 1636,
+          "end_line": 1640,
+          "supports": "Index creation marks fields indexed independently of forward-block reconstruction.",
+          "resolves_in_frozen_source": true,
+          "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+          "span_sha256": "a10c74ace18a74414beda22d86aac64c819b6b41c6b2f5f892a75bead0f188b6",
+          "source_excerpt": "  new_segment_meta->set_indexed_vector_fields(vector_field_names);\n  *segment_meta = new_segment_meta;\n\n  return Status::OK();\n}\n",
+          "answer_support_status": "Additional audit evidence; see criterion or unsupported-claim entries for whether the answer itself cited this exact span."
+        }
+      ],
+      "unsupported_claims": [
+        {
+          "id": "U1",
+          "answer_quote": "The single differing piece of state is `wal_file_ == nullptr` after recovery. Everything else (`doc_ids_`, `memory_store_`, memory indexers, id map) is identical to the ordinary path.",
+          "assessment": "Overstrong literal state-equivalence claim. The relevant WAL distinction is correct, but recovery also adds recovered counts to mem_block.max_doc_id_ after internal_insert has already set it for each insert. Thus the complete state is not established as identical.",
+          "evidence_ids": [
+            "E04",
+            "E05"
+          ],
+          "critical": false
+        },
+        {
+          "id": "U2",
+          "answer_quote": "Crucially, **nothing on disk has changed yet**",
+          "assessment": "Unsupported blanket claim. The manifest/WAL recovery linkage remains, but replay invokes IDMap::upsert, which performs RocksDB Put; initialization can also remove a residue forward-block file and open memory-store components. The narrower claim that flush did not persist/finalize the recovered forward block is supported.",
+          "evidence_ids": [
+            "E04",
+            "X11",
+            "X12"
+          ],
+          "critical": false
+        },
+        {
+          "id": "U3",
+          "answer_quote": "`flush()`/`dump()` is a silent no-op",
+          "assessment": "Imprecise summary: flush returns before its persistence body, but dump still seals scalar indexers, invokes dump_fts_indexers and sets sealed_. The answer later expressly describes sealing, so this is not the listed critical contradiction that optimize never invokes flush.",
+          "evidence_ids": [
+            "E08"
+          ],
+          "critical": false
+        },
+        {
+          "id": "U4",
+          "answer_quote": "Both can be perfect while the manifest references zero blocks.",
+          "assessment": "Needs qualification to zero persisted scalar/forward blocks or to the all-memory FLAT branch. A successful non-FLAT index-building branch can add VECTOR_INDEX metadata even though the recovered scalar rows were never persisted. The core no-scalar-block explanation is correct.",
+          "evidence_ids": [
+            "E15",
+            "X13"
+          ],
+          "critical": false
+        },
+        {
+          "id": "U5",
+          "answer_quote": "Had it been 0, Optimize returns at `807-810` and nothing is lost.",
+          "assessment": "Only true if there are also no persisted segments. The cited early return tests persist_segments.size()==0, independently of writing-segment doc_count. In the intended newly populated small collection that qualification may hold; the statement is overgeneral outside it.",
+          "evidence_ids": [
+            "X18"
+          ],
+          "critical": false
+        },
+        {
+          "id": "U6",
+          "answer_quote": "`1155/1227/1311` (Add/Alter/DropColumn)",
+          "assessment": "The cited call sites exist, but the last two labels are reversed: 1227 is DropColumn and 1311 is AlterColumn. This does not affect the shared switch hazard or any criterion score.",
+          "evidence_ids": [
+            "X16",
+            "X17"
+          ],
+          "critical": false
+        }
+      ],
+      "critical_contradictions": [],
+      "critical_contradiction_count": 0,
+      "total_points": 9,
+      "maximum_points": 10,
+      "factual_core_full_credit": true,
+      "core_citation_status": {
+        "C1": "valid supporting citations",
+        "C2": "valid supporting citations",
+        "C3": "valid supporting citations",
+        "all_required_core_claims_supported": true
+      },
+      "source_grounded_success": true,
+      "pass_fail": "PASS",
+      "success_rule_applied": {
+        "minimum_points": 8,
+        "required_full_credit": [
+          "C1",
+          "C2",
+          "C3"
+        ],
+        "critical_contradictions_allowed": 0,
+        "supporting_citations_required_for_core_claims": true
+      },
+      "repair_description_limitations": [
+        "Explicitly close or transfer/cancel the temporary-reader cleanup when retaining its handle.",
+        "Propagate any error from reopening the member WAL."
+      ],
+      "execution_claim_assessment": "The answer explicitly says it did not build, run or reproduce the scenario; predicted test outcomes are therefore read as source inferences, not execution evidence.",
+      "reviewer_notes": [
+        "Scoring uses only the supplied original rubric and frozen source. No profile identity, trajectory, resource metrics, other answer or run metadata was accessed.",
+        "Shorthand segment.cc/collection.cc citations were resolved from the answer's explicit repository-relative paths and verified for claim support. Whole-file hits were not used as core evidence.",
+        "C6 is credited at repair-principle level under the rubric's express attaching/reopening equivalence rule; implementation details remain noted.",
+        "C7 loses its one point for not specifying the final fresh-process reopen required by the criterion. The described same-process destroy/reopen can still be diagnostically useful, but is not the complete requested regression sequence.",
+        "The noncritical overclaims do not match any listed critical contradiction and do not negate C1-C3. No additional numeric penalties were invented."
+      ]
+    }
+  ],
+  "run_validity_assessed": false,
+  "comparative_benefit_assessed": false,
+  "reviewer_executed_reproduction": false,
+  "input_files_modified": false
+}
