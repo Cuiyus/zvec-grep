@@ -1,0 +1,649 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "artifact_type": "source_preparation_only",
+  "status": "prepared_awaiting_explicit_anonymous_packet_path",
+  "reviewer": "model reviewer; not official SWE-QA or human grading",
+  "source_commit": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+  "inputs": {
+    "question": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/tasks/q001/instruction.md",
+      "bytes": 1753,
+      "sha256": "94aad1d075ef44984c2e6c330bca8d3dc6c273c1c7044c20b4bdd47c6c7854ef"
+    },
+    "rubric": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/zvec-issue-qa/evaluator/q001.json",
+      "bytes": 17326,
+      "sha256": "6da038c670a93213095bb3ac07c77a67f9863defa23f8ac4a3b6fd2af8a81cb9"
+    },
+    "contract": {
+      "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/native-claude-qa-pilot/grader-contract-v1.json",
+      "bytes": 2157,
+      "sha256": "948938cdb32baa3b87ad0658196c33c158939dfeadc707e5c89e952d3e3558c6"
+    },
+    "source_manifest": {
+      "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/source-manifest.json",
+      "bytes": 218767,
+      "sha256": "fe57be1690b322600251ab938d6f7a14d02394621121aa9e3da7fa1cfbfa1d1e"
+    }
+  },
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source",
+  "source_integrity": {
+    "manifest_file_count": 1232,
+    "verified_manifest_entries": 1232,
+    "byte_count_and_file_sha_mismatches": [],
+    "original_evidence_spans_verified": 16,
+    "original_evidence_file_and_span_hash_mismatches": [],
+    "manifest_declared_inventory_sha256": "741d06d8fc216150933c5ed87f9a100e0d2120b2dc09a9109084365e92d307ba",
+    "inventory_hash_recalculated": false,
+    "note": "All listed file bytes and SHA256 values were checked; manifest inventory hash is recorded as declared, not claimed independently recomputed."
+  },
+  "grading_contract_preserved": {
+    "criterion_count": 7,
+    "maximum_points": 10,
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C1",
+      "C2",
+      "C3"
+    ],
+    "verified_supporting_core_citations_required": true,
+    "critical_contradictions_allowed": 0,
+    "factual_points_separate_from_citations_and_contradictions": true,
+    "equivalent_explanations_and_spans_allowed": true,
+    "no_answer_scores_or_quality_benefit_conclusions": true,
+    "critical_contradictions_verbatim": [
+      "Claims WAL replay itself failed and documents never existed after initial reopen.",
+      "Claims optimize never invokes a flush path.",
+      "Claims simply calling flush() on this recovered state repairs the lifecycle without further changes.",
+      "Claims vector similarity/quantization or Python garbage collection is the causal defect.",
+      "Claims same-handle statistics prove disk durability."
+    ],
+    "c6_primary_and_sensitivity_rule_verbatim": "For C6, apply the stated member-WAL lifecycle invariant and handling-errors clause symmetrically: answer must attach/reopen the existing WAL (or prove an equivalent lifecycle), and indicate that failure cannot be silently treated as successful recovery. Error propagation/checking wording need not be exact. Record a separate sensitivity point if the minimal-lifecycle-only reading of full_credit would differ, without replacing the primary score.",
+    "c7_rule_verbatim": "For C7, require a fresh reopen after optimize without extra writes and known-document checks, with the stated no-crash or already-flushed control. Same-handle checks alone are insufficient."
+  },
+  "criterion_source_preparation": [
+    {
+      "criterion_id": "C1",
+      "maximum_points": 2,
+      "critical": true,
+      "claim_verbatim": "Recovery reconstructs readable in-memory state from a temporary/local WAL handle but finishes without installing/reopening the member wal_file_.",
+      "full_credit_verbatim": "Name the local-versus-member distinction and show replay enters internal operations that populate memory/doc ids. A generic claim of stale cache is insufficient.",
+      "partial_credit_verbatim": "1 point for correct recovered-memory state or correct local/member WAL distinction, but not both.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E01",
+        "E02",
+        "E03",
+        "E04",
+        "E05",
+        "S01",
+        "S02",
+        "S03",
+        "S05",
+        "S06"
+      ],
+      "verified_causal_parts": [
+        "temporary/local recovery WAL versus null member wal_file_",
+        "direct internal replay rebuilds memory/id map/doc_ids_/indexes",
+        "writing-block memory fetch explains initially readable data"
+      ],
+      "citation_requirement": "Actual future-answer citations must substantiate both local/member distinction and reconstructed memory state; no reviewer-added citation substitution."
+    },
+    {
+      "criterion_id": "C2",
+      "maximum_points": 2,
+      "critical": true,
+      "claim_verbatim": "flush() treats a null member WAL or one with no records as no pending work, returning OK before persistence. Here the null member arm triggers.",
+      "full_credit_verbatim": "State the exact null-or-no-record guard, identify the null-member cause for this scenario, and explain the skipped persistence/finalization.",
+      "partial_credit_verbatim": "1 point for identifying flush as the skipped step without the precise condition or lifecycle consequences.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E08",
+        "E09",
+        "E10",
+        "E15",
+        "S07",
+        "S08"
+      ],
+      "verified_causal_parts": [
+        "exact null-or-no-record guard returns OK",
+        "null-member arm applies after successful recovery in the stated small-data/no-extra-write sequence",
+        "memory/index flush, persisted-block finalization and version update are skipped"
+      ],
+      "citation_requirement": "Future-answer core citations must support the guard and skipped persistence consequences, not merely name flush."
+    },
+    {
+      "criterion_id": "C3",
+      "maximum_points": 2,
+      "critical": true,
+      "claim_verbatim": "Optimize -> switch_to_new_segment_for_writing -> dump -> flush; successful early return allows sealing/switching and version persistence after old writing-block metadata is removed, so a future open cannot recover/persist the lost memory via the old writing block.",
+      "full_credit_verbatim": "Connect the full call chain to removal of old writing metadata and the new persisted version, rather than blaming vector-ranking quality or claiming optimize never calls flush.",
+      "partial_credit_verbatim": "1 point for correct call chain without the metadata/reopen consequence, or correct consequence without the chain.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E06",
+        "E07",
+        "E08",
+        "E01",
+        "S02",
+        "S04"
+      ],
+      "verified_causal_parts": [
+        "optimize -> switch_to_new_segment_for_writing -> dump -> flush",
+        "OK permits sealing and switching",
+        "old writing-forward metadata removed and new version applied/flushed",
+        "next Open does not recover that old writing block and cannot reconstruct its memory-only rows from registered persisted blocks"
+      ],
+      "citation_requirement": "Full causal chain and metadata/reopen consequence must be explained and supported by actual answer citations."
+    },
+    {
+      "criterion_id": "C4",
+      "maximum_points": 1,
+      "critical": false,
+      "claim_verbatim": "Same-handle Stats reads in-memory segment counts and indexed metadata; success/index completeness is not a durability or data-content check.",
+      "full_credit_verbatim": "Explain doc_ids_ based counting and metadata-derived index completeness; do not invent a separate stats cache.",
+      "partial_credit_verbatim": "No partial point.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E11",
+        "E12"
+      ],
+      "verified_causal_parts": [
+        "doc_ids_-based current-handle live count",
+        "vector-indexed metadata-derived completeness",
+        "successful status and these observations are not fresh-open durability validation"
+      ]
+    },
+    {
+      "criterion_id": "C5",
+      "maximum_points": 1,
+      "critical": false,
+      "claim_verbatim": "Normal Insert appends to/opens the member WAL before internal_insert, unlike replay, explaining the no-crash control under the stated size assumptions.",
+      "full_credit_verbatim": "Cite ordinary insertion and append/open behavior; distinguish recovery bypassing append_wal.",
+      "partial_credit_verbatim": "No partial point.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E13",
+        "E14",
+        "E03"
+      ],
+      "verified_causal_parts": [
+        "normal Insert invokes append_wal first",
+        "append lazily opens member WAL and checks status",
+        "replay bypasses that public append path",
+        "no-crash small-data control consequently has an attached WAL for optimize/dump/flush"
+      ]
+    },
+    {
+      "criterion_id": "C6",
+      "maximum_points": 1,
+      "critical": false,
+      "claim_verbatim": "Restore the invariant that replayed pending data has an attached usable member WAL before later flush/dump; close the temporary reader and reopen/retain the existing WAL through the normal member path, handling errors.",
+      "full_credit_verbatim": "A minimal lifecycle repair equivalent to attaching/reopening the existing WAL is accepted. An alternative persistence design is accepted only if the answer proves it preserves version, flush and WAL cleanup invariants.",
+      "partial_credit_verbatim": "No partial point; simply calling public flush on the broken state is not a repair.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E02",
+        "E05",
+        "E08",
+        "E14",
+        "S07",
+        "S08",
+        "S09",
+        "S10",
+        "S11",
+        "S12"
+      ],
+      "verified_causal_parts": [
+        "pending replayed data must have a successfully usable member WAL before flush/dump",
+        "close temporary reader and reopen/retain existing WAL through member path or prove equivalent lifecycle",
+        "check/propagate reopen failure; non-null pointer alone is insufficient",
+        "preserve flush/version commit/WAL cleanup ordering"
+      ],
+      "primary_contract_application": "Apply lifecycle and error-handling clauses together. Equivalent wording indicating failure cannot silently count as successful recovery is accepted. No exact patch spelling is required. Merely calling public flush with the null member is insufficient.",
+      "sensitivity_record_required_if_applicable": "If an answer states the correct minimal attach/reopen lifecycle but omits error handling, record the separately marked minimal-lifecycle-only sensitivity point without replacing the primary score.",
+      "scope_boundary": "Do not add a requirement to fix every preexisting recovery error branch or ignored operation status; the required error handling concerns the proposed usable-member-WAL restoration."
+    },
+    {
+      "criterion_id": "C7",
+      "maximum_points": 1,
+      "critical": false,
+      "claim_verbatim": "Regression: insert known documents, force abrupt termination before flush, reopen and verify recovered data, optimize without extra writes, close, reopen from fresh process and compare count plus representative/all known documents and vectors. Include a no-crash or already-flushed control.",
+      "full_credit_verbatim": "Fresh reopen after optimize and no intervening writes are required, because same-handle checks and writes that lazily open the WAL can mask the defect. Executing the test is not required.",
+      "partial_credit_verbatim": "No partial point.",
+      "preparation_verification": "source_verified; no answer evaluated",
+      "evidence_ids": [
+        "E16",
+        "E07",
+        "E13",
+        "E14"
+      ],
+      "required_proposed_regression": [
+        "insert known documents while avoiding automatic rollover",
+        "force abrupt exit before explicit flush",
+        "fresh process open and verify recovery",
+        "optimize immediately with no intervening added writes",
+        "close and reopen in another fresh process",
+        "compare count and known document/vector content",
+        "include no-crash or already-flushed control"
+      ],
+      "why_necessary": [
+        "same-handle statistics observe memory/metadata and can mask missing persisted rows",
+        "extra writes lazily open member WAL and can mask the lifecycle bug",
+        "existing inspected crash test stops at recovery readback"
+      ],
+      "execution_required": false
+    }
+  ],
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 484,
+      "end_line": 501,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "779ce7d762e28e05982de1e368780654d859a4c840f17bd44e69100810bc4e1f",
+      "exact_source": "  auto writing_block = segment_meta_->writing_forward_block();\n  if (!writing_block.has_value() && !options_.read_only_) {\n    return Status::InternalError(\n        \"No writing block found when in writing mode.\");\n  }\n\n  if (writing_block.has_value()) {\n    // init doc_id_allocator and block_id_allocator\n    doc_id_allocator_ = writing_block.value().min_doc_id();\n    BlockID max_block_id{writing_block.value().id()};\n    for (auto &block : segment_meta_->persisted_blocks()) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_ = max_block_id + 1;\n\n    // recover writing block\n    s = recover();\n    CHECK_RETURN_STATUS(s);\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Open invokes recover only if writing_forward_block exists; CHECK_RETURN_STATUS propagates its non-OK result. The full Open control flow is also verified in S02.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E02",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4193,
+      "end_line": 4215,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "95fee72e702aaf4cc9105864f8eee18472fef5f743d5569676cb34caceaad7b8",
+      "exact_source": "Status SegmentImpl::recover() {\n  // recover mem block meta\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  doc_id_allocator_.store(mem_block.min_doc_id());\n\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  if (!std::filesystem::exists(wal_file_path)) {\n    LOG_INFO(\"WAL recovery skipped: no WAL file exists [%s]\",\n             wal_file_path.c_str());\n    return Status::OK();\n  }\n\n  WalFilePtr recover_wal_file;\n  WalOptions wal_option;\n  wal_option.create_new = false;\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n      0) {\n    LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::OK();\n  }\n  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "The recover_wal_file pointer is local, opened for an existing WAL and closed by deferred cleanup; the successful replay path does not install it into wal_file_. This quoted range also contains a preexisting WAL-open-failure branch returning OK, distinct from the reported successful-replay/null-member cause.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E03",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4234,
+      "end_line": 4265,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "906ce9887c062fb4e15640236a434b362625d6ce9d8c52fd2e8b667a4e461d43",
+      "exact_source": "  while (true) {\n    std::string buf = recover_wal_file->next();\n    if (buf.empty()) {\n      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n      break;\n    }\n    total_recovered_doc_count++;\n    auto doc = Doc::deserialize(reinterpret_cast<const uint8_t *>(buf.data()),\n                                buf.size());\n    if (doc == nullptr) {\n      LOG_ERROR(\"WAL recovery failed [%s]: doc deserialization error at %zu\",\n                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n      continue;\n    }\n\n    Status status;\n    switch (doc->get_operator()) {\n      case Operator::INSERT: {\n        internal_insert(*doc);\n        break;\n      }\n      case Operator::UPDATE: {\n        internal_update(*doc);\n        break;\n      }\n      case Operator::UPSERT: {\n        internal_upsert(*doc);\n        break;\n      }\n      case Operator::DELETE: {\n        internal_delete(*doc);\n        break;\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Recovery directly invokes internal_insert/update/upsert/delete, bypassing public Insert and append_wal. The operation return values are not assigned to the declared status in this frozen source; this ancillary issue is not substituted for the requested cause or made an additional grading requirement.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E04",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 837,
+      "end_line": 880,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "f5272d0e86956896f24cb66f51b2c6be475e7b8035ef426e173feafff243df27",
+      "exact_source": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  mem_block.max_doc_id_ = g_doc_id;\n  mem_block.doc_count_ = mem_block.doc_count_ + 1;\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "internal_insert initializes memory components, populates ID map, memory forward store and indexes, and appends doc_ids_ while updating writing-block count; it does not attach the member WAL. Automatic flush is possible at ready_for_dump_block, explicitly excluded by the prompt size assumption.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E05",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4285,
+      "end_line": 4301,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "dfdc1347216f2c31eb96e6c22acf895d2574189b724af0e52f7426b464c356fc",
+      "exact_source": "  const auto added_docs = recovered_doc_count[0] +  // INSERT\n                          recovered_doc_count[1] +  // UPSERT\n                          recovered_doc_count[2];   // UPDATE\n  mem_block.max_doc_id_ += added_docs;\n\n  LOG_INFO(\n      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n      \"(insert[%zu], upsert[%zu], update[%zu], delete[%zu])\",\n      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n      (size_t)recovered_doc_count[0],  // INSERT\n      (size_t)recovered_doc_count[1],  // UPSERT\n      (size_t)recovered_doc_count[2],  // UPDATE\n      (size_t)recovered_doc_count[3]   // DELETE\n  );\n\n  return Status::OK();\n}\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Recovery returns OK after replay accounting; there is no member-WAL attach/reopen before this return. Together E02/E03 and full function context establish the local/member distinction.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E06",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/collection.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/collection.cc",
+      "start_line": 788,
+      "end_line": 816,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "4d717fe3dfd3e5dbeec8ad0b838d3d979efef81a9bd99e984e5adacfc9513424",
+      "exact_source": "  std::vector<Segment::Ptr> persist_segments;\n\n  {\n    // forbidden writing for a while\n    std::lock_guard write_lock(write_mtx_);\n\n    if (writing_segment_->doc_count() != 0) {\n      // flush and create new segment\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n    // after leave this scope, writing action is allowed\n  }\n\n  if (persist_segments.size() == 0) {\n    // no need to optimize\n    return Status::OK();\n  }\n\n  // build segment compact task\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "optimize tests writing_segment_->doc_count()!=0 and calls switch_to_new_segment_for_writing before planning persisted-segment maintenance. It is not true that optimize never calls a flush path.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E07",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/collection.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/collection.cc",
+      "start_line": 1517,
+      "end_line": 1551,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "d04765f4431e25f55650974e39d788a03d8e25d97689c82a0784fe9a38b45c50",
+      "exact_source": "Status CollectionImpl::switch_to_new_segment_for_writing(\n    const CollectionSchema::Ptr &schema) {\n  auto s = writing_segment_->dump();\n  CHECK_RETURN_STATUS(s);\n\n  s = segment_manager_->add_segment(writing_segment_);\n  CHECK_RETURN_STATUS(s);\n\n  // when create new segment, segment meta should create a first new block\n  // meta\n  auto new_segment = Segment::CreateAndOpen(\n      path_, schema == nullptr ? *schema_ : *schema, allocate_segment_id(),\n      writing_segment_->meta()->max_doc_id() + 1, id_map_, delete_store_,\n      version_manager_,\n      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_});\n  if (!new_segment) {\n    return new_segment.error();\n  }\n\n  Version version = version_manager_->get_current_version();\n  auto writing_segment_meta = writing_segment_->meta();\n  writing_segment_meta->remove_writing_forward_block();\n  s = version.add_persisted_segment_meta(writing_segment_meta);\n  CHECK_RETURN_STATUS(s);\n\n  writing_segment_ = new_segment.value();\n  version.reset_writing_segment_meta(writing_segment_->meta());\n  version.set_next_segment_id(segment_id_allocator_.load());\n\n  s = version_manager_->apply(version);\n  CHECK_RETURN_STATUS(s);\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  return Status::OK();\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Switch calls dump, checks status, adds old segment, removes its writing-forward-block metadata, installs the new writing segment in the version, then applies and flushes the version.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E08",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 2197,
+      "end_line": 2222,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8cf9a3abf15b43787c548efbac672fa1b102dd11a74458c3dcc5c06bb7fff5df",
+      "exact_source": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "dump calls flush and can continue sealing on OK. flush returns OK for wal_file_==nullptr OR !wal_file_->has_record(); the reported successful-recovery path triggers the null-member arm.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E09",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 2224,
+      "end_line": 2255,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "326c887bfd18c8281c263d6b93547342ef0995ee241d8d1dabbd7093cf051c70",
+      "exact_source": "  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "The early return is before WAL flush, memory forward flush, scalar/FTS flush and memory vector Flush. A public flush call on the unchanged broken state reaches the same guard.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E10",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2302,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "3b769ee93f26622dc1a00465cf202cce6a6463f72bd93b8119a84377727308ce",
+      "exact_source": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Normal flush calls finish_memory_components, installs the next writing block and update_version. The null-member early return skips these persistence/finalization steps.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E11",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/collection.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/collection.cc",
+      "start_line": 403,
+      "end_line": 439,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "36c5fb13c90a28123635d0ea28f244995139c6ac601aa8009a9db3451e2d8923",
+      "exact_source": "Result<CollectionStats> CollectionImpl::Stats() const {\n  std::lock_guard lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n\n  auto segments = get_all_segments();\n\n  CollectionStats stats;\n  auto vector_fields = schema_->vector_fields();\n  if (segments.empty()) {\n    stats.doc_count = 0;\n    for (auto &field : vector_fields) {\n      stats.index_completeness[field->name()] =\n          1;  // if no doc, completeness is 1\n    }\n    return stats;\n  }\n\n  for (auto &segment : segments) {\n    stats.doc_count += segment->doc_count(delete_store_->make_filter());\n  }\n\n  for (auto &field : vector_fields) {\n    if (stats.doc_count == 0) {\n      stats.index_completeness[field->name()] = 1;\n      continue;\n    }\n\n    uint32_t indexed_doc_count{0};\n    for (auto &segment : segments) {\n      if (segment->meta()->vector_indexed(field->name())) {\n        indexed_doc_count += segment->doc_count(delete_store_->make_filter());\n      }\n    }\n    stats.index_completeness[field->name()] =\n        indexed_doc_count * 1.0 / stats.doc_count;\n  }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Stats sums current segment doc_count(filter); completeness sums counts for segments whose metadata marks the vector field indexed. It does not independently verify disk reconstruction or content, and does not use a separate invented stats cache.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E12",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 589,
+      "end_line": 600,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+      "exact_source": "uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n  uint64_t doc_count = doc_ids_.size();\n  if (filter) {\n    for (const auto &doc_id : doc_ids_) {\n      if (filter->is_filtered(doc_id)) {\n        doc_count--;\n      }\n    }\n  }\n\n  return doc_count;\n}\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Per-segment counting starts from in-memory doc_ids_.size() and subtracts deletion-filter matches.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E13",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 903,
+      "end_line": 917,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e5a814d864bffcb8530485f5f40accbab36adc93f2d00916ecab31d010aec78c",
+      "exact_source": "Status SegmentImpl::Insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append wal\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n  return internal_insert(doc);\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Ordinary public Insert appends WAL and checks status before internal_insert, explaining the no-crash control.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E14",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4303,
+      "end_line": 4338,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b195933074a1bc80d0e40fda99b8c57500bc0264312cab7270596e1bcd40278a",
+      "exact_source": "Status SegmentImpl::open_wal_file() {\n  auto mem_block = segment_meta_->writing_forward_block().value();\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  WalOptions wal_option;\n  if (std::filesystem::exists(wal_file_path)) {\n    wal_option.create_new = false;\n  } else {\n    wal_option.create_new = true;\n  }\n\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n  }\n\n  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n  return Status::OK();\n}\n\nStatus SegmentImpl::append_wal(const Doc &doc) {\n  std::vector<uint8_t> buf = doc.serialize();\n\n  if (!wal_file_) {\n    auto s = open_wal_file();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n  if (ret != 0) {\n    LOG_ERROR(\"WAL append failed: segment[%d], pk[%s], op[%d], ret[%d]\", id(),\n              doc.pk().c_str(), static_cast<int>(doc.get_operator()), ret);\n    return Status::InternalError(\"Failed to append wal\");\n  }\n\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "open_wal_file chooses the existing path when present and passes the member wal_file_ to CreateAndOpen; open failure returns an error. append_wal lazily invokes it and checks status. Subsequent writes can therefore mask recovery detachment.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E15",
+      "origin": "original_rubric_evidence",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4342,
+      "end_line": 4384,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b34740cd9252ffb6cbb860df65394aa6fcc67f33ab2d20ad529b0fa98e2e1c72",
+      "exact_source": "Status SegmentImpl::finish_memory_components() {\n  auto block = segment_meta_->writing_forward_block().value();\n\n  // close for loading persist block\n  auto s = memory_store_->close();\n  CHECK_RETURN_STATUS(s);\n  memory_store_.reset();\n\n  // load forward store\n  auto persist_forward_store_path = FileHelper::MakeForwardBlockPath(\n      path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n  BaseForwardStore::Ptr persist_store;\n  if (options_.enable_mmap_) {\n    persist_store =\n        std::make_shared<MmapForwardStore>(persist_forward_store_path);\n  } else {\n    persist_store =\n        std::make_shared<BufferPoolForwardStore>(persist_forward_store_path);\n  }\n  s = persist_store->Open();\n  CHECK_RETURN_STATUS(s);\n  persist_stores_.push_back(persist_store);\n\n  BlockMeta b{block.id_,         block.type_,      block.min_doc_id_,\n              block.max_doc_id_, block.doc_count_, block.columns_};\n  segment_meta_->add_persisted_block(b);\n\n  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "finish_memory_components opens the persisted forward store and registers scalar/vector blocks using the writing-block metadata; the skipped flush prevents this normal registration.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "E16",
+      "origin": "original_rubric_evidence",
+      "path": "tests/db/crash_recovery/write_recovery_test.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/tests/db/crash_recovery/write_recovery_test.cc",
+      "start_line": 182,
+      "end_line": 218,
+      "file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "span_sha256": "fa2490e2f9b2b61b0c300af7d333d2e5ab1c6deb728a9ed22c278358ac912080",
+      "exact_source": "TEST_F(CrashRecoveryTest, CrashRecoveryDuringInsertion) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGeneratorAndCrash(\"0\", \"10000\", \"insert\", \"0\", 3);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_GT(doc_count, 800)\n      << \"Document count is too low after 3s of insertion and recovery\";\n\n  for (uint64_t doc_id = 0; doc_id < doc_count; doc_id++) {\n    const auto expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      if (map.find(expected_doc.pk()) == map.end()) {\n        FAIL() << \"Returned map does not contain doc[\" << expected_doc.pk()\n               << \"]\";\n      }\n      const auto actual_doc = map.at(expected_doc.pk());\n      ASSERT_EQ(*actual_doc, expected_doc)\n          << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "The inspected existing crash test crashes during insertion, reopens and checks recovered count/fetched documents, but has no optimize-followed-by-fresh-reopen phase. This source inspection is not test execution or an exhaustive statement about all tests.",
+      "rubric_hashes_match": true,
+      "rubric_annotation_treated_as_hypothesis_not_evidence": true
+    },
+    {
+      "id": "S01",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 397,
+      "end_line": 403,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "6f4c8c8900c6a03e0dbd902171aa5ecb3d145fe6ebe3ee6d6bc64f35ddfb9ce9",
+      "exact_source": "  std::atomic<uint64_t> doc_id_allocator_{0};\n  std::atomic<BlockID> block_id_allocator_{0};\n\n  // wal\n  WalFilePtr wal_file_{nullptr};\n\n  bool sealed_{false};\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Member wal_file_ explicitly initializes to nullptr."
+    },
+    {
+      "id": "S02",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 461,
+      "end_line": 516,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "593af6492c7fbf2f611a5098b511f3e65f4bc0676ed24dc04681ca47395779b8",
+      "exact_source": "Status SegmentImpl::Open(const SegmentOptions &options) {\n  options_ = options;\n  options_.enable_mmap_ = version_manager_->get_current_version().enable_mmap();\n\n  filter_ =\n      std::make_shared<SegmentIndexFilter>(delete_store_, shared_from_this());\n\n  // load persist forward blocks\n  auto s = load_persist_scalar_blocks();\n  CHECK_RETURN_STATUS(s);\n\n  // load scalar indexes\n  s = load_scalar_index_blocks();\n  CHECK_RETURN_STATUS(s);\n\n  // load FTS indexes\n  s = open_fts_indexers(false);\n  CHECK_RETURN_STATUS(s);\n\n  // load vector indexes\n  s = load_vector_index_blocks();\n  CHECK_RETURN_STATUS(s);\n\n  auto writing_block = segment_meta_->writing_forward_block();\n  if (!writing_block.has_value() && !options_.read_only_) {\n    return Status::InternalError(\n        \"No writing block found when in writing mode.\");\n  }\n\n  if (writing_block.has_value()) {\n    // init doc_id_allocator and block_id_allocator\n    doc_id_allocator_ = writing_block.value().min_doc_id();\n    BlockID max_block_id{writing_block.value().id()};\n    for (auto &block : segment_meta_->persisted_blocks()) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_ = max_block_id + 1;\n\n    // recover writing block\n    s = recover();\n    CHECK_RETURN_STATUS(s);\n  } else {\n    // Update block_id_allocator_\n    BlockID max_block_id{0};\n    auto &persist_blocks = segment_meta_->persisted_blocks();\n    for (const auto &block : persist_blocks) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_.store(max_block_id + 1);\n  }\n\n  fresh_persist_block_offset();\n\n  fresh_persist_chunked_array();\n\n  return Status::OK();\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Open loads registered persisted blocks, conditionally recovers a writing block, refreshes offsets and returns; it does not subsequently attach wal_file_. When old writing metadata has been removed, the old recovery branch is not taken."
+    },
+    {
+      "id": "S03",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 2743,
+      "end_line": 2756,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e830aa36886568c4a45bdbe6dbf6816541371868ce4b935113551c8bad396efc",
+      "exact_source": "    // Check memory store\n    if (segment_meta_->has_writing_forward_block()) {\n      int mem_offset =\n          block_offsets.empty()\n              ? 0\n              : block_offsets.back() + block_metas.back().doc_count_;\n      const auto &mem_block = segment_meta_->writing_forward_block().value();\n\n      if (mem_offset <= segment_doc_id &&\n          segment_doc_id <\n              mem_offset + static_cast<int>(mem_block.doc_count_)) {\n        int block_row = segment_doc_id - mem_offset;\n        return memory_store_->fetch(columns, block_row);\n      }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Before the faulty optimize, fetch can route a physical row in the retained writing block to memory_store_->fetch, explaining initial readability."
+    },
+    {
+      "id": "S04",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 3913,
+      "end_line": 3959,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "dbeecaf167dc01b3d65040e04bdb3eef29d7cf8b4f7a4414372cc70034a2f552",
+      "exact_source": "Status SegmentImpl::load_persist_scalar_blocks() {\n  doc_ids_.reserve(segment_meta_->doc_count());\n  for (const auto &block : segment_meta_->persisted_blocks()) {\n    if (block.type() == BlockType::SCALAR) {\n      auto forward_path = FileHelper::MakeForwardBlockPath(\n          path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n      BaseForwardStore::Ptr forward_store;\n      if (options_.enable_mmap_) {\n        forward_store = std::make_shared<MmapForwardStore>(forward_path);\n      } else {\n        forward_store = std::make_shared<BufferPoolForwardStore>(forward_path);\n      }\n      auto s = forward_store->Open();\n      CHECK_RETURN_STATUS(s);\n      persist_stores_.push_back(forward_store);\n\n      if (!block.contain_column(GLOBAL_DOC_ID)) {\n        continue;\n      }\n      auto rb_reader = forward_store->scan({GLOBAL_DOC_ID});\n      while (true) {\n        std::shared_ptr<arrow::RecordBatch> batch;\n        auto status = rb_reader->ReadNext(&batch);\n        if (!status.ok()) {\n          LOG_ERROR(\"Read batch failed: %s\", status.message().c_str());\n          return Status::InternalError(status.message());\n        }\n\n        if (batch == nullptr) {\n          break;\n        }\n\n        auto uint64_array =\n            std::dynamic_pointer_cast<arrow::UInt64Array>(batch->column(0));\n        if (!uint64_array) {\n          LOG_ERROR(\"Failed to cast column to UInt64Array\");\n          return Status::InternalError(\"Array type mismatch\");\n        }\n        auto *values = uint64_array->raw_values();\n        doc_ids_.insert(doc_ids_.end(), values,\n                        values + uint64_array->length());\n      }\n    }\n  }\n\n  return Status::OK();\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Fresh load reconstructs doc_ids_ only from metadata-listed persisted scalar blocks and their GLOBAL_DOC_ID columns; memory-only rows are not recovered from arbitrary unlisted files."
+    },
+    {
+      "id": "S05",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4215,
+      "end_line": 4233,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "23f9bb9ca3337077f407b27a74449e55066f5e8a82c76d84890b27f50010c51c",
+      "exact_source": "  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n\n  std::array<uint64_t, static_cast<size_t>(Operator::DELETE) + 1>\n      recovered_doc_count{};\n  uint64_t total_recovered_doc_count{0};\n\n  int ret = recover_wal_file->prepare_for_read();\n  if (ret != 0) {\n    LOG_ERROR(\n        \"WAL recovery failed: unable to prepare WAL file [%s] for reading\",\n        wal_file_path.c_str());\n    return Status::InternalError(\"Failed to prepare wal file: \", wal_file_path,\n                                 \" for read\");\n  }\n\n  LOG_INFO(\"WAL recovery started [%s]\", wal_file_path.c_str());\n\n  std::lock_guard<std::mutex> lock(seg_mtx_);\n\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Local WAL reader is prepared for replay; prepare_for_read errors return an error. Reader lifecycle is distinct from the member used by flush."
+    },
+    {
+      "id": "S06",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4265,
+      "end_line": 4301,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "63d61c632cb0a9adbf8c90f8db0d9cb5c7ae9306e0345a6b2759b2a5defc7ca9",
+      "exact_source": "        break;\n      }\n      default:\n        LOG_ERROR(\"WAL recovery failed [%s]: unknown operator type %d at %zu \",\n                  wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n                  (size_t)total_recovered_doc_count);\n        break;\n    }\n\n    if (!status.ok()) {\n      LOG_ERROR(\n          \"WAL recovery failed [%s]: operation %d failed at %zu, reason: %s\",\n          wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n          (size_t)total_recovered_doc_count, status.message().c_str());\n      continue;\n    }\n\n    recovered_doc_count[static_cast<size_t>(doc->get_operator())]++;\n  }\n\n  const auto added_docs = recovered_doc_count[0] +  // INSERT\n                          recovered_doc_count[1] +  // UPSERT\n                          recovered_doc_count[2];   // UPDATE\n  mem_block.max_doc_id_ += added_docs;\n\n  LOG_INFO(\n      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n      \"(insert[%zu], upsert[%zu], update[%zu], delete[%zu])\",\n      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n      (size_t)recovered_doc_count[0],  // INSERT\n      (size_t)recovered_doc_count[1],  // UPSERT\n      (size_t)recovered_doc_count[2],  // UPDATE\n      (size_t)recovered_doc_count[3]   // DELETE\n  );\n\n  return Status::OK();\n}\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "The remainder of recover ends with OK without any member-WAL assignment/open. All recover lines 4193-4301 were inspected, using E02/E03 and S05/S06."
+    },
+    {
+      "id": "S07",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 2300,
+      "end_line": 2314,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "32e787c97be0912ce1e2ece02fbc721dbe7e0f9cc2b0e03795dba24c3af94e14",
+      "exact_source": "  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n\n  // clear wal file\n  if (wal_file_) {\n    auto ret = wal_file_->remove();\n    if (ret != 0) {\n      LOG_ERROR(\n          \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n          id());\n      return Status::InternalError(\"Failed to remove WAL file\");\n    }\n    wal_file_.reset();\n    LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Normal flush commits version first, then removes and resets the attached member WAL; any alternative repair must preserve this persistence-before-cleanup ordering."
+    },
+    {
+      "id": "S08",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/segment/segment.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/segment/segment.cc",
+      "start_line": 4414,
+      "end_line": 4425,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "f1f82c0ef8f6ddbd52095d26804a7e95e1f29114289377c6abfd0566f2f46df5",
+      "exact_source": "Status SegmentImpl::update_version(uint32_t delete_snapshot_path_suffix) {\n  if (version_manager_) {\n    if (delete_snapshot_path_suffix != UINT32_MAX) {\n      version_manager_->set_delete_snapshot_path_suffix(\n          delete_snapshot_path_suffix);\n    }\n    auto s = version_manager_->reset_writing_segment_meta(segment_meta_);\n    CHECK_RETURN_STATUS(s);\n    s = version_manager_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n  return Status::OK();\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "update_version resets writing metadata and flushes the version manager, with status checks."
+    },
+    {
+      "id": "S09",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/storage/wal/wal_file.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/storage/wal/wal_file.cc",
+      "start_line": 20,
+      "end_line": 29,
+      "file_sha256": "a0cf76945ec165a85ac85b6c1760143f5ddf333a9c6aa105c54b1b64611ce6df",
+      "span_sha256": "b794d2a0157c05ff5c3d792eebf5c90f54b79468763a5f751e829088b29184ff",
+      "exact_source": "WalFilePtr WalFile::Create(const std::string &wal_path) {\n  return std::make_shared<LocalWalFile>(wal_path);\n}\n\nint WalFile::CreateAndOpen(const std::string &wal_path,\n                           const WalOptions &wal_options,\n                           WalFilePtr *wal_file) {\n  *wal_file = std::make_shared<LocalWalFile>(wal_path);\n\n  return (*wal_file)->open(wal_options);\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "CreateAndOpen allocates the WAL object into the caller-provided pointer and returns open status. A non-null pointer alone is not proof the open succeeded."
+    },
+    {
+      "id": "S10",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/storage/wal/local_wal_file.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/storage/wal/local_wal_file.cc",
+      "start_line": 70,
+      "end_line": 120,
+      "file_sha256": "2f9d37ab8315bcc90fc29d68bac76832b503fe0ea7655b3a4c139fe337504ec9",
+      "span_sha256": "1ab7d90745e6874f1c02f9d7af9470351301fd09a2d13827fe790df0d8e0a2bb",
+      "exact_source": "int LocalWalFile::open(const WalOptions &wal_option) {\n  CHECK_STATUS(opened_, false);\n  if (wal_option.create_new) {\n    if (FileHelper::FileExists(wal_path_)) {\n      WLOG_ERROR(\"Wal open error. file already exist create_new[%d]\",\n                 wal_option.create_new);\n      return -1;\n    }\n\n    if (!file_.create(wal_path_, false)) {\n      WLOG_ERROR(\"Wal create error. create_new[%d]\", wal_option.create_new);\n      return -1;\n    }\n\n    // write wal header\n    int write_size = file_.write((const void *)&header_, sizeof(header_));\n    if (write_size != sizeof(header_)) {\n      WLOG_ERROR(\"Wal write header error. create_new[%d]\",\n                 wal_option.create_new);\n      return -1;\n    }\n\n  } else {\n    if (!FileHelper::FileExists(wal_path_)) {\n      WLOG_ERROR(\"Wal open error. file is not exist create_new[%d]\",\n                 wal_option.create_new);\n      return -1;\n    }\n\n    if (!file_.open(wal_path_.c_str(), false)) {\n      WLOG_ERROR(\"Wal open error. create_new[%d]\", wal_option.create_new);\n      return -1;\n    }\n\n    // open default for write\n    file_.seek(0, ailego::File::Origin::End);\n  }\n\n  max_docs_wal_flush_ = wal_option.max_docs_wal_flush;\n  opened_ = true;\n\n  WLOG_INFO(\"Wal open success. create_new[%d]\", wal_option.create_new);\n  return 0;\n}\n\nint LocalWalFile::close() {\n  CHECK_STATUS(opened_, true);\n  file_.close();\n  WLOG_INFO(\"Wal close success\");\n  opened_ = false;\n  return 0;\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "Opening existing WAL uses create_new=false, opens the file and seeks to end for writing. open failures return nonzero; close releases the file and marks the handle closed. Reopening the existing WAL is not truncation or a new empty log."
+    },
+    {
+      "id": "S11",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/storage/wal/local_wal_file.h",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/storage/wal/local_wal_file.h",
+      "start_line": 67,
+      "end_line": 77,
+      "file_sha256": "d39b3d5d15cfe51324c535cb1db1792e4aa851b98cffbd8861a552948783f7ae",
+      "span_sha256": "900ab0347f8858d6a0f2c513fd1bb510a079a7dab51ef7b131be55f610be4bb8",
+      "exact_source": "  int open(const WalOptions &wal_option) override;\n\n  int close() override;\n\n  int flush() override;\n\n  int remove() override;\n\n  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "has_record checks file size beyond the header, not the exhausted replay cursor. Attaching a successfully reopened nonempty existing WAL restores the later flush guard to the intended pending-data state."
+    },
+    {
+      "id": "S12",
+      "origin": "reviewer_preparation_supplement",
+      "path": "src/db/index/storage/wal/local_wal_file.cc",
+      "absolute_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source/src/db/index/storage/wal/local_wal_file.cc",
+      "start_line": 123,
+      "end_line": 131,
+      "file_sha256": "2f9d37ab8315bcc90fc29d68bac76832b503fe0ea7655b3a4c139fe337504ec9",
+      "span_sha256": "fb079dd3ffd92989409ba209db266b878c509f5977f7abb292cb2855ebf7dc04",
+      "exact_source": "int LocalWalFile::remove() {\n  if (opened_) {\n    close();\n  }\n  if (FileHelper::FileExists(wal_path_)) {\n    FileHelper::RemoveFile(wal_path_);\n    WLOG_INFO(\"Wal remove success.\");\n  }\n  return 0;\n",
+      "verification_status": "verified_by_reading_actual_frozen_source",
+      "findings": "remove closes an opened WAL then removes the file, supporting the normal flush cleanup lifecycle."
+    }
+  ],
+  "prior_q001_exposure_self_report": {
+    "scope": "Self-report from this agent conversation history, not an independent complete tool-history audit.",
+    "before_this_preparation": "I had not read q001 questions, q001 final answers, q001 scores, q001 run trajectories, condition labels or private mappings. I previously prepared and graded q003 in this same agent; that work exposed the allowed q003 frozen contract, whose generic common rules referred to q001 error handling and stated it did not apply to the current q001 confirmation. Those references contained no q001 answers or scores. The parent supplied the current seven-criterion/C6/C7 preparation directions before this read.",
+    "during_this_preparation": "Read the four explicitly allowed input files and the allowed frozen q001 source only. No anonymous answer packet has been supplied or read. No list_agents, agent/thread/task inventory/status, other-agent messages, private assignment, historical q001 result, resource metric, network lookup or source/test execution was used. Only the parent was addressed. No subagents were created.",
+    "answer_grading_started": false
+  },
+  "limitations": [
+    "All causal findings are static source inferences, not an executed reproduction, durability experiment or passing regression test.",
+    "No implementation files were edited and no source instructions were executed. Source comments and rubric annotations were checked against implementation rather than treated as authority for execution.",
+    "The supplied no-automatic-rollover and no-extra-write assumptions bound the causal path.",
+    "No new answer content, quality comparison or treatment/benefit conclusion is recorded."
+  ]
+}

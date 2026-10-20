@@ -1,0 +1,214 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#1 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#2 [global_fill] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#2 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#3 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#3 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#4 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#4 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#5 [global_fill] matchedBy=fts+vector src/core/framework/index_mapping.cc:423-477
+groups: Q1#5 (fts+vector)
+source:
+423	int IndexMapping::flush(void) {
+424	  if ((file_.size() < index_size_) && !file_.truncate(index_size_)) {
+425	    LOG_ERROR("Failed to truncate file size %zu, %s", index_size_,
+426	              ailego::FileHelper::GetLastErrorString().c_str());
+427	    return IndexError_TruncateFile;
+428	  }
+429	
+430	  for (auto iter = segments_.begin(); iter != segments_.end(); ++iter) {
+431	    SegmentInfo &segment_info = iter->second;
+432	    Segment *item = &segment_info.segment;
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/column/fts_column/fts_column_indexer.h:147
+groups: Q1#6 (fts+vector)
+source:
+147	Result<void> flush();
+
+#7 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q1#7 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#8 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#8 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#9 matchedBy=fts+vector src/db/index/segment/segment.cc:4324-4340
+groups: Q1#9 (fts+vector)
+source:
+4324	Status SegmentImpl::append_wal(const Doc &doc) {
+4325	  std::vector<uint8_t> buf = doc.serialize();
+4326	
+4327	  if (!wal_file_) {
+4328	    auto s = open_wal_file();
+4329	    CHECK_RETURN_STATUS(s);
+4330	  }
+4331	
+4332	  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));
+4333	  if (ret != 0) {
+...
+
+#10 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:46-96
+groups: Q1#10 (fts+vector)
+source:
+46	class LocalWalFile : public WalFile {
+47	 public:
+48	  LocalWalFile(const LocalWalFile &) = delete;
+49	  LocalWalFile &operator=(const LocalWalFile &) = delete;
+50	
+51	  //! Constructor
+52	  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}
+53	
+54	  //! Destructor
+55	  ~LocalWalFile() {
+...
+
+#11 matchedBy=fts+vector python/tests/test_hnsw_contiguous_memory.py:323-372
+groups: Q1#11 (fts+vector)
+source:
+323	def test_close_and_reopen_with_contiguous_memory(
+324	        self,
+325	        tmp_path_factory,
+326	        collection_option,
+327	        rng,
+328	    ):
+329	        """Reopening a collection must preserve the ``use_contiguous_memory`` flag.
+330	
+331	        The core property: the flag survives the schema persist/reload
+332	        round-trip so the HNSW streamer entity — constructed lazily on first
+...
+
+#12 matchedBy=fts+vector src/core/utility/buffer_storage.cc:911-1001
+groups: Q1#12 (fts+vector)
+source:
+911	int flush_index_locked(void) {
+912	    // No-op on never-opened / already-closed storage: close_index()
+913	    // unconditionally calls us during teardown.
+914	    if (!buffer_pool_ || !buffer_pool_handle_) {
+915	      index_dirty_.store(false, std::memory_order_relaxed);
+916	      return 0;
+917	    }
+918	    if (corrupted_.load(std::memory_order_acquire)) {
+919	      LOG_ERROR(
+920	          "BufferStorage::flush_index skipped: storage is marked corrupted, "
+...
+
+#13 matchedBy=fts+vector tests/db/index/storage/wal_file_test.cc:52-146
+groups: Q1#13 (fts+vector)
+source:
+52	TEST_F(WalFileTest, TestGeneral) {
+53	  std::string dir_path = "./";
+54	  SegmentID segment_id = 0;
+55	  std::string wal_file_path =
+56	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+57	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+58	
+59	  ASSERT_TRUE(wal_file != nullptr);
+60	
+61	  WalOptions wal_option;
+...
+
+#14 matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q1#14 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#15 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q1#15 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...

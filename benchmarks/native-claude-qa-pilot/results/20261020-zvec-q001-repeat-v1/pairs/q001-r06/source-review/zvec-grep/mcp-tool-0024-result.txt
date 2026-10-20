@@ -1,0 +1,672 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (3):
+  Q1 [primary]: collection open recovery replay WAL journal unflushed documents after crash optimize flush lifecycle
+  Q2 [primary]: optimize segments merge commit persist state after recovery
+  Q3 [primary]: replay write ahead log on open collection recover inserts
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#1 (fts+vector), Q3#11 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q2#1 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q3#1 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#4 [global_fill] matchedBy=fts+vector python/zvec/model/collection.py:105-110
+groups: Q1#6 (fts+vector), Q3#2 (fts+vector)
+source:
+105	def flush(self) -> None:
+106	        """Force all pending writes to disk.
+107	
+108	        Ensures durability of recent inserts/updates.
+109	        """
+110	        self._obj.Flush()
+
+#5 [global_fill] matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#9 (fts+vector), Q3#10 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#4 (fts+vector), Q3#19 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#7 matchedBy=fts+vector src/db/index/segment/segment.h:199
+groups: Q1#8 (fts+vector), Q2#16 (vector)
+source:
+199	virtual Status flush() = 0;
+
+#8 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#2 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#9 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q2#2 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#10 matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#3 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#11 matchedBy=fts+vector src/include/zvec/c_api.h:3354-3355
+groups: Q2#3 (fts+vector)
+source:
+3354	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3355	zvec_collection_optimize(zvec_collection_t *collection);
+
+#12 matchedBy=fts+vector src/core/interface/index.cc:280-393
+groups: Q3#3 (fts+vector)
+source:
+280	int Index::Open(const std::string &file_path, StorageOptions storage_options) {
+281	  ailego::Params storage_params;
+282	  // storage_params.set("proxima.mmap_file.storage.memory_warmup", true);
+283	  // storage_params.set("proxima.mmap_file.storage.segment_meta_capacity",
+284	  // 1024);
+285	
+286	  storage_params.set(core::MMAPFILE_STORAGE_COPY_ON_WRITE,
+287	                     storage_options.copy_on_write);
+288	  // force_flush must be enabled with copy_on_write so that
+289	  // IndexMapping::flush() actually persists data written via file_.write() to
+...
+
+#13 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q2#4 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#14 matchedBy=fts+vector python/zvec/__init__.pyi:128-129
+groups: Q3#4 (fts+vector)
+source:
+128	@staticmethod
+129	    def Open(arg0: str, arg1: param.CollectionOption) -> _Collection: ...
+
+#15 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:46-96
+groups: Q1#5 (fts+vector)
+source:
+46	class LocalWalFile : public WalFile {
+47	 public:
+48	  LocalWalFile(const LocalWalFile &) = delete;
+49	  LocalWalFile &operator=(const LocalWalFile &) = delete;
+50	
+51	  //! Constructor
+52	  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}
+53	
+54	  //! Destructor
+55	  ~LocalWalFile() {
+...
+
+#16 matchedBy=fts+vector src/db/index/segment/segment.cc:269
+groups: Q2#5 (fts+vector)
+source:
+269	void fresh_persist_block_offset();
+
+#17 matchedBy=fts+vector src/db/index/segment/segment.cc:307
+groups: Q3#5 (fts+vector)
+source:
+307	Status recover();
+
+#18 matchedBy=fts+vector src/db/index/segment/segment_helper.cc:791-850
+groups: Q2#6 (fts+vector)
+source:
+791	Status SegmentHelper::MergeWithOptionalReuse(
+792	    const std::string &output_index_path, const FieldSchema &index_field,
+793	    std::vector<VectorColumnIndexer::Ptr> source_indexers,
+794	    const IndexFilter::Ptr &filter, int concurrency,
+795	    VectorColumnIndexer::Ptr *merged_indexer) {
+796	  vector_column_params::MergeOptions merge_options;
+797	  if (concurrency == 0) {
+798	    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+799	    merge_options.write_concurrency =
+800	        GlobalConfig::Instance().optimize_thread_count();
+...
+
+#19 matchedBy=fts+vector src/core/algorithm/vamana/vamana_streamer.cc:167-303
+groups: Q3#6 (fts+vector)
+source:
+167	int VamanaStreamer::open(IndexStorage::Pointer stg) {
+168	  LOG_INFO("VamanaStreamer open");
+169	
+170	  if (ailego_unlikely(state_ != STATE_INITED)) {
+171	    LOG_ERROR("Open storage failed, init streamer first!");
+172	    return IndexError_NoReady;
+173	  }
+174	
+175	  // Create entity based on storage type
+176	  switch (stg->memory_block_type()) {
+...
+
+#20 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#7 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...
+
+#21 matchedBy=fts+vector src/db/collection.cc:172
+groups: Q2#7 (fts+vector)
+source:
+172	std::vector<Segment::Ptr> get_all_persist_segments() const;
+
+#22 matchedBy=fts+vector python/zvec/zvec.py:227-246
+groups: Q3#7 (fts+vector)
+source:
+227	def open(path: str, option: CollectionOption = CollectionOption()) -> Collection:
+228	    """Open an existing collection from disk.
+229	
+230	    The collection must have been previously created with ``create_and_open``.
+231	
+232	    Args:
+233	        path (str): Path or name of the existing collection.
+234	        option (CollectionOption, optional): Configuration options
+235	            for opening the collection. Defaults to a default-constructed
+236	            ``CollectionOption()`` if not provided.
+...
+
+#23 matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:131-141
+groups: Q2#8 (fts+vector)
+source:
+131	class OptimizeRecoveryTest : public ::testing::Test {
+132	 protected:
+133	  void SetUp() override {
+134	    zvec::test_util::RemoveTestPath("./optimize_recovery_test_db");
+135	    ASSERT_NO_THROW(optimizer_bin_ = LocateOptimizeGenerator());
+136	  }
+137	
+138	  void TearDown() override {
+139	    zvec::test_util::RemoveTestPath("./optimize_recovery_test_db");
+140	  }
+...
+
+#24 matchedBy=fts src/core/framework/index_mapping.cc:90-116
+groups: Q3#8 (fts)
+source:
+90	int IndexMapping::open(const std::string &path, bool cow, bool full_mode) {
+91	  path_ = path;
+92	  full_mode_ = full_mode;
+93	  copy_on_write_ = cow;
+94	  huge_page_ = Ishugetlbfs(path);
+95	
+96	  bool read_only = copy_on_write_ && !full_mode_;
+97	  if (!file_.open(path.c_str(), read_only, false)) {
+98	    LOG_ERROR("Failed to open file %s, %s", path.c_str(),
+99	              ailego::FileHelper::GetLastErrorString().c_str());
+...
+
+#25 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_merge.cc:58-96
+groups: Q2#9 (fts+vector)
+source:
+58	bool FtsPostingsMerge::FullMergeV2(const MergeOperationInput &merge_in,
+59	                                   MergeOperationOutput *merge_out) const {
+60	  // If there is only one operand and no existing_value, return directly
+61	  if (merge_in.existing_value == nullptr && merge_in.operand_list.size() == 1) {
+62	    merge_out->new_value = std::string(merge_in.operand_list[0].data(),
+63	                                       merge_in.operand_list[0].size());
+64	    return true;
+65	  }
+66	
+67	  // Deserialize bitmap from existing_value
+...
+
+#26 matchedBy=fts+vector src/include/zvec/c_api.h:3436-3438
+groups: Q3#9 (fts+vector)
+source:
+3436	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL zvec_collection_insert_with_results(
+3437	    zvec_collection_t *collection, const zvec_doc_t **docs, size_t doc_count,
+3438	    zvec_write_result_t **results, size_t *result_count);
+
+#27 matchedBy=fts+vector python/zvec/__init__.pyi:157
+groups: Q1#10 (fts+vector)
+source:
+157	def Flush(self) -> None: ...
+
+#28 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.h:37-155
+groups: Q2#10 (fts+vector)
+source:
+37	class FtsRocksdbReducer {
+38	 public:
+39	  /*! Initialize the reducer with destination column families.
+40	   *  \param field_name          FTS field name (used for stat_cf keys)
+41	   *  \param dst_postings_cf     Destination postings CF (BitPacked output)
+42	   *  \param dst_positions_cf    Destination positions CF (phrase support)
+43	   *  \param dst_stat_cf         Destination segment-stat CF
+44	   *  \return Result<void> on success, or Status on failure
+45	   */
+46	  Result<void> init(const std::string &field_name, RocksdbContext *ctx,
+...
+
+#29 matchedBy=fts+vector src/include/zvec/c_api.h:3271-3272
+groups: Q1#11 (fts+vector)
+source:
+3271	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3272	zvec_collection_flush(zvec_collection_t *collection);
+
+#30 matchedBy=fts+vector src/core/utility/buffer_storage.cc:1051-1407
+groups: Q2#11 (fts+vector)
+source:
+1051	int append_segment(const std::string &id, size_t size) {
+1052	    // Persist any pending data_size/padding/CRC mutations from prior
+1053	    // write()/resize() before we re-hash and rewrite the segment_meta.
+1054	    this->flush_index();
+1055	
+1056	    AllShardsExclusiveLatch latch(mapping_shards_);
+1057	
+1058	    if (!buffer_pool_ || !buffer_pool_handle_) {
+1059	      LOG_ERROR("append_segment: pool not ready, file[%s]", file_name_.c_str());
+1060	      return IndexError_Runtime;
+...
+
+#31 matchedBy=fts+vector src/core/interface/index.cc:419-438
+groups: Q1#12 (fts+vector)
+source:
+419	int Index::Flush() {
+420	  if (!is_open_) {
+421	    LOG_ERROR("Index is not open");
+422	    return core::IndexError_Runtime;
+423	  }
+424	
+425	  if (is_read_only_) {
+426	    LOG_ERROR("Cannot flush read-only index");
+427	    return core::IndexError_Runtime;
+428	  }
+...
+
+#32 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_rocksdb_merger.h:29-75
+groups: Q2#12 (fts+vector)
+source:
+29	bool FullMergeV2(const MergeOperationInput &merge_in,
+30	                   MergeOperationOutput *merge_out) const override {
+31	    if (merge_in.existing_value == nullptr &&
+32	        merge_in.operand_list.size() == 1) {
+33	      merge_out->new_value = std::string(merge_in.operand_list[0].data(),
+34	                                         merge_in.operand_list[0].size());
+35	      return true;
+36	    }
+37	
+38	    merge_out->new_value.clear();
+...
+
+#33 matchedBy=fts README.md:47-56
+groups: Q3#12 (fts)
+heading: 💫 Features
+heading_level: 2
+source:
+47	## 💫 Features
+48	
+49	- **Blazing Fast**: Searches billions of vectors in milliseconds.
+50	- **Simple, Just Works**: [Install](#-installation) and start searching in seconds. Pure local, no servers, no config, no fuss.
+51	- **Dense + Sparse Vectors**: Support dense and sparse embeddings, multi-vector queries, and a rich selection of [vector index types](https://zvec.org/en/docs/...
+52	- **Full-Text Search (FTS)**: Native keyword-based full-text search — query string fields with natural-language or structured expressions.
+53	- **Hybrid Search**: Fuse vector similarity, full-text search, and structured filters in a single query for precise results.
+54	- **Durable Storage**: Write-ahead logging (WAL) guarantees persistence — data is never lost, even on process crash or power failure.
+55	- **Concurrent Access**: Multiple processes can read the same collection simultaneously; writes are single-process exclusive.
+56	- **Runs Anywhere**: As an in-process library, Zvec runs wherever your code runs — notebooks, servers, CLI tools, or even edge devices.
+...
+
+#34 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:26-29
+groups: Q1#13 (fts+vector)
+source:
+26	struct WalOptions {
+27	  uint32_t max_docs_wal_flush{0};
+28	  bool create_new{false};
+29	}
+
+#35 matchedBy=fts+vector src/db/sqlengine/planner/optimizer.h:26
+groups: Q2#13 (fts+vector)
+source:
+26	virtual bool optimize(Segment *segment, QueryInfo *query_info) = 0;
+
+#36 matchedBy=fts src/core/utility/mmap_file_storage.cc:179-192
+groups: Q3#13 (fts)
+source:
+179	int open(const std::string &path, bool create_if_missing) override {
+180	    if (!ailego::File::IsExist(path) && create_if_missing) {
+181	      size_t last_slash = path.rfind('/');
+182	      if (last_slash != std::string::npos) {
+183	        ailego::File::MakePath(path.substr(0, last_slash));
+184	      }
+185	
+186	      int error_code = this->init_index(path);
+187	      if (error_code != 0) {
+188	        return error_code;
+...
+
+#37 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:134-141
+groups: Q1#14 (fts+vector)
+source:
+134	int LocalWalFile::flush() {
+135	  CHECK_STATUS(opened_, true);
+136	  if (!file_.flush()) {
+137	    WLOG_ERROR("Wal flush error.");
+138	    return -1;
+139	  }
+140	  return 0;
+141	}
+
+#38 matchedBy=fts+vector src/db/collection.cc:2084-2086
+groups: Q2#14 (fts+vector)
+source:
+2084	std::vector<Segment::Ptr> CollectionImpl::get_all_persist_segments() const {
+2085	  return segment_manager_->get_segments();
+2086	}
+
+#39 matchedBy=fts+vector tests/db/index/utils/utils.cc:442-500
+groups: Q3#14 (fts+vector)
+source:
+442	Status TestHelper::CollectionInsertDoc(const Collection::Ptr &collection,
+443	                                       const uint64_t start_doc_id,
+444	                                       const uint64_t end_doc_id, bool nullable,
+445	                                       bool upsert, bool batch) {
+446	  if (!collection) {
+447	    return Status::InvalidArgument("collection is nullptr");
+448	  }
+449	  auto schema = collection->Schema().value();
+450	  auto make_doc = [&](uint64_t doc_id) -> Doc {
+451	    return nullable ? CreateDocNull(doc_id, schema) : CreateDoc(doc_id, schema);
+...
+
+#40 matchedBy=fts+vector tests/db/index/storage/wal_file_test.cc:52-146
+groups: Q1#15 (fts+vector)
+source:
+52	TEST_F(WalFileTest, TestGeneral) {
+53	  std::string dir_path = "./";
+54	  SegmentID segment_id = 0;
+55	  std::string wal_file_path =
+56	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+57	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+58	
+59	  ASSERT_TRUE(wal_file != nullptr);
+60	
+61	  WalOptions wal_option;
+...
+
+#41 matchedBy=fts+vector src/db/index/segment/segment.cc:3680-3746
+groups: Q2#15 (fts+vector)
+source:
+3680	void SegmentImpl::fresh_persist_chunked_array() {
+3681	  if (options_.enable_mmap_ && options_.read_only_) {
+3682	    persist_chunk_arrays_.clear();
+3683	    chunk_offsets_.clear();
+3684	    col_idx_map_.clear();
+3685	    use_fetch_perf_ = false;
+3686	
+3687	    std::vector<std::vector<std::shared_ptr<arrow::ChunkedArray>>> chunk_arrays;
+3688	    auto fields = collection_schema_->forward_field_names();
+3689	    fields.insert(fields.begin(), USER_ID);
+...
+
+#42 matchedBy=fts python/zvec/typing/enum.py:51-62
+groups: Q3#15 (fts)
+source:
+51	class LogType(IntEnum):
+52	    """Enumeration of supported log output destinations.
+53	
+54	    Specifies where log messages should be written.
+55	
+56	    Attributes:
+57	        CONSOLE (int): Output logs to standard output/error (e.g., terminal or IDE console).
+58	        FILE (int): Write logs to a persistent file on disk.
+59	    """
+60	
+...
+
+#43 matchedBy=fts+vector src/core/utility/file_read_storage.cc:292-297
+groups: Q1#16 (fts+vector)
+source:
+292	int flush(void) override {
+293	    // Read-only storage — nothing to flush. Return success so that
+294	    // generic Index::Flush() works on read-only-backed indexes (e.g.
+295	    // DiskAnn after build/dump). Mirrors MMapFileReadStorage::flush().
+296	    return 0;
+297	  }
+
+#44 matchedBy=fts+vector tests/db/collection_test.cc:2671-2727
+groups: Q3#16 (fts+vector)
+source:
+2671	TEST_F(CollectionTest,
+2672	       Feature_DropIndex_Scalar_FailureKeepsPersistedOldSchema) {
+2673	#ifdef __ANDROID__
+2674	  GTEST_SKIP() << "Skipped on Android: emulator filesystem lacks hardlink "
+2675	                  "support (needed by RocksDB checkpoint)";
+2676	#endif
+2677	  FileHelper::RemoveDirectory(col_path);
+2678	
+2679	  int doc_count = 1;
+2680	  auto schema = TestHelper::CreateSchemaWithScalarIndex(false, true);
+...
+
+#45 matchedBy=vector src/db/common/rocksdb_context.cc:365-368
+groups: Q1#17 (vector)
+source:
+365	Status RocksdbContext::flush() {
+366	  std::lock_guard<std::mutex> lock(mutex_);
+367	  return flush_unlocked();
+368	}
+
+#46 matchedBy=fts src/db/index/column/fts_column/fts_rocksdb_reducer.cc:156-213
+groups: Q2#17 (fts)
+source:
+156	Result<void> FtsRocksdbReducer::reduce(
+157	    const roaring::Roaring &delete_row_id_bitmap) {
+158	  if (state_ != STATE_FEED || num_segments_ == 0) {
+159	    return tl::make_unexpected(Status::InternalError(
+160	        "FtsRocksdbReducer: call feed() before reduce(). field=", field_name_));
+161	  }
+162	
+163	  effective_total_docs_ = 0;
+164	  effective_total_tokens_ = 0;
+165	
+...
+
+#47 matchedBy=fts+vector src/core/algorithm/vamana/vamana_streamer_entity.cc:332-406
+groups: Q3#17 (fts+vector)
+source:
+332	int VamanaStreamerEntity::open(IndexStorage::Pointer stg,
+333	                               uint64_t max_index_size, bool check_crc) {
+334	  std::lock_guard<std::mutex> lock(mutex_);
+335	  bool huge_page = stg->isHugePage();
+336	
+337	  int ret = broker_->open(std::move(stg), chunk_size_, check_crc);
+338	  if (ailego_unlikely(ret != 0)) {
+339	    LOG_ERROR("Open index failed: %s", IndexError::What(ret));
+340	    return ret;
+341	  }
+...
+
+#48 matchedBy=fts+vector src/include/zvec/db/collection.h:58
+groups: Q1#18 (fts+vector)
+source:
+58	virtual Status Flush() = 0;
+
+#49 matchedBy=vector src/db/index/common/version_manager.h:201
+groups: Q2#18 (vector)
+source:
+201	Status add_persisted_segment_meta(SegmentMeta::Ptr meta);
+
+#50 matchedBy=fts src/core/algorithm/diskann/diskann_file_reader.cc:289-316
+groups: Q3#18 (fts)
+source:
+289	void LinuxAlignedFileReader::open(const std::string &fname) {
+290	  int flags = O_RDONLY;
+291	
+292	#if defined(__linux__) || defined(__linux)
+293	  flags |= O_DIRECT | O_LARGEFILE;
+294	#endif
+295	
+296	  this->file_desc = ::open(fname.c_str(), flags);
+297	
+298	#if defined(__linux__) || defined(__linux)
+...
+
+#51 matchedBy=fts+vector python/tests/test_collection_diskann.py:516-590
+groups: Q1#19 (fts+vector)
+source:
+516	@pytest.mark.usefixtures("diskann_collection")
+517	class TestDiskAnnCollectionOptimizeAndReopen:
+518	    """Test collection optimize and reopen functionality."""
+519	
+520	    def test_optimize_close_reopen_and_query(
+521	        self,
+522	        tmp_path_factory,
+523	        diskann_collection_schema,
+524	        collection_option,
+525	        multiple_docs: list[Doc],
+...
+
+#52 matchedBy=fts+vector src/db/index/column/fts_column/fts_types.h:47-51
+groups: Q2#19 (fts+vector)
+source:
+47	struct FtsSegmentStats {
+48	  uint64_t min_doc_id{0};
+49	  uint64_t max_doc_id{0};
+50	  uint64_t doc_count{0};
+51	}
+
+#53 matchedBy=fts+vector src/db/index/storage/wal/wal_file.cc:24-30
+groups: Q1#20 (fts+vector)
+source:
+24	int WalFile::CreateAndOpen(const std::string &wal_path,
+25	                           const WalOptions &wal_options,
+26	                           WalFilePtr *wal_file) {
+27	  *wal_file = std::make_shared<LocalWalFile>(wal_path);
+28	
+29	  return (*wal_file)->open(wal_options);
+30	}
+
+#54 matchedBy=fts src/db/sqlengine/planner/optimizer.cc:274-291
+groups: Q2#20 (fts)
+source:
+274	bool InvertCondOptimizer::optimize(Segment *segment, QueryInfo *query_info) {
+275	  auto invert_cond = query_info->invert_cond();
+276	  // TODO: check if support optimize for mutable
+277	  if (invert_cond == nullptr) {
+278	    return false;
+279	  }
+280	
+281	  // find invert subroot after considering ratio rule,
+282	  // specifically, which invert cond subroot is still eligable.
+283	  SubRootResult invert_subroot;
+...
+
+#55 matchedBy=fts src/include/zvec/ailego/encoding/json/mod_json_plus.h:1078-1088
+groups: Q3#20 (fts)
+source:
+1078	bool copy_on_write(void) {
+1079	    if (val_) {
+1080	      if (mod_json_value_is_shared(val_)) {
+1081	        mod_json_value_put(val_);
+1082	        val_ = mod_json_value_clone(val_);
+1083	      }
+1084	    } else {
+1085	      val_ = mod_json_value_set_null();
+1086	    }
+1087	    return (val_ != nullptr);
+...

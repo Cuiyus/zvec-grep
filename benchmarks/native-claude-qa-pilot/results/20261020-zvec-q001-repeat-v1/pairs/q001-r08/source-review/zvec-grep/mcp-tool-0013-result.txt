@@ -1,0 +1,469 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (3):
+  Q1 [primary]: collection open recovery replay write-ahead log WAL redo uncommitted documents after crash
+  Q2 [primary]: optimize() implementation segment merge dump persist manifest commit
+  Q3 [primary]: collection flush persistence lifecycle dump segment to disk
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#1 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q2#1 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/db/index/segment/segment.h:199
+groups: Q3#1 (fts+vector)
+source:
+199	virtual Status flush() = 0;
+
+#4 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:2197-2215
+groups: Q2#6 (fts+vector), Q3#5 (fts+vector)
+source:
+2197	Status SegmentImpl::dump() {
+2198	  if (sealed_) {
+2199	    return Status::NotSupported("Segment has been dumped.");
+2200	  }
+2201	  auto s = flush();
+2202	  CHECK_RETURN_STATUS(s);
+2203	
+2204	  if (invert_indexers_) {
+2205	    s = invert_indexers_->seal();
+2206	    CHECK_RETURN_STATUS(s);
+...
+
+#5 [global_fill] matchedBy=fts+vector src/core/algorithm/ivf/ivf_dumper.h:232-233
+groups: Q2#10 (fts+vector), Q3#14 (fts+vector)
+source:
+232	int dump_segment(const std::string &segment_id, const void *data,
+233	                   size_t size) const;
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#2 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#7 matchedBy=fts+vector src/db/sqlengine/planner/optimizer.h:26
+groups: Q2#2 (fts+vector)
+source:
+26	virtual bool optimize(Segment *segment, QueryInfo *query_info) = 0;
+
+#8 matchedBy=fts+vector python/zvec/model/collection.py:105-110
+groups: Q3#2 (fts+vector)
+source:
+105	def flush(self) -> None:
+106	        """Force all pending writes to disk.
+107	
+108	        Ensures durability of recent inserts/updates.
+109	        """
+110	        self._obj.Flush()
+
+#9 matchedBy=fts+vector src/db/index/segment/segment.cc:4324-4340
+groups: Q1#3 (fts+vector)
+source:
+4324	Status SegmentImpl::append_wal(const Doc &doc) {
+4325	  std::vector<uint8_t> buf = doc.serialize();
+4326	
+4327	  if (!wal_file_) {
+4328	    auto s = open_wal_file();
+4329	    CHECK_RETURN_STATUS(s);
+4330	  }
+4331	
+4332	  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));
+4333	  if (ret != 0) {
+...
+
+#10 matchedBy=fts+vector src/include/zvec/c_api.h:3354-3355
+groups: Q2#3 (fts+vector)
+source:
+3354	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3355	zvec_collection_optimize(zvec_collection_t *collection);
+
+#11 matchedBy=fts+vector src/include/zvec/c_api.h:3271-3272
+groups: Q3#3 (fts+vector)
+source:
+3271	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3272	zvec_collection_flush(zvec_collection_t *collection);
+
+#12 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#4 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#13 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q2#4 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#14 matchedBy=fts+vector src/db/index/column/fts_column/fts_column_indexer.h:147
+groups: Q3#4 (fts+vector)
+source:
+147	Result<void> flush();
+
+#15 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:46-96
+groups: Q1#5 (fts+vector)
+source:
+46	class LocalWalFile : public WalFile {
+47	 public:
+48	  LocalWalFile(const LocalWalFile &) = delete;
+49	  LocalWalFile &operator=(const LocalWalFile &) = delete;
+50	
+51	  //! Constructor
+52	  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}
+53	
+54	  //! Destructor
+55	  ~LocalWalFile() {
+...
+
+#16 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q2#5 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#17 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#6 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...
+
+#18 matchedBy=fts+vector src/db/collection.cc:389-395
+groups: Q3#6 (fts+vector)
+source:
+389	Status CollectionImpl::flush_unsafe() {
+390	  if (!writing_segment_) {
+391	    return Status::InternalError(
+392	        "flush writing segment failed because writing segment is nullptr");
+393	  }
+394	  return writing_segment_->flush();
+395	}
+
+#19 matchedBy=fts+vector src/db/index/storage/wal/wal_file.cc:24-30
+groups: Q1#7 (fts+vector)
+source:
+24	int WalFile::CreateAndOpen(const std::string &wal_path,
+25	                           const WalOptions &wal_options,
+26	                           WalFilePtr *wal_file) {
+27	  *wal_file = std::make_shared<LocalWalFile>(wal_path);
+28	
+29	  return (*wal_file)->open(wal_options);
+30	}
+
+#20 matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder_entity.h:53-55
+groups: Q2#7 (fts+vector)
+source:
+53	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+54	                       const std::string &segment_id, const void *data,
+55	                       size_t size) const;
+
+#21 matchedBy=fts+vector src/include/zvec/ailego/buffer/vector_page_table.h:240
+groups: Q3#7 (fts+vector)
+source:
+240	int flush_all();
+
+#22 matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#8 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#23 matchedBy=fts+vector src/db/index/common/version_manager.cc:77-116
+groups: Q2#8 (fts+vector)
+source:
+77	Status Version::Save(const std::string &path, const Version &version) {
+78	  std::ofstream ofs;
+79	  ailego::FileHelper::OpenOfstream(ofs, path, std::ios::binary);
+80	  if (!ofs.is_open()) {
+81	    LOG_ERROR("Failed to open file: %s, err: %s", path.c_str(),
+82	              ailego::FileHelper::GetLastErrorString().c_str());
+83	    return Status::InternalError("Failed to open file: %s", path.c_str());
+84	  }
+85	
+86	  proto::Manifest manifest;
+...
+
+#24 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:62
+groups: Q3#8 (fts+vector)
+source:
+62	virtual int flush() = 0;
+
+#25 matchedBy=fts+vector tests/db/index/storage/wal_file_test.cc:677-733
+groups: Q1#9 (fts+vector)
+source:
+677	TEST_F(WalFileTest, TestCRCErrorCase) {
+678	  std::string dir_path = "./";
+679	  SegmentID segment_id = 0;
+680	  std::string wal_file_path =
+681	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+682	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+683	  ASSERT_TRUE(wal_file != nullptr);
+684	
+685	  WalOptions wal_option;
+686	  wal_option.create_new = true;
+...
+
+#26 matchedBy=fts+vector src/core/algorithm/ivf/ivf_dumper.cc:349-371
+groups: Q2#9 (fts+vector)
+source:
+349	int IVFDumper::dump_segment(const std::string &segment_id, const void *data,
+350	                            size_t size) const {
+351	  size_t len = dumper_->write(data, size);
+352	  if (len != size) {
+353	    LOG_ERROR("Dump segment %s data failed, expect=%zu, actual=%zu",
+354	              segment_id.c_str(), size, len);
+355	    return IndexError_WriteData;
+356	  }
+357	
+358	  size_t padding_size = 0;
+...
+
+#27 matchedBy=fts+vector src/db/index/storage/memory_forward_store.h:70
+groups: Q3#9 (fts+vector)
+source:
+70	Status flush();
+
+#28 matchedBy=fts+vector src/db/index/segment/segment.cc:4193-4301
+groups: Q1#10 (fts+vector)
+source:
+4193	Status SegmentImpl::recover() {
+4194	  // recover mem block meta
+4195	  auto &mem_block = segment_meta_->writing_forward_block().value();
+4196	  doc_id_allocator_.store(mem_block.min_doc_id());
+4197	
+4198	  std::string wal_file_path =
+4199	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4200	  if (!std::filesystem::exists(wal_file_path)) {
+4201	    LOG_INFO("WAL recovery skipped: no WAL file exists [%s]",
+4202	             wal_file_path.c_str());
+...
+
+#29 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_streamer_entity.h:138
+groups: Q3#10 (fts+vector)
+source:
+138	int flush(uint64_t checkpoint);
+
+#30 matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#11 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#31 matchedBy=fts+vector src/core/algorithm/vamana/vamana_entity.h:311-313
+groups: Q2#11 (fts+vector)
+source:
+311	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+312	                       const std::string &segment_id, const void *data,
+313	                       size_t size) const;
+
+#32 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_streamer_entity.h:119
+groups: Q3#11 (fts+vector)
+source:
+119	int flush(uint64_t checkpoint);
+
+#33 matchedBy=fts README.md:47-56
+groups: Q1#12 (fts)
+heading: 💫 Features
+heading_level: 2
+source:
+47	## 💫 Features
+48	
+49	- **Blazing Fast**: Searches billions of vectors in milliseconds.
+50	- **Simple, Just Works**: [Install](#-installation) and start searching in seconds. Pure local, no servers, no config, no fuss.
+51	- **Dense + Sparse Vectors**: Support dense and sparse embeddings, multi-vector queries, and a rich selection of [vector index types](https://zvec.org/en/docs/...
+52	- **Full-Text Search (FTS)**: Native keyword-based full-text search — query string fields with natural-language or structured expressions.
+53	- **Hybrid Search**: Fuse vector similarity, full-text search, and structured filters in a single query for precise results.
+54	- **Durable Storage**: Write-ahead logging (WAL) guarantees persistence — data is never lost, even on process crash or power failure.
+55	- **Concurrent Access**: Multiple processes can read the same collection simultaneously; writes are single-process exclusive.
+56	- **Runs Anywhere**: As an in-process library, Zvec runs wherever your code runs — notebooks, servers, CLI tools, or even edge devices.
+...
+
+#34 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_entity.h:518-520
+groups: Q2#12 (fts+vector)
+source:
+518	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+519	                       const std::string &segment_id, const void *data,
+520	                       size_t size) const;
+
+#35 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_streamer_entity.h:136
+groups: Q3#12 (fts+vector)
+source:
+136	int flush(uint64_t checkpoint);
+
+#36 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:53
+groups: Q1#13 (fts+vector)
+source:
+53	virtual int open(const WalOptions &wal_options) = 0;
+
+#37 matchedBy=fts+vector src/db/collection.cc:2084-2086
+groups: Q2#13 (fts+vector)
+source:
+2084	std::vector<Segment::Ptr> CollectionImpl::get_all_persist_segments() const {
+2085	  return segment_manager_->get_segments();
+2086	}
+
+#38 matchedBy=fts+vector src/core/utility/buffer_storage.cc:897-906
+groups: Q3#13 (fts+vector)
+source:
+897	int flush_index(void) {
+898	    if (!index_dirty_.load(std::memory_order_relaxed)) {
+899	      return 0;
+900	    }
+901	    // Exclusive all-shards latch excludes the lock-free hot path while we
+902	    // hash meta_buf and pwrite footer; without it segments_meta_crc would
+903	    // not match the bytes on disk.
+904	    AllShardsExclusiveLatch latch(mapping_shards_);
+905	    return flush_index_locked();
+906	  }
+
+#39 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#14 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#40 matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder_entity.cc:144-172
+groups: Q2#14 (fts+vector)
+source:
+144	int64_t DiskAnnBuilderEntity::dump_segment(const IndexDumper::Pointer &dumper,
+145	                                           const std::string &segment_id,
+146	                                           const void *data,
+147	                                           size_t size) const {
+148	  size_t len = dumper->write(data, size);
+149	  if (len != size) {
+150	    LOG_ERROR("Dump segment %s data failed, expect: %lu, actual: %lu",
+151	              segment_id.c_str(), size, len);
+152	    return IndexError_WriteData;
+153	  }
+...
+
+#41 matchedBy=fts+vector src/db/index/common/version_manager.cc:190-241
+groups: Q1#15 (fts+vector)
+source:
+190	Result<VersionManager::Ptr> VersionManager::Recovery(const std::string &path) {
+191	  namespace fs = std::filesystem;
+192	  auto u8path = ailego::FileHelper::PathFromUtf8(path);
+193	  if (!fs::exists(u8path)) {
+194	    LOG_ERROR("VersionManager::Recovery: path %s does not exist", path.c_str());
+195	    return tl::make_unexpected(
+196	        Status::NotFound("path ", path, " does not exist"));
+197	  }
+198	  if (!fs::is_directory(u8path)) {
+199	    LOG_ERROR("VersionManager::Recovery: path %s is not a directory",
+...
+
+#42 matchedBy=fts+vector tools/core/local_builder_original.cc:217-246
+groups: Q2#15 (fts+vector)
+source:
+217	int64_t dump_meta_segment(const IndexDumper::Pointer &dumper,
+218	                          const std::string &segment_id, const void *data,
+219	                          size_t size, size_t &writes) {
+220	  size_t len = dumper->write(data, size);
+221	  if (len != size) {
+222	    LOG_ERROR("Dump segment %s data failed, expect: %lu, actual: %lu",
+223	              segment_id.c_str(), size, len);
+224	    return false;
+225	  }
+226	
+...
+
+#43 matchedBy=fts+vector python/zvec/__init__.pyi:157
+groups: Q3#15 (fts+vector)
+source:
+157	def Flush(self) -> None: ...

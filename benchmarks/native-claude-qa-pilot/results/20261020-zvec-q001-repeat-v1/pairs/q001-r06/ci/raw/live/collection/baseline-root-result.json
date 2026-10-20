@@ -1,0 +1,50 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 1132961,
+  "duration_ms": 1133558,
+  "fast_mode_state": "off",
+  "is_error": false,
+  "modelUsage": {
+    "qwen3.8-max": {
+      "cacheCreationInputTokens": 96663,
+      "cacheReadInputTokens": 2424095,
+      "contextWindow": 200000,
+      "costUSD": 2.60207625,
+      "inputTokens": 252,
+      "maxOutputTokens": 32000,
+      "outputTokens": 31385,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 45,
+  "permission_denials": [],
+  "result": "The investigation is complete \u2014 the full analysis is above. Summary of the causal chain: WAL replay recovery (`segment.cc:4193-4301`) refills the memory block through a throwaway read handle and leaves the segment's `wal_file_` member null; `flush()`'s dirty check (`segment.cc:2220-2222`) keys off that handle, so `Optimize()`'s `switch_to_new_segment_for_writing()` (`collection.cc:1517-1552`) dumps a no-op, strips the writing block from the meta, registers the segment as \"persisted\" with zero data blocks, and commits a new manifest while deleting the old one (`version_manager.cc:282-301`) \u2014 orphaning the WAL that still holds the only durable copy. The minimal repair is to re-attach (or otherwise mark dirty) the replayed WAL at recovery so the existing flush lifecycle runs unchanged, and the regression test is a three-process sequence: kill-after-insert \u2192 reopen + optimize with **no** intervening writes \u2192 reopen and assert the count, which is precisely the window the current `tests/db/crash_recovery` suite skips by closing gracefully and re-inserting before optimizing.",
+  "session_id": "d447dd53-1a0f-43e5-ac20-e345f42c928f",
+  "stop_reason": "end_turn",
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 56,
+  "total_cost_usd": 2.60207625,
+  "ttft_ms": 3843,
+  "ttft_stream_ms": 3201,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 96663
+    },
+    "cache_creation_input_tokens": 96663,
+    "cache_read_input_tokens": 2424095,
+    "inference_geo": "",
+    "input_tokens": 252,
+    "iterations": [],
+    "output_tokens": 31385,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "aae781ab-bec7-4475-9810-6e990ad38206"
+}

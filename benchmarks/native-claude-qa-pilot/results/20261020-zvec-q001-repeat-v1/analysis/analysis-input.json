@@ -1,0 +1,2551 @@
+{
+  "schema_version": 1,
+  "assembled_at_utc": "2026-10-20T05:08:23.749488+00:00",
+  "measurement_scope": "Claude per-model reported input = uncached input + cache read + cache write; output separate. Complete persisted root/child records corroborate usage. This is not provider billing.",
+  "time_scope": "agent_wall_seconds is Harbor agent_execution for PR261 dispersion; native_run and full outer_slot (including fresh zg indexing/setup) are separate measurements.",
+  "cases": [
+    {
+      "task_id": "q001",
+      "profiles": {
+        "baseline": {
+          "trials": [
+            {
+              "trial_index": 1,
+              "trial_name": "q001-r01-baseline",
+              "pair_key": "q001-r01",
+              "anonymous_answer_id": "answer-2afaa2e8e7ae5ead",
+              "answer_sha256": "1623cfd72435058f7b7aae9aaf8e68918c766d2df669b2ead3e73ca8f61139f4",
+              "judge": {
+                "total": 9,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": 1
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2afaa2e8e7ae5ead:CITE01",
+                    "answer-2afaa2e8e7ae5ead:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2afaa2e8e7ae5ead:CITE07",
+                    "answer-2afaa2e8e7ae5ead:CITE08",
+                    "answer-2afaa2e8e7ae5ead:CITE09",
+                    "answer-2afaa2e8e7ae5ead:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2afaa2e8e7ae5ead:CITE03",
+                    "answer-2afaa2e8e7ae5ead:CITE04",
+                    "answer-2afaa2e8e7ae5ead:CITE05",
+                    "answer-2afaa2e8e7ae5ead:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 9,
+                "sensitivity_total_points": 10,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-2afaa2e8e7ae5ead.txt",
+                    "start_line": 46,
+                    "end_line": 46,
+                    "exact_quote": "**Repair principle \u2014 restore the invariant \"a writing segment whose writing block has records has its WAL open,\" so recovered writes are indistinguishable from in-process writes.** The minimal change is at the end of `SegmentImpl::recover()` (or in `Open` right after a successful `recover()`, `segment.cc:499-501`): when the replayed WAL exists/has records, call `open_wal_file()` to bind the member `wal_file_` (it opens the existing file for append, `local_wal_file.cc:92-106`). Then `has_record()` is true, and `flush()`/`dump()`/`switch_to_new_segment_for_writing`/`Close` all take the full persist-then-commit path, including proper WAL removal. An equally small alternative is to change the flush gate itself (`segment.cc:2220-2222`) to test *unpersisted memory data* (e.g., `memory_store_ && memory_store_->num_rows() > 0`, or writing-block `doc_count != 0`) instead of the WAL handle, with WAL cleanup done by path when `wal_file_` was never opened. What should **not** be done is patching only `Optimize` (e.g., pre-flushing there) \u2014 `Close`, `CreateIndex`, `DropIndex`, and the column DDL paths reach the same no-op flush."
+                  }
+                ],
+                "reason_primary_differs": "Correct member reopen and explicit alternate WAL cleanup ordering, but no indication attach/open errors must be checked/propagated."
+              },
+              "metrics": {
+                "input_tokens": 2776949,
+                "output_tokens": 30615,
+                "uncached_input_tokens": 234,
+                "cache_read_tokens": 2664222,
+                "cache_write_tokens": 112493,
+                "tool_calls": 40,
+                "agent_wall_seconds": 1099.873097,
+                "native_run_seconds": 1096.761108062,
+                "outer_slot_seconds": 1148.5326766967773,
+                "agent_setup_seconds": 14.337459
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r01",
+                "trial_index": 1,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 40,
+                "root_tool_count": 40,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 9,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 2,
+              "trial_name": "q001-r02-baseline",
+              "pair_key": "q001-r02",
+              "anonymous_answer_id": "answer-bb80ac8c70e4c2ec",
+              "answer_sha256": "0c5b6dd54d9ca410cbf8f7d6a217579ad7236dca10ec87e3cfeea90b2a5fe45c",
+              "judge": {
+                "total": 9,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": 1
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-bb80ac8c70e4c2ec:CITE01",
+                    "answer-bb80ac8c70e4c2ec:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-bb80ac8c70e4c2ec:CITE07",
+                    "answer-bb80ac8c70e4c2ec:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-bb80ac8c70e4c2ec:CITE03",
+                    "answer-bb80ac8c70e4c2ec:CITE04",
+                    "answer-bb80ac8c70e4c2ec:CITE05",
+                    "answer-bb80ac8c70e4c2ec:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 9,
+                "sensitivity_total_points": 10,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-bb80ac8c70e4c2ec.txt",
+                    "start_line": 60,
+                    "end_line": 60,
+                    "exact_quote": "**Repair principle \u2014 restore the invariant \"the WAL is removed only after everything it covers is durable,\" by making the recovered segment's dirty state visible to the flush guard.** Smallest change: at the end of `SegmentImpl::recover()` (`segment.cc:4193\u20134301`), after the replay loop and after closing the local read handle, attach the member `wal_file_` to the existing WAL (i.e., call `open_wal_file()`, which opens with `create_new=false` and seeks to end). Because `has_record()` is file-size based (`local_wal_file.h:75\u201377`), the guard at `segment.cc:2220` then evaluates truthfully, the first subsequent `flush()/dump()` performs the full persist sequence, and the WAL is removed only at `segment.cc:2304\u20132315`. This one change also fixes the silent no-op `Flush()`/`Close()` after recovery and all DDL paths that share `switch_to_new_segment_for_writing`. (An equally valid alternative is to replace the handle-based guard with a durable dirty check \u2014 WAL file exists/non-empty for the current writing block, or a `recovered_dirty_` flag \u2014 but re-attaching the handle is the smaller, more local edit.)"
+                  }
+                ],
+                "reason_primary_differs": "Explicitly closes local reader and reopens existing member WAL, preserving cleanup order, but omits failure checking/propagation."
+              },
+              "metrics": {
+                "input_tokens": 2998422,
+                "output_tokens": 35379,
+                "uncached_input_tokens": 234,
+                "cache_read_tokens": 2893340,
+                "cache_write_tokens": 104848,
+                "tool_calls": 38,
+                "agent_wall_seconds": 1261.784443,
+                "native_run_seconds": 1259.0175828840001,
+                "outer_slot_seconds": 1289.2161319255829,
+                "agent_setup_seconds": 12.708921
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r02",
+                "trial_index": 2,
+                "profile": "baseline",
+                "strict_source_scope_valid": null,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [
+                  {
+                    "profile": "baseline",
+                    "ordinal": 35,
+                    "kind": "conditional_outside_directory_enumeration_execution_unresolved",
+                    "command": "ls -la /workspace 2>/dev/null || ls -la ~ 2>/dev/null; pwd; ls -la",
+                    "observed": "Two byte-identical full frozen workspace listings with pwd=/workspace between them; file names and top-level regular-file sizes match frozen source, dot entries retained as permitted directory metadata. No extra home entries or file contents observed.",
+                    "missing_evidence": "Independent first ls exit status, branch execution trace and concrete tilde expansion are absent. Both candidate ls stderr streams are suppressed; final pwd/ls can make overall success non-diagnostic.",
+                    "not_inferred": [
+                      "Home branch executed",
+                      "Home branch definitely skipped",
+                      "Any outside file content or code/answer facts were accessed"
+                    ],
+                    "gate_effect": "Strict source scope cannot be confirmed; nullable strict verdict and false strict_scope_gate_pass preserve unknown without counting a proven deviation.",
+                    "policy_basis": "Post-run audit, not network isolation. Unresolved audit evidence blocks favorable conclusions rather than proving absence of access."
+                  }
+                ],
+                "tool_count": 38,
+                "root_tool_count": 38,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": false,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 9,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 3,
+              "trial_name": "q001-r03-baseline",
+              "pair_key": "q001-r03",
+              "anonymous_answer_id": "answer-ab9f125adb2c5d62",
+              "answer_sha256": "a82988ff11dcbc5a280b31444a7181e24c2a9a0c06c306da85a6e0a9ca73f918",
+              "judge": {
+                "total": 8,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-ab9f125adb2c5d62:CITE01",
+                    "answer-ab9f125adb2c5d62:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-ab9f125adb2c5d62:CITE07",
+                    "answer-ab9f125adb2c5d62:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-ab9f125adb2c5d62:CITE03",
+                    "answer-ab9f125adb2c5d62:CITE04",
+                    "answer-ab9f125adb2c5d62:CITE05",
+                    "answer-ab9f125adb2c5d62:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 9,
+                "sensitivity_total_points": 10,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-ab9f125adb2c5d62.txt",
+                    "start_line": 45,
+                    "end_line": 45,
+                    "exact_quote": "**Repair principle**: *a writing segment must never be allowed to report \"clean/flushed\" while its data exists only in memory; equivalently, the manifest must never demote a writing segment to persisted until the forward data is actually present in blocks the committed meta references.* The minimal change consistent with the existing design: at the end of the recovery path, rebind the member `wal_file_` (hand off `recover_wal_file` instead of closing it at `segment.cc:4215`, or re-open it for append in `SegmentImpl::Open` when replay occurred). Then the existing `flush()` machinery works unchanged: the guard sees `wal_file_ != nullptr && has_record()` (file size > header), persists the memory store, commits the version, and removes the WAL only afterwards \u2014 restoring the invariant that WAL removal follows durable block commit. An equally small alternative is to strengthen the `flush()` guard itself (e.g., also treat `memory_store_` with rows / writing-block `doc_count_ != 0` as dirty). A cheap defense-in-depth: have `switch_to_new_segment_for_writing` (or `dump`) fail if the segment's committed persisted blocks don't account for its in-memory `doc_count` \u2014 converting silent loss into a loud error."
+                  }
+                ],
+                "reason_primary_differs": "Correct member-WAL handoff or reopen and data/version/WAL ordering. No explicit checking/propagation of attachment/reopen failure; optional fail-on-persisted-block-mismatch defense addresses later promotion, not whether WAL restoration failure can be accepted as successful recovery."
+              },
+              "metrics": {
+                "input_tokens": 1667830,
+                "output_tokens": 29540,
+                "uncached_input_tokens": 150,
+                "cache_read_tokens": 1562390,
+                "cache_write_tokens": 105290,
+                "tool_calls": 32,
+                "agent_wall_seconds": 966.001585,
+                "native_run_seconds": 963.1489731250001,
+                "outer_slot_seconds": 1013.5217573642731,
+                "agent_setup_seconds": 14.476065
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r03",
+                "trial_index": 3,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 32,
+                "root_tool_count": 32,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 9,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 4,
+              "trial_name": "q001-r04-baseline",
+              "pair_key": "q001-r04",
+              "anonymous_answer_id": "answer-2321bb280d50a4ca",
+              "answer_sha256": "3f4cda70eb020629946cfc9bff5a314f7df19ea1b89919192384cd7f6b873afe",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2321bb280d50a4ca:CITE01",
+                    "answer-2321bb280d50a4ca:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2321bb280d50a4ca:CITE07",
+                    "answer-2321bb280d50a4ca:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2321bb280d50a4ca:CITE03",
+                    "answer-2321bb280d50a4ca:CITE04",
+                    "answer-2321bb280d50a4ca:CITE05",
+                    "answer-2321bb280d50a4ca:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-2321bb280d50a4ca.txt",
+                    "start_line": 41,
+                    "end_line": 44,
+                    "exact_quote": "**Repair principle:** answer \"is there unpersisted data?\" from the authoritative dirty state, not from the presence of a lazily-attached log handle \u2014 and preserve the invariant that *a segment is demoted from writing to persisted only after its memory components have actually been persisted*. The minimal change:\n\n1. At the end of `SegmentImpl::recover()`, when any record was replayed, attach the member WAL via the existing `open_wal_file()` (`segment.cc:4303-4322`; it opens the existing file for append, and `has_record()` is `file_.size() > sizeof(header_)`, `local_wal_file.h:75-77`, so the existing gate then evaluates true). The first subsequent `flush()`/`dump()` runs the full persist path \u2014 memory flush \u2192 `finish_memory_components` \u2192 version update \u2192 WAL removal \u2014 restoring the intended lifecycle with no change to `flush()` itself.\n2. Defense in depth: make flush's early-return also consult real memory state (e.g. `memory_store_ && num_rows() > 0` or `mem_block.doc_count_ != 0`), and/or have `switch_to_new_segment_for_writing` verify after `dump()` that the meta actually gained persisted blocks (or holds zero docs) before stripping the writing block and flushing the version."
+                  }
+                ],
+                "reason_primary_differs": "Correct attach/reopen existing member WAL and normal lifecycle, without restoration-error handling."
+              },
+              "metrics": {
+                "input_tokens": 2336041,
+                "output_tokens": 34159,
+                "uncached_input_tokens": 270,
+                "cache_read_tokens": 2248362,
+                "cache_write_tokens": 87409,
+                "tool_calls": 44,
+                "agent_wall_seconds": 1306.477848,
+                "native_run_seconds": 1304.043969031,
+                "outer_slot_seconds": 1335.5346579551697,
+                "agent_setup_seconds": 15.085966
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r04",
+                "trial_index": 4,
+                "profile": "baseline",
+                "strict_source_scope_valid": null,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [
+                  {
+                    "profile": "baseline",
+                    "ordinal": 23,
+                    "kind": "conditional_outside_directory_enumeration_execution_unresolved",
+                    "command": "ls /workspace 2>/dev/null || ls ~ 2>/dev/null; pwd",
+                    "observed": "Full16 nonhidden frozen workspace names followed by /workspace; no home names or file contents. Native tool is_error=false, interrupted=false.",
+                    "missing_evidence": "Independent first ls exit status, branch execution trace, and concrete tilde expansion are absent. Both ls stderr streams are redirected and final pwd can determine overall success.",
+                    "not_inferred": [
+                      "Home branch executed",
+                      "Home branch definitely skipped",
+                      "Any outside file content or code/answer facts were accessed"
+                    ],
+                    "gate_effect": "Strict source scope cannot be confirmed; nullable strict verdict and false strict_scope_gate_pass preserve unknown without counting a proven deviation.",
+                    "policy_basis": "Post-run audit, not network isolation. Unresolved audit evidence blocks favorable conclusions rather than proving absence of access."
+                  }
+                ],
+                "tool_count": 44,
+                "root_tool_count": 44,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": false,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 5,
+              "trial_name": "q001-r05-baseline",
+              "pair_key": "q001-r05",
+              "anonymous_answer_id": "answer-2eebc4cc1812b340",
+              "answer_sha256": "a01bb8d104ac3a56b165bd2971b89aa440e467b470e44d958af971a89ca0483b",
+              "judge": {
+                "total": null,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": null
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "The cited recovery and internal_insert implementations support local replay, populated memory/doc_ids_ and lack of member-WAL installation.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2eebc4cc1812b340:CITE01",
+                    "answer-2eebc4cc1812b340:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": false,
+                  "mandatory_gate_passed": false,
+                  "rationale": "The answer accurately explains the guard and skipped persistence, but its actual citations cover the guard, helper definitions and WAL cleanup, not a flush-body call to memory-store persistence, finish_memory_components or update_version. Definitions establish what helpers do, not that flush calls them after this guard. No reviewer-added call-site evidence is used to repair this incomplete C2 citation chain.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2eebc4cc1812b340:CITE07",
+                    "answer-2eebc4cc1812b340:CITE08",
+                    "answer-2eebc4cc1812b340:CITE09",
+                    "answer-2eebc4cc1812b340:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual Optimize, switch, dump and conditional-Open citations support the sealing/version/removed-writing-block/reopen chain.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-2eebc4cc1812b340:CITE03",
+                    "answer-2eebc4cc1812b340:CITE04",
+                    "answer-2eebc4cc1812b340:CITE05",
+                    "answer-2eebc4cc1812b340:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 9,
+                "sensitivity_total_points": 10,
+                "sensitivity_quality_pass_holding_other_gates_fixed": false,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-2eebc4cc1812b340.txt",
+                    "start_line": 45,
+                    "end_line": 45,
+                    "exact_quote": "**Repair principle:** *WAL replay must leave the segment in the same dirty lifecycle state as a live append; the flush gate must never report \"nothing to persist\" for memory state that exists only because of replay.* The minimal change is inside `SegmentImpl::recover()` (`segment.cc:4193-4301`): after replaying \u22651 record, arm the member handle via the existing `open_wal_file()` (`segment.cc:4303-4322`, which reopens the existing file with `create_new=false`). Then `flush()`'s gate (`wal_file_ != nullptr && has_record()` \u2014 `has_record()` is size-based, so it sees the pre-existing records) runs the full body: persist memory store, register persisted blocks, update the manifest, and **remove the WAL** \u2014 restoring the intended invariant \"WAL exists \u21d4 block not yet persisted; block persisted \u21d2 WAL removed.\" An explicit `dirty_after_recovery_` flag consulted by the same gate is an equivalent variant. Fixing it at this one site also repairs the identical window in `Flush()`/`Close()` (currently silent no-ops after recovery) and in every DDL path that funnels through `switch_to_new_segment_for_writing` / `commit_schema_change_with_new_writing_segment` (`CreateIndex`/`DropIndex`/`AddColumn`/`DropColumn`/`AlterColumn`, `collection.cc:501-503, 674-676, 1154-1156, 1226-1228, 1310-1312`). A defense-in-depth addition (not the minimal fix): in `switch_to_new_segment_for_writing` (`collection.cc:1517-1552`), refuse to `remove_writing_forward_block()` on a meta whose writing block still shows `doc_count > 0` without a corresponding persisted SCALAR block."
+                  }
+                ],
+                "reason_primary_differs": "Correct member reopen of existing WAL and normal flush/cleanup lifecycle, but no error checking/propagation requirement. The alternative dirty flag is not independently proved to preserve WAL cleanup; the member-reopen option supplies minimal-lifecycle sensitivity."
+              },
+              "metrics": {
+                "input_tokens": 2685923,
+                "output_tokens": 27692,
+                "uncached_input_tokens": 222,
+                "cache_read_tokens": 2592101,
+                "cache_write_tokens": 93600,
+                "tool_calls": 36,
+                "agent_wall_seconds": 976.946008,
+                "native_run_seconds": 974.226206919,
+                "outer_slot_seconds": 1022.2922840118408,
+                "agent_setup_seconds": 15.465656
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r05",
+                "trial_index": 5,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 36,
+                "root_tool_count": 36,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 9,
+              "initial_quality_pass": false,
+              "initial_C7_points": 1,
+              "score_bounds_not_observations": [
+                8,
+                9
+              ],
+              "quality_pass_bounds_not_observations": [
+                false,
+                false
+              ],
+              "C7_status": "unknown_independent_blind_review_disagreement"
+            },
+            {
+              "trial_index": 6,
+              "trial_name": "q001-r06-baseline",
+              "pair_key": "q001-r06",
+              "anonymous_answer_id": "answer-e01a37d845889cab",
+              "answer_sha256": "06758de2e4be13f1222dfd8b1202bc34fe35083eaa7873f6e1e2b233ea120769",
+              "judge": {
+                "total": 4,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 1,
+                "C2": 1,
+                "C3": 2,
+                "C4": 0,
+                "C5": 0,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": false,
+                  "supporting_citations_sufficient": false,
+                  "mandatory_gate_passed": false,
+                  "rationale": "Actual cited recover range verifies local reader/internal dispatch but no cited internal_insert implementation supports populated memory/doc_ids_ and readability.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e01a37d845889cab:CITE01"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": false,
+                  "supporting_citations_sufficient": false,
+                  "mandatory_gate_passed": false,
+                  "rationale": "Only the guard is cited; no actual answer citation covers the skipped flush persistence/finalization body.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e01a37d845889cab:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": false,
+                  "mandatory_gate_passed": false,
+                  "rationale": "Switch metadata/version ranges resolve, but no answer-cited dump->flush span or Open writing-block recovery gate supports the complete call-chain/reopen claim.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e01a37d845889cab:CITE03",
+                    "answer-e01a37d845889cab:CITE04"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 4,
+                "sensitivity_total_points": 5,
+                "sensitivity_quality_pass_holding_other_gates_fixed": false,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-e01a37d845889cab.txt",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "exact_quote": "The investigation is complete \u2014 the full analysis is above. Summary of the causal chain: WAL replay recovery (`segment.cc:4193-4301`) refills the memory block through a throwaway read handle and leaves the segment's `wal_file_` member null; `flush()`'s dirty check (`segment.cc:2220-2222`) keys off that handle, so `Optimize()`'s `switch_to_new_segment_for_writing()` (`collection.cc:1517-1552`) dumps a no-op, strips the writing block from the meta, registers the segment as \"persisted\" with zero data blocks, and commits a new manifest while deleting the old one (`version_manager.cc:282-301`) \u2014 orphaning the WAL that still holds the only durable copy. The minimal repair is to re-attach (or otherwise mark dirty) the replayed WAL at recovery so the existing flush lifecycle runs unchanged, and the regression test is a three-process sequence: kill-after-insert \u2192 reopen + optimize with **no** intervening writes \u2192 reopen and assert the count, which is precisely the window the current `tests/db/crash_recovery` suite skips by closing gracefully and re-inserting before optimizing."
+                  }
+                ],
+                "reason_primary_differs": "Reattach replayed WAL is a correct minimal lifecycle principle; no usable-member restoration/error handling is stated for primary full credit."
+              },
+              "metrics": {
+                "input_tokens": 2521010,
+                "output_tokens": 31385,
+                "uncached_input_tokens": 252,
+                "cache_read_tokens": 2424095,
+                "cache_write_tokens": 96663,
+                "tool_calls": 44,
+                "agent_wall_seconds": 1137.014307,
+                "native_run_seconds": 1134.2521650610001,
+                "outer_slot_seconds": 1166.6741449832916,
+                "agent_setup_seconds": 14.755798
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r06",
+                "trial_index": 6,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 44,
+                "root_tool_count": 44,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 4,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 7,
+              "trial_name": "q001-r07-baseline",
+              "pair_key": "q001-r07",
+              "anonymous_answer_id": "answer-7cf13396ce2c2cf7",
+              "answer_sha256": "64fc354e4e6bbb47327ee30ba7682f16d1cac719d11dc84d72108884864b9252",
+              "judge": {
+                "total": 8,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 1
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7cf13396ce2c2cf7:CITE01",
+                    "answer-7cf13396ce2c2cf7:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7cf13396ce2c2cf7:CITE07",
+                    "answer-7cf13396ce2c2cf7:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7cf13396ce2c2cf7:CITE03",
+                    "answer-7cf13396ce2c2cf7:CITE04",
+                    "answer-7cf13396ce2c2cf7:CITE05",
+                    "answer-7cf13396ce2c2cf7:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-7cf13396ce2c2cf7.txt",
+                    "start_line": 55,
+                    "end_line": 55,
+                    "exact_quote": "**Repair principle \u2014 make recovery leave the segment marked \"dirty\" in the same terms `flush()` checks.** The intended lifecycle invariant is: *a WAL with records exists \u27fa memory data is unpersisted \u27f9 flush must persist it, and the WAL is removed only after the forward data and version are on disk* (exactly the ordering in `segment.cc:2231\u20132315`). The minimal repair is to have `recover()` (or `SegmentImpl::Open` after a successful replay, `segment.cc:499\u2013501`) open the member handle via the existing `open_wal_file()` (`segment.cc:4303\u20134322`, which already picks `create_new = false` for an existing file). Then at `segment.cc:2220` the guard evaluates `has_record()` \u2014 true, since it is file-size-based (`local_wal_file.h:75\u201377`) \u2014 and flush takes the full path: persist memory components, commit the version, remove the WAL. Replay must keep using the `internal_*` variants so recovered records are not re-appended; that property is unchanged. (An equivalent alternative is to change the guard itself to consult durable dirty state \u2014 e.g. writing-block `doc_count_ != 0` or a live `memory_store_` \u2014 instead of handle state; the open-the-handle fix is smaller and also repairs `Collection::Flush()` and the mid-replay rollover flush at `segment.cc:841\u2013844` in one stroke.)"
+                  }
+                ],
+                "reason_primary_differs": "Correct member open of existing WAL and full lifecycle; does not address open/attachment failure handling."
+              },
+              "metrics": {
+                "input_tokens": 1941985,
+                "output_tokens": 31772,
+                "uncached_input_tokens": 234,
+                "cache_read_tokens": 1877700,
+                "cache_write_tokens": 64051,
+                "tool_calls": 44,
+                "agent_wall_seconds": 1098.029605,
+                "native_run_seconds": 1095.21363866,
+                "outer_slot_seconds": 1144.0397500991821,
+                "agent_setup_seconds": 14.647745
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r07",
+                "trial_index": 7,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 44,
+                "root_tool_count": 44,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 8,
+              "trial_name": "q001-r08-baseline",
+              "pair_key": "q001-r08",
+              "anonymous_answer_id": "answer-0835ef4be696bdd8",
+              "answer_sha256": "79c976d3125529fe6877369bdd492eb4cf567aa2a22b17f054891bbe45b61068",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-0835ef4be696bdd8:CITE01",
+                    "answer-0835ef4be696bdd8:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-0835ef4be696bdd8:CITE07",
+                    "answer-0835ef4be696bdd8:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-0835ef4be696bdd8:CITE03",
+                    "answer-0835ef4be696bdd8:CITE04",
+                    "answer-0835ef4be696bdd8:CITE05",
+                    "answer-0835ef4be696bdd8:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-0835ef4be696bdd8.txt",
+                    "start_line": 45,
+                    "end_line": 47,
+                    "exact_quote": "**Principle (invariant to restore):** *after WAL replay, a writing segment must regard its recovered records as unpersisted; `flush()/dump()` must persist memory blocks and commit them into the version before the WAL is eligible for removal; and a writing segment must never be converted into a persist segment (writing block stripped, meta committed) unless that persistence actually happened.*\n\n**Smallest repair (describe-only):** at the end of `SegmentImpl::recover()` (`segment.cc:4193\u20134301`), when a WAL file existed, call `open_wal_file()` to attach `wal_file_` to that existing file. `open_wal_file` already handles this case (`create_new = false` when the file exists, `segment.cc:4308\u20134312`) and `LocalWalFile::open` seeks to end for appending (`local_wal_file.cc:104\u2013106`), so later writes append after the recovered records. Since `has_record()` is file-size based (`local_wal_file.h:75\u201377`), the existing `flush()` gate then evaluates true and the *unchanged* persist machinery runs \u2014 memory block written, version updated, WAL removed only afterwards (`segment.cc:2231\u20132315`). No caller changes. (Equivalent alternative: replace the gate at `segment.cc:2220` with a test of actual unpersisted state \u2014 `memory_store_ != nullptr`, writing-block `doc_count_ > 0`, or WAL-file existence. A cheap second-line guard: `switch_to_new_segment_for_writing` should fail rather than strip the writing block if, after `dump()`, the block still holds unpersisted docs.)"
+                  }
+                ],
+                "reason_primary_differs": "Correct attach existing member WAL and normal ordering, but no restoration-error handling; optional later refusal of promotion does not cover recovery success on attach/open failure."
+              },
+              "metrics": {
+                "input_tokens": 1571111,
+                "output_tokens": 27651,
+                "uncached_input_tokens": 186,
+                "cache_read_tokens": 1501300,
+                "cache_write_tokens": 69625,
+                "tool_calls": 45,
+                "agent_wall_seconds": 936.805899,
+                "native_run_seconds": 934.1456782679998,
+                "outer_slot_seconds": 964.4931492805481,
+                "agent_setup_seconds": 13.089301
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r08",
+                "trial_index": 8,
+                "profile": "baseline",
+                "strict_source_scope_valid": false,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 45,
+                "root_tool_count": 45,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": false,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 9,
+              "trial_name": "q001-r09-baseline",
+              "pair_key": "q001-r09",
+              "anonymous_answer_id": "answer-7252d026e12db37d",
+              "answer_sha256": "82dfd6e75650cc34bf66f22fa1d8e3896b26896930420f6f54a7c6ff5c11e521",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7252d026e12db37d:CITE01",
+                    "answer-7252d026e12db37d:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Exact guard plus the correctly cited actual update_version call at 2300-2302 and its definition support skipped metadata persistence; the cited finish definition independently explains block registration. Misplaced 2292-2296/2298-2303 references are not credited as finish/new-block call sites and are recorded in the diagnostic audit. Equivalent correctly supported finalization evidence is accepted.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7252d026e12db37d:CITE07",
+                    "answer-7252d026e12db37d:CITE08",
+                    "answer-7252d026e12db37d:CITE09",
+                    "answer-7252d026e12db37d:CITE10",
+                    "answer-7252d026e12db37d:CITE11"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-7252d026e12db37d:CITE03",
+                    "answer-7252d026e12db37d:CITE04",
+                    "answer-7252d026e12db37d:CITE05",
+                    "answer-7252d026e12db37d:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-7252d026e12db37d.txt",
+                    "start_line": 44,
+                    "end_line": 46,
+                    "exact_quote": "**Principle:** \"Is there unpersisted data?\" must be answered from durable/write state (rows in the writing block / WAL contents on disk), never from whether *this process* happens to hold an open WAL handle; and a WAL may become unreachable only *after* the rows it covers are in files referenced by a committed manifest.\n\n**Smallest repair:** at the end of `SegmentImpl::recover()` (or in the recovery branch of `Open`, `segment.cc:498\u2013501`), when records were replayed, attach the member handle by calling the existing `open_wal_file()` (`segment.cc:4303\u20134322`; it opens the existing file and seeks to end). Then `has_record()` is true (file-size based), and the first `flush()` \u2014 from `dump()` in Optimize, from `close()` (`segment.cc:552`), or from rollover (`segment.cc:841\u2013844`) \u2014 runs the full persist path and removes the WAL only after `update_version()`. No change to `flush()` itself. (Equivalent alternative: widen the guard at `segment.cc:2219` to treat `memory_store_` rows / writing-block `doc_count_ > 0` as dirty. Defense in depth: refuse promotion in `switch_to_new_segment_for_writing` when the meta would be persisted with `doc_count() > 0` but zero SCALAR blocks.)"
+                  }
+                ],
+                "reason_primary_differs": "Attaches/reopens existing WAL and preserves persistence-before-cleanup, but omits checking/propagating attach/open failure."
+              },
+              "metrics": {
+                "input_tokens": 1913526,
+                "output_tokens": 36871,
+                "uncached_input_tokens": 210,
+                "cache_read_tokens": 1813800,
+                "cache_write_tokens": 99516,
+                "tool_calls": 45,
+                "agent_wall_seconds": 1231.893303,
+                "native_run_seconds": 1229.148585368,
+                "outer_slot_seconds": 1277.5603613853455,
+                "agent_setup_seconds": 14.86361
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r09",
+                "trial_index": 9,
+                "profile": "baseline",
+                "strict_source_scope_valid": false,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 45,
+                "root_tool_count": 45,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": false,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 10,
+              "trial_name": "q001-r10-baseline",
+              "pair_key": "q001-r10",
+              "anonymous_answer_id": "answer-75c88b690d446d6b",
+              "answer_sha256": "23fadbb4d7b4b12d1a37141bfb187f0128a336876e8788a3fb70d7b9cf11f429",
+              "judge": {
+                "total": 8,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-75c88b690d446d6b:CITE01",
+                    "answer-75c88b690d446d6b:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-75c88b690d446d6b:CITE07",
+                    "answer-75c88b690d446d6b:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-75c88b690d446d6b:CITE03",
+                    "answer-75c88b690d446d6b:CITE04",
+                    "answer-75c88b690d446d6b:CITE05",
+                    "answer-75c88b690d446d6b:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 9,
+                "sensitivity_total_points": 10,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-75c88b690d446d6b.txt",
+                    "start_line": 42,
+                    "end_line": 42,
+                    "exact_quote": "**Repair principle:** *unify the WAL handle across recovery and normal writing so the existing flush lifecycle applies unchanged.* The smallest fix: in `SegmentImpl::recover()`, after replay completes, adopt the WAL as the member `wal_file_` (opened for append) instead of closing a local handle (segment.cc:4206-4215). Then the unmodified `flush()` guard at 2220 sees `wal_file_ != nullptr && has_record()`, and `dump()` inside optimize persists the forward block, commits the version, and only then removes the WAL \u2014 restoring the invariant \"a WAL is retired only after the data it covers is committed in the manifest.\" (Equivalently minimal: change the guard to test durable state \u2014 memory store has records / WAL file on disk has records \u2014 rather than the member pointer. Defense-in-depth, optional: assert in `switch_to_new_segment_for_writing` that a dumped segment's meta contains persisted blocks covering its `doc_count` before `add_persisted_segment_meta`.)"
+                  }
+                ],
+                "reason_primary_differs": "Adopt the existing WAL/member lifecycle and persist-before-retire ordering are correct, but no handling of attachment/open failure is stated."
+              },
+              "metrics": {
+                "input_tokens": 1506198,
+                "output_tokens": 24270,
+                "uncached_input_tokens": 198,
+                "cache_read_tokens": 1445403,
+                "cache_write_tokens": 60597,
+                "tool_calls": 37,
+                "agent_wall_seconds": 842.933048,
+                "native_run_seconds": 840.1436089460001,
+                "outer_slot_seconds": 870.5837743282318,
+                "agent_setup_seconds": 12.848698
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r10",
+                "trial_index": 10,
+                "profile": "baseline",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": null,
+                "unresolved_evidence": [],
+                "tool_count": 37,
+                "root_tool_count": 37,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 9,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            }
+          ]
+        },
+        "zvec-grep": {
+          "trials": [
+            {
+              "trial_index": 1,
+              "trial_name": "q001-r01-zvec-grep",
+              "pair_key": "q001-r01",
+              "anonymous_answer_id": "answer-4625da0b61e70601",
+              "answer_sha256": "edbd686c70ecd185c79627de12feb2f24c6195b3022c137cbcfe4793eb1e7a23",
+              "judge": {
+                "total": 8,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 1,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-4625da0b61e70601:CITE01",
+                    "answer-4625da0b61e70601:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-4625da0b61e70601:CITE07",
+                    "answer-4625da0b61e70601:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-4625da0b61e70601:CITE03",
+                    "answer-4625da0b61e70601:CITE04",
+                    "answer-4625da0b61e70601:CITE05",
+                    "answer-4625da0b61e70601:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-4625da0b61e70601.txt",
+                    "start_line": 38,
+                    "end_line": 38,
+                    "exact_quote": "**Repair principle:** restore the invariant \u201cthe writing segment knows about its unflushed WAL records\u201d at the end of recovery. Smallest change: in `SegmentImpl::recover()`, after a successful replay of \u22651 record, adopt the WAL as the member handle \u2014 e.g., call `open_wal_file()` (`segment.cc:4303-4322`), which already reopens an existing WAL with `create_new=false` \u2014 instead of leaving `wal_file_` null (the local `recover_wal_file` is closed at `4215`). Then the existing guard evaluates `has_record()` against the real file (true), and `dump()/flush()/Optimize/Close/Flush` all take the full persistence path with the existing correct ordering (data \u2192 version \u2192 WAL removal, `segment.cc:2224-2315`). No other call site changes. (An equivalent-but-larger alternative is to make the guard test durable state \u2014 WAL file existence or memory-vs-persisted doc delta \u2014 rather than the handle; and an eager variant would flush immediately at end of recovery. Adoption is the minimal one.) One implementation nuance: adopt *after* the replay loop, since `internal_insert`\u2019s rollover check (`segment.cc:841-844`) can invoke `flush()` mid-replay."
+                  }
+                ],
+                "reason_primary_differs": "Member adoption/reopening existing WAL is correct, but the repair does not indicate that reopen errors must be checked/propagated rather than accepted as recovery success."
+              },
+              "metrics": {
+                "input_tokens": 1416097,
+                "output_tokens": 32195,
+                "uncached_input_tokens": 138,
+                "cache_read_tokens": 1322714,
+                "cache_write_tokens": 93245,
+                "tool_calls": 44,
+                "agent_wall_seconds": 1043.406295,
+                "native_run_seconds": 1039.1923879580002,
+                "outer_slot_seconds": 1229.0105135440826,
+                "agent_setup_seconds": 170.616651
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r01",
+                "trial_index": 1,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 44,
+                "root_tool_count": 44,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 2,
+              "trial_name": "q001-r02-zvec-grep",
+              "pair_key": "q001-r02",
+              "anonymous_answer_id": "answer-eea6a2aa0b66daf5",
+              "answer_sha256": "1a3caaf2d7c295763df5671058f417980b186b411191c848607e5cd1c6ac6d6d",
+              "judge": {
+                "total": null,
+                "maximum": 10
+              },
+              "quality_pass": null,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": null
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-eea6a2aa0b66daf5:CITE01",
+                    "answer-eea6a2aa0b66daf5:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-eea6a2aa0b66daf5:CITE07",
+                    "answer-eea6a2aa0b66daf5:CITE08",
+                    "answer-eea6a2aa0b66daf5:CITE09"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-eea6a2aa0b66daf5:CITE03",
+                    "answer-eea6a2aa0b66daf5:CITE04",
+                    "answer-eea6a2aa0b66daf5:CITE05",
+                    "answer-eea6a2aa0b66daf5:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-eea6a2aa0b66daf5.txt",
+                    "start_line": 31,
+                    "end_line": 35,
+                    "exact_quote": "**Principle:** the recovery path must leave the segment satisfying the same invariant the insert path maintains \u2014 *flush's \"is there unpersisted data?\" test must consult durable/dirty state, not whether this process happens to hold an open WAL handle* \u2014 and a WAL may be orphaned only after a version referencing the persisted data is durable (the order already present in `flush()`).\n\nSmallest concrete repair (describe-only): at the end of `SegmentImpl::recover()` (`segment.cc:4193`), when records were replayed, adopt the WAL as the member handle via `open_wal_file()` (`segment.cc:4303`). Then `has_record()` is true, and any subsequent flush/dump runs the full persist path and removes the WAL only after the version flush. The alternative \u2014 rewriting the gate at `segment.cc:2220` to test dirtiness (e.g., `memory_store_ != nullptr` or writing-block `doc_count_ != 0`, or on-disk WAL non-emptiness) \u2014 is also small but touches a hotter path (flush is called from `close()`, `segment.cc:551-552`, and the rollover in `internal_insert`, line 841).\n\n**Related defect to verify alongside the fix:** `segment.cc:4285-4288` does `mem_block.max_doc_id_ += added_docs` *after* `internal_insert` already set `max_doc_id_ = g_doc_id` per doc (line 875) \u2014 a double count the ordinary path never produces. Today it's masked (flush never runs post-recovery); once the repair makes flush run, the inflated value gets persisted (`finish_memory_components`, 4366-4368) and skews the next segment's `min_doc_id` (`collection.cc:1529`). The repair should make replay leave the meta exactly as live inserts would (drop the `+=` or don't set per-doc during replay). This is a source-level reading; its runtime effect needs a test to confirm."
+                  }
+                ],
+                "reason_primary_differs": "Correct member reopen via open_wal_file and cleanup order, without indicating error checks or propagation for the restoration."
+              },
+              "metrics": {
+                "input_tokens": 1511261,
+                "output_tokens": 26979,
+                "uncached_input_tokens": 180,
+                "cache_read_tokens": 1434079,
+                "cache_write_tokens": 77002,
+                "tool_calls": 29,
+                "agent_wall_seconds": 936.11662,
+                "native_run_seconds": 932.269407354,
+                "outer_slot_seconds": 1145.0358610153198,
+                "agent_setup_seconds": 178.65212
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r02",
+                "trial_index": 2,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 29,
+                "root_tool_count": 29,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "score_bounds_not_observations": [
+                7,
+                8
+              ],
+              "quality_pass_bounds_not_observations": [
+                false,
+                true
+              ],
+              "C7_status": "unknown_independent_blind_review_disagreement"
+            },
+            {
+              "trial_index": 3,
+              "trial_name": "q001-r03-zvec-grep",
+              "pair_key": "q001-r03",
+              "anonymous_answer_id": "answer-81e80730216a921c",
+              "answer_sha256": "839d5f829463a5c01b2a956113950e22f30fe68158bbfa857664608418e58170",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-81e80730216a921c:CITE01",
+                    "answer-81e80730216a921c:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-81e80730216a921c:CITE07",
+                    "answer-81e80730216a921c:CITE08",
+                    "answer-81e80730216a921c:CITE09",
+                    "answer-81e80730216a921c:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-81e80730216a921c:CITE03",
+                    "answer-81e80730216a921c:CITE04",
+                    "answer-81e80730216a921c:CITE05",
+                    "answer-81e80730216a921c:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-81e80730216a921c.txt",
+                    "start_line": 43,
+                    "end_line": 43,
+                    "exact_quote": "**Repair principle: recovery must restore the same invariant the write path maintains \u2014 a writing segment with un-persisted replayed data must own a live WAL handle for that data.** The minimal change is at the end of `SegmentImpl::recover()` (`segment.cc:4193-4301`): instead of leaving `wal_file_` null after replay, adopt/reopen the WAL as the segment's `wal_file_` (the existing `open_wal_file()`, `segment.cc:4303-4322`, does exactly this). Then `wal_file_ != nullptr` and `has_record()` \u2014 which is file-size based (`src/db/index/storage/wal/local_wal_file.h:75-77`) \u2014 is true, so the *unmodified* `flush()` takes the full persist path and removes the WAL, making recovered data follow the identical lifecycle to inserted data. (An equivalent alternative is to change the guard at `segment.cc:2220` to key off actual dirty state, e.g. `memory_store_`/writing-block doc count, rather than the WAL handle; the recovery-side fix is smaller and leaves flush semantics untouched.)"
+                  }
+                ],
+                "reason_primary_differs": "Correct attach/reopen-existing-member-WAL repair, but no indication restoration errors must be checked/propagated."
+              },
+              "metrics": {
+                "input_tokens": 1154068,
+                "output_tokens": 16212,
+                "uncached_input_tokens": 156,
+                "cache_read_tokens": 1111748,
+                "cache_write_tokens": 42164,
+                "tool_calls": 28,
+                "agent_wall_seconds": 593.67323,
+                "native_run_seconds": 589.625977293,
+                "outer_slot_seconds": 778.6814396381378,
+                "agent_setup_seconds": 169.34328
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r03",
+                "trial_index": 3,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 28,
+                "root_tool_count": 28,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 4,
+              "trial_name": "q001-r04-zvec-grep",
+              "pair_key": "q001-r04",
+              "anonymous_answer_id": "answer-c0af562597fc3c7a",
+              "answer_sha256": "7eac4892a2ea396898a274502aff05689ae35cb3508a8fb80308a58d577120e1",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-c0af562597fc3c7a:CITE01",
+                    "answer-c0af562597fc3c7a:CITE02",
+                    "answer-c0af562597fc3c7a:CITE09",
+                    "answer-c0af562597fc3c7a:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-c0af562597fc3c7a:CITE07",
+                    "answer-c0af562597fc3c7a:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-c0af562597fc3c7a:CITE03",
+                    "answer-c0af562597fc3c7a:CITE04",
+                    "answer-c0af562597fc3c7a:CITE05",
+                    "answer-c0af562597fc3c7a:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-c0af562597fc3c7a.txt",
+                    "start_line": 67,
+                    "end_line": 69,
+                    "exact_quote": "**Repair principle (smallest):** make the recovery path re-establish the same durability invariant the insert path guarantees \u2014 *a writing segment that holds un-persisted, WAL-derived documents must have a live `wal_file_` with `has_record()==true`*. Concretely, at the end of `SegmentImpl::recover()` (segment.cc:4193-4301), when records were replayed, (re)open the segment's own `wal_file_` against the existing WAL in append mode (the existing `open_wal_file()` already opens non-`create_new` when the file exists, 4303-4322) instead of leaving it null. Then `flush()`'s guard (2220-2222) correctly sees un-persisted data, and `dump()`/`switch_to_new_segment_for_writing()` will persist the forward block (`finish_memory_components` \u2192 `add_persisted_block`) and commit it (`update_version`) before the WAL is removed and the segment is promoted.\n\nThe alternative \u2014 changing the `flush()` guard to key off \"does this segment hold un-persisted data\" rather than `wal_file_` \u2014 is a larger blast-radius change; the recover-side fix is the minimal one that restores the intended lifecycle (recovered data behaves exactly like freshly inserted data w.r.t. flush/dump/optimize). Either way, the invariant to enforce is: **`switch_to_new_segment_for_writing()` must not promote a writing segment whose forward data has not actually been persisted.**"
+                  }
+                ],
+                "reason_primary_differs": "Correct attach/reopen-existing-WAL lifecycle, but gives no checking/propagation of restoration failure. Primary error-handling clause is incomplete."
+              },
+              "metrics": {
+                "input_tokens": 1121418,
+                "output_tokens": 28737,
+                "uncached_input_tokens": 126,
+                "cache_read_tokens": 1055066,
+                "cache_write_tokens": 66226,
+                "tool_calls": 25,
+                "agent_wall_seconds": 938.019423,
+                "native_run_seconds": 934.536596312,
+                "outer_slot_seconds": 1122.2398126125336,
+                "agent_setup_seconds": 152.628283
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r04",
+                "trial_index": 4,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 25,
+                "root_tool_count": 25,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 5,
+              "trial_name": "q001-r05-zvec-grep",
+              "pair_key": "q001-r05",
+              "anonymous_answer_id": "answer-639b6b945459264a",
+              "answer_sha256": "b9f6dbcdaa29436eaf5464cfa2a02c2f08d4f9e51680453f1d778072eb362992",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-639b6b945459264a:CITE01",
+                    "answer-639b6b945459264a:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-639b6b945459264a:CITE07",
+                    "answer-639b6b945459264a:CITE08",
+                    "answer-639b6b945459264a:CITE09",
+                    "answer-639b6b945459264a:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-639b6b945459264a:CITE03",
+                    "answer-639b6b945459264a:CITE04",
+                    "answer-639b6b945459264a:CITE05",
+                    "answer-639b6b945459264a:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-639b6b945459264a.txt",
+                    "start_line": 48,
+                    "end_line": 48,
+                    "exact_quote": "**Repair principle \u2014 restore the invariant the `flush()` guard depends on:** after WAL replay, the segment must again own a live WAL handle reflecting its unpersisted memory state. Concretely, at the end of `SegmentImpl::recover()` (or in `Open` right after it, `segment.cc:500`), when a WAL file existed, call the existing `open_wal_file()` (`segment.cc:4303-4322`). It opens the existing file with `create_new = false`, and `LocalWalFile::open` seeks to the end for appending (`local_wal_file.cc:92-106`), so `wal_file_ != nullptr` and `has_record()` is true again. Then `dump()`/`flush()`/`Optimize()` \u2014 and also a plain `Collection::Flush()`, which is a no-op today for the same reason (`collection.cc:389-395`) \u2014 take the full path: persist memory components, register persisted blocks in the meta, update the version, and remove the WAL only after the data is durable. A deeper alternative (make the guard test unpersisted memory state, e.g. `memory_store_ != nullptr` or writing-block `doc_count_ != 0`, instead of the WAL handle) also works but changes more semantics; handle re-attachment is the minimal fix."
+                  }
+                ],
+                "reason_primary_differs": "Correct existing member-WAL reopen and ordered persist/cleanup; no checking/propagation of open/attach failure."
+              },
+              "metrics": {
+                "input_tokens": 1535439,
+                "output_tokens": 28972,
+                "uncached_input_tokens": 168,
+                "cache_read_tokens": 1471549,
+                "cache_write_tokens": 63722,
+                "tool_calls": 35,
+                "agent_wall_seconds": 1106.059384,
+                "native_run_seconds": 1102.091311715,
+                "outer_slot_seconds": 1298.3872187137604,
+                "agent_setup_seconds": 177.330954
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r05",
+                "trial_index": 5,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 35,
+                "root_tool_count": 35,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 6,
+              "trial_name": "q001-r06-zvec-grep",
+              "pair_key": "q001-r06",
+              "anonymous_answer_id": "answer-cce2b184669826eb",
+              "answer_sha256": "95fcdcbdc65ee6afdd529dca8a0e0bfbede1f35cae748cffbaab18c18da2e77a",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "The cited recovery and internal_insert implementations support local replay, populated memory/doc_ids_ and lack of member-WAL installation.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cce2b184669826eb:CITE01",
+                    "answer-cce2b184669826eb:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": false,
+                  "mandatory_gate_passed": false,
+                  "rationale": "The answer accurately explains the guard and skipped persistence, but its actual citations cover the guard, helper definitions and WAL cleanup, not a flush-body call to memory-store persistence, finish_memory_components or update_version. Definitions establish what helpers do, not that flush calls them after this guard. No reviewer-added call-site evidence is used to repair this incomplete C2 citation chain.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cce2b184669826eb:CITE07",
+                    "answer-cce2b184669826eb:CITE08",
+                    "answer-cce2b184669826eb:CITE09",
+                    "answer-cce2b184669826eb:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual Optimize, switch, dump and conditional-Open citations support the sealing/version/removed-writing-block/reopen chain.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cce2b184669826eb:CITE03",
+                    "answer-cce2b184669826eb:CITE04",
+                    "answer-cce2b184669826eb:CITE05",
+                    "answer-cce2b184669826eb:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": false,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-cce2b184669826eb.txt",
+                    "start_line": 44,
+                    "end_line": 44,
+                    "exact_quote": "**Repair principle (smallest):** restore the invariant *\"the flush decision reflects durable WAL state, not whether this process happens to hold a write handle.\"* Minimally, in `SegmentImpl::recover()` (`segment.cc:4193-4301`): when the WAL file exists, re-attach the member handle before returning \u2014 e.g., call `open_wal_file()` (`segment.cc:4303-4322`), which already handles an existing file with `create_new = false` \u2014 so that `wal_file_ != nullptr` and `has_record()` (which reads the crashed process's on-disk records) make the guard at `segment.cc:2220` take the full persistence path, ending in the WAL's removal as designed. A defensive complement (not strictly minimal): make the guard refuse to equate `wal_file_ == nullptr` with \"clean\" (probe the on-disk WAL path, or gate on writing-block emptiness), and/or have `switch_to_new_segment_for_writing` refuse to demote a non-empty segment whose `dump()` produced no persisted blocks. The lifecycle invariant to re-establish: *a writing segment is demoted in the committed version only after its memory data has actually been converted into manifest-referenced on-disk blocks (or its WAL removed).*"
+                  }
+                ],
+                "reason_primary_differs": "Correct existing member-WAL reattachment and normal lifecycle is described, without restoration-error checking/propagation."
+              },
+              "metrics": {
+                "input_tokens": 1820965,
+                "output_tokens": 27480,
+                "uncached_input_tokens": 180,
+                "cache_read_tokens": 1758159,
+                "cache_write_tokens": 62626,
+                "tool_calls": 42,
+                "agent_wall_seconds": 985.70431,
+                "native_run_seconds": 981.6810421019999,
+                "outer_slot_seconds": 1202.0549104213715,
+                "agent_setup_seconds": 184.528063
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r06",
+                "trial_index": 6,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 42,
+                "root_tool_count": 42,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": false,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 7,
+              "trial_name": "q001-r07-zvec-grep",
+              "pair_key": "q001-r07",
+              "anonymous_answer_id": "answer-e685a19f72a84f9d",
+              "answer_sha256": "feb8d416394478f485a22774263caa83ed66a14da4c47f4bdd823753a4b01817",
+              "judge": {
+                "total": 8,
+                "maximum": 10
+              },
+              "quality_pass": true,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 1
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e685a19f72a84f9d:CITE01",
+                    "answer-e685a19f72a84f9d:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e685a19f72a84f9d:CITE07",
+                    "answer-e685a19f72a84f9d:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-e685a19f72a84f9d:CITE03",
+                    "answer-e685a19f72a84f9d:CITE04",
+                    "answer-e685a19f72a84f9d:CITE05",
+                    "answer-e685a19f72a84f9d:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-e685a19f72a84f9d.txt",
+                    "start_line": 52,
+                    "end_line": 52,
+                    "exact_quote": "**Repair principle:** *WAL replay must leave the segment in the same persistence-bookkeeping state as the equivalent live writes \u2014 the WAL handle stays bound until the records have been converted into persisted blocks under a committed version, at which point (and only then) the WAL may be removed.* The minimal change consistent with the existing design is, at the end of `SegmentImpl::recover()` (`segment.cc:4193-4301`) \u2014 or in `SegmentImpl::Open` whenever `writing_forward_block` exists \u2014 to call the existing `open_wal_file()` (`:4303-4322`, which reopens the existing file with `create_new = false`) so `wal_file_` is non-null. Then `has_record()` (`local_wal_file.h:75-77`, size-based, so it sees the replayed records) is true, and every downstream `flush()`/`dump()`/`Optimize()`/`Close()` takes the full persist path (`segment.cc:2224-2323`), removing the WAL only after blocks + version are durable. A defense-in-depth companion: make `flush()`'s early return additionally require that there are no unpersisted in-memory rows (e.g., writing-block `doc_count_ == 0` / `memory_store_` empty), so `switch_to_new_segment_for_writing()` can never strip the WAL anchor on the strength of a no-op flush."
+                  }
+                ],
+                "reason_primary_differs": "Reopening existing member WAL and preserving data/version-before-cleanup is stated; restoration failure handling is absent."
+              },
+              "metrics": {
+                "input_tokens": 1935520,
+                "output_tokens": 26676,
+                "uncached_input_tokens": 198,
+                "cache_read_tokens": 1863315,
+                "cache_write_tokens": 72007,
+                "tool_calls": 37,
+                "agent_wall_seconds": 1021.287651,
+                "native_run_seconds": 1017.4093289629998,
+                "outer_slot_seconds": 1207.583179950714,
+                "agent_setup_seconds": 171.214261
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r07",
+                "trial_index": 7,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": false,
+                "unresolved_evidence": [],
+                "tool_count": 37,
+                "root_tool_count": 37,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": false,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 8,
+              "trial_name": "q001-r08-zvec-grep",
+              "pair_key": "q001-r08",
+              "anonymous_answer_id": "answer-9c3dae34ccd3fa1c",
+              "answer_sha256": "d743d1e778acc7251f0006f0792e3405a1e6efa73968796a2c8e248bb8e7f40e",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-9c3dae34ccd3fa1c:CITE01",
+                    "answer-9c3dae34ccd3fa1c:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-9c3dae34ccd3fa1c:CITE07",
+                    "answer-9c3dae34ccd3fa1c:CITE08",
+                    "answer-9c3dae34ccd3fa1c:CITE09",
+                    "answer-9c3dae34ccd3fa1c:CITE10"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-9c3dae34ccd3fa1c:CITE03",
+                    "answer-9c3dae34ccd3fa1c:CITE04",
+                    "answer-9c3dae34ccd3fa1c:CITE05",
+                    "answer-9c3dae34ccd3fa1c:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-9c3dae34ccd3fa1c.txt",
+                    "start_line": 48,
+                    "end_line": 48,
+                    "exact_quote": "**Repair principle:** *recovery must leave the segment in the same dirty-lifecycle state as the insertion path, so that flush's \"is there anything to persist?\" decision is keyed on data state, not on whether this process happens to hold an append handle.* The minimal change: at the end of a successful `SegmentImpl::recover()` that replayed \u22651 record, attach the existing WAL to the member (`open_wal_file()` already opens the existing path with `create_new=false`, `segment.cc:4303-4322`). Then the existing lifecycle restores itself unchanged: Optimize's `dump()`\u2192`flush()` passes the guard, persists the forward block and version, and removes the WAL only after the data is durable. An equivalent alternative is rewriting the guard at `segment.cc:2220` to test data state (e.g., memory store present / writing-block `doc_count_ > 0` / WAL file exists on disk) instead of `wal_file_ != nullptr`. Defense-in-depth (optional, not minimal): `switch_to_new_segment_for_writing` should refuse to `remove_writing_forward_block()` unless the dumped meta's persisted blocks account for `doc_count()` docs \u2014 converting silent loss into an error."
+                  }
+                ],
+                "reason_primary_differs": "Correct existing member-WAL attachment and ordered lifecycle; no restoration-error checking or propagation."
+              },
+              "metrics": {
+                "input_tokens": 950315,
+                "output_tokens": 25390,
+                "uncached_input_tokens": 126,
+                "cache_read_tokens": 878917,
+                "cache_write_tokens": 71272,
+                "tool_calls": 28,
+                "agent_wall_seconds": 832.35163,
+                "native_run_seconds": 828.595599537,
+                "outer_slot_seconds": 1044.124521970749,
+                "agent_setup_seconds": 181.921597
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": false,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r08",
+                "trial_index": 8,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": false,
+                "factual_evidence_scope_valid": false,
+                "external_content_observed": true,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 28,
+                "root_tool_count": 28,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": false,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": false
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 9,
+              "trial_name": "q001-r09-zvec-grep",
+              "pair_key": "q001-r09",
+              "anonymous_answer_id": "answer-cf5c416848821d23",
+              "answer_sha256": "d6631258f108ee9a319538c8d03940252bded1fac51a8624286613aaac8afccc",
+              "judge": {
+                "total": 7,
+                "maximum": 10
+              },
+              "quality_pass": false,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": 0
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cf5c416848821d23:CITE01",
+                    "answer-cf5c416848821d23:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cf5c416848821d23:CITE07",
+                    "answer-cf5c416848821d23:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-cf5c416848821d23:CITE03",
+                    "answer-cf5c416848821d23:CITE04",
+                    "answer-cf5c416848821d23:CITE05",
+                    "answer-cf5c416848821d23:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 7,
+                "sensitivity_total_points": 8,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-cf5c416848821d23.txt",
+                    "start_line": 57,
+                    "end_line": 61,
+                    "exact_quote": "**Repair principle:** *recovery must restore the persistence obligation attached to the data, not just the data.* After `recover()`, the segment must be indistinguishable \u2014 for durability bookkeeping \u2014 from one that inserted the same docs through the normal path.\n\n**Smallest change:** at the end of `SegmentImpl::recover()` (`segment.cc:4193-4301`), call `open_wal_file()` to adopt the existing WAL as the member `wal_file_`. This is safe with the existing primitives: `LocalWalFile::open` with `create_new=false` opens the existing file and seeks to end for appending (`local_wal_file.cc:92-106`), and `has_record()` is size-based (`local_wal_file.h:75-77`), so it immediately reports true. The next `flush()`/`dump()` \u2014 including the one inside `optimize()` \u2014 then takes the full path: persist memory blocks, record them in the version, and only afterwards remove the WAL (`segment.cc:2288-2315`).\n\nOptional hardening (beyond the minimal fix): make `flush()`'s guard test actual in-memory dirtiness (e.g., `memory_store_ != nullptr` / writing-block `doc_count_ > 0`) rather than the WAL handle; and/or have `switch_to_new_segment_for_writing` refuse `remove_writing_forward_block()` unless the dump demonstrably sealed the segment's docs into persisted blocks."
+                  }
+                ],
+                "reason_primary_differs": "Correct existing member WAL reopen and normal ordered persistence; no attach/open failure handling. Optional refusal of later promotion does not state restoration-error handling."
+              },
+              "metrics": {
+                "input_tokens": 1022722,
+                "output_tokens": 22984,
+                "uncached_input_tokens": 114,
+                "cache_read_tokens": 965541,
+                "cache_write_tokens": 57067,
+                "tool_calls": 29,
+                "agent_wall_seconds": 750.557581,
+                "native_run_seconds": 746.6692201699998,
+                "outer_slot_seconds": 953.95920586586,
+                "agent_setup_seconds": 188.445104
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r09",
+                "trial_index": 9,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 29,
+                "root_tool_count": 29,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 7,
+              "initial_quality_pass": false,
+              "initial_C7_points": 0,
+              "C7_status": "known_within_named_rating_view"
+            },
+            {
+              "trial_index": 10,
+              "trial_name": "q001-r10-zvec-grep",
+              "pair_key": "q001-r10",
+              "anonymous_answer_id": "answer-74934d60623178fe",
+              "answer_sha256": "dcce9d0b617db74f575b7a89b7cc1580a42d66e6adb111d4ab2e9ceff2f1d8a7",
+              "judge": {
+                "total": null,
+                "maximum": 10
+              },
+              "quality_pass": null,
+              "criterion_scores": {
+                "C1": 2,
+                "C2": 2,
+                "C3": 2,
+                "C4": 0,
+                "C5": 1,
+                "C6": 0,
+                "C7": null
+              },
+              "core_citation_gates": [
+                {
+                  "criterion_id": "C1",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited recover() and internal_insert/memory/doc_ids_ spans jointly support both required C1 components.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-74934d60623178fe:CITE01",
+                    "answer-74934d60623178fe:CITE02"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C2",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited guard and downstream persistence/finalization sites support the skipped normal lifecycle; factual assessment is distinct from citation sufficiency.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-74934d60623178fe:CITE07",
+                    "answer-74934d60623178fe:CITE08"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                },
+                {
+                  "criterion_id": "C3",
+                  "factual_full_credit": true,
+                  "supporting_citations_sufficient": true,
+                  "mandatory_gate_passed": true,
+                  "rationale": "Actual answer-cited Optimize, switch, dump and Open spans establish the full call chain, durable metadata removal and subsequent recovery gate.",
+                  "verified_actual_answer_citation_ids": [
+                    "answer-74934d60623178fe:CITE03",
+                    "answer-74934d60623178fe:CITE04",
+                    "answer-74934d60623178fe:CITE05",
+                    "answer-74934d60623178fe:CITE06"
+                  ],
+                  "no_reviewer_added_citations_used_to_fill_gap": true
+                }
+              ],
+              "critical_contradictions": [],
+              "c6_minimal_lifecycle_sensitivity": {
+                "label": "separate minimal-lifecycle-only reading; does not replace original primary handling-errors requirement",
+                "primary_C6_points": 0,
+                "minimal_lifecycle_only_C6_points": 1,
+                "primary_total_points": 8,
+                "sensitivity_total_points": 9,
+                "sensitivity_quality_pass_holding_other_gates_fixed": true,
+                "repair_quotes": [
+                  {
+                    "answer_path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/answer-74934d60623178fe.txt",
+                    "start_line": 42,
+                    "end_line": 42,
+                    "exact_quote": "**Repair principle:** recovery must restore the *whole* write-path state, not just the data \u2014 re-establish the invariant \"a writing segment with unpersisted data holds an open WAL handle,\" on which `flush()`'s guard depends. Smallest change: at the end of a successful `SegmentImpl::recover()` (`segment.cc:4193-4301`) \u2014 or immediately after the `recover()` call in `SegmentImpl::Open` (`segment.cc:499-501`) \u2014 call `open_wal_file()` when the WAL file exists. This composes with existing behavior without touching Optimize: `open_wal_file()` already selects `create_new=false` for an existing file (`segment.cc:4308-4309`), `LocalWalFile::open` seeks to End so later appends continue after replayed records (`local_wal_file.cc:104-106`), `has_record()` is size-based and thus true (`local_wal_file.h:75-77`), and the next `flush()`/`dump()` then runs the full lifecycle \u2014 persist memory components, update version, remove the WAL (`segment.cc:2224-2315`). Optional defense-in-depth (larger than minimal): make the guard key on actual unpersisted state (writing block `doc_count_ > 0` / `memory_store_ != nullptr`) instead of the WAL handle, and/or have `switch_to_new_segment_for_writing` refuse to record a segment as persisted unless `dump()` produced persisted blocks covering its `doc_count()`."
+                  }
+                ],
+                "reason_primary_differs": "Correct reopening existing WAL lifecycle and full persist ordering, but no indication that failure of the restoration must be checked/propagated."
+              },
+              "metrics": {
+                "input_tokens": 1542605,
+                "output_tokens": 28904,
+                "uncached_input_tokens": 156,
+                "cache_read_tokens": 1472619,
+                "cache_write_tokens": 69830,
+                "tool_calls": 37,
+                "agent_wall_seconds": 980.67809,
+                "native_run_seconds": 976.6709522509999,
+                "outer_slot_seconds": 1198.653029680252,
+                "agent_setup_seconds": 186.040037
+              },
+              "execution_valid": true,
+              "execution_and_scope_valid": true,
+              "reported_metric_eligible": true,
+              "source_scope": {
+                "pair_key": "q001-r10",
+                "trial_index": 10,
+                "profile": "zvec-grep",
+                "strict_source_scope_valid": true,
+                "factual_evidence_scope_valid": true,
+                "external_content_observed": false,
+                "external_code_or_answer_facts_observed": false,
+                "source_unchanged": true,
+                "relevant_correct_workspace_zg_retrieval": true,
+                "unresolved_evidence": [],
+                "tool_count": 37,
+                "root_tool_count": 37,
+                "child_tool_count": 0,
+                "strict_scope_gate_pass": true,
+                "required_zg_retrieval_gate_pass": true,
+                "all_source_and_required_retrieval_gates_pass": true
+              },
+              "initial_judge_total": 8,
+              "initial_quality_pass": true,
+              "initial_C7_points": 1,
+              "score_bounds_not_observations": [
+                7,
+                8
+              ],
+              "quality_pass_bounds_not_observations": [
+                false,
+                true
+              ],
+              "C7_status": "unknown_independent_blind_review_disagreement"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "all_original_20_rows_preserved": true,
+  "historical_or_cancelled_samples_pooled": false,
+  "rating_view": "primary_original_rubric_with_3_unknown_c7_judgments",
+  "grade_source": "C7-only blind review interpretation. Initial C1-C6/core/critical gates and all20 solver/resource/scope rows retained. No C6 sensitivity substitution.",
+  "references": {
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/grading-completion-check.json": {
+      "sha256": "729b9994af66a1af727cd265a4d30d5210c0fbf22fd060906e76e00de57ae111",
+      "bytes": 3179
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/original/grades.json": {
+      "sha256": "311594dc4073257eb621307c23271d5bde105b9de67734dd7cecada27dc281e1",
+      "bytes": 1409264
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/consistency/consistency-review.json": {
+      "sha256": "e4d4e5c20e231a49281b5964d18ff9a77631557adaa93149f0078f910ab6f217",
+      "bytes": 1295783
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/original/c7-clarification.json": {
+      "sha256": "9fb566bc34a4e15f0123b2c53e6f7e733d98724a8b17ed2d7f2db39b1ab73451",
+      "bytes": 133238
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/consistency/c7-concordance.json": {
+      "sha256": "e990108fb65378a4284c22d4ecc8b2c6aab15fe2e006e800a3e6a25e96666c04",
+      "bytes": 115082
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading/grading-interpretation-decision.json": {
+      "sha256": "a5d038c87abf0ab8550aceebfdc5fc2c12ad1905d9f933950a82b06dfbec601c",
+      "bytes": 2308
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-blind-packets/q001/manifest.json": {
+      "sha256": "702bfb2007d9e5ef2a23efdf24a91f6e154febdf58a0f904a7cd23133f0a77aa",
+      "bytes": 6321
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/reported-resource-evidence.json": {
+      "sha256": "f81a75368760719b1cd0581dbdd1367858932620f2b40b429dfcd99d372980fb",
+      "bytes": 38729
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/source-scope-evidence.json": {
+      "sha256": "e5e87e7955adf28f5ba5b36cb582eaa2e1ecbb9720d0500bc89c708ea0a3a15f",
+      "bytes": 18726
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/cohort-execution-verification.json": {
+      "sha256": "2b3f19c55c9bbc3e1b610ce60f4091d829ea10dc25f9955dcdf91487789e7f8e",
+      "bytes": 16704
+    },
+    "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-grading-private/assignment.json": {
+      "sha256": "fd370680e83301e2f3cd349cd988084078989d92a451396545794c404d789e28",
+      "bytes": 2960
+    }
+  },
+  "C7_changes_or_unknowns": [
+    {
+      "profile": "baseline",
+      "trial_index": 3,
+      "anonymous_answer_id": "answer-ab9f125adb2c5d62",
+      "initial_C7": 1,
+      "view_C7": 0,
+      "initial_total": 9,
+      "view_total": 8,
+      "initial_quality_pass": true,
+      "view_quality_pass": true
+    },
+    {
+      "profile": "baseline",
+      "trial_index": 5,
+      "anonymous_answer_id": "answer-2eebc4cc1812b340",
+      "initial_C7": 1,
+      "view_C7": null,
+      "initial_total": 9,
+      "view_total": null,
+      "initial_quality_pass": false,
+      "view_quality_pass": false
+    },
+    {
+      "profile": "baseline",
+      "trial_index": 10,
+      "anonymous_answer_id": "answer-75c88b690d446d6b",
+      "initial_C7": 1,
+      "view_C7": 0,
+      "initial_total": 9,
+      "view_total": 8,
+      "initial_quality_pass": true,
+      "view_quality_pass": true
+    },
+    {
+      "profile": "zvec-grep",
+      "trial_index": 2,
+      "anonymous_answer_id": "answer-eea6a2aa0b66daf5",
+      "initial_C7": 1,
+      "view_C7": null,
+      "initial_total": 8,
+      "view_total": null,
+      "initial_quality_pass": true,
+      "view_quality_pass": null
+    },
+    {
+      "profile": "zvec-grep",
+      "trial_index": 3,
+      "anonymous_answer_id": "answer-81e80730216a921c",
+      "initial_C7": 1,
+      "view_C7": 0,
+      "initial_total": 8,
+      "view_total": 7,
+      "initial_quality_pass": true,
+      "view_quality_pass": false
+    },
+    {
+      "profile": "zvec-grep",
+      "trial_index": 6,
+      "anonymous_answer_id": "answer-cce2b184669826eb",
+      "initial_C7": 1,
+      "view_C7": 0,
+      "initial_total": 8,
+      "view_total": 7,
+      "initial_quality_pass": false,
+      "view_quality_pass": false
+    },
+    {
+      "profile": "zvec-grep",
+      "trial_index": 8,
+      "anonymous_answer_id": "answer-9c3dae34ccd3fa1c",
+      "initial_C7": 1,
+      "view_C7": 0,
+      "initial_total": 8,
+      "view_total": 7,
+      "initial_quality_pass": true,
+      "view_quality_pass": false
+    },
+    {
+      "profile": "zvec-grep",
+      "trial_index": 10,
+      "anonymous_answer_id": "answer-74934d60623178fe",
+      "initial_C7": 1,
+      "view_C7": null,
+      "initial_total": 8,
+      "view_total": null,
+      "initial_quality_pass": true,
+      "view_quality_pass": null
+    }
+  ]
+}

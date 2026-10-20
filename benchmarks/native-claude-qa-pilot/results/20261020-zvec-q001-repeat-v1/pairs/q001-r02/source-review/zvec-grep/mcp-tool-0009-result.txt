@@ -1,0 +1,289 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#1 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#2 [global_fill] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#2 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#3 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.h:199
+groups: Q1#3 (fts+vector)
+source:
+199	virtual Status flush() = 0;
+
+#4 [global_fill] matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:182-218
+groups: Q1#4 (fts+vector)
+source:
+182	TEST_F(CrashRecoveryTest, CrashRecoveryDuringInsertion) {
+183	  {
+184	    auto schema = CreateTestSchema(collection_name_);
+185	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+186	    ASSERT_TRUE(result.has_value()) << result.error().message();
+187	    auto collection = result.value();
+188	    collection.reset();
+189	  }
+190	
+191	  RunGeneratorAndCrash("0", "10000", "insert", "0", 3);
+...
+
+#5 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:29-50
+groups: Q1#5 (fts+vector)
+source:
+29	int LocalWalFile::append(std::string &&data) {
+30	  WalRecord record;
+31	  record.length_ = data.size();
+32	  record.crc_ = ailego::Crc32c::Hash(
+33	      reinterpret_cast<const void *>(data.data()), record.length_, 0);
+34	  record.content_ = std::forward<std::string>(data);
+35	
+36	  if (write_record(record) < 0) {
+37	    WLOG_ERROR("Wal write record error. record.length_[%zu]",
+38	               (size_t)record.length_);
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#6 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#7 matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#7 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#8 matchedBy=fts+vector src/db/index/segment/segment.cc:4193-4301
+groups: Q1#8 (fts+vector)
+source:
+4193	Status SegmentImpl::recover() {
+4194	  // recover mem block meta
+4195	  auto &mem_block = segment_meta_->writing_forward_block().value();
+4196	  doc_id_allocator_.store(mem_block.min_doc_id());
+4197	
+4198	  std::string wal_file_path =
+4199	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4200	  if (!std::filesystem::exists(wal_file_path)) {
+4201	    LOG_INFO("WAL recovery skipped: no WAL file exists [%s]",
+4202	             wal_file_path.c_str());
+...
+
+#9 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#9 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#10 matchedBy=fts+vector python/tests/test_collection_diskann.py:520-590
+groups: Q1#10 (fts+vector)
+source:
+520	def test_optimize_close_reopen_and_query(
+521	        self,
+522	        tmp_path_factory,
+523	        diskann_collection_schema,
+524	        collection_option,
+525	        multiple_docs: list[Doc],
+526	    ):
+527	        """Test inserting 100 docs, optimize, close, reopen and query."""
+528	        # Create collection and insert 100 documents
+529	        temp_dir = tmp_path_factory.mktemp("zvec_diskann_optimize")
+...
+
+#11 matchedBy=fts+vector tests/db/index/storage/wal_file_test.cc:52-146
+groups: Q1#11 (fts+vector)
+source:
+52	TEST_F(WalFileTest, TestGeneral) {
+53	  std::string dir_path = "./";
+54	  SegmentID segment_id = 0;
+55	  std::string wal_file_path =
+56	      FileHelper::MakeFilePath(dir_path, FileID::WAL_FILE, segment_id);
+57	  WalFilePtr wal_file = WalFile::Create(wal_file_path);
+58	
+59	  ASSERT_TRUE(wal_file != nullptr);
+60	
+61	  WalOptions wal_option;
+...
+
+#12 matchedBy=vector python/zvec/model/collection.py:105-110
+groups: Q1#12 (vector)
+source:
+105	def flush(self) -> None:
+106	        """Force all pending writes to disk.
+107	
+108	        Ensures durability of recent inserts/updates.
+109	        """
+110	        self._obj.Flush()
+
+#13 matchedBy=fts+vector python/tests/test_collection_hnsw_rabitq.py:504-574
+groups: Q1#13 (fts+vector)
+source:
+504	def test_optimize_close_reopen_and_query(
+505	        self,
+506	        tmp_path_factory,
+507	        hnsw_rabitq_collection_schema,
+508	        collection_option,
+509	        multiple_docs: list[Doc],
+510	    ):
+511	        """Test inserting 100 docs, optimize, close, reopen and query."""
+512	        # Create collection and insert 100 documents
+513	        temp_dir = tmp_path_factory.mktemp("zvec_hnsw_rabitq_optimize")
+...
+
+#14 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:46-96
+groups: Q1#14 (fts+vector)
+source:
+46	class LocalWalFile : public WalFile {
+47	 public:
+48	  LocalWalFile(const LocalWalFile &) = delete;
+49	  LocalWalFile &operator=(const LocalWalFile &) = delete;
+50	
+51	  //! Constructor
+52	  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}
+53	
+54	  //! Destructor
+55	  ~LocalWalFile() {
+...
+
+#15 matchedBy=fts+vector tests/db/index/common/version_manager_test.cc:118-161
+groups: Q1#15 (fts+vector)
+source:
+118	TEST_F(VersionManagerTest, VersionManagerCreateAndRecover) {
+119	  std::string version_path = test_path_ + "/version";
+120	
+121	  std::filesystem::create_directories(version_path);
+122	
+123	  // Create initial version
+124	  Version initial_version;
+125	  CollectionSchema schema;
+126	  schema.set_name("initial_collection");
+127	  initial_version.set_schema(schema);
+...
+
+#16 matchedBy=fts+vector python/tests/test_hnsw_contiguous_memory.py:323-372
+groups: Q1#16 (fts+vector)
+source:
+323	def test_close_and_reopen_with_contiguous_memory(
+324	        self,
+325	        tmp_path_factory,
+326	        collection_option,
+327	        rng,
+328	    ):
+329	        """Reopening a collection must preserve the ``use_contiguous_memory`` flag.
+330	
+331	        The core property: the flag survives the schema persist/reload
+332	        round-trip so the HNSW streamer entity — constructed lazily on first
+...
+
+#17 matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#17 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#18 matchedBy=fts+vector tests/db/collection_test.cc:2729-2786
+groups: Q1#18 (fts+vector)
+source:
+2729	TEST_F(CollectionTest, Feature_IndexDDL_WritingSegmentReopen) {
+2730	  auto run = [&](bool create_index, bool insert_before_ddl) {
+2731	    FileHelper::RemoveDirectory(col_path);
+2732	
+2733	    auto index_params = std::make_shared<InvertIndexParams>();
+2734	    auto schema = std::make_shared<CollectionSchema>(
+2735	        create_index ? "create_index_writing" : "drop_index_writing");
+2736	    schema->add_field(
+2737	        std::make_shared<FieldSchema>("name", DataType::STRING, false,
+2738	                                      create_index ? nullptr : index_params));
+...
+
+#19 matchedBy=fts README.md:47-56
+groups: Q1#19 (fts)
+heading: 💫 Features
+heading_level: 2
+source:
+47	## 💫 Features
+48	
+49	- **Blazing Fast**: Searches billions of vectors in milliseconds.
+50	- **Simple, Just Works**: [Install](#-installation) and start searching in seconds. Pure local, no servers, no config, no fuss.
+51	- **Dense + Sparse Vectors**: Support dense and sparse embeddings, multi-vector queries, and a rich selection of [vector index types](https://zvec.org/en/docs/...
+52	- **Full-Text Search (FTS)**: Native keyword-based full-text search — query string fields with natural-language or structured expressions.
+53	- **Hybrid Search**: Fuse vector similarity, full-text search, and structured filters in a single query for precise results.
+54	- **Durable Storage**: Write-ahead logging (WAL) guarantees persistence — data is never lost, even on process crash or power failure.
+55	- **Concurrent Access**: Multiple processes can read the same collection simultaneously; writes are single-process exclusive.
+56	- **Runs Anywhere**: As an in-process library, Zvec runs wherever your code runs — notebooks, servers, CLI tools, or even edge devices.
+...
+
+#20 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#20 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...

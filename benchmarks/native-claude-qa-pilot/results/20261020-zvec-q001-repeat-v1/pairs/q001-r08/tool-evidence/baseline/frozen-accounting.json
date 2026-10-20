@@ -1,0 +1,1647 @@
+{
+  "schema_version": 1,
+  "scope": "claude-persisted-session-tree-v1",
+  "complete": true,
+  "errors": [],
+  "expected_model": "qwen3.8-max",
+  "root_session_id": "71abcbd2-2d67-4eac-b126-0534d98aded5",
+  "root_count": 1,
+  "child_count": 0,
+  "session_count": 1,
+  "root_only": true,
+  "complete_tree": true,
+  "final": {
+    "text": "# Root-cause analysis: recovered docs lost after `optimize()`\n\nAll findings below are from reading the frozen tree (`/workspace`, the zvec repo); I executed nothing. The root cause is a state asymmetry: **WAL recovery replays documents into memory but never re-attaches a live WAL handle, and `SegmentImpl::flush()` uses \"live WAL handle with records\" as its only test for \"there is unpersisted data\" — so the flush inside `optimize()`'s segment switch is a silent no-op that returns OK, while the version manifest is durably rewritten to declare the segment persisted.**\n\n## 1. Recovery path vs. ordinary insertion path\n\n**Ordinary insertion** (`src/db/index/segment/segment.cc:903–989`): every public write (`Insert/Update/Upsert/Delete`) calls `append_wal(doc)` *before* `internal_insert/...`. `append_wal` (`segment.cc:4324–4340`) lazily calls `open_wal_file()` (`segment.cc:4303–4322`) when `wal_file_` is null. So any segment that accepted a write **in this process** has `wal_file_ != nullptr`, and the file grows past its 64-byte header (`local_wal_file.h:75–77`, `has_record()` = `file_.size() > sizeof(header_)`).\n\n**Recovery path**: `CollectionImpl::recovery()` (`src/db/collection.cc:1836–1892`) opens the writing segment, and `SegmentImpl::Open` calls `recover()` when the meta has a writing forward block (`segment.cc:484–510`). `SegmentImpl::recover()` (`segment.cc:4193–4301`):\n\n- opens the WAL through a **separate local handle** `recover_wal_file` (4206–4214), closed by `AILEGO_DEFER` (4215) — it is never assigned to the member `wal_file_`;\n- replays each record via `internal_insert/internal_update/internal_upsert/internal_delete` **directly** (4250–4266), bypassing `append_wal`.\n\n`internal_insert` (`segment.cc:837–881`) populates `id_map_` (853), `memory_store_` (857), scalar/FTS/vector in-memory indexers (861–872; vectors go to `memory_vector_indexers_`, `segment.cc:763`), the writing-block meta counters (874–876), and `doc_ids_` (878). **That is why the recovered data is immediately readable**: `Stats()` sums `segment->doc_count()` (`collection.cc:403–442`), which is `doc_ids_.size()` minus deletes (`segment.cc:589–599`), and fetch/query read `memory_store_` and the memory indexers.\n\nThe decisive difference: after recovery the segment holds N docs in memory, an N-record WAL file on disk, and **`wal_file_ == nullptr`** — the segment is blind to its own pending state.\n\n## 2. The `optimize()` sequence and the exact condition\n\n`CollectionImpl::Optimize` (`collection.cc:779–915`):\n\n1. `writing_segment_->doc_count() != 0` is true (recovered docs in `doc_ids_`) → `switch_to_new_segment_for_writing()` (`collection.cc:1517–1552`).\n2. That calls `writing_segment_->dump()` (`segment.cc:2197–2215`) → `flush()` (`segment.cc:2217–2324`), which hits the gate at **`segment.cc:2220–2222`**:\n   ```cpp\n   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();\n   ```\n   This is the exact condition. For the recovered segment `wal_file_` is null, so `flush()` returns OK having done **nothing**: no `memory_store_->flush()` (2233–2236), no `finish_memory_components()` (2288–2298; impl at 4342–4368, which would write the forward-block meta into `persisted_blocks`), no `update_version()` (2301; impl 4414–4427), and no WAL removal (2304–2315). `dump()` then seals indexers and sets `sealed_ = true` (2204–2212) — still OK.\n3. `switch_to_new_segment_for_writing` proceeds as if the dump had persisted the data: the old segment (say id 0) is registered as a persist segment (1522), **`remove_writing_forward_block()` strips the in-memory block from its shared meta** (1538), the stripped meta is added to the new version as a *persisted* segment (1539), a fresh writing segment id 1 is created (1527–1531), and `version_manager_->apply/flush` (1546–1549) durably writes a new MANIFEST, deleting the previous one (`src/db/index/common/version_manager.cc:282–300`).\n4. Back in `Optimize`: with one small persist segment and no rebuild trigger, `build_compact_task` produces a single `CreateVectorIndexTask` (`collection.cc:991–1001`), executed via `segment_helper.cc:1113–1125` → `create_all_vector_index` (`segment.cc:1617–1640`). For default/FLAT params it short-circuits (1685–1690); otherwise it merges from `vector_indexers_[column]` (1652), which is empty because the recovered vectors live in `memory_vector_indexers_`. Version update + flush succeed (872–877), `reload_vector_index` swaps indexers in memory (905–909). **`Optimize` returns OK.**\n\nWhy the data is gone on the next open: the old segment's WAL file still physically exists (removal happens only inside a *successful* flush, `segment.cc:2304–2313`), but it is orphaned. On reopen, segment 0 is a persist segment whose meta has **no writing forward block**, and `SegmentImpl::Open` calls `recover()` only when `writing_block.has_value()` (`segment.cc:484–510`); the new writing segment (id 1) has a different WAL path (`MakeWalPath` keys on segment id + block id, `file_helper.h:74`, `segment.cc:4305–4306`). Nothing ever replays or deletes the old WAL; the persisted segment has zero blocks, so count/fetch return 0.\n\n**Why \"without inserting any additional documents\" is essential**: a single new write would call `append_wal` → `open_wal_file()`, which reopens the *existing* WAL with `create_new = false` (`segment.cc:4308–4312`; `local_wal_file.cc:92–106` opens at end for append). Then `wal_file_ != nullptr` and `has_record()` is true (file-size based), so the next `flush()/dump()` takes the full persist path and everything — including the recovered docs — is saved. New writes *mask* the bug. (Note the same gate also makes an explicit `Flush()` in the recovering process a silent no-op: `collection.cc:389–395` → `segment.cc:2220`.)\n\n**Why the control case works**: inserts in the same process leave `wal_file_` attached with records, so `dump()`→`flush()` executes fully: memory store flushed, `finish_memory_components()` moves the block into `persisted_blocks` (4342–4368), version updated and flushed (4414–4427), and only then is the WAL removed (2304–2315). The segment switched to \"persisted\" genuinely is persisted.\n\n## 3. Why success + same-handle statistics prove nothing here\n\n- **Every status is legitimately OK.** The flush gate *returns success* for \"nothing to do\" (`segment.cc:2221`); dump, version `apply`, and version `flush` all succeeded — but what they durably committed is a manifest declaring segment 0 persisted **with no blocks** and no writing block. Success attests that the *metadata transition* committed, not that document bytes reached any persisted block. The durability contract (\"WAL removed only after data is in a committed version\") is inverted: the version was committed while the data existed only in RAM and in an orphaned WAL.\n- **Same-handle stats read the same RAM that recovery populated.** `Stats()` sums `doc_count()` over the live `Segment::Ptr` objects (`collection.cc:403–442`, `segment.cc:589–599`); segment 0 remains in `segment_manager_` holding `doc_ids_`/`memory_store_` (`collection.cc:1522`). No code path in that process re-reads the committed manifest, so nothing observable in-process reflects what was written to disk. Only a fresh `Open` — which trusts the version and skips WAL replay for block-less persist segments — exposes the loss.\n- A related divergence (source-level inference): `id_map_` is RocksDB-backed and recovery's `internal_insert` did `upsert` Puts (`segment.cc:853`; `src/db/index/common/id_map.cc:102–103`), so pk→doc_id entries can outlive the forward data; after reopen, `Fetch` may resolve the pk but find no rows, and re-`Insert` of the same pk can hit `AlreadyExists` (`segment.cc:906–909`). The exact reopen symptom (empty result vs. error) would need execution to pin down.\n\n## 4. Smallest repair principle and regression test\n\n**Principle (invariant to restore):** *after WAL replay, a writing segment must regard its recovered records as unpersisted; `flush()/dump()` must persist memory blocks and commit them into the version before the WAL is eligible for removal; and a writing segment must never be converted into a persist segment (writing block stripped, meta committed) unless that persistence actually happened.*\n\n**Smallest repair (describe-only):** at the end of `SegmentImpl::recover()` (`segment.cc:4193–4301`), when a WAL file existed, call `open_wal_file()` to attach `wal_file_` to that existing file. `open_wal_file` already handles this case (`create_new = false` when the file exists, `segment.cc:4308–4312`) and `LocalWalFile::open` seeks to end for appending (`local_wal_file.cc:104–106`), so later writes append after the recovered records. Since `has_record()` is file-size based (`local_wal_file.h:75–77`), the existing `flush()` gate then evaluates true and the *unchanged* persist machinery runs — memory block written, version updated, WAL removed only afterwards (`segment.cc:2231–2315`). No caller changes. (Equivalent alternative: replace the gate at `segment.cc:2220` with a test of actual unpersisted state — `memory_store_ != nullptr`, writing-block `doc_count_ > 0`, or WAL-file existence. A cheap second-line guard: `switch_to_new_segment_for_writing` should fail rather than strip the writing block if, after `dump()`, the block still holds unpersisted docs.)\n\n**Regression test (describe-only), reusing `tests/db/crash_recovery/` harness** (`data_generator.cc` with SIGKILL-mid-insert as in `write_recovery_test.cc:53–126`, `collection_optimizer.cc`, `utility.h`):\n\n1. **Crash writer**: spawn `data_generator` inserting a small N (well under `max_doc_count_per_segment`, so no rollover); SIGKILL it mid-run, before any `Flush()`/`Close()`. Assert a `*.wal` file exists and the latest manifest still names a writing segment.\n2. **Recover (process B)**: `Collection::Open`; assert `Stats().doc_count == N' > 0`, `Fetch` of sampled pks matches `CreateTestDoc`, and a top-k query hits.\n3. **Optimize with zero writes (process C or same)**: run `collection_optimizer` (`Open → Optimize → close`); assert OK. Crucially, **no inserts between recovery and optimize** — the existing `optimize_recovery_test.cc` inserts 500 more batches after recovery (lines 207–218) before optimizing, which re-attaches the WAL via `append_wal` and masks this bug; that is precisely the coverage gap (no current test chains crash → reopen → optimize-with-no-writes → reopen).\n4. **Verify durability (fresh open)**: `Collection::Open` again; assert `Stats().doc_count == N'`, every pk fetches byte-equal, query top-1 is `pk_0`, and no orphaned `*.wal` remains. Pre-fix this fails with 0 docs; post-fix it passes.\n5. Optional masking-control variant: repeat with one insert before optimize — passes even pre-fix, confirming the `wal_file_`-reattachment mechanism.\n\n**Established from source vs. requiring execution.** The entire causal chain — `recover()` bypassing `append_wal` and leaving `wal_file_` null; the `flush()` early-return gate; `dump()`'s reliance on `flush()`; the writing-block strip + manifest commit in `switch_to_new_segment_for_writing`; WAL orphaning because `recover()` runs only for metas with a writing block; in-memory-only stats — is established by reading the code. What I could not establish without running it: the exact reopen symptom (silent count 0 vs. load error); whether `Optimize` returns OK for non-FLAT schemas, since `merge_vector_indexer` would merge an *empty* `vector_indexers_[column]` (`segment.cc:1642–1668`) and core `Merge` behavior on empty input is unverified here; the fate of the resulting inconsistent vector-index block meta (claims `doc_ids_.size()` docs, `segment.cc:1720–1727`); and a latent hazard that if a multi-segment `CompactTask` were built instead, its `scan()` would call `writing_forward_block().value()` on the stripped meta while `memory_store_` is non-empty (`segment.cc:2825–2839`) — undefined behavior, not exercised in the single-segment scenario described. I did not run any reproduction.",
+    "sha256": "79c976d3125529fe6877369bdd492eb4cf567aa2a22b17f054891bbe45b61068",
+    "message_id": "msg_8e26eee1-2b17-9bae-b581-ec083d4e6b3b",
+    "root_result_success": true,
+    "persisted_equals_stream_result": true
+  },
+  "usage": {
+    "input_tokens": 1571111,
+    "uncached_input_tokens": 186,
+    "cache_read_tokens": 1501300,
+    "cache_write_tokens": 69625,
+    "output_tokens": 27651,
+    "llm_calls": 31,
+    "tool_calls": 45,
+    "tool_errors": 1,
+    "counted_usage_messages": 31,
+    "unknown_usage_messages": 0,
+    "cost_usd": null
+  },
+  "usage_partial": false,
+  "messages": [
+    {
+      "message_id": "msg_115897ff-bc27-91f4-9d38-aed5a17e2103",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2118,
+        "cache_read_input_tokens": 18005,
+        "output_tokens": 70
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "306b6e8b-ea84-4970-92a3-06f36990a9aa",
+        "9b89dd14-9ec4-445e-b740-59262752716f"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 7
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 8
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_4b733f04-49ad-953a-b172-c1ddc330a579",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 200,
+        "cache_read_input_tokens": 20123,
+        "output_tokens": 185
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "d170506d-81da-400d-b9fe-7d7472a2d5c9",
+        "123d7d18-d49f-40df-b146-b0122e622af1"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 11
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 12
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_3d43889b-55f7-9c7a-873b-2915199cc44b",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 299,
+        "cache_read_input_tokens": 20323,
+        "output_tokens": 109
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "8e7378a3-3270-43d0-a5c6-2fe591423585",
+        "7bbb2e51-a574-489c-8a2c-eed4b05df593"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 15
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 16
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_cee1e14c-0b27-94f2-a9e0-9066adcadac3",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1610,
+        "cache_read_input_tokens": 20622,
+        "output_tokens": 87
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "d3ebf261-005e-484a-8c11-4a8b228bd5ab",
+        "1e59528e-96a7-4184-ac22-c2d6dbd54578"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 19
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 20
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_8d02dc53-97a9-9eb2-bc2a-29e948706c00",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1499,
+        "cache_read_input_tokens": 22232,
+        "output_tokens": 204
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "35953d88-65a1-4fb0-b005-79443c69db6f",
+        "eab70e99-f6cd-4579-a664-9a517db93a6f"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 24
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 25
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_1efa0c61-981b-980f-a149-d3c4050b0c6d",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 319,
+        "cache_read_input_tokens": 23731,
+        "output_tokens": 79
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "926057c0-0908-4162-bf42-92f2bc43684b",
+        "2a5fcc7c-484c-4b5c-833c-bab834b1285a"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 28
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 29
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_48672bfb-7b7f-97f6-b981-ddec42052641",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 24050,
+        "output_tokens": 327
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "f01c2cf8-d2af-49b8-a239-87d9aab6b595",
+        "2a442683-e158-4a89-aa9f-33787a25460f"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 33
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 34
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_f5f5c05e-57e0-96d6-947d-73b32592e9ef",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 544,
+        "cache_read_input_tokens": 27499,
+        "output_tokens": 204
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "550ea387-9ca0-4c55-9977-47ce0c1cb5d8",
+        "15f03740-3e30-4516-a0bd-bbf1ceeadc3e",
+        "ec6d5342-bf86-45c2-990d-b7ac704f539e"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 37
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 38
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 40
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_66de8f59-d3f4-9b9d-af5d-f33dfef575c5",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 835,
+        "cache_read_input_tokens": 28043,
+        "output_tokens": 182
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "4765a3f4-fae3-4d44-a3b6-835c172cf43e",
+        "a5df0e13-f1e4-4290-ba64-5688f3b247f5",
+        "a8e39b8d-07c3-4850-8051-c2c6f00267f0"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 43
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 44
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 46
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_1596763c-52cd-9971-a6b6-2ee2955ae9d4",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3139,
+        "cache_read_input_tokens": 28878,
+        "output_tokens": 464
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "c31f3c37-aba0-463a-a11b-daa34b18cb93",
+        "a62a0821-f098-48cc-a07e-4e03a2125b9b",
+        "ac15b827-a99a-4e5f-b25c-324b9a5b8ffd"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 51
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 52
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 54
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_ee2cf6de-7662-9adf-a361-9c459ab6d215",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3598,
+        "cache_read_input_tokens": 32017,
+        "output_tokens": 1046
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "7be68f16-1ff8-40a5-b645-cea06c14d774",
+        "f759f10e-0d5b-4c6f-8a5a-4f5d7fd00b3f",
+        "ffa14510-3341-47f2-87fe-1dabc20d4a15"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 57
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 58
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 60
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_ef7412d3-a9a5-9ec0-85e3-22ac05b1d7fb",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2527,
+        "cache_read_input_tokens": 35615,
+        "output_tokens": 232
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "f5068e22-9d86-4307-944c-8e0d8816fc3b",
+        "ae4ec892-074a-4cc1-a07f-202e3bf09c56",
+        "1674eb46-6dd7-4d0d-9f51-9ef2171dee7c"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 64
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 65
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 67
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_da6c2692-4a58-9b05-92a0-bd891865f766",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2443,
+        "cache_read_input_tokens": 38142,
+        "output_tokens": 1064
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "8839aac5-7dd3-4a31-ac77-f991816db513",
+        "c95ee4c2-c6aa-4f26-a216-3ae0c2b9f2ca",
+        "efdf71dd-3016-4457-8175-9ffd6a83fb87"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 70
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 71
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 73
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_e601d775-b347-9b27-ab2c-385c6f70547e",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 4295,
+        "cache_read_input_tokens": 40585,
+        "output_tokens": 970
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "2a9aef0c-c3db-49cf-9222-7d7f6846723e",
+        "5ac6a6f2-b68b-4793-80b2-1c6ed6c4b4e4",
+        "63211fea-e0d3-4a51-beff-b76b6c6910de"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 77
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 78
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 80
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_89be769a-2b1e-9950-9a88-d47c95430230",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1777,
+        "cache_read_input_tokens": 44880,
+        "output_tokens": 1629
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "1e5a96b0-dec5-40a0-9da1-d20dd61b4c1a",
+        "d90c7015-eb36-4568-984d-558bb9750e6a",
+        "f2655d95-d025-441e-8c35-0d146f275496"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 84
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 85
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 87
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_5cc220cb-240b-9edb-a6f9-57bb0d07e2c3",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2537,
+        "cache_read_input_tokens": 46657,
+        "output_tokens": 318
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "366bf984-4aba-4fb4-a555-01fd4e7c75b3",
+        "192596b8-2296-4987-bd89-1e1d8838c49e",
+        "a48154e0-7b2e-443b-893d-1f835fe7bbe2"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 90
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 91
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 93
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_c932edf1-b26f-98ca-8f0e-8f20a0500357",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2470,
+        "cache_read_input_tokens": 49194,
+        "output_tokens": 1650
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "5e4e817d-1c14-4dd9-a662-9ea96c472898",
+        "162e74cd-e006-4d50-bc37-e4fdff7a707b",
+        "96a140ba-027e-4c5f-b218-e99f0d862c24"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 97
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 98
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 100
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_eb36fa9e-7087-9cbd-808f-abd099145244",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 5360,
+        "cache_read_input_tokens": 51664,
+        "output_tokens": 1798
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "e04f804d-80c3-4b11-886c-cfd08a8f6e82",
+        "49f73ef9-bac0-446d-84c1-b3224b196760"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 103
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 104
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_e3d1e0f7-7019-955f-844c-f5f862694ee3",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2318,
+        "cache_read_input_tokens": 57024,
+        "output_tokens": 242
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "f904c058-9c9d-42d7-857c-bbe5c3fbce84",
+        "ad67f7a8-dd00-456d-83a4-a4b3ff786272",
+        "973a4863-1e76-4928-b30f-7b4f6c6d6dfa"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 108
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 109
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 111
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_22aea843-579b-9458-8b36-8e5ea4d6f00d",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1133,
+        "cache_read_input_tokens": 59342,
+        "output_tokens": 200
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "ef2810e5-bbd4-4739-8b49-c0cb2a680dc2",
+        "c4e67741-91b8-46a5-825a-238278f5447b"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 114
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 115
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_d543300c-c27f-94e3-a9aa-2eaf3cca0586",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3598,
+        "cache_read_input_tokens": 60475,
+        "output_tokens": 1333
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "acf4275f-a968-4d90-88b3-04b99b32a4bd",
+        "e8c08877-0350-4a16-830d-7ceb99f052b8",
+        "c30b02fe-203c-41f0-8c36-4783ad0fdb24"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 120
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 121
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 123
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_07be1fa3-ca51-9f70-b1b5-07fddcd3c83b",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3685,
+        "cache_read_input_tokens": 64073,
+        "output_tokens": 2334
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "7ab903e5-b2c5-4cd1-a984-3182fa71d223",
+        "ab64ad25-69cc-41b0-a6a6-e1388d127f53",
+        "426c497e-b649-479c-8b9b-83d548b67d8e"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 126
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 127
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 129
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_2bbf5c47-a6aa-9d68-af02-146900970b60",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3148,
+        "cache_read_input_tokens": 67758,
+        "output_tokens": 166
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "c95c9556-23d9-4500-a57e-e0e3ebfe2edc",
+        "240ad819-1b99-4908-8da6-297059d1e86f"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 133
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 134
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_768f584e-14ee-9647-90d7-6c336c530396",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1137,
+        "cache_read_input_tokens": 70906,
+        "output_tokens": 87
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "f8ce991a-99a9-4b60-899c-7f44911a0afe",
+        "1df0d9ea-ee92-4904-8511-5ff2f98d7ba3"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 137
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 138
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_5f182f9b-e814-945f-9ed9-fdf74f6b8db3",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3239,
+        "cache_read_input_tokens": 72043,
+        "output_tokens": 239
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "c1dd6377-e46b-4f01-b7c5-7e475d1ee500",
+        "adc01984-88b4-4db0-a92e-9fd156c663fd"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 141
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 142
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_fd82d60f-f0fb-93df-a7f1-0f00c672d2bf",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1331,
+        "cache_read_input_tokens": 75282,
+        "output_tokens": 528
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "d7456812-b304-4680-8c60-65a26d59a04d",
+        "62edd50f-ef1a-48b8-9dc3-a46318880b29",
+        "a0a779cb-8e27-4b05-a481-e9e370d36cb6"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 146
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 147
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 149
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_a30b703b-6142-95be-bebf-fe96a331bed3",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1977,
+        "cache_read_input_tokens": 76613,
+        "output_tokens": 1542
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "af14f450-ca84-45ea-b1be-59abfefde15d",
+        "18641537-1d77-4a9f-a02a-0bcd73c19fa5"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 152
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 153
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_4e4f0b4d-4fdf-9436-8e1f-6089e696f024",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1980,
+        "cache_read_input_tokens": 78590,
+        "output_tokens": 340
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "cddab5d2-317f-4453-b928-c41516d1a2ee",
+        "1938f560-34d7-47e0-9028-45f5c3b4574e"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 157
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 158
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_979fa352-6b9f-9699-9a84-1d3413fe6a20",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 603,
+        "cache_read_input_tokens": 80570,
+        "output_tokens": 2551
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "51da00b4-aef8-454a-9380-04a84424bee4",
+        "19c8d695-d629-4869-aae1-16bea611c334",
+        "280d8e05-c8d1-4e2a-92b7-66dfd9903aa6"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 162
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 163
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 165
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_65e76bc2-3119-956c-af57-618f03da8ce8",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 4018,
+        "cache_read_input_tokens": 81173,
+        "output_tokens": 1509
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "b7ac6a33-9826-4798-a017-d4d43f9d88b3",
+        "b67359d4-9480-4ea2-96d7-b37ed649d368"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 168
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 169
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_8e26eee1-2b17-9bae-b581-ec083d4e6b3b",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2439,
+        "cache_read_input_tokens": 85191,
+        "output_tokens": 5962
+      },
+      "stop_reason": "end_turn",
+      "event_uuids": [
+        "be67c512-e456-4cb4-8b6f-7427c35681a7",
+        "62c97cd3-ed97-49e4-b26e-0788f42a6b3a"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 173
+        },
+        {
+          "file": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+          "line": 174
+        }
+      ],
+      "usage_valid": true
+    }
+  ],
+  "tools": [
+    {
+      "id": "toolu_d48bf5cd7bc34383b699ae18",
+      "session": "root",
+      "message_id": "msg_115897ff-bc27-91f4-9d38-aed5a17e2103",
+      "name": "Bash",
+      "input_sha256": "05103e8b4e6c55a233d852c1351f36efea083ab550b8a8130db0f5f4e3061570",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "bb7c368dfc54c1bd52b9f01f248d430b7df4cb4e7cc002b55933b9a5d14bf80d"
+    },
+    {
+      "id": "toolu_2ec95daa343147f7aaac087e",
+      "session": "root",
+      "message_id": "msg_4b733f04-49ad-953a-b172-c1ddc330a579",
+      "name": "Bash",
+      "input_sha256": "6fea1681d1f79415083a6af0ddb0fb3be42adea41e1b8d0372fbbcc33032aeda",
+      "completed": true,
+      "is_error": true,
+      "result_sha256": "c1dd5424622571b57719e1d6d5735ed1bd3c341dc482da16a6eac9983aa8fa60"
+    },
+    {
+      "id": "toolu_5d39230d2ffa4e4d99766170",
+      "session": "root",
+      "message_id": "msg_3d43889b-55f7-9c7a-873b-2915199cc44b",
+      "name": "Bash",
+      "input_sha256": "c7477b1198c2b140689935c400b9202ebc5e1acc5d338807fc99acc77df1fd59",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "598072a2b43ccc6d739efa1d9c06f938796283bda49d5912d84a8754ebf17eea"
+    },
+    {
+      "id": "toolu_722626b20338484699d1f8a1",
+      "session": "root",
+      "message_id": "msg_cee1e14c-0b27-94f2-a9e0-9066adcadac3",
+      "name": "Bash",
+      "input_sha256": "3abe8abda4171e4147dc30058a4e05bb5de9a025b2979fba914b5a7011086088",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "7eee98703da43cc95979b1e8cd48503626d4aa07c086c1d5055661003efdaa4c"
+    },
+    {
+      "id": "toolu_3936ae5fc61248e0a6042f2c",
+      "session": "root",
+      "message_id": "msg_8d02dc53-97a9-9eb2-bc2a-29e948706c00",
+      "name": "Bash",
+      "input_sha256": "f122fcf9bef2b7981fc3126effb65bf1145db20d3be74bc1e75047ba8bc1beb9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "c0691313aae7967c75af73b8db98f1d38dee77991ea0b82adeb9ad9c038238d0"
+    },
+    {
+      "id": "toolu_c8e09d4416c84191b85a3824",
+      "session": "root",
+      "message_id": "msg_1efa0c61-981b-980f-a149-d3c4050b0c6d",
+      "name": "Bash",
+      "input_sha256": "c7efbae25ee8835550cbe99bd1f9090894dc1e2be863122bf5a6be3ef473a463",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "c56d0a316343ef143c603b52b6f93e2df98a337bc898b3f3e86f06e2cee500c2"
+    },
+    {
+      "id": "toolu_2cd389f4f076403aa73d5c56",
+      "session": "root",
+      "message_id": "msg_48672bfb-7b7f-97f6-b981-ddec42052641",
+      "name": "Bash",
+      "input_sha256": "41db8f3a239b58271db6e2cbe0b6a3b006b849afef34d981ab675f0fe67c7ce1",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "5ab1b5c13ee59ea63e396e6b16ea232ecc086f17d52e0b137d3e2fe02c526bcc"
+    },
+    {
+      "id": "toolu_3e765c51ba074a36bcde2d26",
+      "session": "root",
+      "message_id": "msg_f5f5c05e-57e0-96d6-947d-73b32592e9ef",
+      "name": "Bash",
+      "input_sha256": "e7a5085757dbe40c9a925d2800589a59badba9312289e20e996d0af3d9523909",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2fa7b1d5a8cd07261ec35350211de560a229b6ab5bb0c539fed9c889eaab09a4"
+    },
+    {
+      "id": "toolu_3726fa22c10a46189939d1d9",
+      "session": "root",
+      "message_id": "msg_f5f5c05e-57e0-96d6-947d-73b32592e9ef",
+      "name": "Bash",
+      "input_sha256": "b80ee04ca0f1e1c1db7f73aa87887b78fdf35e08736c460246c89d49c17bb2bb",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "6045e42d384b8e3c03f7df10425a37e534dff367c57cdf597ec71220db3986da"
+    },
+    {
+      "id": "toolu_7832d20d8a6c4739adb235eb",
+      "session": "root",
+      "message_id": "msg_66de8f59-d3f4-9b9d-af5d-f33dfef575c5",
+      "name": "Read",
+      "input_sha256": "1092e2f3b63c97180d6180c74cb41d0a9c327fcd9252acd622636e5555d002ce",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "206560a26011288bccd0804b6e18adb52f8ed5432db104513afb340c59ac8265"
+    },
+    {
+      "id": "toolu_0fb09efe769040ecbdb80a66",
+      "session": "root",
+      "message_id": "msg_66de8f59-d3f4-9b9d-af5d-f33dfef575c5",
+      "name": "Read",
+      "input_sha256": "e77118d0e1b05655343a616f8886780d85c5bdcb55966de00c57de75ff27fee9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "afc2987efb846e5391e770dad65bcd44f914be084033a8f2781ae0e1566db72c"
+    },
+    {
+      "id": "toolu_6edbe278cd6b4219a468dcb5",
+      "session": "root",
+      "message_id": "msg_1596763c-52cd-9971-a6b6-2ee2955ae9d4",
+      "name": "Read",
+      "input_sha256": "4f2accc6b95588bd366fe5e0aff74665ec1878782d1dd12e29ce7e23235f035a",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "6401b89bdd4cf7bc312f161db3ea456048ecd5a46f283f6e9799b66deadc4b11"
+    },
+    {
+      "id": "toolu_7a3cab9629304ba1bc586419",
+      "session": "root",
+      "message_id": "msg_1596763c-52cd-9971-a6b6-2ee2955ae9d4",
+      "name": "Read",
+      "input_sha256": "aa2b0ec2e3356e9d76be00dfd8ba1c22ebcdb440fce341788146937af30893f0",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "030bdf628cc3519d0714f75088fffd21198d40d378504a4de8d6fd7c8792a12b"
+    },
+    {
+      "id": "toolu_28f36054eece422096395178",
+      "session": "root",
+      "message_id": "msg_ee2cf6de-7662-9adf-a361-9c459ab6d215",
+      "name": "Bash",
+      "input_sha256": "b7aec9a4aa98dfa8b05646bc006ab298baf9aec09c749c9a4aa08b89b19825cd",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2a7efa598ce0d540b80cb59986c353c44521adf57ddb02ea0c3be5fe8051ecd2"
+    },
+    {
+      "id": "toolu_f59229333c454d4ba7703019",
+      "session": "root",
+      "message_id": "msg_ee2cf6de-7662-9adf-a361-9c459ab6d215",
+      "name": "Bash",
+      "input_sha256": "e7d9b554f7302e14c4267c15ee42581091d486b373c4a237109d4a765d7b98f8",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "cf750f6acab78df9de7265fdfcf88fe6354a67f9eadd8e2653af5d6d4a11066d"
+    },
+    {
+      "id": "toolu_9e8e37c1c45d49b783d44fca",
+      "session": "root",
+      "message_id": "msg_ef7412d3-a9a5-9ec0-85e3-22ac05b1d7fb",
+      "name": "Bash",
+      "input_sha256": "261ed304a966324c243f7f2869189e98342269babc147db5cdeb16df550d8de7",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "037fdd7ebfb2956ce540f6b34aae166ed6de248230fbb15a0468a30f784a8cab"
+    },
+    {
+      "id": "toolu_bfc6c5b6cbbb4063ab5c9e1f",
+      "session": "root",
+      "message_id": "msg_ef7412d3-a9a5-9ec0-85e3-22ac05b1d7fb",
+      "name": "Read",
+      "input_sha256": "316718b11765ebcd3c1681375937e9812fc1d7d0e4b2c87b5a397a972af52dbf",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "1027f87a0a86f4d65216e36dcd0669d1790c5c306444c86a124b57652900ef93"
+    },
+    {
+      "id": "toolu_79331d18a51d4917987acb80",
+      "session": "root",
+      "message_id": "msg_da6c2692-4a58-9b05-92a0-bd891865f766",
+      "name": "Read",
+      "input_sha256": "7c806b1afa743d4b06969eff8e7ad6a7c9dfcb17387d35f19534592ef7f54182",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "d143a078ff8cc7f0b3af69736b1a3d8ba9b4bf6df98b0aba42780a1362dd2217"
+    },
+    {
+      "id": "toolu_241e5ca1cc29489fb20797ac",
+      "session": "root",
+      "message_id": "msg_da6c2692-4a58-9b05-92a0-bd891865f766",
+      "name": "Read",
+      "input_sha256": "3a0cb7002aaa34ee78eef27d78c24f3b73b1ee4b957c7360fa4644992644a7a5",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "4de6335937314db94a10f5ac9fc6be02cf5a4dd501a9af8f5e4320deb94bda13"
+    },
+    {
+      "id": "toolu_dbeab92886864915a1436b24",
+      "session": "root",
+      "message_id": "msg_e601d775-b347-9b27-ab2c-385c6f70547e",
+      "name": "Bash",
+      "input_sha256": "021cb550dc2e563de6a4210e75acef04c3b58efc4c4509e225af55a413a2d8ea",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "256f8af6234e8b5b04f05fd676b9b89c184f713dc68b85655f1029cb6e2c4b7e"
+    },
+    {
+      "id": "toolu_fa9e2321c53d46f884d0da02",
+      "session": "root",
+      "message_id": "msg_e601d775-b347-9b27-ab2c-385c6f70547e",
+      "name": "Bash",
+      "input_sha256": "ce85835132e998cea2864357996d6df070a25f153ec894f0fbba5a5854c4c158",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f61913ef3297e983be4a90762c6478c8ed3e80f0fccf2cdaa9069b6193c489e2"
+    },
+    {
+      "id": "toolu_3e4d59fd9f5042b1a605bb3d",
+      "session": "root",
+      "message_id": "msg_89be769a-2b1e-9950-9a88-d47c95430230",
+      "name": "Bash",
+      "input_sha256": "23f84557c670a54ee7463d414e90b1a80166125d8d755682e493efdbbf705d40",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "30d87185b4cae86ed2e460208171abcde728173b268f4ca005a07e311715babf"
+    },
+    {
+      "id": "toolu_a4dd56a0f9664e34927ec2cf",
+      "session": "root",
+      "message_id": "msg_89be769a-2b1e-9950-9a88-d47c95430230",
+      "name": "Read",
+      "input_sha256": "f57d98aeb9a2bddabde905825f9bf8dcd1b78a08c2c6ab8fee2121246c30d61f",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "626fb3e6209d49615767466545241cac45b051f016a9fd9ac544d44da996382a"
+    },
+    {
+      "id": "toolu_fb552baefad84dffaf0060b6",
+      "session": "root",
+      "message_id": "msg_5cc220cb-240b-9edb-a6f9-57bb0d07e2c3",
+      "name": "Read",
+      "input_sha256": "b58233568ea6b29c39f86e9a887945898209885e21d9be678b71c5cf5a3660f9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "8a66ce8036381fc3fb10280a0091e9846dd3a960d3cfc0f235ce2f371dd043cc"
+    },
+    {
+      "id": "toolu_342a5415aeaf48788b2135e1",
+      "session": "root",
+      "message_id": "msg_5cc220cb-240b-9edb-a6f9-57bb0d07e2c3",
+      "name": "Read",
+      "input_sha256": "0153d7798a4a8a8bf077bc90fc1249786e4bd676b1864b8a0785151d5412d6df",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "8bd738d90085f49add39ff271af28e1104c54e73fa369c296edd360c5b42b672"
+    },
+    {
+      "id": "toolu_8e0925bea3e84d1da686b741",
+      "session": "root",
+      "message_id": "msg_c932edf1-b26f-98ca-8f0e-8f20a0500357",
+      "name": "Read",
+      "input_sha256": "5a9ef4061232db1c38e26ac18cb9effc00b4ca479d63aac4992583a0df3817c2",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "a73eb0d7b962760701cfe2716bd65d31d00b3c1e6b0b74a3c0c42772d69934c6"
+    },
+    {
+      "id": "toolu_4a5896f5c6aa4055beed9124",
+      "session": "root",
+      "message_id": "msg_c932edf1-b26f-98ca-8f0e-8f20a0500357",
+      "name": "Read",
+      "input_sha256": "110eac9240a48f566cf5865e1be8248c58ca0572d093443bd698acfcd6c3bdbf",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "0ee86047d1a608b64be639dc3a8daa180065c154d6c45ff18ef8979a38e1b4cf"
+    },
+    {
+      "id": "toolu_f26fd4e9202a40ca8f412ce7",
+      "session": "root",
+      "message_id": "msg_eb36fa9e-7087-9cbd-808f-abd099145244",
+      "name": "Bash",
+      "input_sha256": "20165682bb3691c54d4d532098f3006cccd042db24c2d5bf99f096bd3fbfa6d2",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "836d49f39eb36537bb5cc34d67ab9969bbd5bcfd3c1fc05760b888401e9f6933"
+    },
+    {
+      "id": "toolu_d27edec99d294b82b3b22e25",
+      "session": "root",
+      "message_id": "msg_e3d1e0f7-7019-955f-844c-f5f862694ee3",
+      "name": "Read",
+      "input_sha256": "d45462c47c9da8f0b616af8f1585dc3798951892f436a9737c92f22972aaf5c6",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "5bb8298fb996c9e263a9f6ad5df650e7da78b7d7bc84da951c34f1539efc574f"
+    },
+    {
+      "id": "toolu_dc93bc5490184467a2b67817",
+      "session": "root",
+      "message_id": "msg_e3d1e0f7-7019-955f-844c-f5f862694ee3",
+      "name": "Bash",
+      "input_sha256": "ead39e6ff7095f520cdb28369f7bb37ff8f8f510334243d6b98f97e2701e22d7",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f3677ad0e9fb1e1454e570252e08bb3c5a5e14bbae696119aaa8c063b529a853"
+    },
+    {
+      "id": "toolu_2e83b435897546c582090f40",
+      "session": "root",
+      "message_id": "msg_22aea843-579b-9458-8b36-8e5ea4d6f00d",
+      "name": "Read",
+      "input_sha256": "bb3c340121dc4388c1f26434d0b76f1c71ed82529b93637e72e497fe0d9258eb",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "413402b677900279f97c14ea3a91dd4a5fe1818a00b4549fbd8f43dc6e0b6773"
+    },
+    {
+      "id": "toolu_61f8b06bfd2445a0aa49f0e3",
+      "session": "root",
+      "message_id": "msg_d543300c-c27f-94e3-a9aa-2eaf3cca0586",
+      "name": "Read",
+      "input_sha256": "9f4cf6d5c8c3cd00c7145c5f6336352b49b279d294c3ba8ead056fa2d3e2517b",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "348bd4c3f937bb525d4a061463fb14462325209dba3adcb94d8cc66b186b4164"
+    },
+    {
+      "id": "toolu_20c6326693d64204878f2f3f",
+      "session": "root",
+      "message_id": "msg_d543300c-c27f-94e3-a9aa-2eaf3cca0586",
+      "name": "Read",
+      "input_sha256": "6b4c463ce85b75489d436c40f552d68feeefbd9f81f200efc02d424cfd1cf8ba",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "0f6fea4b60aef3b8d4d20427b56b6920fa798451d67fd561db84c247292255ea"
+    },
+    {
+      "id": "toolu_fef5feee7f1f4270a8722fe9",
+      "session": "root",
+      "message_id": "msg_07be1fa3-ca51-9f70-b1b5-07fddcd3c83b",
+      "name": "Bash",
+      "input_sha256": "491dee64e5741592eab200caadfe00bc90a3a298a3ed63a5c27d3098231575b0",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "161444979931849f229ce34cff97fa3e2e2bdf2254538ec88ffd9a3731682824"
+    },
+    {
+      "id": "toolu_3b99f2c56ec943d7a1805865",
+      "session": "root",
+      "message_id": "msg_07be1fa3-ca51-9f70-b1b5-07fddcd3c83b",
+      "name": "Bash",
+      "input_sha256": "b9974de36934b30060d709d7f0c59992d2cc3d0fc6635e2cb4abbecc95d787c9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "b0cd4f9e008f6ff1a1353bb083997d55caf65dfcf7fbb7904610a88f5e6835a4"
+    },
+    {
+      "id": "toolu_08343c1a14f74f728e609fdc",
+      "session": "root",
+      "message_id": "msg_2bbf5c47-a6aa-9d68-af02-146900970b60",
+      "name": "Bash",
+      "input_sha256": "5e620adc310a6229f94bccd5fb7115e63d631c728943d0427a6cf2484620a0d7",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "aef1c3f996eefc6fc9c50802c6ba96b961a7ed101c54fbb08fe9e2380eaeb2a4"
+    },
+    {
+      "id": "toolu_5b9d8235d56e4bf6ab22375c",
+      "session": "root",
+      "message_id": "msg_768f584e-14ee-9647-90d7-6c336c530396",
+      "name": "Read",
+      "input_sha256": "714da7a32ccdf8f1d58524f4132aa5a75c18c9439bf5b180228aba0193d1e7f2",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "4b1d9fd744157cddac185a4254d77699c4708fd2c94e1d18ee7b96c2bc3fa8c0"
+    },
+    {
+      "id": "toolu_77be6c76304742ed8fe87be9",
+      "session": "root",
+      "message_id": "msg_5f182f9b-e814-945f-9ed9-fdf74f6b8db3",
+      "name": "Bash",
+      "input_sha256": "4050f34a326eac464abd8f6f3d06441478fdd582230ff01b78b60d8727013493",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "41f9cd52ddb6e31070ef625e56aabf05eceb6caa717829c1433a4973e3cda6ca"
+    },
+    {
+      "id": "toolu_0d5408ca2b9d47f89301dc55",
+      "session": "root",
+      "message_id": "msg_fd82d60f-f0fb-93df-a7f1-0f00c672d2bf",
+      "name": "Bash",
+      "input_sha256": "2af32eacb50eabfd08308cffb08f11847862b105ed39b07c1cfeae2a72219b44",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "4bbf56cb2d5bc17c64a0006699d36d90d57b3df8adc6e5c353ecc624c56c74af"
+    },
+    {
+      "id": "toolu_5a9e46d442044dba815a0798",
+      "session": "root",
+      "message_id": "msg_fd82d60f-f0fb-93df-a7f1-0f00c672d2bf",
+      "name": "Bash",
+      "input_sha256": "706601008918641dddb6672ddc049d23743909dd02d788fc826f405b28b14005",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2b3f16222da9ae1842f8fa1076016f7b34a9bcbd3b71cc1b03abed8b1946f0bf"
+    },
+    {
+      "id": "toolu_9347c73e006e49e4bff50279",
+      "session": "root",
+      "message_id": "msg_a30b703b-6142-95be-bebf-fe96a331bed3",
+      "name": "Bash",
+      "input_sha256": "08e37ae194be1dc4e5f8a5f40606bc017dd8cea29ae52b4637e7b810adcd8c14",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "e23176da97da155bcc42513ff211e9c3dff7cd302da2400aefcb64fddc46a43d"
+    },
+    {
+      "id": "toolu_83a0003000164b7395555f06",
+      "session": "root",
+      "message_id": "msg_4e4f0b4d-4fdf-9436-8e1f-6089e696f024",
+      "name": "Bash",
+      "input_sha256": "5ab3f5a9865748634ec27df398e1647cec17d876b9d091ecaac243a8ecabbfdb",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "3e1e4f7d826478ccb7ceee7ca4f83b93f72f7119d071fe171a87587839698c6b"
+    },
+    {
+      "id": "toolu_28dfd590a46344de8fcec854",
+      "session": "root",
+      "message_id": "msg_979fa352-6b9f-9699-9a84-1d3413fe6a20",
+      "name": "Read",
+      "input_sha256": "af0467d947d7d8b479727528a108b7ba31f0229dc8f7fabd00cf778672c184de",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "eeef67f1fac2f5c424f702f99c58ba90e343cecea5a8c2a49ebcd5d9b3506451"
+    },
+    {
+      "id": "toolu_2ebecc5a881743209e71e997",
+      "session": "root",
+      "message_id": "msg_979fa352-6b9f-9699-9a84-1d3413fe6a20",
+      "name": "Read",
+      "input_sha256": "351015b0d79b6e2a2f255926367cad6782ffbf6875c7204caa329dd3d5e4b1a1",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f965c99ee750cd6afcb49ea285a86f18317a4b85ab714988755f64aadcb3b18e"
+    },
+    {
+      "id": "toolu_4b11cf3bf12a4d28a074ec5f",
+      "session": "root",
+      "message_id": "msg_65e76bc2-3119-956c-af57-618f03da8ce8",
+      "name": "Bash",
+      "input_sha256": "170d6aab9f96d47ee8724324e1a57d77d65d42c0bb423f6fb2ac68abc7b5be22",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "6d20f2a73b43f74608cb70ad97c3f0fae2ee06a8cfbde199db1e467f519fd14f"
+    }
+  ],
+  "root": {
+    "id": "root",
+    "agent_id": null,
+    "parent_session": null,
+    "parent_tool_use_id": null,
+    "files": [
+      "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+    ],
+    "message_ids": [
+      "msg_115897ff-bc27-91f4-9d38-aed5a17e2103",
+      "msg_4b733f04-49ad-953a-b172-c1ddc330a579",
+      "msg_3d43889b-55f7-9c7a-873b-2915199cc44b",
+      "msg_cee1e14c-0b27-94f2-a9e0-9066adcadac3",
+      "msg_8d02dc53-97a9-9eb2-bc2a-29e948706c00",
+      "msg_1efa0c61-981b-980f-a149-d3c4050b0c6d",
+      "msg_48672bfb-7b7f-97f6-b981-ddec42052641",
+      "msg_f5f5c05e-57e0-96d6-947d-73b32592e9ef",
+      "msg_66de8f59-d3f4-9b9d-af5d-f33dfef575c5",
+      "msg_1596763c-52cd-9971-a6b6-2ee2955ae9d4",
+      "msg_ee2cf6de-7662-9adf-a361-9c459ab6d215",
+      "msg_ef7412d3-a9a5-9ec0-85e3-22ac05b1d7fb",
+      "msg_da6c2692-4a58-9b05-92a0-bd891865f766",
+      "msg_e601d775-b347-9b27-ab2c-385c6f70547e",
+      "msg_89be769a-2b1e-9950-9a88-d47c95430230",
+      "msg_5cc220cb-240b-9edb-a6f9-57bb0d07e2c3",
+      "msg_c932edf1-b26f-98ca-8f0e-8f20a0500357",
+      "msg_eb36fa9e-7087-9cbd-808f-abd099145244",
+      "msg_e3d1e0f7-7019-955f-844c-f5f862694ee3",
+      "msg_22aea843-579b-9458-8b36-8e5ea4d6f00d",
+      "msg_d543300c-c27f-94e3-a9aa-2eaf3cca0586",
+      "msg_07be1fa3-ca51-9f70-b1b5-07fddcd3c83b",
+      "msg_2bbf5c47-a6aa-9d68-af02-146900970b60",
+      "msg_768f584e-14ee-9647-90d7-6c336c530396",
+      "msg_5f182f9b-e814-945f-9ed9-fdf74f6b8db3",
+      "msg_fd82d60f-f0fb-93df-a7f1-0f00c672d2bf",
+      "msg_a30b703b-6142-95be-bebf-fe96a331bed3",
+      "msg_4e4f0b4d-4fdf-9436-8e1f-6089e696f024",
+      "msg_979fa352-6b9f-9699-9a84-1d3413fe6a20",
+      "msg_65e76bc2-3119-956c-af57-618f03da8ce8",
+      "msg_8e26eee1-2b17-9bae-b581-ec083d4e6b3b"
+    ],
+    "usage": {
+      "input_tokens": 1571111,
+      "uncached_input_tokens": 186,
+      "cache_read_tokens": 1501300,
+      "cache_write_tokens": 69625,
+      "output_tokens": 27651,
+      "llm_calls": 31,
+      "tool_calls": 45,
+      "tool_errors": 1,
+      "counted_usage_messages": 31,
+      "unknown_usage_messages": 0,
+      "cost_usd": null
+    },
+    "tool_count": 45,
+    "reachable": true
+  },
+  "children": [],
+  "sessions": [
+    {
+      "id": "root",
+      "agent_id": null,
+      "parent_session": null,
+      "parent_tool_use_id": null,
+      "files": [
+        "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl"
+      ],
+      "message_ids": [
+        "msg_115897ff-bc27-91f4-9d38-aed5a17e2103",
+        "msg_4b733f04-49ad-953a-b172-c1ddc330a579",
+        "msg_3d43889b-55f7-9c7a-873b-2915199cc44b",
+        "msg_cee1e14c-0b27-94f2-a9e0-9066adcadac3",
+        "msg_8d02dc53-97a9-9eb2-bc2a-29e948706c00",
+        "msg_1efa0c61-981b-980f-a149-d3c4050b0c6d",
+        "msg_48672bfb-7b7f-97f6-b981-ddec42052641",
+        "msg_f5f5c05e-57e0-96d6-947d-73b32592e9ef",
+        "msg_66de8f59-d3f4-9b9d-af5d-f33dfef575c5",
+        "msg_1596763c-52cd-9971-a6b6-2ee2955ae9d4",
+        "msg_ee2cf6de-7662-9adf-a361-9c459ab6d215",
+        "msg_ef7412d3-a9a5-9ec0-85e3-22ac05b1d7fb",
+        "msg_da6c2692-4a58-9b05-92a0-bd891865f766",
+        "msg_e601d775-b347-9b27-ab2c-385c6f70547e",
+        "msg_89be769a-2b1e-9950-9a88-d47c95430230",
+        "msg_5cc220cb-240b-9edb-a6f9-57bb0d07e2c3",
+        "msg_c932edf1-b26f-98ca-8f0e-8f20a0500357",
+        "msg_eb36fa9e-7087-9cbd-808f-abd099145244",
+        "msg_e3d1e0f7-7019-955f-844c-f5f862694ee3",
+        "msg_22aea843-579b-9458-8b36-8e5ea4d6f00d",
+        "msg_d543300c-c27f-94e3-a9aa-2eaf3cca0586",
+        "msg_07be1fa3-ca51-9f70-b1b5-07fddcd3c83b",
+        "msg_2bbf5c47-a6aa-9d68-af02-146900970b60",
+        "msg_768f584e-14ee-9647-90d7-6c336c530396",
+        "msg_5f182f9b-e814-945f-9ed9-fdf74f6b8db3",
+        "msg_fd82d60f-f0fb-93df-a7f1-0f00c672d2bf",
+        "msg_a30b703b-6142-95be-bebf-fe96a331bed3",
+        "msg_4e4f0b4d-4fdf-9436-8e1f-6089e696f024",
+        "msg_979fa352-6b9f-9699-9a84-1d3413fe6a20",
+        "msg_65e76bc2-3119-956c-af57-618f03da8ce8",
+        "msg_8e26eee1-2b17-9bae-b581-ec083d4e6b3b"
+      ],
+      "usage": {
+        "input_tokens": 1571111,
+        "uncached_input_tokens": 186,
+        "cache_read_tokens": 1501300,
+        "cache_write_tokens": 69625,
+        "output_tokens": 27651,
+        "llm_calls": 31,
+        "tool_calls": 45,
+        "tool_errors": 1,
+        "counted_usage_messages": 31,
+        "unknown_usage_messages": 0,
+        "cost_usd": null
+      },
+      "tool_count": 45,
+      "reachable": true
+    }
+  ],
+  "files": [
+    {
+      "path": "claude-code.txt",
+      "sha256": "c6582019f88c73cdbd65ed33d78a63fbcb4c05ab2c23b5de98a2a81c71b2b632",
+      "bytes": 1682050
+    },
+    {
+      "path": "sessions/projects/-workspace/71abcbd2-2d67-4eac-b126-0534d98aded5.jsonl",
+      "sha256": "9cb1d245c51841ee69b71ca60d3205cf7c618c6c27e249d31c93c618114fdb09",
+      "bytes": 522798
+    }
+  ],
+  "root_result_usage": {
+    "input_tokens": 186,
+    "cache_creation_input_tokens": 69625,
+    "cache_read_input_tokens": 1501300,
+    "output_tokens": 27651,
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 69625
+    },
+    "inference_geo": "",
+    "iterations": [],
+    "speed": "standard"
+  },
+  "root_result_usage_valid": true,
+  "root_result_usage_counted": false,
+  "limitations": [
+    "Persisted linked session messages only; not whole-provider billing or unpersisted background usage.",
+    "Root result totals are diagnostic and may already include child usage; never added to persisted totals.",
+    "Unknown or missing child linkage fails closed; native Docker evidence must validate the supported transcript shape."
+  ]
+}

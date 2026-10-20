@@ -1,0 +1,57 @@
+# Root cause: recovery replays the WAL without re-attaching the WAL handle, and `flush()`/`dump()` use that handle as the only dirtiness signal
+
+All findings below are from reading the frozen source only (repo root = `/workspace`). I did not build or run anything; claims that would need execution to confirm are flagged explicitly.
+
+## Lifecycle background (the two write paths)
+
+**Ordinary insertion** — `Collection::Insert` → `SegmentImpl::Insert/Upsert/Update/Delete` (`src/db/index/segment/segment.cc:903–1000`): each op first calls `append_wal()` (`segment.cc:4324–4339`), which lazily opens the **member** `wal_file_` via `open_wal_file()` (`segment.cc:4303–4322`) and appends the serialized doc, then calls `internal_insert()` etc. (`segment.cc:837–901`) to fill `memory_store_`, memory vector indexers, `id_map_`, `doc_ids_`, and the writing-block meta.
+
+**Recovery** — `CollectionImpl::Open` → `recovery()` (`src/db/collection.cc:308–330, 1836–1892`): the manifest is loaded (`VersionManager::Recovery`, `src/db/index/common/version_manager.cc:190`; manifest = persisted segment metas + writing segment meta + idmap/delete suffixes — **no WAL knowledge at all**, `version_manager.cc:35–115`). Persisted segments are opened read-only; the writing segment is opened via `SegmentImpl::Open` (`segment.cc:461–518`), which calls `recover()` **only because the meta still has a `writing_forward_block`** (`segment.cc:485–501`).
+
+## 1. What differs after recovery, and why data is initially readable
+
+`SegmentImpl::recover()` (`segment.cc:4193–4301`) opens `<collection>/<seg_id>/<block_id>.wal` (`src/db/common/file_helper.h:74–79`) into a **local** `recover_wal_file` (`segment.cc:4206–4215`), replays each record through `internal_insert/internal_update/internal_upsert/internal_delete` (`segment.cc:4250–4273`) — which bypass `append_wal()` — bumps `mem_block.max_doc_id_` (`segment.cc:4285–4288`), and closes the local handle (`segment.cc:4215`). 
+
+**The one differing piece of state: the member `wal_file_` stays `nullptr`.** Everything else (memory forward store, memory vector indexers, `doc_ids_`, id map) is populated identically to the insert path. That is why reads work in the recovery process: `doc_count()` is `doc_ids_.size()` (`segment.cc:589–600`), and `scan()` merges persisted stores with `memory_store_` (`segment.cc:2825–2842`). The data is durable at this point *only* because the WAL file still sits on disk and the committed manifest still routes openers to replay it.
+
+## 2. The call sequence and exact condition that let `Optimize()` succeed while losing the data
+
+In the recovery process, with no new inserts, `CollectionImpl::Optimize` (`src/db/collection.cc:779–915`):
+
+1. `writing_segment_->doc_count() != 0` → true (`collection.cc:794`) → `switch_to_new_segment_for_writing()` (`collection.cc:796`, defined `1517–1552`).
+2. That calls `writing_segment_->dump()` (`collection.cc:1519`) → `SegmentImpl::dump()` (`segment.cc:2197–2215`) → `flush()` (`segment.cc:2217`), which hits the **exact condition**:
+   ```cpp
+   if (wal_file_ == nullptr || !wal_file_->has_record()) return Status::OK();   // segment.cc:2219–2221
+   ```
+   `wal_file_` is null (never assigned by `recover()`, no `append_wal()` since open) → `flush()` is a **silent no-op success**. Skipped: `memory_store_->flush()`, `finish_memory_components()` (`segment.cc:2292–2296`, defined `4342–4412` — writes the forward-block file, converts the memory block and memory vector indexers into *persisted* `BlockMeta`s), the new writing block (`2298–2303`), `update_version()` (`2300–2302`, defined `4414–4427`), and the WAL removal (`2304–2315`). Note `has_record()` is file-size-based (`src/db/index/storage/wal/local_wal_file.h:75–77`), so an *open* handle on the recovered WAL would have reported records — the bug is conflating "no handle in this process" with "nothing to persist". `dump()` then seals indexers and sets `sealed_ = true` (`segment.cc:2204–2213`).
+3. `switch_to_new_segment_for_writing` promotes the segment anyway: adds it to `segment_manager_` (`collection.cc:1521–1523`), mutates its live meta with `remove_writing_forward_block()` and `version.add_persisted_segment_meta(...)` (`collection.cc:1538–1539`), creates a new empty writing segment, then `version_manager_->apply(version)` + `flush()` (`collection.cc:1546–1548`). **The poisoned manifest is now on disk**: the promoted segment is listed as persisted with *zero* persisted blocks (its only block descriptor — the writing block — was removed, and no data files were ever written), and no segment meta references the WAL anymore. WAL replay is triggered *only* by a writing block (`segment.cc:485–501`), so no future opener will ever replay `<W_id>/<block>.wal` — it is orphaned (never deleted in this flow, since the flush's removal step was skipped and `destroy_segment` runs only for `CompactTask` inputs, `collection.cc:883–901`).
+4. `persist_segments = [W]` (`collection.cc:802–803`, non-empty → no early return at `807–809`); `build_compact_task` for a single segment yields a `CreateVectorIndexTask` (`collection.cc:991–996`), executed via `SegmentHelper::Execute` (`src/db/index/segment/segment_helper.cc:50–83, 1113–1126`) → `create_all_vector_index` (`segment.cc:1617–1640`). For default/FLAT params it *skips* as "already indexed" (`segment.cc:1687–1692`); for non-FLAT it merges from `vector_indexers_[column]` — the persisted list `finish_memory_components()` never populated — i.e., from nothing (`segment.cc:1642–1668, 1702–1729`). Either way it returns OK.
+5. Optimize applies `update_persisted_segment_meta(output)` (`collection.cc:863–867`), `apply` + `flush` the version again (`collection.cc:872–877`), and returns OK (`collection.cc:914`).
+6. **Reopen**: `recovery()` opens W read-only; no writing block → `recover()` never runs; `load_persist_scalar_blocks` finds no SCALAR blocks → `doc_ids_` empty (`segment.cc:3913–3959`). Doc count 0; the recovered documents are gone despite the WAL bytes still lying on disk.
+
+Control case: without the crash, `append_wal()` kept `wal_file_` open with records, so step 2's `flush()` ran fully (persist files + meta conversion + version update), and only then removed the WAL (`segment.cc:2304–2315`) — promotion referenced real files.
+
+Corroborating inconsistency (source-level, not executed): if other persisted segments exist, the `CompactTask` path scans inputs (`segment_helper.cc:233`), and `scan()` on the promoted-but-unflushed W would dereference the removed optional at `segment.cc:2837` (`std::bad_optional_access`) — the promoted state is internally invalid either way.
+
+## 3. Why "success" and same-handle statistics prove nothing here
+
+- Every status in the chain is manufactured without touching W's data: `flush()` early-returns OK (`segment.cc:2219–2221`); `dump()`, `switch_to_new_segment_for_writing`, the index task, and `Optimize` merely propagate it. `version_manager_->flush()` only serializes the manifest protobuf (`version_manager.cc:76–115, 282`); nothing validates that a segment added to `persisted_segment_metas` has any persisted blocks or backing files.
+- `Stats()` sums `segment->doc_count()` over the **live in-memory handles** (`collection.cc:403–441` → `doc_ids_.size()`, `segment.cc:589–600`); fetch/scan serve from `memory_store_` (`segment.cc:2825–2842`); `reload_vector_index` (`segment.cc:1882+`) swaps only vector indexers. So the same handle keeps reporting N docs from the very RAM copy that was never persisted, while the on-disk manifest already describes a world without them. The divergence is observable only by reopening — or by comparing manifest vs. files.
+- Side effect (inferred from the RocksDB-backed `IDMap`, `src/db/index/common/id_map.cc:36–42`, not execution-verified): replay re-upserts pk→doc-id entries, so after reopen the id map can still reference doc ids no segment contains.
+
+## 4. Smallest repair principle and a regression test (described, not implemented)
+
+**Principle:** "Is there unpersisted data?" must be answered from durable/write state (rows in the writing block / WAL contents on disk), never from whether *this process* happens to hold an open WAL handle; and a WAL may become unreachable only *after* the rows it covers are in files referenced by a committed manifest.
+
+**Smallest repair:** at the end of `SegmentImpl::recover()` (or in the recovery branch of `Open`, `segment.cc:498–501`), when records were replayed, attach the member handle by calling the existing `open_wal_file()` (`segment.cc:4303–4322`; it opens the existing file and seeks to end). Then `has_record()` is true (file-size based), and the first `flush()` — from `dump()` in Optimize, from `close()` (`segment.cc:552`), or from rollover (`segment.cc:841–844`) — runs the full persist path and removes the WAL only after `update_version()`. No change to `flush()` itself. (Equivalent alternative: widen the guard at `segment.cc:2219` to treat `memory_store_` rows / writing-block `doc_count_ > 0` as dirty. Defense in depth: refuse promotion in `switch_to_new_segment_for_writing` when the meta would be persisted with `doc_count() > 0` but zero SCALAR blocks.)
+
+**Regression test** — fits the existing `tests/db/crash_recovery` harness (fork + SIGKILL, `data_generator.cc`, `utility.h`). Note the existing `CrashDuringOptimize` (`tests/db/crash_recovery/optimize_recovery_test.cc:144`) misses this because the writer is closed cleanly first (close → flush, `segment.cc:552`) and after crash-reopen it *inserts new docs* (re-opening `wal_file_`) before optimizing:
+
+1. Child A: create collection, insert N docs (N small enough to stay under `max_buffer_size_` rollover), then SIGKILL/`_exit` — no Close, no Flush.
+2. Process B: `Collection::Open`; assert `Stats().doc_count == N` and `Fetch` returns all N (passes today; guards replay itself).
+3. Same B, **no inserts**: `Optimize()` returns OK; `Stats().doc_count == N`.
+4. End B (two variants: clean Close, and SIGKILL — durability must hold for both).
+5. Process C: `Collection::Open`; assert `Stats().doc_count == N`, fetch every pk and compare full contents, run a top-k vector query. **This assertion fails on current source** (C sees 0).
+6. Optional structural invariant (diagnostic rather than count-based): after step 3, no `*.wal` may exist under any segment directory listed as persisted in the current manifest, and every persisted segment meta must have ≥1 SCALAR block whose forward file exists with matching doc count.
+
+**Established vs. needs-execution:** the entire causal chain (null `wal_file_` → no-op flush → promotion with empty meta → manifest flush → WAL never replayed again) is traceable statically end-to-end for the FLAT/default-index single-segment case. Things I could not confirm without running: the non-FLAT variant's exact behavior when `Merge` receives an empty indexer list, the `bad_optional_access` in the multi-segment compact variant, and RocksDB-level durability of the replayed id-map entries.

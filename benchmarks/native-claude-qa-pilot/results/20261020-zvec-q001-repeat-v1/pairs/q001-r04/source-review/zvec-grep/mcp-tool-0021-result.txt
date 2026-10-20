@@ -1,0 +1,556 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (4):
+  Q1 [primary]: crash recovery replay WAL into in-memory segment when opening collection
+  Q2 [primary]: optimize() commit new version and truncate WAL
+  Q3 [primary]: insert documents into mutable segment flush seal
+  Q4 [primary]: version manager commit manifest persisted segment
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#1 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q2#1 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/db/index/segment/segment.cc:2197-2215
+groups: Q3#1 (fts+vector)
+source:
+2197	Status SegmentImpl::dump() {
+2198	  if (sealed_) {
+2199	    return Status::NotSupported("Segment has been dumped.");
+2200	  }
+2201	  auto s = flush();
+2202	  CHECK_RETURN_STATUS(s);
+2203	
+2204	  if (invert_indexers_) {
+2205	    s = invert_indexers_->seal();
+2206	    CHECK_RETURN_STATUS(s);
+...
+
+#4 [group_coverage: Q4] matchedBy=fts+vector src/db/index/common/version_manager.cc:77-116
+groups: Q4#1 (fts+vector)
+source:
+77	Status Version::Save(const std::string &path, const Version &version) {
+78	  std::ofstream ofs;
+79	  ailego::FileHelper::OpenOfstream(ofs, path, std::ios::binary);
+80	  if (!ofs.is_open()) {
+81	    LOG_ERROR("Failed to open file: %s, err: %s", path.c_str(),
+82	              ailego::FileHelper::GetLastErrorString().c_str());
+83	    return Status::InternalError("Failed to open file: %s", path.c_str());
+84	  }
+85	
+86	  proto::Manifest manifest;
+...
+
+#5 [global_fill] matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#5 (fts+vector), Q2#5 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#9 (fts+vector), Q2#4 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#7 matchedBy=fts+vector src/db/collection.cc:1476-1515
+groups: Q2#12 (fts+vector), Q4#3 (fts+vector)
+source:
+1476	Status CollectionImpl::commit_schema_change_with_new_writing_segment(
+1477	    const CollectionSchema::Ptr &new_schema,
+1478	    const Segment::Ptr &old_writing_segment, const Version &old_version,
+1479	    Version *new_version, uint64_t writing_min_doc_id) {
+1480	  if (new_version == nullptr) {
+1481	    return Status::InvalidArgument("new_version is null");
+1482	  }
+1483	
+1484	  auto seg_options =
+1485	      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_};
+...
+
+#8 matchedBy=fts+vector src/db/index/segment/segment.cc:4303-4322
+groups: Q1#2 (fts+vector)
+source:
+4303	Status SegmentImpl::open_wal_file() {
+4304	  auto mem_block = segment_meta_->writing_forward_block().value();
+4305	  std::string wal_file_path =
+4306	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4307	  WalOptions wal_option;
+4308	  if (std::filesystem::exists(wal_file_path)) {
+4309	    wal_option.create_new = false;
+4310	  } else {
+4311	    wal_option.create_new = true;
+4312	  }
+...
+
+#9 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:31-34
+groups: Q2#2 (fts+vector)
+source:
+31	struct WalHeader {
+32	  uint64_t wal_version{0U};
+33	  uint64_t reserved_[7];
+34	}
+
+#10 matchedBy=fts+vector src/db/index/segment/segment.h:199
+groups: Q3#2 (fts+vector)
+source:
+199	virtual Status flush() = 0;
+
+#11 matchedBy=fts+vector src/db/index/common/version_manager.h:28-177
+groups: Q4#2 (fts+vector)
+source:
+28	class Version {
+29	 public:
+30	  using Ptr = std::shared_ptr<Version>;
+31	
+32	  Version() = default;
+33	
+34	  static Status Load(const std::string &path, Version *version);
+35	
+36	  static Status Save(const std::string &path, const Version &version);
+37	
+...
+
+#12 matchedBy=fts+vector python/zvec/model/param/__init__.pyi:102-136
+groups: Q1#3 (fts+vector)
+source:
+102	class CollectionOption:
+103	    """
+104	
+105	    Options for opening or creating a collection.
+106	
+107	    Attributes:
+108	        read_only (bool): Whether the collection is opened in read-only mode.
+109	            Default is False.
+110	        enable_mmap (bool): Whether to use memory-mapped I/O for data files.
+111	            Default is True.
+...
+
+#13 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:26-29
+groups: Q2#3 (fts+vector)
+source:
+26	struct WalOptions {
+27	  uint32_t max_docs_wal_flush{0};
+28	  bool create_new{false};
+29	}
+
+#14 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_indexer.cc:127-149
+groups: Q3#3 (fts+vector)
+source:
+127	Status InvertedIndexer::seal() {
+128	  Status s;
+129	  for (const auto &[_, indexer] : indexers_) {
+130	    if (indexer->is_sealed()) {
+131	      continue;
+132	    }
+133	    if (s = indexer->seal(); !s.ok()) {
+134	      LOG_ERROR("Failed to seal %s", indexer->ID().c_str());
+135	    }
+136	  }
+...
+
+#15 matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#4 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...
+
+#16 matchedBy=fts+vector src/db/collection.cc:1416-1418
+groups: Q3#4 (fts+vector)
+source:
+1416	Status CollectionImpl::handle_insert(Doc &doc) {
+1417	  return writing_segment_->Insert(doc);
+1418	}
+
+#17 matchedBy=fts+vector src/db/index/segment/segment.cc:4414-4426
+groups: Q4#4 (fts+vector)
+source:
+4414	Status SegmentImpl::update_version(uint32_t delete_snapshot_path_suffix) {
+4415	  if (version_manager_) {
+4416	    if (delete_snapshot_path_suffix != UINT32_MAX) {
+4417	      version_manager_->set_delete_snapshot_path_suffix(
+4418	          delete_snapshot_path_suffix);
+4419	    }
+4420	    auto s = version_manager_->reset_writing_segment_meta(segment_meta_);
+4421	    CHECK_RETURN_STATUS(s);
+4422	    s = version_manager_->flush();
+4423	    CHECK_RETURN_STATUS(s);
+...
+
+#18 matchedBy=fts+vector src/db/index/column/fts_column/fts_indexer.h:67
+groups: Q3#5 (fts+vector)
+source:
+67	Status seal(const std::string &field_name);
+
+#19 matchedBy=fts+vector tests/db/index/common/version_manager_test.cc:84-115
+groups: Q4#5 (fts+vector)
+source:
+84	TEST_F(VersionManagerTest, VersionLoadSave) {
+85	  std::string manifest_path = test_path_ + "/manifest";
+86	
+87	  // Create and populate a version
+88	  Version version;
+89	
+90	  CollectionSchema schema;
+91	  schema.set_name("test_collection");
+92	  version.set_schema(schema);
+93	
+...
+
+#20 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#6 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#21 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q2#6 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#22 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_column_indexer_write.cc:435-463
+groups: Q3#6 (fts+vector)
+source:
+435	Status InvertedColumnIndexer::seal() {
+436	  if (read_only_) {
+437	    return Status::PermissionDenied();
+438	  }
+439	
+440	  Status status = flush_special_values();
+441	  if (!status.ok()) {
+442	    LOG_ERROR("Failed to flush special values to %s", ID().c_str());
+443	    return status;
+444	  }
+...
+
+#23 matchedBy=fts+vector src/db/index/common/version_manager.cc:272-275
+groups: Q4#6 (fts+vector)
+source:
+272	Status VersionManager::add_persisted_segment_meta(SegmentMeta::Ptr meta) {
+273	  std::lock_guard lock(mtx_);
+274	  return current_version_.add_persisted_segment_meta(meta);
+275	}
+
+#24 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#7 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#25 matchedBy=fts+vector src/db/sqlengine/planner/optimizer.h:26
+groups: Q2#7 (fts+vector)
+source:
+26	virtual bool optimize(Segment *segment, QueryInfo *query_info) = 0;
+
+#26 matchedBy=fts+vector src/db/index/column/fts_column/fts_indexer.cc:271-297
+groups: Q3#7 (fts+vector)
+source:
+271	Status FtsIndexer::seal(const std::string &field_name) {
+272	  auto it = indexers_.find(field_name);
+273	  if (it == indexers_.end()) {
+274	    return Status::NotFound("FtsIndexer::seal: field not found: ", field_name);
+275	  }
+276	
+277	  auto &indexer = it->second;
+278	
+279	  auto ret = indexer->flush();
+280	  if (!ret.has_value()) {
+...
+
+#27 matchedBy=fts+vector src/core/utility/mmap_file_storage.cc:241-262
+groups: Q4#7 (fts+vector)
+source:
+241	int init_version_segment(void) {
+242	    size_t data_size = std::strlen(IndexVersion::Details());
+243	    int error_code =
+244	        this->append_segment(INDEX_VERSION_SEGMENT_NAME, data_size);
+245	    if (error_code != 0) {
+246	      return error_code;
+247	    }
+248	
+249	    IndexMapping::Segment *segment = get_segment(INDEX_VERSION_SEGMENT_NAME);
+250	    if (!segment) {
+...
+
+#28 matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#8 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#29 matchedBy=fts+vector python/zvec/__init__.pyi:160
+groups: Q2#8 (fts+vector)
+source:
+160	def Optimize(self, arg0: param.OptimizeOption) -> None: ...
+
+#30 matchedBy=fts+vector src/include/zvec/core/framework/index_mapping.h:30-83
+groups: Q3#8 (fts+vector)
+source:
+30	class Segment {
+31	   public:
+32	    //! Constructor
+33	    Segment(void) {}
+34	
+35	    //! Constructor
+36	    Segment(IndexFormat::SegmentMeta *segmeta) : meta_(segmeta) {}
+37	
+38	    //! Flush the segment
+39	    bool flush(void) const {
+...
+
+#31 matchedBy=fts+vector src/db/index/common/version_manager.h:89-93
+groups: Q4#8 (fts+vector)
+source:
+89	void set_persisted_segment_metas(const std::vector<SegmentMeta::Ptr> &metas) {
+90	    for (auto &meta : metas) {
+91	      persisted_segment_metas_map_[meta->id()] = meta;
+92	    }
+93	  }
+
+#32 matchedBy=fts+vector src/include/zvec/db/collection.h:75-76
+groups: Q2#9 (fts+vector)
+source:
+75	virtual Status Optimize(const OptimizeOptions &options = OptimizeOptions{
+76	                              0}) = 0;
+
+#33 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_chunk.cc:141-161
+groups: Q3#9 (fts+vector)
+source:
+141	int ChunkBroker::flush(uint64_t checkpoint) {
+142	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+143	
+144	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+145	  stats_.set_update_time(chunk_meta_.update_time);
+146	
+147	  size_t size =
+148	      chunk_meta_segment_->write(0UL, &chunk_meta_, sizeof(HnswChunkMeta));
+149	  if (ailego_unlikely(size != sizeof(HnswChunkMeta))) {
+150	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#34 matchedBy=fts+vector src/core/utility/buffer_storage.cc:811-831
+groups: Q4#9 (fts+vector)
+source:
+811	int init_version_segment(IndexMapping &mapping) {
+812	    size_t data_size = std::strlen(IndexVersion::Details());
+813	    int error_code = mapping.append(INDEX_VERSION_SEGMENT_NAME, data_size);
+814	    if (error_code != 0) {
+815	      return error_code;
+816	    }
+817	    IndexMapping::Segment *segment =
+818	        mapping.map(INDEX_VERSION_SEGMENT_NAME, false, false);
+819	    if (!segment) {
+820	      return IndexError_MMapFile;
+...
+
+#35 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:67
+groups: Q1#10 (fts+vector)
+source:
+67	int open(const WalOptions &wal_option) override;
+
+#36 matchedBy=fts+vector src/include/zvec/c_api.h:3354-3355
+groups: Q2#10 (fts+vector)
+source:
+3354	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3355	zvec_collection_optimize(zvec_collection_t *collection);
+
+#37 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_chunk.cc:143-163
+groups: Q3#10 (fts+vector)
+source:
+143	int HnswRabitqChunkBroker::flush(uint64_t checkpoint) {
+144	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+145	
+146	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+147	  stats_.set_update_time(chunk_meta_.update_time);
+148	
+149	  size_t size =
+150	      chunk_meta_segment_->write(0UL, &chunk_meta_, sizeof(HnswChunkMeta));
+151	  if (ailego_unlikely(size != sizeof(HnswChunkMeta))) {
+152	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#38 matchedBy=fts+vector src/db/index/common/meta.h:320-322
+groups: Q4#10 (fts+vector)
+source:
+320	std::vector<BlockMeta> &persisted_blocks() {
+321	    return persisted_blocks_;
+322	  }
+
+#39 matchedBy=fts+vector src/core/utility/memory_read_storage.cc:27-244
+groups: Q1#11 (fts+vector)
+source:
+27	class MemoryReadStorage : public IndexStorage {
+28	 public:
+29	  /*! Memory Storage Segment
+30	   */
+31	  class Segment : public IndexStorage::Segment,
+32	                  public std::enable_shared_from_this<Segment> {
+33	   public:
+34	    //! Index Storage Pointer
+35	    typedef std::shared_ptr<Segment> Pointer;
+36	
+...
+
+#40 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q2#11 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#41 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_chunk.cc:138-158
+groups: Q3#11 (fts+vector)
+source:
+138	int SparseChunkBroker::flush(uint64_t checkpoint) {
+139	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+140	
+141	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+142	  stats_.set_update_time(chunk_meta_.update_time);
+143	
+144	  size_t size = chunk_meta_segment_->write(0UL, &chunk_meta_,
+145	                                           sizeof(HnswSparseChunkMeta));
+146	  if (ailego_unlikely(size != sizeof(HnswSparseChunkMeta))) {
+147	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#42 matchedBy=fts+vector src/db/index/segment/segment.h:56-62
+groups: Q4#11 (fts+vector)
+source:
+56	static Result<Ptr> Open(const std::string &path,
+57	                          const CollectionSchema &schema,
+58	                          const SegmentMeta &segment_meta,
+59	                          const IDMap::Ptr &id_map,
+60	                          const DeleteStore::Ptr &delete_store,
+61	                          const VersionManager::Ptr &version_manager,
+62	                          const SegmentOptions &options);
+
+#43 matchedBy=fts+vector tests/db/index/common/version_manager_test.cc:118-161
+groups: Q1#12 (fts+vector)
+source:
+118	TEST_F(VersionManagerTest, VersionManagerCreateAndRecover) {
+119	  std::string version_path = test_path_ + "/version";
+120	
+121	  std::filesystem::create_directories(version_path);
+122	
+123	  // Create initial version
+124	  Version initial_version;
+125	  CollectionSchema schema;
+126	  schema.set_name("initial_collection");
+127	  initial_version.set_schema(schema);
+...
+
+#44 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_indexer.h:73
+groups: Q3#12 (fts+vector)
+source:
+73	Status seal();
+
+#45 matchedBy=fts+vector src/db/collection.cc:1517-1552
+groups: Q4#12 (fts+vector)
+source:
+1517	Status CollectionImpl::switch_to_new_segment_for_writing(
+1518	    const CollectionSchema::Ptr &schema) {
+1519	  auto s = writing_segment_->dump();
+1520	  CHECK_RETURN_STATUS(s);
+1521	
+1522	  s = segment_manager_->add_segment(writing_segment_);
+1523	  CHECK_RETURN_STATUS(s);
+1524	
+1525	  // when create new segment, segment meta should create a first new block
+1526	  // meta
+...

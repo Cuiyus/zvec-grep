@@ -1,0 +1,214 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#1 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#2 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#2 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#3 [global_fill] matchedBy=fts+vector src/db/index/common/version_manager.cc:77-116
+groups: Q1#3 (fts+vector)
+source:
+77	Status Version::Save(const std::string &path, const Version &version) {
+78	  std::ofstream ofs;
+79	  ailego::FileHelper::OpenOfstream(ofs, path, std::ios::binary);
+80	  if (!ofs.is_open()) {
+81	    LOG_ERROR("Failed to open file: %s, err: %s", path.c_str(),
+82	              ailego::FileHelper::GetLastErrorString().c_str());
+83	    return Status::InternalError("Failed to open file: %s", path.c_str());
+84	  }
+85	
+86	  proto::Manifest manifest;
+...
+
+#4 [global_fill] matchedBy=fts+vector tests/db/crash_recovery/write_recovery_test.cc:274-359
+groups: Q1#4 (fts+vector)
+source:
+274	TEST_F(CrashRecoveryTest, CrashRecoveryDuringUpdate) {
+275	  {
+276	    auto schema = CreateTestSchema(collection_name_);
+277	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+278	    ASSERT_TRUE(result.has_value()) << result.error().message();
+279	    auto collection = result.value();
+280	    collection.reset();
+281	  }
+282	
+283	  RunGenerator("0", "18000", "upsert", "0");
+...
+
+#5 [global_fill] matchedBy=fts+vector src/core/utility/buffer_storage.cc:911-1001
+groups: Q1#5 (fts+vector)
+source:
+911	int flush_index_locked(void) {
+912	    // No-op on never-opened / already-closed storage: close_index()
+913	    // unconditionally calls us during teardown.
+914	    if (!buffer_pool_ || !buffer_pool_handle_) {
+915	      index_dirty_.store(false, std::memory_order_relaxed);
+916	      return 0;
+917	    }
+918	    if (corrupted_.load(std::memory_order_acquire)) {
+919	      LOG_ERROR(
+920	          "BufferStorage::flush_index skipped: storage is marked corrupted, "
+...
+
+#6 [global_fill] matchedBy=fts+vector tests/db/index/common/version_manager_test.cc:118-161
+groups: Q1#6 (fts+vector)
+source:
+118	TEST_F(VersionManagerTest, VersionManagerCreateAndRecover) {
+119	  std::string version_path = test_path_ + "/version";
+120	
+121	  std::filesystem::create_directories(version_path);
+122	
+123	  // Create initial version
+124	  Version initial_version;
+125	  CollectionSchema schema;
+126	  schema.set_name("initial_collection");
+127	  initial_version.set_schema(schema);
+...
+
+#7 matchedBy=fts+vector tests/db/crash_recovery/optimize_recovery_test.cc:144-261
+groups: Q1#7 (fts+vector)
+source:
+144	TEST_F(OptimizeRecoveryTest, CrashDuringOptimize) {
+145	  {  // Create a collection and insert some documents
+146	    auto schema = CreateTestSchema(collection_name_);
+147	    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);
+148	    ASSERT_TRUE(result.has_value());
+149	    auto collection = result.value();
+150	
+151	    for (int batch = 0; batch < num_batches; batch++) {
+152	      std::vector<Doc> docs;
+153	      for (int i = 0; i < batch_size; i++) {
+...
+
+#8 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q1#8 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#9 matchedBy=fts+vector src/core/framework/index_mapping.cc:423-477
+groups: Q1#9 (fts+vector)
+source:
+423	int IndexMapping::flush(void) {
+424	  if ((file_.size() < index_size_) && !file_.truncate(index_size_)) {
+425	    LOG_ERROR("Failed to truncate file size %zu, %s", index_size_,
+426	              ailego::FileHelper::GetLastErrorString().c_str());
+427	    return IndexError_TruncateFile;
+428	  }
+429	
+430	  for (auto iter = segments_.begin(); iter != segments_.end(); ++iter) {
+431	    SegmentInfo &segment_info = iter->second;
+432	    Segment *item = &segment_info.segment;
+...
+
+#10 matchedBy=fts+vector src/include/zvec/core/framework/index_segment_storage.h:153-171
+groups: Q1#10 (fts+vector)
+source:
+153	int open(const std::string &, bool) override {
+154	    if (!parent_) {
+155	      LOG_ERROR("Failed to load an empty segment");
+156	      return IndexError_NoReady;
+157	    }
+158	
+159	    auto read_data = [this](size_t offset, const void **data, size_t len) {
+160	      return this->parent_->read(offset, data, len);
+161	    };
+162	
+...
+
+#11 matchedBy=fts+vector python/tests/test_hnsw_contiguous_memory.py:323-372
+groups: Q1#11 (fts+vector)
+source:
+323	def test_close_and_reopen_with_contiguous_memory(
+324	        self,
+325	        tmp_path_factory,
+326	        collection_option,
+327	        rng,
+328	    ):
+329	        """Reopening a collection must preserve the ``use_contiguous_memory`` flag.
+330	
+331	        The core property: the flag survives the schema persist/reload
+332	        round-trip so the HNSW streamer entity — constructed lazily on first
+...
+
+#12 matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q1#12 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#13 matchedBy=vector src/db/index/segment/segment.h:199
+groups: Q1#13 (vector)
+source:
+199	virtual Status flush() = 0;
+
+#14 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_indexer.cc:127-149
+groups: Q1#14 (fts+vector)
+source:
+127	Status InvertedIndexer::seal() {
+128	  Status s;
+129	  for (const auto &[_, indexer] : indexers_) {
+130	    if (indexer->is_sealed()) {
+131	      continue;
+132	    }
+133	    if (s = indexer->seal(); !s.ok()) {
+134	      LOG_ERROR("Failed to seal %s", indexer->ID().c_str());
+135	    }
+136	  }
+...
+
+#15 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:1260-1363
+groups: Q1#15 (fts+vector)
+source:
+1260	TEST_P(SegmentTest, FetchPerf) {
+1261	  // create segment
+1262	  int doc_count = 1000;
+1263	  options_.max_buffer_size_ = 100 * 1024;
+1264	  auto segment = test::TestHelper::CreateSegmentWithDoc(
+1265	      col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+1266	      0, doc_count);
+1267	  ASSERT_TRUE(segment != nullptr);
+1268	
+1269	  segment->dump();
+...

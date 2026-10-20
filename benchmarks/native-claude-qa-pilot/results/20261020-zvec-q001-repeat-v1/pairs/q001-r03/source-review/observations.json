@@ -1,0 +1,69 @@
+{
+  "pair_id": "q001-r03",
+  "policy": {
+    "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/native-claude-qa-pilot/repeat-scope-policy-v1.json",
+    "bytes": 3028,
+    "sha256": "2233de3a9413bbad6c8af4a977c4da406213ac25674bb7b38e90b08fb4ac8d06"
+  },
+  "observations": [
+    {
+      "profile": "baseline",
+      "ordinal": 26,
+      "tool_id": "toolu_cfb5312a37e747788fecbd91",
+      "category": "failed_source_local_read_command",
+      "input": {
+        "command": "sed -n '60,95p' /workspace/src/db/index/storage/wal/local_wal_file.h; echo ====; grep -n \"MakeWalPath\\|MakeSegmentPath\\|MakeTempSegmentPath\\|MakeForwardBlockPath\" /workspace/src/db/common/file_helper.h | head; echo ====; sed -n \"$(grep -n 'MakeWalPath' /workspace/src/db/common/file_helper.cc | head -1 | cut -d: -f1),+12p\" /workspace/src/db/common/file_helper.cc",
+        "description": "Show has_record impl and WAL path helpers"
+      },
+      "result": "Exit code 1\n\n public:\n  int append(std::string &&data) override;\n  int prepare_for_read() override;\n  std::string next() override;\n\n public:\n  int open(const WalOptions &wal_option) override;\n\n  int close() override;\n\n  int flush() override;\n\n  int remove() override;\n\n  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n\n private:\n  int write_record(WalRecord &record);\n  int read_record(WalRecord &record);\n\n private:\n  ailego::File file_;\n  const static int32_t LENGTH_SIZE{4};\n  const static int32_t CRC_SIZE{4};\n\n private:\n  std::string wal_path_{};\n  std::mutex file_mutex_;\n  uint32_t max_docs_wal_flush_{0};\n  std::atomic<uint64_t> docs_count_{0UL};\n  WalHeader header_;\n\n  bool opened_{false};\n====\n74:  static const std::string MakeWalPath(const std::string &path, uint32_t seg_id,\n80:  static std::string MakeSegmentPath(const std::string &path, uint32_t id,\n89:  static std::string MakeTempSegmentPath(const std::string &path, uint32_t id) {\n90:    return MakeSegmentPath(path, id, \"tmp\");\n94:  static const std::string MakeForwardBlockPath(const std::string &path,\n98:    return MakeForwardBlockPath(path, seg_id, block_id,\n102:  static const std::string MakeForwardBlockPath(const std::string &path,\n111:  static const std::string MakeForwardBlockPath(const std::string &seg_path,\n114:    return MakeForwardBlockPath(seg_path, block_id,\n118:  static const std::string MakeForwardBlockPath(const std::string &seg_path,\n====\nsed: -e expression #1, char 1: unknown command: `,'",
+      "metadata": "Error: Exit code 1\n\n public:\n  int append(std::string &&data) override;\n  int prepare_for_read() override;\n  std::string next() override;\n\n public:\n  int open(const WalOptions &wal_option) override;\n\n  int close() override;\n\n  int flush() override;\n\n  int remove() override;\n\n  bool has_record() override {\n    return file_.size() > sizeof(header_);\n  }\n\n private:\n  int write_record(WalRecord &record);\n  int read_record(WalRecord &record);\n\n private:\n  ailego::File file_;\n  const static int32_t LENGTH_SIZE{4};\n  const static int32_t CRC_SIZE{4};\n\n private:\n  std::string wal_path_{};\n  std::mutex file_mutex_;\n  uint32_t max_docs_wal_flush_{0};\n  std::atomic<uint64_t> docs_count_{0UL};\n  WalHeader header_;\n\n  bool opened_{false};\n====\n74:  static const std::string MakeWalPath(const std::string &path, uint32_t seg_id,\n80:  static std::string MakeSegmentPath(const std::string &path, uint32_t id,\n89:  static std::string MakeTempSegmentPath(const std::string &path, uint32_t id) {\n90:    return MakeSegmentPath(path, id, \"tmp\");\n94:  static const std::string MakeForwardBlockPath(const std::string &path,\n98:    return MakeForwardBlockPath(path, seg_id, block_id,\n102:  static const std::string MakeForwardBlockPath(const std::string &path,\n111:  static const std::string MakeForwardBlockPath(const std::string &seg_path,\n114:    return MakeForwardBlockPath(seg_path, block_id,\n118:  static const std::string MakeForwardBlockPath(const std::string &seg_path,\n====\nsed: -e expression #1, char 1: unknown command: `,'",
+      "description": "Full semicolon-separated shell expression and nested $(grep|head|cut) reviewed as source-only reads. Frozen file_helper.cc contains no MakeWalPath text, yielding no line-number evidence; resulting sed address starts with comma and native tool reports Exit1/unknown command comma. Earlier source and header grep results match frozen files. No network, external path, write, source test/build or unknown injected command is present. Failure retained; not treated as successful final sed read.",
+      "tool_evidence": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/scope/q001-r03/baseline/tools/tool-0026.json",
+        "bytes": 17994,
+        "sha256": "7ae119f5e86bf8e7315159b082fa1a04070d378df5e989d884fb3c2cfff26741"
+      },
+      "strict_deviation": false
+    },
+    {
+      "profile": "baseline",
+      "ordinal": 31,
+      "tool_id": "toolu_ead68e68242b4c14ad9bacf2",
+      "category": "permitted_source_directory_metadata",
+      "description": "Source-local pwd/ls -la reports /workspace and frozen source entries; treatment adds predeclared .zvec-grep and .zg-bench-index.ignore entries. Parent dot entries are incidental source-directory metadata explicitly allowed by frozen policy, not an external enumeration.",
+      "tool_evidence": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/scope/q001-r03/baseline/tools/tool-0031.json",
+        "bytes": 16780,
+        "sha256": "c93fda8f381834556801a6e443399095b68c51334556cfd0d4bb8401fa78c901"
+      }
+    },
+    {
+      "profile": "zvec-grep",
+      "ordinal": 5,
+      "tool_id": "toolu_34b5086f107040af8f1ce017",
+      "category": "source_local_no_match",
+      "description": "Complete shell expression individually examined: only local source navigation/listing, grep, sed slices, head, cut, wc, find and literal echo separators, including the nested read-only command substitution. No external path enumeration/content read, web client, Git-history access, write or source execution. Relative paths resolve under native persisted cwd=/workspace; no command changes cwd. Grep context delimiters and relative source paths are verified against the actual source. Test-related words occur in read/search text, not executed test commands. Native metadata explicitly reports returnCodeInterpretation=No matches found for final grep; earlier header matches remain verified. No result is invented for the empty final search.",
+      "native_returnCodeInterpretation": "No matches found",
+      "tool_evidence": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/scope/q001-r03/zvec-grep/tools/tool-0005.json",
+        "bytes": 11474,
+        "sha256": "a0f12adda54fd614048a4eb4eb0a888d2273b15814e81a5060cab4e4ce579ef4"
+      },
+      "strict_deviation": false
+    },
+    {
+      "profile": "zvec-grep",
+      "ordinal": 22,
+      "tool_id": "toolu_b60465da27064b61ad346220",
+      "category": "permitted_source_directory_metadata",
+      "description": "Source-local pwd/ls -la reports /workspace and frozen source entries; treatment adds predeclared .zvec-grep and .zg-bench-index.ignore entries. Parent dot entries are incidental source-directory metadata explicitly allowed by frozen policy, not an external enumeration.",
+      "tool_evidence": {
+        "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-zvec-q001-repeat-v1-audit/scope/q001-r03/zvec-grep/tools/tool-0022.json",
+        "bytes": 17440,
+        "sha256": "46f77488812f35e921a3055bea8db19357f137581ebee0e73c3f9ec3e031e859"
+      }
+    }
+  ],
+  "factual_scope_definition": "No source-external file content is observed. Code-domain facts and runtime metadata remain separately distinguished.",
+  "quality_graded": false
+}
