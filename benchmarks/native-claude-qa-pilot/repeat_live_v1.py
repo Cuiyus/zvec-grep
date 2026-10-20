@@ -24,12 +24,12 @@ WORKFLOW = ".github/workflows/native-claude-qa-repeat-v1.yml"
 SETUP = ".github/actions/native-claude-repeat-setup/action.yml"
 DECISION = PREFIX + "repeat-decision-v1.json"
 SCOPE_POLICY = PREFIX + "repeat-scope-policy-v1.json"
-UPSTREAM_SHA = "33a931e53350c039b824367efe1d44e747399e80"
+UPSTREAM_SHA = "49de68563a7d3da9b408dd64277a8a51e3dd0fc6"
 RUST_TREE = "de02030056a3224012725799d845bf2be9edae2b"
 SEED = 20261020
 CONTROLS = {PREFIX + name for name in (
     "repeat_live_v1.py", "repeat_inputs_v1.py", "repeat_identity_v1.py", "repeat_analysis_v1.py",
-    "robust_statistics_v1.py", "test_repeat_live_v1.py", "test_repeat_analysis_v1.py",
+    "robust_statistics_v1.py", "repeat_secret_scan_v1.py", "test_repeat_live_v1.py", "test_repeat_analysis_v1.py",
     "test_robust_statistics_pr261.py", "test_robust_statistics_v1.py",
     "grader-contract-v1.json", "expansion-grader-contract-v1.json"
 )} | {WORKFLOW, SETUP, DECISION, SCOPE_POLICY}

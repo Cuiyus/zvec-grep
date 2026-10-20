@@ -43,8 +43,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)" = 33a931e53350c039b824367efe1d44e747399e80
-          test "$(gh api repos/zvec-ai/zvec-grep/git/trees/33a931e53350c039b824367efe1d44e747399e80 --jq '.tree[] | select(.path == "rust") | .sha')" = de02030056a3224012725799d845bf2be9edae2b
+          export REPAIR_ROOT="$RUNNER_TEMP/native-claude-repeat-v1-preflight"
+          mkdir -p "$REPAIR_ROOT"
+          gh api repos/zvec-ai/zvec-grep/commits/main > "$REPAIR_ROOT/current-upstream.json"
+          current=$(python3 -c 'import json,os; from pathlib import Path; print(json.loads((Path(os.environ["REPAIR_ROOT"])/"current-upstream.json").read_text())["sha"])')
+          gh api "repos/zvec-ai/zvec-grep/git/trees/$current" > "$REPAIR_ROOT/current-upstream-tree.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          tree = json.loads((Path(os.environ['REPAIR_ROOT'])/'current-upstream-tree.json').read_text())
+          assert next(item['sha'] for item in tree['tree'] if item['path']=='rust') == 'de02030056a3224012725799d845bf2be9edae2b', 'current upstream Rust changed'
+          PY
       - uses: ./.github/actions/native-claude-repeat-setup
         with:
           pair_key: preflight
@@ -81,7 +90,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan --secret-env GH_TOKEN --root "$REPAIR_ROOT"
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/native-claude-repeat-v1-preflight"
       - uses: actions/upload-artifact@v4
         if: always() && steps.scan.outcome == 'success'
         with:
@@ -143,10 +152,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          PAIR_KEY: ${{ matrix.key }}
         run: |
           set -euo pipefail
-          "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan \
-            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPAIR_ROOT"
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py \
+            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$RUNNER_TEMP/native-claude-repeat-v1-$PAIR_KEY"
       - uses: actions/upload-artifact@v4
         if: always() && steps.scan.outcome == 'success'
         with:
