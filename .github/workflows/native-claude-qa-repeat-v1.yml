@@ -1,0 +1,157 @@
+name: Native Claude current-task repetitions v1
+run-name: native Claude repetitions / ${{ github.event_name }} / execute=${{ inputs.execute_repeats || false }}
+
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths:
+      - 'benchmarks/native-claude-qa-pilot/repeat*'
+      - 'benchmarks/native-claude-qa-pilot/test_repeat*'
+      - 'benchmarks/native-claude-qa-pilot/robust_statistics_v1.py'
+      - 'benchmarks/native-claude-qa-pilot/test_robust_statistics*'
+      - '.github/actions/native-claude-repeat-setup/action.yml'
+      - '.github/workflows/native-claude-qa-repeat-v1.yml'
+  workflow_dispatch:
+    inputs:
+      execute_repeats:
+        description: Execute all 30 frozen fresh task pairs (60 trials)
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-claude-repeat-v1-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.schedule.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check current upstream before starting the frozen study
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)" = 33a931e53350c039b824367efe1d44e747399e80
+          test "$(gh api repos/zvec-ai/zvec-grep/git/trees/33a931e53350c039b824367efe1d44e747399e80 --jq '.tree[] | select(.path == "rust") | .sha')" = de02030056a3224012725799d845bf2be9edae2b
+      - uses: ./.github/actions/native-claude-repeat-setup
+        with:
+          pair_key: preflight
+      - name: Test native collection, preparation, repetition and statistics without providers
+        run: |
+          set -euo pipefail
+          for pattern in test_live.py test_accounting_v2.py test_expansion_v1.py test_expansion_identity_v1.py test_expansion_live_v1.py test_repeat_live_v1.py test_repeat_analysis_v1.py test_robust_statistics_pr261.py test_robust_statistics_v1.py; do
+            "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/native-claude-qa-pilot -p "$pattern" -v 2>&1 | tee "$REPAIR_ROOT/$pattern.log"
+          done
+      - name: Validate all 30 dry runs and expose only the frozen matrix
+        id: schedule
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" - <<'PY'
+          import json, os
+          from pathlib import Path
+          import repeat_live_v1 as repeat
+          root = Path(os.environ['REPAIR_ROOT'])
+          for pair in repeat.schedule():
+              argv = ['--plan','benchmarks/native-claude-qa-pilot/repeat-plan-v1.json',
+                  '--main-root',os.environ['MAIN_ROOT'],'--reference-prepared',os.environ['REFERENCE_PREPARED_ROOT'],
+                  '--prepared-group',os.environ['PREPARED_GROUP_ROOT'],'--candidate',str(root/'zg-install.tgz'),
+                  '--output',str(root/('dry-'+pair['key'])),'--task',pair['task_id'],
+                  '--repetition',str(pair['trial_index']),'dry-run']
+              if repeat.main(argv) != 0:
+                  raise SystemExit('dry-run failed: '+pair['key'])
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('matrix='+json.dumps({'include':repeat.schedule()},separators=(',',':'))+'\n')
+          PY
+      - name: Scan preflight output before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan --secret-env GH_TOKEN --root "$REPAIR_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-claude-repeat-v1-${{ github.run_id }}-preflight
+          path: ${{ runner.temp }}/native-claude-repeat-v1-preflight/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+  repeat:
+    needs: preflight
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute_repeats == true
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-claude-repeat-setup
+        with:
+          pair_key: ${{ matrix.key }}
+      - name: Execute exactly the scheduled pair
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          TASK_ID: ${{ matrix.task_id }}
+          TRIAL_INDEX: ${{ matrix.trial_index }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/repeat_live_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/repeat-plan-v1.json \
+            --task "$TASK_ID" --repetition "$TRIAL_INDEX" \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" run \
+            2>&1 | tee "$REPAIR_ROOT/live.log"
+      - name: Retain answers, usage and exact actual task identity
+        if: always()
+        env:
+          TASK_ID: ${{ matrix.task_id }}
+          TRIAL_INDEX: ${{ matrix.trial_index }}
+        run: |
+          set -euo pipefail
+          if test -d "$REPAIR_ROOT/live" || test -f "$REPAIR_ROOT/live-repeat-context.json"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/repeat_live_v1.py \
+              --plan benchmarks/native-claude-qa-pilot/repeat-plan-v1.json \
+              --task "$TASK_ID" --repetition "$TRIAL_INDEX" \
+              --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+              --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" collect \
+              2>&1 | tee "$REPAIR_ROOT/collect.log"
+          fi
+      - name: Scan actual secrets before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan \
+            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPAIR_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-claude-repeat-v1-${{ github.run_id }}-${{ matrix.key }}
+          path: ${{ runner.temp }}/native-claude-repeat-v1-${{ matrix.key }}/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

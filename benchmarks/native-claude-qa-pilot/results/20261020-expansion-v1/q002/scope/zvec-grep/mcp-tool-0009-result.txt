@@ -1,0 +1,612 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (4):
+  Q1 [primary]: full-text search query execution applying scalar filter condition inverted index intersection with FTS match results
+  Q2 [primary]: how does a full text (FTS/BM25) query handle a filter expression on indexed scalar fields
+  Q3 [primary]: inverted index filter execution empty result set handling in query executor
+  Q4 [primary]: fulltext search query plan filter pushdown bitmap intersection
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector python/zvec/model/param/query.py:107-115
+groups: Q1#1 (fts+vector), Q2#1 (fts+vector)
+source:
+107	def has_fts(self) -> bool:
+108	        """Check if the query contains an FTS (full-text search) condition.
+109	
+110	        Returns:
+111	            bool: True if `fts` is set with a query_string or match_string.
+112	        """
+113	        if self.fts is not None:
+114	            return bool(self.fts.query_string) or bool(self.fts.match_string)
+115	        return False
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/sqlengine/planner/query_planner.h:63-66
+groups: Q1#12 (fts+vector), Q2#2 (fts+vector)
+source:
+63	Result<PlanInfo::Ptr> fts_scan(
+64	      Segment::Ptr seg, QueryInfo::Ptr query_info,
+65	      std::unique_ptr<arrow::compute::Expression> forward_filter,
+66	      bool single_stage_search);
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/core/algorithm/ivf/ivf_entity.h:48-50
+groups: Q1#5 (fts+vector), Q3#1 (fts+vector)
+source:
+48	int search(size_t inverted_list_id, const void *query,
+49	             const IndexFilter &filter, uint32_t *scan_count,
+50	             IndexDocumentHeap *heap, IndexContext::Stats *context_stats) const;
+
+#4 [group_coverage: Q4] matchedBy=fts+vector src/db/sqlengine/planner/query_planner.cc:533-557
+groups: Q4#1 (fts+vector)
+source:
+533	DocFilter::Ptr QueryPlanner::build_doc_filter(
+534	    const Segment::Ptr &seg, const QueryInfo::Ptr &query_info,
+535	    std::unique_ptr<arrow::compute::Expression> &forward_filter,
+536	    bool single_stage_search) {
+537	  std::unique_ptr<ac::Declaration> forward_filter_plan;
+538	  // if single stage search is not enabled, first run acero plan to get
+539	  // forward bitmap, then filter during search. otherwise, filter forward
+540	  // during search.
+541	  if (forward_filter && !single_stage_search) {
+542	    ac::RecordBatchReaderSourceNodeOptions source_options{
+...
+
+#5 [global_fill] matchedBy=fts+vector src/db/sqlengine/analyzer/query_analyzer.cc:257-314
+groups: Q1#6 (fts+vector), Q3#2 (fts+vector), Q4#10 (fts+vector)
+source:
+257	Status QueryAnalyzer::decide_filter_index_cond(
+258	    const CollectionSchema &schema,
+259	    const SearchCondCheckWalker &search_cond_check_walker,
+260	    QueryInfo *query_info) {
+261	  const std::vector<QueryRelNode *> &filter_rels =
+262	      search_cond_check_walker.filter_rels();
+263	  const std::vector<QueryRelNode *> &invert_rels =
+264	      search_cond_check_walker.invert_rels();
+265	  QueryRelNode *vector_rel = search_cond_check_walker.vector_rel();
+266	  uint32_t vector_rel_size = (vector_rel != nullptr) ? 1 : 0;
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/column/fts_column/fts_column_indexer.h:124-125
+groups: Q1#2 (fts+vector), Q2#4 (fts+vector)
+source:
+124	Result<std::vector<FtsResult>> search(
+125	      const FtsAstNode &ast, const FtsQueryParams &query_params) const;
+
+#7 matchedBy=fts+vector src/db/sqlengine/planner/doc_filter.h:29-72
+groups: Q3#10 (fts+vector), Q4#4 (fts+vector)
+source:
+29	class DocFilter : public IndexFilter {
+30	 public:
+31	  using Ptr = std::shared_ptr<DocFilter>;
+32	
+33	  DocFilter(Segment::Ptr segment, QueryInfo::Ptr query_info,
+34	            std::unique_ptr<arrow::acero::Declaration> forward_plan,
+35	            std::unique_ptr<arrow::compute::Expression> forward_filter)
+36	      : segment_(std::move(segment)),
+37	        query_info_(std::move(query_info)),
+38	        delete_filter_(segment_->get_filter()),
+...
+
+#8 matchedBy=fts+vector src/db/index/column/fts_column/fts_types.h:25-36
+groups: Q1#9 (fts+vector), Q2#5 (fts+vector)
+source:
+25	struct FtsQueryParams {
+26	  uint32_t topk{10};
+27	  // Optional filter: returns true if a doc should be EXCLUDED.
+28	  // Wraps zvec::IndexFilter for push-down filtering inside the search loop.
+29	  IndexFilter::Ptr filter{nullptr};
+30	  // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;
+31	  // when non-empty, FtsColumnIndexer restricts evaluation to this set by
+32	  // AND-ing it with the root iterator. Filled by the planner via
+33	  // DocFilter::get_bf_by_keys_and_update when an invert result is highly
+34	  // selective.
+...
+
+#9 matchedBy=fts+vector src/db/sqlengine/sqlengine_impl.cc:162-272
+groups: Q1#11 (fts+vector), Q2#8 (fts+vector)
+source:
+162	Result<FtsCondInfo::Ptr> SQLEngineImpl::parse_fts_query(
+163	    CollectionSchema::Ptr collection, const std::string &field_name,
+164	    const FtsClause &fts, const QueryParams::Ptr &query_params) {
+165	  // Exactly one of query_string_ or match_string_ must be provided.
+166	  bool has_query = !fts.query_string_.empty();
+167	  bool has_match_string = !fts.match_string_.empty();
+168	  if (has_query == has_match_string) {
+169	    return tl::make_unexpected(Status::InvalidArgument(
+170	        "Exactly one of query_string or match_string must be provided"));
+171	  }
+...
+
+#10 matchedBy=fts+vector src/db/sqlengine/planner/query_planner.cc:642-662
+groups: Q1#13 (fts+vector), Q2#7 (fts+vector)
+source:
+642	Result<PlanInfo::Ptr> QueryPlanner::fts_scan(
+643	    Segment::Ptr seg, QueryInfo::Ptr query_info,
+644	    std::unique_ptr<arrow::compute::Expression> forward_filter,
+645	    bool single_stage_search) {
+646	  auto doc_filter =
+647	      build_doc_filter(seg, query_info, forward_filter, single_stage_search);
+648	
+649	  auto topn = query_info->query_topn();
+650	  int batch_size = get_batch_size(*query_info, false);
+651	  auto recall_node = std::make_shared<FtsRecallNode>(
+...
+
+#11 matchedBy=fts+vector src/db/index/column/fts_column/fts_column_indexer.cc:172-260
+groups: Q1#10 (fts+vector), Q4#13 (fts+vector)
+source:
+172	Result<std::vector<FtsResult>> FtsColumnIndexer::search(
+173	    const FtsAstNode &ast, const FtsQueryParams &query_params) const {
+174	  if (!scorer_) {
+175	    LOG_ERROR("FtsColumnIndexer::search: not opened. field[%s]",
+176	              field_name_.c_str());
+177	    return tl::make_unexpected(Status::InternalError(
+178	        "FtsColumnIndexer::search: not opened. field=", field_name_));
+179	  }
+180	
+181	  if (query_params.topk == 0) {
+...
+
+#12 matchedBy=fts+vector src/core/algorithm/ivf/ivf_entity.cc:735-747
+groups: Q1#15 (fts+vector), Q3#15 (fts+vector)
+source:
+735	int IVFEntity::search(const void *query, const IndexFilter &filter,
+736	                      IndexDocumentHeap *heap,
+737	                      IndexContext::Stats *context_stats) const {
+738	  for (size_t i = 0; i < header_.inverted_list_count; ++i) {
+739	    uint32_t scan_count;
+740	    int ret = this->search(i, query, filter, &scan_count, heap, context_stats);
+741	    if (ret != 0) {
+742	      return ret;
+743	    }
+744	  }
+...
+
+#13 matchedBy=fts+vector src/db/sqlengine/planner/doc_filter.cc:24-66
+groups: Q4#2 (fts+vector)
+source:
+24	Status DocFilter::compute_filter() {
+25	  if (invert_cond_) {
+26	    InvertSearch search(segment_.get());
+27	    auto invert_res = search.exec_invert_cond_tree(invert_cond_.get());
+28	    if (!invert_res) {
+29	      return Status::InternalError("Execute invert search failed: ",
+30	                                   invert_res.error().message());
+31	    }
+32	    invert_result_ = invert_res.value();
+33	    invert_filter_ = invert_result_->make_filter();
+...
+
+#14 matchedBy=fts+vector python/zvec/executor/query_executor.py:218-224
+groups: Q1#3 (fts+vector)
+source:
+218	def _apply_fts(self, query: Query, search_query: _SearchQuery) -> None:
+219	        """Set FTS query on search_query if the query has FTS parameters."""
+220	        if query.has_fts():
+221	            fts = _Fts()
+222	            fts.query_string = query.fts.query_string or ""
+223	            fts.match_string = query.fts.match_string or ""
+224	            search_query.fts = fts
+
+#15 matchedBy=fts+vector src/db/index/column/fts_column/bm25_scorer.h:103-185
+groups: Q2#3 (fts+vector)
+source:
+103	class BM25Scorer {
+104	 public:
+105	  explicit BM25Scorer(BM25Params params = BM25Params{}) : params_(params) {}
+106	
+107	  /*! Load per-segment statistics from $SEGMENT_STAT CF
+108	   *  \param field_name  Field name
+109	   *  \param stat_cf     $SEGMENT_STAT CF
+110	   *  \return 0 for success, non-0 for failure
+111	   */
+112	  int load_segment_stats(const std::string &field_name, RocksdbContext *ctx,
+...
+
+#16 matchedBy=fts+vector python/tests/detail/test_collection_dql.py:654-668
+groups: Q3#3 (fts+vector)
+source:
+654	@pytest.mark.parametrize(
+655	        "filter",
+656	        [
+657	            "int32_field >= 10 and int32_field <= 20",
+658	            "int32_field = 3 and int32_field = 8",
+659	        ],
+660	    )
+661	    @pytest.mark.parametrize("doc_num", [10])
+662	    def test_query_empty_result(self, full_collection: Collection, doc_num, filter):
+663	        multiple_docs = [
+...
+
+#17 matchedBy=fts+vector src/db/sqlengine/planner/query_planner.h:30-77
+groups: Q4#3 (fts+vector)
+source:
+30	class QueryPlanner {
+31	 public:
+32	  QueryPlanner(CollectionSchema *schema);
+33	
+34	  Result<PlanInfo::Ptr> make_plan(
+35	      const std::vector<Segment::Ptr> &segments, const std::string &trace_id,
+36	      std::vector<sqlengine::QueryInfo::Ptr> *query_infos);
+37	
+38	
+39	 private:
+...
+
+#18 matchedBy=fts+vector src/db/sqlengine/planner/fts_recall_node.cc:110-141
+groups: Q1#4 (fts+vector)
+source:
+110	Result<FtsIndexResults::Ptr> FtsRecallNode::prepare() {
+111	  auto filter_status = doc_filter_->compute_filter();
+112	  if (!filter_status.ok()) {
+113	    return tl::make_unexpected(filter_status);
+114	  }
+115	
+116	  const auto &fts_cond = query_info_->fts_cond_info();
+117	  if (!fts_cond) {
+118	    return tl::make_unexpected(
+119	        Status::InvalidArgument("FtsRecallNode: no fts_cond_info in query"));
+...
+
+#19 matchedBy=fts+vector python/tests/test_query_executor.py:230-239
+groups: Q3#4 (fts+vector)
+source:
+230	def test_do_build_without_queries(self):
+231	        # When no queries are given, build a single vector-less query.
+232	        schema = MockCollectionSchema()
+233	        executor = QueryExecutor(schema)
+234	        ctx = QueryContext(topk=5, filter="test_filter")
+235	
+236	        result = executor._build_queries(ctx, MagicMock())
+237	        assert len(result) == 1
+238	        assert result[0].topk == 5
+239	        assert result[0].filter == "test_filter"
+
+#20 matchedBy=vector src/db/index/column/inverted_column/inverted_search_result.h:34-45
+groups: Q3#5 (vector)
+source:
+34	class Filter : public IndexFilter {
+35	   public:
+36	    explicit Filter(std::shared_ptr<const InvertedSearchResult> result)
+37	        : result_(std::move(result)) {};
+38	
+39	    bool is_filtered(uint64_t id) const override {
+40	      return !result_->contains(id);
+41	    }
+42	
+43	   private:
+...
+
+#21 matchedBy=fts+vector src/db/sqlengine/sqlengine_impl.cc:347-363
+groups: Q4#5 (fts+vector)
+source:
+347	Result<std::unique_ptr<arrow::RecordBatchReader>>
+348	SQLEngineImpl::search_by_query_info(
+349	    CollectionSchema::Ptr collection, const std::vector<Segment::Ptr> &segments,
+350	    std::vector<sqlengine::QueryInfo::Ptr> *query_infos) {
+351	  global_init();
+352	
+353	  ScopedProfilerStage stage_guard(profiler_, "build_query_plan");
+354	  QueryPlanner planner(collection.get());
+355	  auto plan_info =
+356	      planner.make_plan(segments, profiler_->trace_id(), query_infos);
+...
+
+#22 matchedBy=fts+vector src/db/index/common/query.cc:23-182
+groups: Q2#6 (fts+vector)
+source:
+23	Status QueryTarget::validate(const FieldSchema *schema,
+24	                             bool *need_sanitize) const {
+25	  auto opt_view = get_vector_view();
+26	  auto *fc = get_fts_clause();
+27	  auto &field_name = field_name_;
+28	  auto &query_params = query_params_;
+29	  // A "scalar-only filter" query has no vector payload — either the clause
+30	  // is not a VectorClause (e.g., FtsClause) or its fields are all empty.
+31	  bool no_vector_payload = !opt_view || (opt_view->query_vector_.empty() &&
+32	                                         opt_view->sparse_indices_.empty());
+...
+
+#23 matchedBy=vector src/db/index/column/inverted_column/inverted_column_indexer_search.cc:914-925
+groups: Q3#6 (vector)
+source:
+914	InvertedSearchResult::Ptr InvertedColumnIndexer::search_null() const {
+915	  auto search_res = std::make_shared<InvertedSearchResult>();
+916	  auto bitmap_res = get_bitmap_null();
+917	  if (bitmap_res) {
+918	    search_res->set_and_own_bitmap(bitmap_res.value());
+919	    return search_res;
+920	  } else {
+921	    LOG_ERROR("%s: failed to search, code[%d]", ID().c_str(),
+922	              static_cast<int>(bitmap_res.error().code()));
+923	    return nullptr;
+...
+
+#24 matchedBy=fts+vector src/core/algorithm/flat/flat_streamer_entity.h:74-76
+groups: Q4#6 (fts+vector)
+source:
+74	int search_bf(const void *query, const IndexFilter &filter,
+75	                IndexDocumentHeap *heap,
+76	                IndexContext::Stats *context_stats) const;
+
+#25 matchedBy=fts+vector src/db/index/column/fts_column/fts_query_ast.h:148-166
+groups: Q1#7 (fts+vector)
+source:
+148	struct AndNode : public FtsAstNode {
+149	  std::vector<FtsAstNodePtr> children;
+150	
+151	  FtsNodeType type() const override {
+152	    return FtsNodeType::AND;
+153	  }
+154	
+155	  std::string text() const override {
+156	    std::string result = modifier_prefix() + "AND(";
+157	    for (size_t i = 0; i < children.size(); ++i) {
+...
+
+#26 matchedBy=vector src/db/index/column/inverted_column/inverted_column_indexer.h:118
+groups: Q3#7 (vector)
+source:
+118	virtual InvertedSearchResult::Ptr search_null() const;
+
+#27 matchedBy=fts+vector src/core/algorithm/flat/flat_searcher_context.h:398-399
+groups: Q4#7 (fts+vector)
+source:
+398	int batch_search_column_filter(const void *query, const IndexQueryMeta &qmeta,
+399	                                 size_t query_count);
+
+#28 matchedBy=fts+vector tests/db/sqlengine/fts_recall_test.cc:509-522
+groups: Q1#8 (fts+vector)
+source:
+509	TEST_F(FtsRecallTest, FtsSearchWithFilter_ScoreTag) {
+510	  auto result = fts_search_with_filter("apple", "tag = 1");
+511	  ASSERT_TRUE(result.has_value()) << result.error().c_str();
+512	  // Filter should reduce results to doc 0 only
+513	  EXPECT_LE(result->size(), 3u);
+514	  // Verify that at least doc 0 (which satisfies both FTS and filter) is present
+515	  bool found_pk0 = false;
+516	  for (auto &doc : *result) {
+517	    if (doc->pk() == "pk_0") {
+518	      found_pk0 = true;
+...
+
+#29 matchedBy=vector src/db/sqlengine/planner/doc_filter.cc:68-71
+groups: Q3#8 (vector)
+source:
+68	bool DocFilter::empty() const {
+69	  return !(delete_filter_ || invert_filter_ || forward_plan_ ||
+70	           forward_filter_expr_);
+71	}
+
+#30 matchedBy=fts+vector src/db/sqlengine/analyzer/query_analyzer.h:42-45
+groups: Q4#8 (fts+vector)
+source:
+42	Status decide_filter_index_cond(
+43	      const CollectionSchema &schema,
+44	      const SearchCondCheckWalker &search_cond_check_walker,
+45	      QueryInfo *query_info);
+
+#31 matchedBy=fts+vector src/db/index/column/fts_column/fts_query_ast.h:39-79
+groups: Q2#9 (fts+vector)
+source:
+39	struct FtsAstNode {
+40	  bool must{false};      // Prefix + means must
+41	  bool must_not{false};  // Prefix - / right-hand side of AND NOT means must_not
+42	  bool should{
+43	      false};  // SHOULD semantics: does not affect matching, only scoring
+44	  // Per-node scoring weight. Currently meaningful only on TermNode / PhraseNode
+45	  // (composite nodes inherit boost from their scored leaves). Repeated terms in
+46	  // a sibling list are collapsed by the AST rewriter into a single node whose
+47	  // boost is the linear sum of duplicates, so that the post-rewrite score
+48	  // matches the pre-rewrite "sum of independent scorers" semantics exactly.
+...
+
+#32 matchedBy=fts+vector src/include/zvec/core/framework/index_context.h:57-272
+groups: Q3#9 (fts+vector)
+source:
+57	class IndexContext {
+58	 public:
+59	  //! Index Context Pointer
+60	  typedef std::unique_ptr<IndexContext> Pointer;
+61	
+62	  //! Index Context UPointer
+63	  typedef std::unique_ptr<IndexContext> UPointer;
+64	
+65	  /*! Index Context Stats
+66	   */
+...
+
+#33 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_column_indexer_search.cc:822-859
+groups: Q4#9 (fts+vector)
+source:
+822	InvertedSearchResult::Ptr InvertedColumnIndexer::multi_search(
+823	    const std::vector<std::string> &values, CompareOp op) const {
+824	  auto encoded_values = encode(values);
+825	  auto search_res = std::make_shared<InvertedSearchResult>();
+826	  Result<roaring_bitmap_t *> bitmap_res;
+827	
+828	  switch (op) {
+829	    case CompareOp::CONTAIN_ANY: {
+830	      bitmap_res = get_bitmap_contain(encoded_values, true);
+831	      break;
+...
+
+#34 matchedBy=fts+vector src/include/zvec/c_api.h:1886-1887
+groups: Q2#10 (fts+vector)
+source:
+1886	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+1887	zvec_fts_set_query_string(zvec_fts_t *fts, const char *query_string);
+
+#35 matchedBy=fts+vector python/zvec/model/param/query.py:26-39
+groups: Q2#11 (fts+vector)
+source:
+26	@dataclass(frozen=True)
+27	class Fts:
+28	    """Full-text search query parameters.
+29	
+30	    Attributes:
+31	        query_string (Optional[str]): FTS query expression
+32	            (e.g. '+vector -slow "exact phrase"'). Mutually exclusive with match_string.
+33	        match_string (Optional[str]): Natural language match string,
+34	            tokenized and combined using the default operator.
+35	            Mutually exclusive with query_string.
+...
+
+#36 matchedBy=fts+vector src/db/collection.cc:1665-1694
+groups: Q3#11 (fts+vector)
+source:
+1665	Result<DocPtrList> CollectionImpl::Query(const SearchQuery &query) const {
+1666	  std::shared_lock lock(schema_handle_mtx_);
+1667	
+1668	  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);
+1669	
+1670	  // When field_name_ is set, use get_field to retrieve the schema uniformly.
+1671	  // validate checks that the field type matches the query type
+1672	  // (FTS query requires an FTS field, vector query requires a vector field).
+1673	  const auto &field_name = query.target_.field_name_;
+1674	  const FieldSchema *field_schema =
+...
+
+#37 matchedBy=fts+vector src/db/sqlengine/sqlengine_impl.h:43-46
+groups: Q4#11 (fts+vector)
+source:
+43	Result<std::unique_ptr<arrow::RecordBatchReader>> search_by_query_info(
+44	      CollectionSchema::Ptr collection,
+45	      const std::vector<Segment::Ptr> &segments,
+46	      std::vector<sqlengine::QueryInfo::Ptr> *query_infos);
+
+#38 matchedBy=fts+vector tests/db/sqlengine/fts_recall_test.cc:533-536
+groups: Q2#12 (fts+vector)
+source:
+533	TEST_F(FtsRecallTest, FtsFieldNotAllowedInFilter) {
+534	  auto result = fts_search_with_filter("apple", "content = 'apple'");
+535	  ASSERT_FALSE(result.has_value());
+536	}
+
+#39 matchedBy=fts+vector src/include/zvec/c_api.h:1740-1741
+groups: Q3#12 (fts+vector)
+source:
+1740	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+1741	zvec_vector_query_set_filter(zvec_vector_query_t *query, const char *filter);
+
+#40 matchedBy=fts+vector src/db/sqlengine/planner/query_planner.cc:345-465
+groups: Q4#12 (fts+vector)
+source:
+345	Result<PlanInfo::Ptr> QueryPlanner::make_physical_plan(
+346	    const std::vector<Segment::Ptr> &segments, const std::string & /*trace_id*/,
+347	    std::vector<sqlengine::QueryInfo::Ptr> *query_infos) {
+348	  const std::string &table_name = schema_->name();
+349	  if (segments.empty()) {
+350	    LOG_ERROR("Segment not found [%s]", table_name.c_str());
+351	    return tl::make_unexpected(
+352	        Status::InvalidArgument("segment not found:", table_name));
+353	  }
+354	
+...
+
+#41 matchedBy=fts+vector src/db/sqlengine/planner/fts_recall_node.cc:25-36
+groups: Q2#13 (fts+vector)
+source:
+25	FtsRecallNode::FtsRecallNode(Segment::Ptr segment, QueryInfo::Ptr query_info,
+26	                             DocFilter::Ptr doc_filter, int batch_size)
+27	    : segment_(std::move(segment)),
+28	      query_info_(std::move(query_info)),
+29	      doc_filter_(std::move(doc_filter)),
+30	      fetched_columns_(query_info_->get_all_fetched_scalar_field_names()),
+31	      batch_size_(batch_size) {
+32	  auto table = segment_->fetch(fetched_columns_, std::vector<int>{});
+33	  // Append BM25 score column so downstream fill_doc_score() surfaces it to
+34	  // the Python Doc.score, matching the vector-recall path.
+...
+
+#42 matchedBy=fts+vector src/binding/c/c_api.cc:5917-5927
+groups: Q3#13 (fts+vector)
+source:
+5917	zvec_error_code_t zvec_multi_query_set_filter(
+5918	    zvec_multi_query_t *query, const char *filter) {
+5919	  if (!query || !filter) {
+5920	    SET_LAST_ERROR(ZVEC_ERROR_INVALID_ARGUMENT,
+5921	                   "Query or filter pointer is null");
+5922	    return ZVEC_ERROR_INVALID_ARGUMENT;
+5923	  }
+5924	  auto *mvq = reinterpret_cast<zvec::MultiQuery *>(query);
+5925	  mvq->filter = std::string(filter);
+5926	  return ZVEC_OK;
+...
+
+#43 matchedBy=fts+vector tests/db/index/column/fts_column/fts_column_indexer_test.cc:97-119
+groups: Q1#14 (fts+vector)
+source:
+97	static bool search_ok_with_filter(Reader &reader, const std::string &query_str,
+98	                                  uint32_t topk, zvec::IndexFilter::Ptr filter,
+99	                                  std::vector<FtsResult> *results,
+100	                                  const zvec::fts::TokenizerPipelinePtr
+101	                                      &pipeline = make_whitespace_pipeline()) {
+102	  FtsQueryParser parser;
+103	  auto ast = parser.parse(query_str, pipeline);
+104	  if (!ast) {
+105	    ADD_FAILURE() << "FtsQueryParser failed to parse: " << query_str
+106	                  << " err: " << parser.err_msg();
+...
+
+#44 matchedBy=fts+vector tests/db/fts_query_test.cc:44-58
+groups: Q2#14 (fts+vector)
+source:
+44	static CollectionSchema::Ptr CreateFtsSchema() {
+45	    auto schema = std::make_shared<CollectionSchema>("fts_demo");
+46	    // A simple scalar field for forward store
+47	    schema->add_field(std::make_shared<FieldSchema>("title", DataType::STRING));
+48	    // FTS indexed field
+49	    schema->add_field(
+50	        std::make_shared<FieldSchema>("content", DataType::STRING, false,
+51	                                      std::make_shared<FtsIndexParams>()));
+52	    // A vector field is required for Collection to work (segment open expects
+53	    // at least one vector field in the normal schema path).
+...
+
+#45 matchedBy=fts src/db/sqlengine/parser/sql_info_helper.cc:68-115
+groups: Q3#14 (fts)
+source:
+68	Result<sqlengine::SQLInfo::Ptr> SQLInfoHelper::BuildSQLInfoFromSearchQuery(
+69	    const SearchQuery &query, Node::Ptr filter_node,
+70	    std::shared_ptr<GroupBy> group_by) {
+71	  Node::Ptr index_params_node_ptr = nullptr;
+72	  if (auto vc = query.target_.get_vector_view();
+73	      vc.has_value() &&
+74	      (!vc->query_vector_.empty() || !vc->sparse_indices_.empty())) {
+75	    index_params_node_ptr = handle_vector(query);
+76	    if (index_params_node_ptr == nullptr) {
+77	      return tl::make_unexpected(Status::InvalidArgument(
+...
+
+#46 matchedBy=fts+vector src/core/algorithm/flat/flat_streamer_entity.cc:325-330
+groups: Q4#14 (fts+vector)
+source:
+325	int FlatStreamerEntity::search_bf(const void *query, const IndexFilter &filter,
+326	                                  IndexDocumentHeap *heap,
+327	                                  IndexContext::Stats *context_stats) const {
+328	  uint32_t scan_count;
+329	  return this->search(query, filter, &scan_count, heap, context_stats);
+330	}
+
+#47 matchedBy=fts src/db/index/column/fts_column/fts_indexer.h:30-91
+groups: Q2#15 (fts)
+source:
+30	class FtsIndexer {
+31	 public:
+32	  using Ptr = std::shared_ptr<FtsIndexer>;
+33	
+34	  FtsIndexer(const std::string &working_dir) : working_dir_(working_dir) {}
+35	
+36	  ~FtsIndexer();
+37	
+38	  // Create a new fts.rocksdb or open an existing one. Returns nullptr on
+39	  // failure.
+...
+
+#48 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_search_result.h:48-50
+groups: Q4#15 (fts+vector)
+source:
+48	const IndexFilter::Ptr make_filter() const {
+49	    return bitmap_ ? std::make_shared<Filter>(shared_from_this()) : nullptr;
+50	  }

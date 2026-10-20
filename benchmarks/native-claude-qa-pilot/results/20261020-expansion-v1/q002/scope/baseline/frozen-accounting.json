@@ -1,0 +1,1461 @@
+{
+  "schema_version": 1,
+  "scope": "claude-persisted-session-tree-v1",
+  "complete": true,
+  "errors": [],
+  "expected_model": "qwen3.8-max",
+  "root_session_id": "95f49568-8c9c-4a9b-9b4f-51474bc1cf85",
+  "root_count": 1,
+  "child_count": 0,
+  "session_count": 1,
+  "root_only": true,
+  "complete_tree": true,
+  "final": {
+    "text": "# Root cause: a zero‑match scalar filter degenerates into “no filter at all” on the FTS path\n\nEverything below is **source‑based inference** from the snapshot at `/workspace` (zvec). I did not build or run the code, so no executed results are reported; all line references are to the snapshot as checked out.\n\n## 1. How the condition is classified and routed\n\nWith inverted indexes present, `status = 'archived'` / `views > 1000` are routed to the **invert** side of the query plan, not the forward side:\n\n- `SearchCondCheckWalker` sends a predicate on a field with `has_invert_index()` to `add_invert_filter()` (`src/db/sqlengine/analyzer/query_node_walker.cc:216`, `:701–704`); fields without an inverted index go to `add_forward_filter()` (`:694–699`).\n- `QueryAnalyzer::decide_filter_index_cond` lifts the invert sub‑tree into `query_info->set_invert_cond(...)` (`src/db/sqlengine/analyzer/query_analyzer.cc:276–287`); leftovers become `filter_cond` (`:304–307`).\n- The `InvertCondOptimizer` does not demote these to forward filters: `ratio_rule` returns `false` immediately for `EQ` (`src/db/sqlengine/planner/optimizer.cc:39–45`), and for `GT` the evaluated ratio (0 matched of 3) is below `invert_to_forward_scan_ratio` (`optimizer.cc:84–87`). So the condition stays in `invert_cond_`.\n- Because the query has an FTS condition, the planner picks `fts_scan` (`src/db/sqlengine/planner/query_planner.cc:413–415`, `:642–662`) and builds a `DocFilter` (`query_planner.cc:533–557`). With no forward predicate here, `forward_filter` is null and only `invert_cond_` is set in the `DocFilter` (`src/db/sqlengine/planner/doc_filter.h:33–41`).\n\n## 2. What the inverted search returns for a zero‑match condition\n\n`DocFilter::compute_filter()` runs `InvertSearch::exec_invert_cond_tree` and stores `invert_result_` plus `invert_filter_ = invert_result_->make_filter()` (`src/db/sqlengine/planner/doc_filter.cc:24–34`).\n\nFor the two zero‑match conditions:\n\n- `status = 'archived'` (EQ, term absent): `get_bitmap_eq` hits RocksDB `kNotFound` and returns a **null** bitmap (`src/db/index/column/inverted_column/inverted_column_indexer_search.cc:31–33`); `InvertedColumnIndexer::search` still wraps it into an `InvertedSearchResult` with `bitmap_ == nullptr` (`:810–815`). Crucially, `make_filter()` returns `nullptr` when `bitmap_` is null (`src/db/index/column/inverted_column/inverted_search_result.h:48–50`), and `count()` is 0 (`:79–85`).\n- `views > 1000` (GT, no matching ranges): `get_bitmap_gt` builds a **non‑null but empty** roaring bitmap (`inverted_column_indexer_search.cc:364`), so `count()` is 0 and `make_filter()` yields a filter that excludes everything.\n\nEither way, `invert_result_->count() == 0`.\n\n## 3. The bug: brute‑force‑by‑keys converts “matches nothing” into “unrestricted”\n\n`FtsRecallNode::prepare()` (`src/db/sqlengine/planner/fts_recall_node.cc:110–141`) does:\n\n```cpp\nif (auto bf_keys = doc_filter_->get_bf_by_keys_and_update(\n        GlobalConfig::Instance().fts_brute_force_by_keys_ratio())) {\n  params.candidate_ids = std::move(bf_keys.value());          // line 126–129\n}\nparams.filter = doc_filter_->empty() ? nullptr : doc_filter_; // line 132\n```\n\n`DocFilter::get_bf_by_keys_and_update` (`doc_filter.cc:109–141`) computes `bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio)`. With defaults (`fts_brute_force_by_keys_ratio = 0.05`, `src/db/common/config.cc:40`) and `doc_count = 3`, the threshold is `⌊0.15⌋ = 0`. A zero‑match condition has `match_count = 0 ≤ 0`, so the branch is **always** taken (for any ratio in [0,1], 0 ≤ threshold). It then:\n\n- `extract_ids(&ids)` → an **empty** vector (`doc_filter.cc:125–126`; `inverted_search_result.h:140–156` extracts nothing from a null/empty bitmap),\n- **clears** `invert_filter_` and `invert_result_` (`doc_filter.cc:127–128`; the comment at `fts_recall_node.cc:124–125` documents this clearing),\n- returns the empty vector, which becomes `params.candidate_ids`.\n\nNow both restrictions silently vanish:\n\n1. **Candidate restriction:** the FTS indexer applies candidate mode only when the list is non‑empty — `if (!query_params.candidate_ids.empty())` (`src/db/index/column/fts_column/fts_column_indexer.cc:209–217`), matching the contract comment “when non‑empty … restricts evaluation to this set” (`src/db/index/column/fts_column/fts_types.h:30–35`). An empty list is indistinguishable from “no candidate restriction”, so the term iterator for `hello` runs over **all** postings.\n2. **Push‑down filter:** after the clearing, `DocFilter::empty()` checks only pointers — `!(delete_filter_ || invert_filter_ || forward_plan_ || forward_filter_expr_)` (`doc_filter.cc:68–71`). `delete_filter_` is null because `SegmentImpl::get_filter()` returns `nullptr` when the delete store is empty (`src/db/index/segment/segment.cc:1613–1615`) and nothing was deleted; `invert_filter_` was just reset; no forward plan/expr exists. So `empty()` is `true` and `params.filter = nullptr` (`fts_recall_node.cc:132`), and the search loop runs unfiltered (`fts_column_indexer.cc:229–250`).\n\nResult: `hello` scores docs 1, 2, 3 into the min‑heap (`fts_column_indexer.cc:231–251`), passes through `SegmentImpl::fts_search` unchanged (`segment.cc:4585–4601`), and the query returns **{1, 2, 3}** — the zero‑match filter was erased rather than applied. (For the EQ case there is a second, latent route to the same outcome: even if the bf shortcut were disabled, `make_filter()` returned `nullptr` for the null bitmap — `inverted_search_result.h:48–50` — so `invert_filter_` would be null and `empty()` true anyway.)\n\n## 4. Why each control behaves correctly\n\n**Scalar‑only query (`status='archived'`) → empty.** With no vector/FTS condition the planner takes `invert_scan` (`query_planner.cc:416–418`, `:584–640`). `InvertRecallNode` iterates the `InvertedSearchResult` directly (`src/db/sqlengine/planner/invert_recall_node.cc:30–45`, `:82–85`). For a null bitmap, `InvertedIndexIterator` never becomes valid (`inverted_search_result.h:88–132`), so `gen()` immediately returns `std::nullopt` → empty set. Empty is *driven by the id set*, so “zero matches” naturally yields zero rows.\n\n**FTS `hello` + `status='published'` → {2, 3}.** `match_count = 2 > threshold 0`, so `get_bf_by_keys_and_update` declines (`doc_filter.cc:134–140`) and `invert_filter_` survives. `empty()` is false → `params.filter = doc_filter_`. During the posting walk, `next_doc(filter_ptr)` (`fts_column_indexer.cc:229–250`) calls `DocFilter::is_filtered` (`doc_filter.cc:73–86`), which delegates to `InvertedSearchResult::Filter::is_filtered = !contains(id)` (`inverted_search_result.h:39–41`) — doc 1 is excluded, docs 2 and 3 returned.\n\n**FTS `one` + `status='published'` → empty.** Same bitmap‑filter path; the only doc matching `one` (doc 1) is not in {2, 3}, so it is filtered out → empty intersection. This control shows the push‑down filter itself is correct; only the *empty match set* representation is broken.\n\n**No inverted indexes on `status`/`views` → empty.** The walker now routes the predicates to forward filters (`query_node_walker.cc:694–699`; `query_analyzer.cc:304–307`). In `build_doc_filter`, since `single_stage_search` is false (there was no invert cond before optimization, `query_planner.cc:391–397`), the forward expression is compiled into an Acero bitmap plan (`query_planner.cc:541–553`). `compute_filter()` materializes `forward_bitmap_` (`doc_filter.cc:36–49`); `get_bf_by_keys_and_update` returns `nullopt` because `invert_result_` is null (`doc_filter.cc:116–118`); `empty()` is false because `forward_plan_` is set → `params.filter = doc_filter_`. `is_filtered` reads the bitmap (`doc_filter.cc:80–86`, `:88–107`): all rows are `false` → every doc is excluded → empty set. The forward path never passes through the lossy “extract ids and clear” shortcut, which is why removing the inverted indexes *fixes* the anomaly.\n\n**Contrast with the vector path (informative).** `VectorRecallNode::prepare()` uses the same `get_bf_by_keys_and_update` (`src/db/sqlengine/planner/vector_recall_node.cc:163–169`), but the keys travel as `bf_pks`, a `vector<vector<uint64_t>>` where a *present but empty* inner list is preserved (`vector_column_indexer.cc:184–193`: `bf_pks.size() == 1` → non‑null shared_ptr to an empty key list) and the core engine restricts the search whenever `bf_pks != nullptr` (`src/core/interface/index.cc:742–746`, `:871–874`). Presence‑vs‑absence is encoded by the pointer, not by list emptiness — exactly the distinction the FTS `candidate_ids` (a plain `std::vector`) loses.\n\n## 5. Minimal repair principle\n\n**Principle: an evaluated filter that matches zero documents must remain a positive “match‑nothing” constraint end‑to‑end; emptiness of a match set must never be encoded as absence of the constraint.**\n\nMinimal change (planner side, smallest blast radius):\n\n- In `FtsRecallNode::prepare()` (`fts_recall_node.cc:126–129`), if `get_bf_by_keys_and_update` returns a **present but empty** id list, short‑circuit and return an empty `FtsIndexResults` without calling `segment_->fts_search` — the intersection of anything with ∅ is ∅. This mirrors the existing benign early return for `topk == 0` (`fts_column_indexer.cc:181–183`).\n\nRepresentation hardening (defense in depth, small and local):\n\n- Change `FtsQueryParams::candidate_ids` to `std::optional<std::vector<uint64_t>>` (or add a `restrict_to_candidates` flag) so the indexer can distinguish “unset” from “empty”; at `fts_column_indexer.cc:209`, an engaged‑but‑empty optional returns `{}` immediately, a non‑empty optional ANDs in the `CandidateDocIterator` as today, and a disengaged optional leaves the root iterator untouched.\n- Make zero‑match invert results always yield a non‑null filter: e.g., have `InvertedColumnIndexer::search` substitute an empty bitmap when `get_bitmap_eq` returns `nullptr` on `kNotFound` (`inverted_column_indexer_search.cc:31–33`, `:810–815`), or have `make_filter()` return a filter that excludes everything for a null bitmap (`inverted_search_result.h:48–50`). Correspondingly, `DocFilter::empty()` should key off “an invert condition existed” (`invert_cond_`/`invert_result_`) rather than only the post‑clear `invert_filter_` pointer (`doc_filter.cc:68–71`).\n\nWhy ordinary queries are preserved:\n\n- **No scalar condition:** `invert_cond_` is null → `compute_filter` sets nothing → `get_bf_by_keys_and_update` returns `nullopt` (`doc_filter.cc:116–118`) → `candidate_ids` stays disengaged and `params.filter` stays `nullptr`. Untouched.\n- **Selective non‑empty condition:** non‑empty candidate list → same `CandidateDocIterator` AND path (`fts_column_indexer.cc:209–217`). Untouched.\n- **Non‑selective condition:** bf declines → bitmap push‑down filter as today (the `published` control). Untouched.\n- **Forward‑filter collections:** the bf shortcut is never reached; untouched. The vector path already has correct empty‑semantics via `bf_pks` and needs no change.\n\n## 6. Regression checks\n\nC++ unit tests (extend `tests/db/sqlengine/fts_recall_test.cc`, which already exercises `FtsRecallNode`, and `tests/db/fts_query_test.cc`):\n\n1. **The reported anomaly:** FTS `hello` + EQ on an absent term → ∅; FTS `hello` + GT beyond the max → ∅; FTS `hello` + `IN` with all‑absent values → ∅.\n2. **Both bitmap shapes:** absent‑term EQ (null bitmap, `get_bitmap_eq` kNotFound) vs. empty‑but‑non‑null bitmap (range GT) — both must produce “match nothing”, covering `make_filter()`’s null case (`inverted_search_result.h:48–50`).\n3. **Indexer contract:** `FtsQueryParams` with candidate list engaged‑but‑empty → `{}`; disengaged → full results; non‑empty → intersection (guards the optional/flag change at `fts_column_indexer.cc:209`).\n4. **`DocFilter` semantics:** after `compute_filter` + `get_bf_by_keys_and_update` on a zero‑match cond, `empty()` must not report “no filter” (or the caller must have early‑returned); with a delete filter present (`segment_->get_filter()` non‑null, `segment.cc:1613–1615`) the result must still be ∅.\n5. **Positive controls unchanged:** `hello` alone → {1,2,3}; `hello`+`published` → {2,3}; `one`+`published` → ∅; BM25 ordering/topk tests already in `fts_recall_test.cc` keep passing.\n\nBoundary cases:\n\n- **Config sweep:** `fts_brute_force_by_keys_ratio` ∈ {0.0, 0.05, 1.0} (`config.cc:40`). At 1.0 even `published` (2 ≤ 3) goes through candidate mode — must still yield {2,3}, and zero‑match conds must still yield ∅ in candidate mode.\n- **Mixed predicates:** `status IN ('archived','published')` → {2,3} (partially empty term set); `status='archived' AND views<100` → ∅ (AND with null bitmap destroys it, `inverted_search_result.h:173–179`); `status='archived' OR status='published'` → {2,3} (OR ignores null, `:182–191`); `status != 'draft'` → {2,3} (NE path, `inverted_column_indexer_search.cc:131–134`).\n- **Deletes:** delete doc 2, then `hello`+`published` → {3}; a condition matching only deleted docs → ∅ (delete filter ∩ invert filter interplay in `doc_filter.cc:73–86`).\n- **Multiple segments:** force a dump so the three docs span two segments; repeat zero‑match and selective queries — per‑segment `DocFilter`s are built in the planner loop (`query_planner.cc:370–431`) and merged with the score re‑sort (`:449–457`); also exercises local↔global doc‑id assumptions noted in `fts_types.h:38–50`.\n- **No‑index control (the fourth scenario):** drop the inverted indexes; zero‑match forward filters must still give ∅ via the bitmap plan (`query_planner.cc:541–553`, `doc_filter.cc:36–49`, `:88–107`).\n- **Vector analogue:** vector query + zero‑match invert cond → ∅ (locks in the already‑correct `bf_pks` semantics at `vector_recall_node.cc:163–169`, `index.cc:742–746`, so a future “unification” of the two bf‑by‑keys paths can’t regress it).\n- **Invariant property test:** for arbitrary condition C and FTS query q, `ids(FTS q + C) ⊆ ids(scalar‑only C)` and `⊆ ids(FTS q)`; the anomaly is exactly a violation of the first inclusion (FTS+`archived` = {1,2,3} ⊄ ∅), making this a cheap randomized guard.\n\nIntegration tests can live alongside `python/tests/test_collection_fts.py` / `test_collection_fts_vector_hybrid.py`, replicating the table in the question verbatim (topk=10, standard tokenizer + lowercase) so the four reported behaviors become pinned assertions.",
+    "sha256": "86a40f4a68dcae527438711bd04dc9b4582dc7b8e68e77ab6b40501a6877f1c8",
+    "message_id": "msg_114a5c10-678d-9cfa-808d-bfde092555dd",
+    "root_result_success": true,
+    "persisted_equals_stream_result": true
+  },
+  "usage": {
+    "input_tokens": 1363047,
+    "uncached_input_tokens": 168,
+    "cache_read_tokens": 1286859,
+    "cache_write_tokens": 76020,
+    "output_tokens": 18499,
+    "llm_calls": 28,
+    "tool_calls": 38,
+    "tool_errors": 0,
+    "counted_usage_messages": 28,
+    "unknown_usage_messages": 0,
+    "cost_usd": null
+  },
+  "usage_partial": false,
+  "messages": [
+    {
+      "message_id": "msg_8909a479-fb6d-9c3c-b496-2ad019c908a1",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 20207,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 178
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "ae628ce1-52c6-43c8-a58f-1ba8c78ba8f9",
+        "2b2f17cb-b498-4477-b5f3-56b2afa98cb8"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 7
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 8
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_7d99c6b1-e8b6-9348-8c2d-0af0d41f5d39",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 990,
+        "cache_read_input_tokens": 20207,
+        "output_tokens": 117
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "fcafab14-dac8-46c4-84b9-4506ace1a59e",
+        "7a391367-8acd-4c4f-a23b-60097fc5ae0d"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 11
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 12
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_34f6464f-eddb-9fee-acba-48fa0d4b9143",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1334,
+        "cache_read_input_tokens": 21197,
+        "output_tokens": 310
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "1c3123b7-62d3-406f-9a58-f2c002366620",
+        "81cee20a-4028-4f68-abc6-165b65e2b55c"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 15
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 16
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_8e95bcbe-a0f3-96ff-bc24-367f170333bb",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 596,
+        "cache_read_input_tokens": 22531,
+        "output_tokens": 182
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "7e5c1512-ced3-49d6-be66-041d68f8f6ae",
+        "709ae993-e1ad-406a-b491-fa3fb9892fb6",
+        "0d381c32-8efc-41c7-9f5d-d35caa87a264"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 20
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 21
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 23
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_9ad9dd2b-3bad-946e-b4a0-dfdcf107db57",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 311,
+        "cache_read_input_tokens": 23127,
+        "output_tokens": 100
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "77471b45-1d4a-469c-9b42-0dda5e70941e",
+        "8eb1e6e7-5710-4a31-92a0-2c101b76bbab"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 26
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 27
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_67c49a41-807f-9343-9068-b533c6c2d8c7",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 375,
+        "cache_read_input_tokens": 23438,
+        "output_tokens": 160
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "52d55a24-861f-4d55-8bc2-588c96fd1ce1",
+        "11a943a1-77b8-4ec8-9722-9f13f5667a68"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 30
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 31
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_c6b73570-d40f-9fc9-b285-1c334741a804",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 654,
+        "cache_read_input_tokens": 23813,
+        "output_tokens": 112
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "eb529b7e-1287-4319-abf9-09b9ec6e4b84",
+        "ea4aec2d-b245-4aea-98f7-9da16c519355",
+        "934a4cef-eb0b-44db-8d44-467daa608ee3"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 34
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 35
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 37
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_84ef7477-bd22-92d9-ac20-fabe68588b53",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2851,
+        "cache_read_input_tokens": 24467,
+        "output_tokens": 145
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "acccc691-d1c4-4873-b57c-543f825df807",
+        "f8b1f7c8-9030-4982-ab9d-b19a09f22b22"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 41
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 42
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2268,
+        "cache_read_input_tokens": 27318,
+        "output_tokens": 1312
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "e5b1632f-3015-4532-ba0b-aa9fe8b17846",
+        "4f0b4604-4012-45cb-ad46-9e5f378a82ab",
+        "07d228d5-acff-43cf-b3a3-055989f7554d",
+        "503b9d7b-31d2-4439-a7b2-f9cc20f569ca"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 46
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 47
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 49
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 51
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_93de2e2f-6b6f-9009-8702-4490e71b0ee8",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 4030,
+        "cache_read_input_tokens": 29586,
+        "output_tokens": 530
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "de072683-44a2-40ad-8626-950fe0df968e",
+        "e19f0a51-59a5-4f26-862f-36f854f5d089",
+        "9bbb6408-24b1-4bd3-af2a-528f37476ad0"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 55
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 56
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 58
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_28deecc5-cb0d-94c7-88ff-88c62e567c19",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2771,
+        "cache_read_input_tokens": 33616,
+        "output_tokens": 313
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "ef5deeb3-d85b-4cfd-a03e-f4b5d009da77",
+        "60f28d7f-762d-4856-b446-0b7b1f38707a",
+        "879148c1-9184-4416-b212-f2cc8c2284f9"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 61
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 62
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 64
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_2b602f2c-9e4d-9fa4-a0f9-f5de05232ec7",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 837,
+        "cache_read_input_tokens": 36387,
+        "output_tokens": 254
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "4f90ced5-585f-42ef-a87f-53c6ee23135a",
+        "58a5aa57-9fc4-49c1-8361-609af6f12100"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 67
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 68
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_26e43beb-8391-9a61-8f1b-b5cb9d9745ed",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 9414,
+        "cache_read_input_tokens": 37224,
+        "output_tokens": 842
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "b359ed6b-f222-41b3-9bac-216c0906a53f",
+        "a4b8c5c9-bc41-4acf-b240-33405c618923",
+        "30184d3e-89f9-4f28-b995-b8cb4b34c7a0"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 72
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 73
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 75
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_c59be9e6-0395-984d-a487-e5a2c22e8c91",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 5704,
+        "cache_read_input_tokens": 46638,
+        "output_tokens": 349
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "9504f05c-8bf0-4643-b6f5-cd227afebc48",
+        "053b43ba-75fd-46d5-8fde-462e8474ee53",
+        "67404360-b2ff-43b0-b233-e9fdfb7b59b5"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 80
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 81
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 83
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_c84b538d-6764-9732-9bfc-8c33104117ff",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2945,
+        "cache_read_input_tokens": 52342,
+        "output_tokens": 147
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "bbc62d7e-057d-494f-858b-1c3902470c61",
+        "933483e1-0c13-400d-94cd-82ef9dc4172a"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 86
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 87
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 3035,
+        "cache_read_input_tokens": 55287,
+        "output_tokens": 352
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "81ab6b97-e2e1-4e5d-9ec5-2ab20c5c9480",
+        "be192172-7401-4c17-89d5-d5aca2c3da8f",
+        "ce7a0c6e-30da-4560-bd50-d731beb20b0f",
+        "250621f3-20d7-4f87-8c61-9fb810d4ef1e"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 91
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 92
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 94
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 96
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_a72364a6-d7bf-9883-bef2-f2571d9b59f9",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1193,
+        "cache_read_input_tokens": 58322,
+        "output_tokens": 513
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "5fae125f-916a-4fac-9337-74d35ededcd1",
+        "f355f996-17f5-403a-a0c4-bc1a4f69b21d",
+        "b04ae008-376b-419e-ab26-5800ddd2ae30"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 99
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 100
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 102
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_98ca923b-aebb-9822-bb24-0763b8e0d950",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2505,
+        "cache_read_input_tokens": 59515,
+        "output_tokens": 439
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "61e0e735-a231-41cf-9df8-217ba76b83dc",
+        "70913d99-f310-436c-8b7f-04a57e5349a8"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 106
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 107
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_6c823a95-63ef-9533-a3f3-485163caa14f",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1521,
+        "cache_read_input_tokens": 62020,
+        "output_tokens": 556
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "5dad8672-f3c5-414f-8a7a-e546327c8da1",
+        "8e56448b-e2ba-44d1-bb1a-38a6f8b0d298"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 110
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 111
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_d7c55401-0fb4-99f2-9880-1d3bc53b0289",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1662,
+        "cache_read_input_tokens": 63541,
+        "output_tokens": 1060
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "037b98a7-1469-4c53-b952-18db2f2b951c",
+        "abda4d8d-b5c6-4f47-b57d-1d6319cd41ab"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 115
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 116
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_5a5fb698-4316-9caa-88a9-162fade294fc",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2546,
+        "cache_read_input_tokens": 65203,
+        "output_tokens": 436
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "6c451dd6-c670-439d-a80a-87309ed10d9e",
+        "b989bea0-9018-4c55-9478-fad54932d559"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 120
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 121
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_fb88b1b6-1797-9476-9c49-9981e76f1004",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1198,
+        "cache_read_input_tokens": 67749,
+        "output_tokens": 307
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "baf29bef-2b40-471e-8e6c-367cc60966a8",
+        "b44ec242-1e5c-460d-b75d-02ebeeba2c09"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 124
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 125
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_7df54526-acd2-9c4d-b630-bd62b2e3bcf2",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 969,
+        "cache_read_input_tokens": 68947,
+        "output_tokens": 2507
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "f9aa5bb2-75be-44b3-86e8-6e7413e54fd6",
+        "13e264b2-19a8-43df-b44c-4607951e5f7b"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 128
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 129
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_e6ead9c5-9fd8-979d-b630-2e6284520387",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 2770,
+        "cache_read_input_tokens": 69916,
+        "output_tokens": 112
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "1947d0f4-d6d0-4012-9c27-927b740f1ab6",
+        "75b1b0df-3f59-4faa-83f4-ba0e8709b191"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 133
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 134
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_3ca78f84-536a-950e-bb10-77e38f5e01db",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 214,
+        "cache_read_input_tokens": 72686,
+        "output_tokens": 339
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "da9c4757-c2ce-4c6d-9978-112e0645e541",
+        "d1dd8bb5-e91c-4ac3-a3a8-b332be35bf81"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 137
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 138
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_32b5ca34-3ad8-9c38-a490-81ec76d8ae54",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 767,
+        "cache_read_input_tokens": 72900,
+        "output_tokens": 967
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "20e4006e-f132-45e6-90b3-33c1318c83bf",
+        "653a342e-4d05-4f38-bdcd-b76d28478c2d"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 141
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 142
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_ad4eafed-f25e-9d9f-9306-732b35477e6c",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 1548,
+        "cache_read_input_tokens": 73667,
+        "output_tokens": 157
+      },
+      "stop_reason": "tool_use",
+      "event_uuids": [
+        "595ee294-824a-438b-9422-26489780a233",
+        "eccb82d3-80d0-439b-af62-835641a914da"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 145
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 146
+        }
+      ],
+      "usage_valid": true
+    },
+    {
+      "message_id": "msg_114a5c10-678d-9cfa-808d-bfde092555dd",
+      "session": "root",
+      "model": "qwen3.8-max",
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 805,
+        "cache_read_input_tokens": 75215,
+        "output_tokens": 5703
+      },
+      "stop_reason": "end_turn",
+      "event_uuids": [
+        "4c8bd9bd-0cca-4159-a4b2-48f3847d7400",
+        "e7a1cee7-6af7-4eb1-beda-6fcb076e5b96"
+      ],
+      "session_files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "source_locations": [
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 149
+        },
+        {
+          "file": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+          "line": 150
+        }
+      ],
+      "usage_valid": true
+    }
+  ],
+  "tools": [
+    {
+      "id": "toolu_14b350c5e208499b9f3a8179",
+      "session": "root",
+      "message_id": "msg_8909a479-fb6d-9c3c-b496-2ad019c908a1",
+      "name": "Bash",
+      "input_sha256": "53c6dc5c3f1602e0474f71a76cad268125d67f25978476e33cbe017b7a5c50c1",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "32405dcc3b8cb17742497dbedfeb3c1e91bf32399fe68247fedb7f2fad9eaaba"
+    },
+    {
+      "id": "toolu_d6404eb1670f4b94bd36f840",
+      "session": "root",
+      "message_id": "msg_7d99c6b1-e8b6-9348-8c2d-0af0d41f5d39",
+      "name": "Bash",
+      "input_sha256": "a8e888ce883141c1d8e2f340446d6ad5c7ff1c3852a08c2ab633b30c14c4b663",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "fede1d02c01ef346a91a5e5d90baf7271da89cdc0994c20c4ce3786542a10541"
+    },
+    {
+      "id": "toolu_eda0543846f04379a4db7fb3",
+      "session": "root",
+      "message_id": "msg_34f6464f-eddb-9fee-acba-48fa0d4b9143",
+      "name": "Bash",
+      "input_sha256": "c3c29f8fdb89fd20a6b5a022dc0a680472426953b50383c989c329cfdd058838",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "359bc44b44b62f98e94cb6019186d76e4f3ecdddfd5af20f3a60b49da168d92d"
+    },
+    {
+      "id": "toolu_6436420414594156b501d8b3",
+      "session": "root",
+      "message_id": "msg_8e95bcbe-a0f3-96ff-bc24-367f170333bb",
+      "name": "Bash",
+      "input_sha256": "a788e7b3636ce54610ea8bbdea1bf1361e1d8363f0d10415542550bf77baac82",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "83f5fe3931ad369fc70a0fc11615999b74e7d6061d7e5b38a818ad54a3610f23"
+    },
+    {
+      "id": "toolu_43acd51d193e4e5790269bc0",
+      "session": "root",
+      "message_id": "msg_8e95bcbe-a0f3-96ff-bc24-367f170333bb",
+      "name": "Bash",
+      "input_sha256": "c5ba905dfdc6c423dbedb9d4531901a202e5a31388186b350ed43c8ff40c032b",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2e8e45a7aa02e466338f22018b2bc7d39561e432b0877564e2a77e293bfab70a"
+    },
+    {
+      "id": "toolu_e31b0cf5b279463db00f62e3",
+      "session": "root",
+      "message_id": "msg_9ad9dd2b-3bad-946e-b4a0-dfdcf107db57",
+      "name": "Bash",
+      "input_sha256": "8809e45fadb0170f188a67b5c640f52bd6a4ad747f0810f2b90e235956a6c5ca",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "70246fcb791e276ae4ca50b4fe4cc692a74b66f8b701870a97c92d57c7b8ad92"
+    },
+    {
+      "id": "toolu_ec3ae3c7e5da4776bf998642",
+      "session": "root",
+      "message_id": "msg_67c49a41-807f-9343-9068-b533c6c2d8c7",
+      "name": "Bash",
+      "input_sha256": "00086e8b374c87713b3c9fafdd58c67c804f3f163eaf3fc0ef7519b64aa3c00e",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2560c63a76b0e6d09077c1fadf2f34633e006b55bd5e5d1d3e04b32e3650b83b"
+    },
+    {
+      "id": "toolu_991ecc2ae84840c79a9b1369",
+      "session": "root",
+      "message_id": "msg_c6b73570-d40f-9fc9-b285-1c334741a804",
+      "name": "Read",
+      "input_sha256": "7df4aa5eb18d8b85129136bb369a222e817ac91b42dd0d6707c9e7e2b35a0b36",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "7693de51af4042f73ebb2bda8366ec056003fd5f20b996cd76c85232984b42bd"
+    },
+    {
+      "id": "toolu_70aa645549234c6f940711e8",
+      "session": "root",
+      "message_id": "msg_c6b73570-d40f-9fc9-b285-1c334741a804",
+      "name": "Read",
+      "input_sha256": "2ab9d0be8e1120c58aa3730d83212056fb6eac1330d31f9eacf9d49ef65109aa",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "4362c8c8c866ca5b3e64fe7cb3243afb96c5970084a8d10298b8c8a40c862390"
+    },
+    {
+      "id": "toolu_cb0a54d345ad47e3930056bf",
+      "session": "root",
+      "message_id": "msg_84ef7477-bd22-92d9-ac20-fabe68588b53",
+      "name": "Read",
+      "input_sha256": "d6805ef80694a67469a3921efd72c16fb92e59a525fd80e7ef34f471a6938187",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "b909fda1a7637350cd865f0a073be62a3a9e196d07d5c8e61adf2aa09afc43cb"
+    },
+    {
+      "id": "toolu_d3604859f49a4dff968352ca",
+      "session": "root",
+      "message_id": "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+      "name": "Read",
+      "input_sha256": "8a21bb97d321bfa599bad4c072a20f462ee960784c1607db258425796c7eaa85",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "d4361f92106a2e4a499711794051c95254f31ae0dc30ac738e881d87bb68c3b3"
+    },
+    {
+      "id": "toolu_01d76a382ec946448594f8d4",
+      "session": "root",
+      "message_id": "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+      "name": "Read",
+      "input_sha256": "5f67a73fcc4bb3e032fa060317150d028dda1f8beb4695ab91a663e91129551f",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f9e95e86641af79b08eccfe5009e6207f036640e3234429c215c3dccc6357043"
+    },
+    {
+      "id": "toolu_04abaaf5e5974fc5ac40c131",
+      "session": "root",
+      "message_id": "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+      "name": "Bash",
+      "input_sha256": "47a6cf8590bf2e298bd62a35934beef49762611b8f38ce9396f5ed3b035e3ca9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "87025221dad9b3780cab57da368a9b07ae51493fb1dc89834db04d7eec9df75a"
+    },
+    {
+      "id": "toolu_19f5914f4f2a44af9c86a89b",
+      "session": "root",
+      "message_id": "msg_93de2e2f-6b6f-9009-8702-4490e71b0ee8",
+      "name": "Read",
+      "input_sha256": "e24676891e279de9e9ee96c8f37fca99ee4ad413cb2a6267729dc242834bef58",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "fb1e06ad6d7cda8dde3524ac92a4d156447ff1aaed98226b21314ebae1aa2c7e"
+    },
+    {
+      "id": "toolu_7d5a65bbff844569a2c4b72f",
+      "session": "root",
+      "message_id": "msg_93de2e2f-6b6f-9009-8702-4490e71b0ee8",
+      "name": "Bash",
+      "input_sha256": "71dad7d6fe7f757523d78b19bf22069b4a38ef93918598ff169ef761263af630",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "0564e09585de9b7eb50c40a01a7677b22532d4afc2388e34ecc57e850b7a912a"
+    },
+    {
+      "id": "toolu_801af5f526014a04a150668c",
+      "session": "root",
+      "message_id": "msg_28deecc5-cb0d-94c7-88ff-88c62e567c19",
+      "name": "Bash",
+      "input_sha256": "d36d2730194cc69b774a9242e7654913e8f0a97d0de4ccbf45b8bb31747e6cf8",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "dde84b2f60c3a369be5c4562092738d877d09882a4a83838487e796e11e373da"
+    },
+    {
+      "id": "toolu_4655d4eb1f9d4a139d01792e",
+      "session": "root",
+      "message_id": "msg_28deecc5-cb0d-94c7-88ff-88c62e567c19",
+      "name": "Bash",
+      "input_sha256": "4ae4bd2b6518960d74030c4e337ad100638096e6bc00305a943a6ecc8557e049",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "aea5537d01a05a13a2beb22cd4a4f7ca64d4870e8b8a221d89a7445656472cb6"
+    },
+    {
+      "id": "toolu_d130a1b56227433fa6cbcb3b",
+      "session": "root",
+      "message_id": "msg_2b602f2c-9e4d-9fa4-a0f9-f5de05232ec7",
+      "name": "Read",
+      "input_sha256": "ebf013bc8afbe4e66829f6a426fc7c39d5e4cf1e750b84cf9d9ed026f9bf5496",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "5685c9a5a9c11d4dbc1aeb1a964cfe6dbf53058fd19041a4135ac46772da152a"
+    },
+    {
+      "id": "toolu_9297c5a9168f40a6b59ddfa9",
+      "session": "root",
+      "message_id": "msg_26e43beb-8391-9a61-8f1b-b5cb9d9745ed",
+      "name": "Read",
+      "input_sha256": "86441776be401ccb425a3e7375793b244d956056302b1ad4eaff45523686633b",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "ca0facfeaa6e2f168888a4ffde957cc1e6a305eae1049135717dbdad279d93cf"
+    },
+    {
+      "id": "toolu_3acf955e4eec487794a4940c",
+      "session": "root",
+      "message_id": "msg_26e43beb-8391-9a61-8f1b-b5cb9d9745ed",
+      "name": "Read",
+      "input_sha256": "f3c971b714aebaf15afa07ff0c1f650cec300c3a1e6affebe6ca813a1ffff0bb",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "bec1987a875801d0b056c52d563f8f59efbcb99c7265150bc2be184806f81a33"
+    },
+    {
+      "id": "toolu_29f2276db3b04f239f080e13",
+      "session": "root",
+      "message_id": "msg_c59be9e6-0395-984d-a487-e5a2c22e8c91",
+      "name": "Read",
+      "input_sha256": "c4f22fe602a096579b8c309399112c924fab5d6b1d5eba2e85460c158f12b0c9",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f33512f02211b43e4d8e0085cf4497a95f5c0be72a3c05d4732c816c5fe2a2a0"
+    },
+    {
+      "id": "toolu_8cc5de1108b1422db1ee778e",
+      "session": "root",
+      "message_id": "msg_c59be9e6-0395-984d-a487-e5a2c22e8c91",
+      "name": "Bash",
+      "input_sha256": "81fa7be47200026c66825f9f13a1281de5550ee39f2d1549313c62ec3ab3c2ed",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "078a6a53c971af91ded6d4568d56942f645d45b1eb6ec72f64729f98396a184d"
+    },
+    {
+      "id": "toolu_519c79a1fcdf447e87451977",
+      "session": "root",
+      "message_id": "msg_c84b538d-6764-9732-9bfc-8c33104117ff",
+      "name": "Read",
+      "input_sha256": "408389c1499fc4dbecb896df5a655857eb512e356303c9a535fb3b2d94a2b65d",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "0f8b5793d6e032a9ac57da398d2104c72d48979928b798dc2acbdfb01d44d1c1"
+    },
+    {
+      "id": "toolu_0cfb74762ed0408abc544e22",
+      "session": "root",
+      "message_id": "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+      "name": "Bash",
+      "input_sha256": "60048561061d7a55906e08f5ca4d4a3b2dde1329f2a3afa7520a97dba801f49e",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "17b245ff68464f59e8faece1f328eebaa9080083b4ff00b3a90fd5f27cd04447"
+    },
+    {
+      "id": "toolu_e87bded785ed446cbb4af45b",
+      "session": "root",
+      "message_id": "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+      "name": "Bash",
+      "input_sha256": "7ea780367d691c811e7a3f5a5ab414a74fc7029026dae4fb02e55b72e0d54cb1",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "030bbb19143a860a155c68d71fd2b727f880c911609f77e7a18f5596510a72b5"
+    },
+    {
+      "id": "toolu_caf35b4505f5473f860dcb04",
+      "session": "root",
+      "message_id": "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+      "name": "Bash",
+      "input_sha256": "9712bfa6bae7450be91bcd4805dc8e956d72fc8643a68712ff0123eb5bf4bcba",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "d64ba2502d5a00086f0ea41bda290217c4f077de98a16e8103f318853a93cc6b"
+    },
+    {
+      "id": "toolu_bcfecd63e84f43d5bbc685bd",
+      "session": "root",
+      "message_id": "msg_a72364a6-d7bf-9883-bef2-f2571d9b59f9",
+      "name": "Bash",
+      "input_sha256": "ef75f0c4ab538c8265984dba263f5203ab94b0b2b2f2e37848a497f368155044",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "478779444701f038658e7a0811de9ce68ab227c0bd69e0b05d5e2bbada070526"
+    },
+    {
+      "id": "toolu_207ad40d1e054085a277a03e",
+      "session": "root",
+      "message_id": "msg_a72364a6-d7bf-9883-bef2-f2571d9b59f9",
+      "name": "Bash",
+      "input_sha256": "545b4d3996769b1046243fc7ef655b341f702cde04b8b2fa8b0fcc2e8e30d2ba",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "9c4db26c184f14ff972f18f6f9c8877f9e41e5d0de26b7bbe8b9c83e77a75ea3"
+    },
+    {
+      "id": "toolu_b8d521cd5698405aa49f3c4c",
+      "session": "root",
+      "message_id": "msg_98ca923b-aebb-9822-bb24-0763b8e0d950",
+      "name": "Bash",
+      "input_sha256": "87fe177d128055d61cc9888a72b47297a7f5e765f749dd173775da82572b480c",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "e68a5ea762085eb27e433a94653526e26264e9c8dbfdf2f7b3c453941da468fd"
+    },
+    {
+      "id": "toolu_6fa29fc109af455a955b2fa6",
+      "session": "root",
+      "message_id": "msg_6c823a95-63ef-9533-a3f3-485163caa14f",
+      "name": "Bash",
+      "input_sha256": "d7ebf45b32ce832983276b34b7cefa8d164c7afebca2fefd80c4b518f549e674",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "441eacea10a8a52954753316aafe2b9fecb6d11c27f9c7ab14bf2f2617ad284c"
+    },
+    {
+      "id": "toolu_f48af531c8674f7c8be699c9",
+      "session": "root",
+      "message_id": "msg_d7c55401-0fb4-99f2-9880-1d3bc53b0289",
+      "name": "Bash",
+      "input_sha256": "293012290d76976dafd35943bdc12a089e3fddc6efa99d9262d811b711955de5",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "51d022c0608392d29df112d4aa24e747417a85aca6f85b77959093e0eca48b97"
+    },
+    {
+      "id": "toolu_73b00ff5896d48bd8f3059c2",
+      "session": "root",
+      "message_id": "msg_5a5fb698-4316-9caa-88a9-162fade294fc",
+      "name": "Bash",
+      "input_sha256": "2a2425e3b39b8c9c99cd5bac01a986f238a03e715766c96e14434d90a329f665",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "e02e512bba8a2677a89c3b99aca461aa277f4b59e1b4633c7326c5734439ab69"
+    },
+    {
+      "id": "toolu_e7c60a60faf74fb6b98759dc",
+      "session": "root",
+      "message_id": "msg_fb88b1b6-1797-9476-9c49-9981e76f1004",
+      "name": "Bash",
+      "input_sha256": "ab88025b91d49fc4323f622c3e7f6d02614065b31d17d0b744a534cb5f5b9c90",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "f93842222ae51889af387e102598b1d13f8ef07e1b9e22c34a5996475a00767c"
+    },
+    {
+      "id": "toolu_ccd0b629bbf845e2a5a1aac3",
+      "session": "root",
+      "message_id": "msg_7df54526-acd2-9c4d-b630-bd62b2e3bcf2",
+      "name": "Bash",
+      "input_sha256": "98faa35f3c537ec7f3ee4d4a798c0dcd47c7408458abc48d5013aeef7b019221",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "2becd9099d0b1faff0e8708a924477897488b8a54af5062fa4fe67d0bc8d87b1"
+    },
+    {
+      "id": "toolu_d3304d7a39ba468d92744864",
+      "session": "root",
+      "message_id": "msg_e6ead9c5-9fd8-979d-b630-2e6284520387",
+      "name": "Bash",
+      "input_sha256": "719169113f76bd43ad989d59becaf39ec213c3fe45fc418baeca0e4d578b4787",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "0a1788d1ed4579759747a76178d5a4629b154722db65d87fab94630cf6fa0dd8"
+    },
+    {
+      "id": "toolu_4a630e3d4ad34a34915c6a04",
+      "session": "root",
+      "message_id": "msg_3ca78f84-536a-950e-bb10-77e38f5e01db",
+      "name": "Bash",
+      "input_sha256": "99a4c6cf28043a5355631300e6a542abe411222b7f20bbd257d538ef512abf35",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "4420b97a2c19368d3532888c445c2b1c39c865e0740f2538f61ed3cc890cd3dd"
+    },
+    {
+      "id": "toolu_2a3eb5a35c224a9a86ec502f",
+      "session": "root",
+      "message_id": "msg_32b5ca34-3ad8-9c38-a490-81ec76d8ae54",
+      "name": "Bash",
+      "input_sha256": "2646d19d0d0b1065fc586daacd0dce843160285f76c53781c283d74ee758d852",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "14915f0c65ce0486559051b87e27683647119ec8c2212c845241fc9dc50c758b"
+    },
+    {
+      "id": "toolu_58cdb616290a40b3afe5ddd6",
+      "session": "root",
+      "message_id": "msg_ad4eafed-f25e-9d9f-9306-732b35477e6c",
+      "name": "Bash",
+      "input_sha256": "0ff83477f5ad7e9d0559d07022b60b337bd82628af67ac9209d0f7b5044fc95b",
+      "completed": true,
+      "is_error": false,
+      "result_sha256": "5557adff81b1b38a3b3f921e7f5cdd4188ed745d7fdae303a438f52cef8e585c"
+    }
+  ],
+  "root": {
+    "id": "root",
+    "agent_id": null,
+    "parent_session": null,
+    "parent_tool_use_id": null,
+    "files": [
+      "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+    ],
+    "message_ids": [
+      "msg_8909a479-fb6d-9c3c-b496-2ad019c908a1",
+      "msg_7d99c6b1-e8b6-9348-8c2d-0af0d41f5d39",
+      "msg_34f6464f-eddb-9fee-acba-48fa0d4b9143",
+      "msg_8e95bcbe-a0f3-96ff-bc24-367f170333bb",
+      "msg_9ad9dd2b-3bad-946e-b4a0-dfdcf107db57",
+      "msg_67c49a41-807f-9343-9068-b533c6c2d8c7",
+      "msg_c6b73570-d40f-9fc9-b285-1c334741a804",
+      "msg_84ef7477-bd22-92d9-ac20-fabe68588b53",
+      "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+      "msg_93de2e2f-6b6f-9009-8702-4490e71b0ee8",
+      "msg_28deecc5-cb0d-94c7-88ff-88c62e567c19",
+      "msg_2b602f2c-9e4d-9fa4-a0f9-f5de05232ec7",
+      "msg_26e43beb-8391-9a61-8f1b-b5cb9d9745ed",
+      "msg_c59be9e6-0395-984d-a487-e5a2c22e8c91",
+      "msg_c84b538d-6764-9732-9bfc-8c33104117ff",
+      "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+      "msg_a72364a6-d7bf-9883-bef2-f2571d9b59f9",
+      "msg_98ca923b-aebb-9822-bb24-0763b8e0d950",
+      "msg_6c823a95-63ef-9533-a3f3-485163caa14f",
+      "msg_d7c55401-0fb4-99f2-9880-1d3bc53b0289",
+      "msg_5a5fb698-4316-9caa-88a9-162fade294fc",
+      "msg_fb88b1b6-1797-9476-9c49-9981e76f1004",
+      "msg_7df54526-acd2-9c4d-b630-bd62b2e3bcf2",
+      "msg_e6ead9c5-9fd8-979d-b630-2e6284520387",
+      "msg_3ca78f84-536a-950e-bb10-77e38f5e01db",
+      "msg_32b5ca34-3ad8-9c38-a490-81ec76d8ae54",
+      "msg_ad4eafed-f25e-9d9f-9306-732b35477e6c",
+      "msg_114a5c10-678d-9cfa-808d-bfde092555dd"
+    ],
+    "usage": {
+      "input_tokens": 1363047,
+      "uncached_input_tokens": 168,
+      "cache_read_tokens": 1286859,
+      "cache_write_tokens": 76020,
+      "output_tokens": 18499,
+      "llm_calls": 28,
+      "tool_calls": 38,
+      "tool_errors": 0,
+      "counted_usage_messages": 28,
+      "unknown_usage_messages": 0,
+      "cost_usd": null
+    },
+    "tool_count": 38,
+    "reachable": true
+  },
+  "children": [],
+  "sessions": [
+    {
+      "id": "root",
+      "agent_id": null,
+      "parent_session": null,
+      "parent_tool_use_id": null,
+      "files": [
+        "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl"
+      ],
+      "message_ids": [
+        "msg_8909a479-fb6d-9c3c-b496-2ad019c908a1",
+        "msg_7d99c6b1-e8b6-9348-8c2d-0af0d41f5d39",
+        "msg_34f6464f-eddb-9fee-acba-48fa0d4b9143",
+        "msg_8e95bcbe-a0f3-96ff-bc24-367f170333bb",
+        "msg_9ad9dd2b-3bad-946e-b4a0-dfdcf107db57",
+        "msg_67c49a41-807f-9343-9068-b533c6c2d8c7",
+        "msg_c6b73570-d40f-9fc9-b285-1c334741a804",
+        "msg_84ef7477-bd22-92d9-ac20-fabe68588b53",
+        "msg_85696229-18a5-975d-a0d0-1b686da3bacc",
+        "msg_93de2e2f-6b6f-9009-8702-4490e71b0ee8",
+        "msg_28deecc5-cb0d-94c7-88ff-88c62e567c19",
+        "msg_2b602f2c-9e4d-9fa4-a0f9-f5de05232ec7",
+        "msg_26e43beb-8391-9a61-8f1b-b5cb9d9745ed",
+        "msg_c59be9e6-0395-984d-a487-e5a2c22e8c91",
+        "msg_c84b538d-6764-9732-9bfc-8c33104117ff",
+        "msg_0493d4de-9266-92a4-985e-8684b3c8cbfb",
+        "msg_a72364a6-d7bf-9883-bef2-f2571d9b59f9",
+        "msg_98ca923b-aebb-9822-bb24-0763b8e0d950",
+        "msg_6c823a95-63ef-9533-a3f3-485163caa14f",
+        "msg_d7c55401-0fb4-99f2-9880-1d3bc53b0289",
+        "msg_5a5fb698-4316-9caa-88a9-162fade294fc",
+        "msg_fb88b1b6-1797-9476-9c49-9981e76f1004",
+        "msg_7df54526-acd2-9c4d-b630-bd62b2e3bcf2",
+        "msg_e6ead9c5-9fd8-979d-b630-2e6284520387",
+        "msg_3ca78f84-536a-950e-bb10-77e38f5e01db",
+        "msg_32b5ca34-3ad8-9c38-a490-81ec76d8ae54",
+        "msg_ad4eafed-f25e-9d9f-9306-732b35477e6c",
+        "msg_114a5c10-678d-9cfa-808d-bfde092555dd"
+      ],
+      "usage": {
+        "input_tokens": 1363047,
+        "uncached_input_tokens": 168,
+        "cache_read_tokens": 1286859,
+        "cache_write_tokens": 76020,
+        "output_tokens": 18499,
+        "llm_calls": 28,
+        "tool_calls": 38,
+        "tool_errors": 0,
+        "counted_usage_messages": 28,
+        "unknown_usage_messages": 0,
+        "cost_usd": null
+      },
+      "tool_count": 38,
+      "reachable": true
+    }
+  ],
+  "files": [
+    {
+      "path": "claude-code.txt",
+      "sha256": "791e3e9ff28d03edd5516b82d8f63882e1fc15ace730ba15c574e6d7ac0da554",
+      "bytes": 1090374
+    },
+    {
+      "path": "sessions/projects/-workspace/95f49568-8c9c-4a9b-9b4f-51474bc1cf85.jsonl",
+      "sha256": "a76d312348fe79b925b062eba10754ae98c2254e883ae5a5f93ade9bc0b2ca67",
+      "bytes": 463178
+    }
+  ],
+  "root_result_usage": {
+    "input_tokens": 168,
+    "cache_creation_input_tokens": 76020,
+    "cache_read_input_tokens": 1286859,
+    "output_tokens": 18499,
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 76020
+    },
+    "inference_geo": "",
+    "iterations": [],
+    "speed": "standard"
+  },
+  "root_result_usage_valid": true,
+  "root_result_usage_counted": false,
+  "limitations": [
+    "Persisted linked session messages only; not whole-provider billing or unpersisted background usage.",
+    "Root result totals are diagnostic and may already include child usage; never added to persisted totals.",
+    "Unknown or missing child linkage fails closed; native Docker evidence must validate the supported transcript shape."
+  ]
+}

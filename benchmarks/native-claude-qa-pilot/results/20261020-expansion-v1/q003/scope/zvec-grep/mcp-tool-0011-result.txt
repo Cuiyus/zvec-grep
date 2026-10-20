@@ -1,0 +1,858 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (4):
+  Q1 [primary]: collection optimize merge segments apply deleted rows bitmap rewrite segment data
+  Q2 [primary]: delete document tombstone mark deleted docid primary key segment
+  Q3 [primary]: optimize segment merge compaction rebuild vector index HNSW after delete
+  Q4 [primary]: segment dump flush memtable immutable segment id mapping offset to primary key
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/include/zvec/c_api.h:3570-3571
+groups: Q1#1 (fts+vector), Q3#5 (fts+vector)
+source:
+3570	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3571	zvec_collection_optimize(zvec_collection_t *collection);
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/index/segment/segment.cc:986-1008
+groups: Q2#1 (fts+vector)
+source:
+986	Status SegmentImpl::Delete(const std::string &pk) {
+987	  std::lock_guard lock(seg_mtx_);
+988	
+989	  uint64_t g_doc_id;
+990	  if (!id_map_->has(pk, &g_doc_id)) {
+991	    return Status::NotFound("primary key: ", pk, " not found");
+992	  }
+993	  if (delete_store_->is_deleted(g_doc_id)) {
+994	    return Status::NotFound("primary key: ", pk, " g_doc_id: ", g_doc_id,
+995	                            " already deleted");
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/db/index/segment/segment_helper.cc:100-175
+groups: Q1#7 (fts+vector), Q3#1 (fts+vector)
+source:
+100	Status SegmentHelper::ExecuteCompactTask(CompactTask &task) {
+101	  // input
+102	  auto collection_path = task.collection_path_;
+103	  auto schema = task.schema_;
+104	  auto input_segments = task.input_segments_;
+105	  auto filter = task.filter_;
+106	  auto output_segment_id = task.output_segment_id_;
+107	
+108	  // input_segments must be pre-sorted by ascending min_doc_id so the
+109	  // shared delete_row_id_bitmap (built by FilterRecordBatch, consumed by
+...
+
+#4 [group_coverage: Q4] matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder_entity.h:61
+groups: Q4#1 (fts+vector)
+source:
+61	int dump_key_mapping_segment(const IndexDumper::Pointer &dumper) const;
+
+#5 [global_fill] matchedBy=fts+vector python/zvec/model/collection.py:228-235
+groups: Q1#3 (fts+vector), Q3#2 (fts+vector)
+source:
+228	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+229	        """Optimize the collection (e.g., merge segments, rebuild index).
+230	
+231	        Args:
+232	            option (Optional[OptimizeOption], optional): Optimization options.
+233	                Defaults to ``OptimizeOption()``.
+234	        """
+235	        self._obj.Optimize(option)
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.h:79
+groups: Q1#4 (fts+vector), Q2#5 (fts+vector)
+source:
+79	Result<void> reduce(const roaring::Roaring &delete_row_id_bitmap);
+
+#7 matchedBy=fts+vector src/db/collection.cc:910-1084
+groups: Q1#6 (fts+vector), Q3#4 (fts+vector)
+source:
+910	Status CollectionImpl::optimize(const OptimizeOptions &options) {
+911	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+912	
+913	  // Serialize against other maintenance operations for the whole optimize.
+914	  std::lock_guard maintenance_lock(maintenance_mtx_);
+915	
+916	  std::vector<Segment::Ptr> persist_segments;
+917	
+918	  // Phase 1: exclusively seal the current writing segment and snapshot
+919	  // the persisted segment set.
+...
+
+#8 matchedBy=fts+vector src/binding/c/c_api.cc:6840-6854
+groups: Q1#5 (fts+vector), Q3#7 (fts+vector)
+source:
+6840	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6841	  if (!collection) {
+6842	    set_last_error("Invalid argument: collection cannot be null");
+6843	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6844	  }
+6845	
+6846	  ZVEC_TRY_RETURN_ERROR(
+6847	      "Exception occurred",
+6848	      auto coll_ptr =
+6849	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#9 matchedBy=fts+vector src/db/index/segment/segment_helper.h:307-312
+groups: Q1#2 (fts+vector), Q2#12 (fts+vector)
+source:
+307	static Status ReduceFts(const CollectionSchema::Ptr &schema,
+308	                          const std::vector<Segment::Ptr> &input_segments,
+309	                          const std::string &output_segment_path,
+310	                          const roaring::Roaring &delete_row_id_bitmap,
+311	                          std::function<BlockID()> &block_id_generator,
+312	                          std::vector<BlockMeta> *output_block_metas);
+
+#10 matchedBy=fts+vector src/db/index/segment/segment_helper.h:234-320
+groups: Q1#17 (fts+vector), Q3#6 (fts+vector)
+source:
+234	class SegmentHelper {
+235	 public:
+236	  static Status Execute(SegmentTask::Ptr &task);
+237	
+238	 private:
+239	  static Status ExecuteCompactTask(CompactTask &task);
+240	
+241	  static Status ExecuteCreateVectorIndexTask(CreateVectorIndexTask &task);
+242	
+243	  static Status ExecuteCreateScalarIndexTask(CreateScalarIndexTask &task);
+...
+
+#11 matchedBy=fts+vector src/db/index/common/delete_store.h:27-149
+groups: Q1#14 (fts+vector), Q2#15 (fts+vector)
+source:
+27	class DeleteStore : public std::enable_shared_from_this<DeleteStore> {
+28	 public:
+29	  using Ptr = std::shared_ptr<DeleteStore>;
+30	
+31	  explicit DeleteStore(std::string collection_name)
+32	      : collection_name_(std::move(collection_name)) {};
+33	
+34	  ~DeleteStore() {
+35	    LOG_INFO("Closed delete store");
+36	  }
+...
+
+#12 matchedBy=fts+vector src/db/index/common/delete_store.h:96-100
+groups: Q2#2 (fts+vector)
+source:
+96	void mark_deleted(uint64_t doc_id) {
+97	    bitmap_.add(doc_id);
+98	    empty_ = false;
+99	    modified_since_last_flush_ = true;
+100	  }
+
+#13 matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder_entity.cc:326-348
+groups: Q4#2 (fts+vector)
+source:
+326	int DiskAnnBuilderEntity::dump_key_mapping_segment(
+327	    const IndexDumper::Pointer &dumper) const {
+328	  std::vector<diskann_id_t> mapping(doc_cnt());
+329	
+330	  const diskann_key_t *keys = reinterpret_cast<diskann_key_t *>(
+331	      const_cast<char *>(keys_buffer_.data()));
+332	
+333	  std::iota(mapping.begin(), mapping.end(), 0U);
+334	  std::sort(mapping.begin(), mapping.end(),
+335	            [&](diskann_id_t i, diskann_id_t j) { return keys[i] < keys[j]; });
+...
+
+#14 matchedBy=fts+vector src/include/zvec/c_api.h:3721-3723
+groups: Q2#3 (fts+vector)
+source:
+3721	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL zvec_collection_delete(
+3722	    zvec_collection_t *collection, const char *const *pks, size_t pk_count,
+3723	    size_t *success_count, size_t *error_count);
+
+#15 matchedBy=fts+vector src/db/index/segment/segment.cc:1519-1696
+groups: Q3#3 (fts+vector)
+source:
+1519	Status SegmentImpl::create_vector_index(
+1520	    const std::string &column, const IndexParams::Ptr &index_params,
+1521	    int concurrency, SegmentMeta::Ptr *segment_meta,
+1522	    std::unordered_map<std::string, VectorColumnIndexer::Ptr> *vector_indexers,
+1523	    std::unordered_map<std::string, VectorColumnIndexer::Ptr>
+1524	        *quant_vector_indexers) {
+1525	  auto field = collection_schema_->get_vector_field(column);
+1526	  SegmentMeta::Ptr new_segment_meta;
+1527	  if (*segment_meta == nullptr) {
+1528	    new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);
+...
+
+#16 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_entity.cc:102-113
+groups: Q4#3 (fts+vector)
+source:
+102	int64_t HnswEntity::dump_mapping_segment(const IndexDumper::Pointer &dumper,
+103	                                         const key_t *keys) const {
+104	  std::vector<node_id_t> mapping(doc_cnt());
+105	
+106	  std::iota(mapping.begin(), mapping.end(), 0U);
+107	  std::sort(mapping.begin(), mapping.end(),
+108	            [&](node_id_t i, node_id_t j) { return keys[i] < keys[j]; });
+109	
+110	  size_t size = mapping.size() * sizeof(node_id_t);
+111	
+...
+
+#17 matchedBy=fts+vector src/db/index/segment/segment.h:153
+groups: Q2#4 (fts+vector)
+source:
+153	virtual Status Delete(uint64_t g_doc_id) = 0;
+
+#18 matchedBy=fts+vector src/core/algorithm/vamana/vamana_entity.h:340-341
+groups: Q4#4 (fts+vector)
+source:
+340	int64_t dump_mapping_segment(const IndexDumper::Pointer &dumper,
+341	                               const key_t *keys) const;
+
+#19 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_entity.h:484-485
+groups: Q4#5 (fts+vector)
+source:
+484	int64_t dump_mapping_segment(const IndexDumper::Pointer &dumper,
+485	                               const key_t *keys) const;
+
+#20 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:514-539
+groups: Q2#6 (fts+vector)
+source:
+514	TEST_P(SegmentTest, DeleteDoc) {
+515	  auto segment = test::TestHelper::CreateSegmentWithDoc(
+516	      col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+517	      0, 10);
+518	  ASSERT_TRUE(segment != nullptr);
+519	
+520	  // before update
+521	  uint64_t count = segment->doc_count(delete_store_->make_filter());
+522	  EXPECT_EQ(count, 10);
+523	
+...
+
+#21 matchedBy=fts+vector src/core/algorithm/vamana/vamana_entity.cc:150-154
+groups: Q4#6 (fts+vector)
+source:
+150	int64_t VamanaEntity::dump_mapping_segment(const IndexDumper::Pointer &dumper,
+151	                                           const key_t *keys) const {
+152	  size_t total_size = doc_cnt() * sizeof(key_t);
+153	  return dump_segment(dumper, kGraphMappingSegmentId, keys, total_size);
+154	}
+
+#22 matchedBy=fts+vector src/db/index/segment/segment.cc:933-937
+groups: Q2#7 (fts+vector)
+source:
+933	Status SegmentImpl::internal_delete(const Doc &doc) {
+934	  delete_store_->mark_deleted(doc.doc_id());
+935	  id_map_->remove(doc.pk());
+936	  return Status::OK();
+937	}
+
+#23 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_entity.cc:116-127
+groups: Q4#7 (fts+vector)
+source:
+116	int64_t HnswSparseEntity::dump_mapping_segment(
+117	    const IndexDumper::Pointer &dumper, const key_t *keys) const {
+118	  std::vector<node_id_t> mapping(doc_cnt());
+119	
+120	  std::iota(mapping.begin(), mapping.end(), 0U);
+121	  std::sort(mapping.begin(), mapping.end(),
+122	            [&](node_id_t i, node_id_t j) { return keys[i] < keys[j]; });
+123	
+124	  size_t size = mapping.size() * sizeof(node_id_t);
+125	  return dump_segment(dumper, kSparseGraphMappingSegmentId, mapping.data(),
+...
+
+#24 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.cc:156-213
+groups: Q1#8 (fts+vector)
+source:
+156	Result<void> FtsRocksdbReducer::reduce(
+157	    const roaring::Roaring &delete_row_id_bitmap) {
+158	  if (state_ != STATE_FEED || num_segments_ == 0) {
+159	    return tl::make_unexpected(Status::InternalError(
+160	        "FtsRocksdbReducer: call feed() before reduce(). field=", field_name_));
+161	  }
+162	
+163	  effective_total_docs_ = 0;
+164	  effective_total_tokens_ = 0;
+165	
+...
+
+#25 matchedBy=fts+vector src/db/collection.cc:1557-1582
+groups: Q2#8 (fts+vector)
+source:
+1557	Status CollectionImpl::internal_fetch_by_doc(const Doc &doc,
+1558	                                             Doc::Ptr *doc_out) {
+1559	  auto segments = get_all_segments();
+1560	  uint64_t doc_id;
+1561	  bool has = id_map_->has(doc.pk(), &doc_id);
+1562	  if (!has) {
+1563	    return Status::NotFound("Document not found");
+1564	  }
+1565	  if (delete_store_->is_deleted(doc_id)) {
+1566	    return Status::NotFound("Document already deleted");
+...
+
+#26 matchedBy=fts+vector src/db/index/column/vector_column/vector_column_indexer.h:69-71
+groups: Q3#8 (fts+vector)
+source:
+69	Status Merge(const std::vector<VectorColumnIndexer::Ptr> &indexers,
+70	               const IndexFilter::Ptr &filter = nullptr,
+71	               const vector_column_params::MergeOptions &merge_options = {});
+
+#27 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_entity.h:374-375
+groups: Q4#8 (fts+vector)
+source:
+374	int64_t dump_mapping_segment(const IndexDumper::Pointer &dumper,
+375	                               const key_t *keys) const;
+
+#28 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_rocksdb_merger.h:29-75
+groups: Q1#9 (fts+vector)
+source:
+29	bool FullMergeV2(const MergeOperationInput &merge_in,
+30	                   MergeOperationOutput *merge_out) const override {
+31	    if (merge_in.existing_value == nullptr &&
+32	        merge_in.operand_list.size() == 1) {
+33	      merge_out->new_value = std::string(merge_in.operand_list[0].data(),
+34	                                         merge_in.operand_list[0].size());
+35	      return true;
+36	    }
+37	
+38	    merge_out->new_value.clear();
+...
+
+#29 matchedBy=fts+vector src/include/zvec/core/framework/index_document.h:217-219
+groups: Q2#9 (fts+vector)
+source:
+217	void set_key(uint64_t val) {
+218	    key_ = val;
+219	  }
+
+#30 matchedBy=fts+vector src/db/index/segment/segment_helper.cc:794-853
+groups: Q3#9 (fts+vector)
+source:
+794	Status SegmentHelper::MergeWithOptionalReuse(
+795	    const std::string &output_index_path, const FieldSchema &index_field,
+796	    std::vector<VectorColumnIndexer::Ptr> source_indexers,
+797	    const IndexFilter::Ptr &filter, int concurrency,
+798	    VectorColumnIndexer::Ptr *merged_indexer) {
+799	  vector_column_params::MergeOptions merge_options;
+800	  if (concurrency == 0) {
+801	    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+802	    merge_options.write_concurrency =
+803	        static_cast<uint32_t>(merge_options.pool->count());
+...
+
+#31 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_entity.cc:120-131
+groups: Q4#9 (fts+vector)
+source:
+120	int64_t HnswRabitqEntity::dump_mapping_segment(
+121	    const IndexDumper::Pointer &dumper, const key_t *keys) const {
+122	  std::vector<node_id_t> mapping(doc_cnt());
+123	
+124	  std::iota(mapping.begin(), mapping.end(), 0U);
+125	  std::sort(mapping.begin(), mapping.end(),
+126	            [&](node_id_t i, node_id_t j) { return keys[i] < keys[j]; });
+127	
+128	  size_t size = mapping.size() * sizeof(node_id_t);
+129	
+...
+
+#32 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_merge.cc:58-96
+groups: Q1#10 (fts+vector)
+source:
+58	bool FtsPostingsMerge::FullMergeV2(const MergeOperationInput &merge_in,
+59	                                   MergeOperationOutput *merge_out) const {
+60	  // If there is only one operand and no existing_value, return directly
+61	  if (merge_in.existing_value == nullptr && merge_in.operand_list.size() == 1) {
+62	    merge_out->new_value = std::string(merge_in.operand_list[0].data(),
+63	                                       merge_in.operand_list[0].size());
+64	    return true;
+65	  }
+66	
+67	  // Deserialize bitmap from existing_value
+...
+
+#33 matchedBy=fts+vector python/tests/test_collection_fts.py:141-152
+groups: Q2#10 (fts+vector)
+source:
+141	def test_delete_then_query(self, fts_collection: Collection):
+142	        """Tombstone filter must drop deleted docs from FTS results."""
+143	        fts_collection.insert(_make_docs())
+144	        statuses = fts_collection.delete(["pk_0", "pk_4"])
+145	        assert all(s.ok() for s in statuses)
+146	        assert fts_collection.stats.doc_count == 3
+147	
+148	        hits = _fts_query(fts_collection, "hello")
+149	        assert len(hits) == 3
+150	        assert {doc.id for doc in hits} == {"pk_1", "pk_2", "pk_3"}
+...
+
+#34 matchedBy=vector src/core/algorithm/hnsw/hnsw_algorithm.h:59-61
+groups: Q3#10 (vector)
+source:
+59	int cleanup() override {
+60	    return 0;
+61	  }
+
+#35 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_entity.h:381-382
+groups: Q4#10 (fts+vector)
+source:
+381	int64_t dump_mapping_segment(const IndexDumper::Pointer &dumper,
+382	                               const key_t *keys) const;
+
+#36 matchedBy=fts+vector src/db/sqlengine/planner/optimizer.h:26
+groups: Q1#11 (fts+vector)
+source:
+26	virtual bool optimize(Segment *segment, QueryInfo *query_info) = 0;
+
+#37 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.cc:427-468
+groups: Q2#11 (fts+vector)
+source:
+427	Result<void> FtsRocksdbReducer::reduce_positions(
+428	    uint32_t segment_index, const roaring::Roaring &delete_row_id_bitmap) {
+429	  auto *src_positions_cf = src_positions_cfs_[segment_index];
+430	  const uint64_t scan_offset = scan_offset_per_seg_[segment_index];
+431	  const uint64_t seg_doc_count = segment_stats_[segment_index].doc_count;
+432	
+433	  auto iter = std::unique_ptr<rocksdb::Iterator>(
+434	      src_ctxs_[segment_index]->db_->NewIterator(
+435	          src_ctxs_[segment_index]->read_opts_, src_positions_cf));
+436	  iter->SeekToFirst();
+...
+
+#38 matchedBy=fts+vector src/db/collection.cc:1086-1174
+groups: Q3#11 (fts+vector)
+source:
+1086	std::vector<SegmentTask::Ptr> CollectionImpl::build_compact_task(
+1087	    const CollectionSchema::Ptr &schema,
+1088	    const std::vector<Segment::Ptr> &segments, int concurrency,
+1089	    const IndexFilter::Ptr filter) {
+1090	  std::vector<SegmentTask::Ptr> tasks;
+1091	  if (segments.empty()) return tasks;
+1092	
+1093	  bool rebuild = false;
+1094	  size_t current_doc_count = 0;
+1095	  size_t current_actual_doc_count = 0;
+...
+
+#39 matchedBy=fts+vector src/include/zvec/core/framework/index_mapping.h:26-219
+groups: Q4#11 (fts+vector)
+source:
+26	class IndexMapping {
+27	 public:
+28	  /*! Index Mapping Segment
+29	   */
+30	  class Segment {
+31	   public:
+32	    //! Constructor
+33	    Segment(void) {}
+34	
+35	    //! Constructor
+...
+
+#40 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_codec.h:241-279
+groups: Q1#12 (fts+vector)
+source:
+241	static Status Merge_OR(const char *data, size_t size, bool lazy,
+242	                         roaring_bitmap_t *bitmap) {
+243	    if (!data || size == 0) {
+244	      LOG_ERROR("Input data is invalid");
+245	      return Status::InvalidArgument();
+246	    }
+247	
+248	    unsigned char header = data[0];
+249	    if (header > INVERT_ID_LIST_SIZE_THRESHOLD) {
+250	      LOG_ERROR("Invalid header found in inverted data");
+...
+
+#41 matchedBy=vector src/core/algorithm/hnsw_sparse/hnsw_sparse_algorithm.h:35
+groups: Q3#12 (vector)
+source:
+35	int cleanup();
+
+#42 matchedBy=fts+vector src/core/framework/index_mapping.cc:423-477
+groups: Q4#12 (fts+vector)
+source:
+423	int IndexMapping::flush(void) {
+424	  if ((file_.size() < index_size_) && !file_.truncate(index_size_)) {
+425	    LOG_ERROR("Failed to truncate file size %zu, %s", index_size_,
+426	              ailego::FileHelper::GetLastErrorString().c_str());
+427	    return IndexError_TruncateFile;
+428	  }
+429	
+430	  for (auto iter = segments_.begin(); iter != segments_.end(); ++iter) {
+431	    SegmentInfo &segment_info = iter->second;
+432	    Segment *item = &segment_info.segment;
+...
+
+#43 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.h:37-155
+groups: Q1#13 (fts+vector)
+source:
+37	class FtsRocksdbReducer {
+38	 public:
+39	  /*! Initialize the reducer with destination column families.
+40	   *  \param field_name          FTS field name (used for stat_cf keys)
+41	   *  \param dst_postings_cf     Destination postings CF (BitPacked output)
+42	   *  \param dst_positions_cf    Destination positions CF (phrase support)
+43	   *  \param dst_stat_cf         Destination segment-stat CF
+44	   *  \return Result<void> on success, or Status on failure
+45	   */
+46	  Result<void> init(const std::string &field_name, RocksdbContext *ctx,
+...
+
+#44 matchedBy=fts+vector tests/db/sqlengine/fts_recall_test.cc:812-822
+groups: Q2#13 (fts+vector)
+source:
+812	TEST_F(FtsRecallDeleteTest, DeletePersistsAcrossFlush) {
+813	  auto s = segment_->Delete("pk_4");
+814	  ASSERT_TRUE(s.ok()) << s.c_str();
+815	
+816	  auto flush_s = segment_->flush();
+817	  ASSERT_TRUE(flush_s.ok()) << flush_s.c_str();
+818	
+819	  auto result = fts_search("kiwi");
+820	  ASSERT_TRUE(result.has_value()) << result.error().c_str();
+821	  EXPECT_TRUE(result->empty());
+...
+
+#45 matchedBy=fts+vector tests/db/index/segment/segment_helper_test.cc:656-757
+groups: Q3#13 (fts+vector)
+source:
+656	TEST_P(SegmentCompactReuseTest, OptimizedSegmentsReuseFirstIndexer) {
+657	  const auto &param = GetParam();
+658	  auto schema = test::TestHelper::CreateSchemaWithVectorIndex(
+659	      false, col_name, param.vector_index_params);
+660	  auto version_manager = CreateVersionManager(*schema);
+661	  auto write_options = WriteOptions();
+662	
+663	  constexpr int kSegCount = 3;
+664	  constexpr int kDocsPerSeg = 300;
+665	  constexpr uint32_t kTopK = 10;
+...
+
+#46 matchedBy=fts+vector src/core/algorithm/diskann/diskann_searcher_entity.cc:309-338
+groups: Q4#13 (fts+vector)
+source:
+309	int DiskAnnSearcherEntity::load_key_mapping_segment() {
+310	  key_mapping_segment_ = storage_->get(kDiskAnnKeyMappingSegmentId);
+311	  if (!key_mapping_segment_) {
+312	    LOG_ERROR("Miss or invalid segment %s",
+313	              DiskAnnEntity::kDiskAnnKeyMappingSegmentId.c_str());
+314	    return IndexError_InvalidFormat;
+315	  }
+316	
+317	  size_t key_mapping_data_len = doc_cnt() * sizeof(diskann_id_t);
+318	
+...
+
+#47 matchedBy=fts+vector tests/db/index/column/fts_column/fts_rocksdb_reducer_test.cc:448-475
+groups: Q2#14 (fts+vector)
+source:
+448	TEST_F(FtsRocksdbReducerTest, SingleSegmentMergeWithDeletes) {
+449	  // Segment 0: doc_ids 0..2
+450	  auto indexer0 = MakeSrc0Indexer();
+451	  InsertDocs(indexer0.get(),
+452	             {{0, "hello world"}, {1, "hello foo"}, {2, "bar"}});
+453	
+454	  FtsRocksdbReducer reducer = MakeReducer();
+455	  FtsSegmentStats stats0 = MakeSegmentStats(0, 2);
+456	  ASSERT_TRUE(reducer.feed(stats0, &src0_db_, src0_postings_, src0_positions_)
+457	                  .has_value());
+...
+
+#48 matchedBy=fts+vector python/tests/test_hnsw_contiguous_memory.py:251-293
+groups: Q3#14 (fts+vector)
+source:
+251	def test_create_with_contiguous_memory_and_query(
+252	        self,
+253	        tmp_path_factory,
+254	        collection_option,
+255	        rng,
+256	    ):
+257	        """With the flag on, the schema round-trips and search works end-to-end.
+258	
+259	        After ``optimize()`` the writing segment is compacted into a persisted
+260	        segment backed by the configured HNSW entity. We assert both the
+...
+
+#49 matchedBy=fts+vector src/db/index/segment/segment.cc:2087-2196
+groups: Q4#14 (fts+vector)
+source:
+2087	Status SegmentImpl::flush() {
+2088	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2089	
+2090	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2091	    return Status::OK();
+2092	  }
+2093	
+2094	  if (wal_file_) {
+2095	    if (wal_file_->flush() != 0) {
+2096	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#50 matchedBy=fts+vector src/db/index/segment/segment_manager.h:22-60
+groups: Q1#15 (fts+vector)
+source:
+22	class SegmentManager {
+23	 public:
+24	  using Ptr = std::shared_ptr<SegmentManager>;
+25	
+26	  SegmentManager() = default;
+27	  ~SegmentManager() = default;
+28	
+29	 public:
+30	  uint32_t segment_count() const {
+31	    std::shared_lock<std::shared_mutex> lock(mutex_);
+...
+
+#51 matchedBy=vector src/core/algorithm/hnsw_sparse/hnsw_sparse_builder.h:33
+groups: Q3#15 (vector)
+source:
+33	int cleanup(void) override;
+
+#52 matchedBy=fts+vector src/core/algorithm/flat/flat_streamer_dumper.h:208-236
+groups: Q4#15 (fts+vector)
+source:
+208	int write_mapping(const std::vector<uint64_t> &keys, IndexDumper *dumper) {
+209	    std::vector<uint32_t> mapping(keys.size());
+210	    std::iota(mapping.begin(), mapping.end(), 0);
+211	    std::sort(mapping.begin(), mapping.end(),
+212	              [&keys](uint32_t lhs, uint32_t rhs) {
+213	                return (keys[lhs] < keys[rhs]);
+214	              });
+215	
+216	    size_t mapping_size = mapping.size() * sizeof(uint32_t);
+217	    size_t mapping_padding_size = ailego_align(mapping_size, 32) - mapping_size;
+...
+
+#53 matchedBy=fts+vector tests/db/collection_test.cc:3272-3315
+groups: Q1#16 (fts+vector)
+source:
+3272	TEST_F(CollectionTest, Feature_Optimize_Compacted_Segment_Directories_Removed) {
+3273	  namespace fs = std::filesystem;
+3274	
+3275	  auto schema = TestHelper::CreateSchemaWithVectorIndex();
+3276	  auto options = CollectionOptions{false, true, 64 * 1024 * 1024};
+3277	  auto collection = TestHelper::CreateCollectionWithDoc(
+3278	      col_path, *schema, options, 0, 1000, false);
+3279	  ASSERT_NE(collection, nullptr);
+3280	  ASSERT_TRUE(collection->optimize().ok());
+3281	  ASSERT_TRUE(TestHelper::CollectionInsertDoc(collection, 1000, 2000).ok());
+...
+
+#54 matchedBy=fts+vector src/db/index/segment/segment.cc:919-922
+groups: Q2#16 (fts+vector)
+source:
+919	Status SegmentImpl::internal_update(Doc &doc) {
+920	  delete_store_->mark_deleted(doc.doc_id());
+921	  return internal_insert(doc);
+922	}
+
+#55 matchedBy=fts+vector tests/db/collection_test.cc:3913-4001
+groups: Q3#16 (fts+vector)
+source:
+3913	TEST_F(CollectionTest, Feature_Optimize_Rebuild) {
+3914	  FileHelper::RemoveDirectory(col_path);
+3915	
+3916	  int max_doc_per_count = 1000;
+3917	
+3918	  // create empty collection
+3919	  auto schema = TestHelper::CreateNormalSchema(
+3920	      false, "demo", nullptr, std::make_shared<HnswIndexParams>(MetricType::IP),
+3921	      max_doc_per_count);
+3922	  auto options = CollectionOptions{false, true, 64 * 1024 * 1024};
+...
+
+#56 matchedBy=fts+vector src/db/index/column/fts_column/fts_column_indexer.h:147
+groups: Q4#16 (fts+vector)
+source:
+147	Result<void> flush();
+
+#57 matchedBy=fts+vector python/zvec/model/collection.py:404-417
+groups: Q2#17 (fts+vector)
+source:
+404	def delete(self, ids: Union[str, list[str]]) -> Union[Status, list[Status]]:
+405	        """Delete documents by ID.
+406	
+407	        Args:
+408	            ids (Union[str, list[str]]): One or more document IDs to delete.
+409	
+410	        Returns:
+411	            Union[Status, list[Status]]: If a single id was given, returns its Status;
+412	            if a list was given, returns a list of Status objects.
+413	        """
+...
+
+#58 matchedBy=vector src/core/algorithm/hnsw/hnsw_context.h:48
+groups: Q3#17 (vector)
+source:
+48	~HnswContext() override;
+
+#59 matchedBy=fts+vector src/core/algorithm/flat/flat_streamer_entity.cc:1000-1019
+groups: Q4#17 (fts+vector)
+source:
+1000	int FlatStreamerEntity::load_segment_keys_to_vector() {
+1001	  for (uint32_t i = 0; i < meta_.header.total_vector_count; i++) {
+1002	    size_t block_id = i / block_vector_count();
+1003	    uint32_t vector_index = i % block_vector_count();
+1004	
+1005	    ailego_assert(segments_.size() > 1);
+1006	    size_t segment_block_count =
+1007	        segments_[1]->data_size() / linear_block_size();
+1008	    size_t segment_id = block_id / segment_block_count + 1;
+1009	    size_t real_block_id = block_id % segment_block_count;
+...
+
+#60 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_rocksdb_merger.h:27-111
+groups: Q1#18 (fts+vector)
+source:
+27	class InvertedRocksdbValueMerger : public rocksdb::MergeOperator {
+28	 public:
+29	  bool FullMergeV2(const MergeOperationInput &merge_in,
+30	                   MergeOperationOutput *merge_out) const override {
+31	    if (merge_in.existing_value == nullptr &&
+32	        merge_in.operand_list.size() == 1) {
+33	      merge_out->new_value = std::string(merge_in.operand_list[0].data(),
+34	                                         merge_in.operand_list[0].size());
+35	      return true;
+36	    }
+...
+
+#61 matchedBy=fts+vector tests/db/index/segment/segment_row_id_test.cc:216-231
+groups: Q2#18 (fts+vector)
+source:
+216	TEST_P(SegmentTest, DocCountDeleteFilterWithNonZeroGlobalDocID) {
+217	  auto segment = test::TestHelper::CreateSegmentWithDoc(
+218	      col_path_, *schema_, 0, 100, id_map_, delete_store_, version_manager_,
+219	      options_, 0, 10);
+220	  ASSERT_TRUE(segment != nullptr);
+221	
+222	  auto status = segment->Delete("pk_5");
+223	  EXPECT_TRUE(status.ok()) << "Delete by pk failed: " << status.message();
+224	
+225	  status = segment->Delete(103);
+...
+
+#62 matchedBy=vector src/core/algorithm/hnsw_sparse/hnsw_sparse_algorithm.cc:29-31
+groups: Q3#18 (vector)
+source:
+29	int HnswSparseAlgorithm::cleanup() {
+30	  return 0;
+31	}
+
+#63 matchedBy=fts+vector src/core/algorithm/flat_sparse/flat_sparse_streamer_entity.cc:389-460
+groups: Q4#18 (fts+vector)
+source:
+389	int FlatSparseStreamerEntity::dump_offset_data(IndexDumper *dumper) {
+390	  ailego::ElapsedTime stamp;
+391	
+392	  uint64_t init_offset = dump_size_;
+393	  std::vector<std::pair<uint64_t, uint32_t>> offset_length;
+394	
+395	  // write data
+396	  int ret;
+397	  node_id_t total_doc_cnt = doc_cnt();
+398	  for (node_id_t node_id = 0; node_id < total_doc_cnt; node_id++) {
+...
+
+#64 matchedBy=fts+vector src/db/index/segment/segment_helper.cc:999-1119
+groups: Q1#19 (fts+vector)
+source:
+999	Status SegmentHelper::ReduceFts(const CollectionSchema::Ptr &schema,
+1000	                                const std::vector<Segment::Ptr> &input_segments,
+1001	                                const std::string &output_segment_path,
+1002	                                const roaring::Roaring &delete_row_id_bitmap,
+1003	                                std::function<BlockID()> &block_id_generator,
+1004	                                std::vector<BlockMeta> *output_block_metas) {
+1005	  if (!schema->has_fts_field()) {
+1006	    return Status::OK();
+1007	  }
+1008	  if (input_segments.empty()) {
+...
+
+#65 matchedBy=fts+vector src/include/zvec/c_api.h:3736-3738
+groups: Q2#19 (fts+vector)
+source:
+3736	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL zvec_collection_delete_with_results(
+3737	    zvec_collection_t *collection, const char *const *pks, size_t pk_count,
+3738	    zvec_write_result_t **results, size_t *result_count);
+
+#66 matchedBy=fts+vector python/tests/test_collection_hnsw_rabitq.py:500-574
+groups: Q3#19 (fts+vector)
+source:
+500	@pytest.mark.usefixtures("hnsw_rabitq_collection")
+501	class TestHnswRabitqCollectionOptimizeAndReopen:
+502	    """Test collection optimize and reopen functionality."""
+503	
+504	    def test_optimize_close_reopen_and_query(
+505	        self,
+506	        tmp_path_factory,
+507	        hnsw_rabitq_collection_schema,
+508	        collection_option,
+509	        multiple_docs: list[Doc],
+...
+
+#67 matchedBy=fts+vector src/core/algorithm/diskann/diskann_reducer_entity.h:41
+groups: Q4#19 (fts+vector)
+source:
+41	int load_key_mapping_segment();
+
+#68 matchedBy=fts src/db/sqlengine/planner/optimizer.cc:274-291
+groups: Q1#20 (fts)
+source:
+274	bool InvertCondOptimizer::optimize(Segment *segment, QueryInfo *query_info) {
+275	  auto invert_cond = query_info->invert_cond();
+276	  // TODO: check if support optimize for mutable
+277	  if (invert_cond == nullptr) {
+278	    return false;
+279	  }
+280	
+281	  // find invert subroot after considering ratio rule,
+282	  // specifically, which invert cond subroot is still eligable.
+283	  SubRootResult invert_subroot;
+...
+
+#69 matchedBy=fts+vector tests/db/collection_test.cc:5766-5800
+groups: Q2#20 (fts+vector)
+source:
+5766	TEST_F(CollectionTest, Feature_AddColumn_WithDeleteOnlyWritingSegment) {
+5767	  auto schema = TestHelper::CreateNormalSchema();
+5768	  auto options = CollectionOptions{false, true, 64 * 1024 * 1024};
+5769	  auto collection = TestHelper::CreateCollectionWithDoc(col_path, *schema,
+5770	                                                        options, 0, 10, false);
+5771	
+5772	  auto setup_field =
+5773	      std::make_shared<FieldSchema>("setup_col", DataType::INT32, true);
+5774	  auto s = collection->add_column(setup_field, "", AddColumnOptions());
+5775	  ASSERT_TRUE(s.ok()) << s.message();
+...
+
+#70 matchedBy=fts+vector src/db/index/segment/segment.cc:1491-1517
+groups: Q3#20 (fts+vector)
+source:
+1491	Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(
+1492	    const std::string &index_file_path, const std::string &column,
+1493	    const FieldSchema &field, int concurrency) {
+1494	  VectorColumnIndexer::Ptr vector_indexer =
+1495	      std::make_shared<VectorColumnIndexer>(index_file_path, field);
+1496	
+1497	  vector_column_params::ReadOptions options{options_.enable_mmap_, true};
+1498	
+1499	  auto s = vector_indexer->Open(options);
+1500	  CHECK_RETURN_STATUS_EXPECTED(s);
+...
+
+#71 matchedBy=fts+vector src/core/algorithm/ivf/ivf_dumper.cc:118-188
+groups: Q4#20 (fts+vector)
+source:
+118	int IVFDumper::dump_inverted_vector_finished(void) {
+119	  //! Dump Inverted Index Segment
+120	  if (!block_.empty()) {
+121	    int ret = this->dump_block();
+122	    ivf_check_error_code(ret);
+123	  }
+124	  header_.block_size = block_.block_size();
+125	  size_t segment_size = header_.inverted_body_size;
+126	  int ret = dumper_->append(IVF_INVERTED_BODY_SEG_ID, segment_size, 0, 0);
+127	  if (ret != 0) {
+...
