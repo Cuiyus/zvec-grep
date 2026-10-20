@@ -1,0 +1,146 @@
+name: Zvec QA uniform postrun GLM quality v1
+run-name: Zvec QA quality / ${{ inputs.score && 'uniform original100 postrun wave' || 'provider-free boundary tests' }}
+on:
+  push:
+    branches: [dev/zvec-qa-glm52-local]
+    paths:
+      - '.github/workflows/zvec-qa-glm-local-score-v1.yml'
+      - 'benchmarks/zvec-qa-glm-scoring-v1/**'
+  workflow_dispatch:
+    inputs:
+      score:
+        description: Score every retained complete answer once after original run 39414480210 terminates
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: zvec-qa-glm-postrun-quality-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+env:
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+  SWE_QA_JUDGE_CONCURRENCY: '3'
+jobs:
+  boundary-tests:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify source seal and complete planned-position handling without provider calls
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          seal=json.loads(Path('benchmarks/zvec-qa-glm-scoring-v1/source-seal-v1.json').read_text())
+          for rel,digest in seal['controls'].items():
+              assert hashlib.sha256(Path(rel).read_bytes()).hexdigest()==digest,rel
+          PY
+          python -m unittest discover -s benchmarks/zvec-qa-glm-scoring-v1 -p 'test_*.py' -v
+  uniform-quality-wave:
+    needs: boundary-tests
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.score
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Require the complete original native workload to have terminated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/glm-quality-evidence"
+          gh api repos/Cuiyus/zvec-grep/actions/runs/39414480210 > "$RUNNER_TEMP/glm-quality-evidence/native-terminal-metadata.json"
+          gh api 'repos/Cuiyus/zvec-grep/actions/runs/39414480210/artifacts?per_page=100' > "$RUNNER_TEMP/glm-quality-evidence/native-artifacts-metadata.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ['RUNNER_TEMP'])/'glm-quality-evidence/native-terminal-metadata.json').read_text())
+          assert d['status']=='completed' and d['run_attempt']==1
+          assert d['id']==39414480210 and d['head_sha']=='4e72601048a2eed840b5bcb99105c4d9aa6314a8'
+          assert d['repository']['full_name']=='Cuiyus/zvec-grep' and d['event']=='workflow_dispatch'
+          PY
+      - uses: ./.github/actions/zvec-qa-glm-local-setup
+      - uses: actions/download-artifact@v4
+        with:
+          repository: Cuiyus/zvec-grep
+          run-id: 39414480210
+          name: zvec-qa-glm-local-preflight-39414480210
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/glm-original-preflight
+      - uses: actions/download-artifact@v4
+        with:
+          repository: Cuiyus/zvec-grep
+          run-id: 39414480210
+          pattern: zvec-qa-glm-local-pair-*
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/glm-original-pairs
+      - name: Restore the original frozen inputs without executing agents
+        run: |
+          set -euo pipefail
+          mkdir -p "$GLM_QA_PREPARED"
+          tar -xzf "$RUNNER_TEMP/glm-original-preflight/accepted-five-inputs.tgz" -C "$GLM_QA_PREPARED"
+          cmp "$GLM_QA_PLAN" "$RUNNER_TEMP/glm-original-preflight/plan-v1.json"
+          cp benchmarks/zvec-qa-glm-scoring-v1/amendment-v1.json "$RUNNER_TEMP/glm-quality-evidence/"
+          cp benchmarks/zvec-qa-glm-scoring-v1/source-seal-v1.json "$RUNNER_TEMP/glm-quality-evidence/"
+      - name: Uniformly score all retained complete original answers with main-default concurrency3
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          set -euo pipefail
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-scoring-v1/score.py \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --candidate "$GLM_QA_CANDIDATE" \
+            --plan "$GLM_QA_PLAN" --raw-root "$RUNNER_TEMP/glm-original-pairs" \
+            --native-run-metadata "$RUNNER_TEMP/glm-quality-evidence/native-terminal-metadata.json" \
+            --output "$RUNNER_TEMP/glm-quality-evidence/quality"
+      - name: Produce the raw and filtered statistics using the same uniform quality wave
+        run: |
+          set -euo pipefail
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/results.py \
+            --plan "$GLM_QA_PLAN" --raw-root "$RUNNER_TEMP/glm-quality-evidence/quality/pairs" \
+            --output "$RUNNER_TEMP/glm-quality-evidence/report"
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'glm-quality-evidence'
+          p=root/'report/report.json';r=json.loads(p.read_text())
+          r['quality_evaluation_wave']={'method':'uniform postrun GLM SWE-QA wave over all100 planned positions',
+              'source_native_run_id':39414480210,'initial_judgements_preserved_separately':True,
+              'amendment_sha256':hashlib.sha256((root/'amendment-v1.json').read_bytes()).hexdigest(),
+              'native_agent_executions_added':0,'concurrency':3,'attempts_per_available_answer':3}
+          p.write_text(json.dumps(r,ensure_ascii=False,indent=2)+'\n')
+          h=root/'report/report.html';body=h.read_text()
+          body=body.replace('<h1>', '<p><strong>质量采用原始100次agent测试全部结束后的统一评分；原始并发评分及限流缺失保留在源工作流。两组统计使用同一批统一评分，没有增加agent执行。</strong></p><h1>',1)
+          h.write_text(body)
+          PY
+      - name: Keep unresolved grading visibly incomplete
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ['RUNNER_TEMP'])/'glm-quality-evidence/quality/summary.json').read_text())
+          assert d['planned']==100 and d['scored']+d['judge_failed']+d['unavailable_no_answer']==100
+          assert d['native_agent_executions_added']==0 and d['judge_failed']==0
+          PY
+      - name: Scan retained quality evidence
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GLM_API_KEY --root "$RUNNER_TEMP/glm-quality-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zvec-qa-glm-postrun-quality-${{ github.run_id }}
+          path: ${{ runner.temp }}/glm-quality-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
