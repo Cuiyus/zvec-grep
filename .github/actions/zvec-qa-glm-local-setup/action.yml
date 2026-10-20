@@ -1,0 +1,31 @@
+name: Prepare pinned main OpenCode GLM local QA
+description: Export the exact main harness and install its locked Python environment.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Export the pinned main benchmark
+      shell: bash
+      run: |
+        set -euo pipefail
+        revision=ae1ac57d489542508e016bba5d868bc38c3c095a
+        git init "$RUNNER_TEMP/glm-main-git"
+        git -C "$RUNNER_TEMP/glm-main-git" -c gc.auto=0 -c maintenance.auto=false fetch --depth=1 https://github.com/zvec-ai/zvec-grep.git "$revision"
+        test "$(git -C "$RUNNER_TEMP/glm-main-git" rev-parse FETCH_HEAD)" = "$revision"
+        mkdir -p "$RUNNER_TEMP/glm-main"
+        git -C "$RUNNER_TEMP/glm-main-git" archive "$revision" benchmarks/swe-qa-bench benchmarks/shared/rust-package-cache.mjs | tar -x -C "$RUNNER_TEMP/glm-main"
+        main="$RUNNER_TEMP/glm-main/benchmarks/swe-qa-bench"
+        python -m pip install --disable-pip-version-check uv==0.9.17
+        uv sync --project "$main" --frozen
+        cat >> "$GITHUB_ENV" <<EOF
+        GLM_QA_MAIN_ROOT=$main
+        GLM_QA_PREPARED=$RUNNER_TEMP/glm-prepared
+        GLM_QA_CANDIDATE=$RUNNER_TEMP/glm-prepared/zg-install.tgz
+        GLM_QA_PLAN=$GITHUB_WORKSPACE/benchmarks/zvec-qa-glm-local/plan-v1.json
+        PYTHONPATH=$GITHUB_WORKSPACE/benchmarks/zvec-qa-glm-local:$GITHUB_WORKSPACE/benchmarks/opencode-qa-pilot:$GITHUB_WORKSPACE/benchmarks/native-claude-qa-pilot:$main
+        EOF

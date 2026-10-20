@@ -1,0 +1,215 @@
+name: Zvec QA OpenCode GLM local v1
+run-name: Zvec QA five / OpenCode GLM-5.2 local / ${{ inputs.execute && '100 planned live trials' || 'provider-free preflight' }}
+on:
+  push:
+    branches: [dev/zvec-qa-glm52-local]
+    paths:
+      - '.github/workflows/zvec-qa-glm-local-v1.yml'
+      - '.github/actions/zvec-qa-glm-local-setup/action.yml'
+      - 'benchmarks/zvec-qa-glm-local/**'
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: Execute the frozen 50 pairs once after provider-free preflight
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: zvec-qa-glm-local-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+env:
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+jobs:
+  preflight:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/zvec-qa-glm-local-setup
+      - name: Verify current main admission and preserve its identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/glm-preflight"
+          gh api repos/zvec-ai/zvec-grep/commits/main > "$RUNNER_TEMP/glm-preflight/main-at-admission.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          item=json.loads((Path(os.environ['RUNNER_TEMP'])/'glm-preflight/main-at-admission.json').read_text())
+          assert item['sha']=='ae1ac57d489542508e016bba5d868bc38c3c095a'
+          PY
+      - name: Fetch the four accepted source commits once
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/glm-zvec-git"
+          git -C "$RUNNER_TEMP/glm-zvec-git" -c gc.auto=0 -c maintenance.auto=false fetch --depth=1 https://github.com/alibaba/zvec.git \
+            ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d e906168cc19378358d8fa1c1559f48e4b920aa37 \
+            68078e55e7ae9d705b8829b5d416e022060bebf7 1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/cohort.py prepare \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --zvec-repo "$RUNNER_TEMP/glm-zvec-git"
+      - name: Read the existing exact-main fork-built Rust artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: Cuiyus/zvec-grep
+          run-id: 39388715134
+          name: benchmark-current-rust-linux-x64-gnu
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/glm-rust-build
+      - name: Recreate and verify the unchanged Rust install payload
+        run: |
+          set -euo pipefail
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/rust_candidate_v1.py derive \
+            --source "$RUNNER_TEMP/glm-rust-build/zvec-zvec-grep-linux-x64-gnu-0.0.1.tgz" \
+            --source-pins benchmarks/native-claude-qa-pilot/provenance/current-rust-ae1ac57-v1/source-pins.json \
+            --source-pins-sha256 4d85eda28a5fb9fd30ddf9cad40f1e9897a03c8a6561b1a8f1c12ff0edafa3fd \
+            --output "$GLM_QA_CANDIDATE" --derivation "$RUNNER_TEMP/glm-preflight/package-derivation.json" \
+            --candidate-manifest "$RUNNER_TEMP/glm-preflight/candidate-manifest.json"
+      - name: Run frozen-boundary and request tests without provider credentials
+        run: |
+          set -euo pipefail
+          npm install --global opencode-ai@1.18.4
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/zvec-qa-glm-local -p 'test_*.py' -v
+          OPENCODE_BENCHMARK_TEST_BINARY=opencode "$GLM_QA_MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s "$GLM_QA_MAIN_ROOT/tests" -p 'test_opencode.py' -v
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s "$GLM_QA_MAIN_ROOT/tests" -p 'test_opencode_usage.py' -v
+      - name: Verify the real native Linux GLM transport and local Potion MCP pair
+        run: |
+          set -euo pipefail
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/offline.py \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --plan "$GLM_QA_PLAN" \
+            --candidate "$GLM_QA_CANDIDATE" --output "$RUNNER_TEMP/glm-preflight/native"
+      - name: Build the frozen 50-pair matrix
+        id: matrix
+        run: |
+          set -euo pipefail
+          matrix=$("$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/cohort.py matrix --plan "$GLM_QA_PLAN")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          tar -czf "$RUNNER_TEMP/glm-preflight/accepted-five-inputs.tgz" -C "$GLM_QA_PREPARED" .
+          cp "$GLM_QA_PLAN" "$RUNNER_TEMP/glm-preflight/plan-v1.json"
+      - name: Scan preflight evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/glm-preflight"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zvec-qa-glm-local-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/glm-preflight/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+  pair:
+    needs: preflight
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/zvec-qa-glm-local-setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: zvec-qa-glm-local-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/glm-preflight
+      - name: Restore and validate the preflight's accepted input bytes
+        run: |
+          set -euo pipefail
+          mkdir -p "$GLM_QA_PREPARED"
+          tar -xzf "$RUNNER_TEMP/glm-preflight/accepted-five-inputs.tgz" -C "$GLM_QA_PREPARED"
+          cmp "$GLM_QA_PLAN" "$RUNNER_TEMP/glm-preflight/plan-v1.json"
+          mkdir -p "$RUNNER_TEMP/glm-live"
+      - name: Execute only this original planned pair once
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          PAIR_KEY: ${{ matrix.key }}
+        run: |
+          set -euo pipefail
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/cohort.py run \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --plan "$GLM_QA_PLAN" \
+            --candidate "$GLM_QA_CANDIDATE" --pair "$PAIR_KEY" --output "$RUNNER_TEMP/glm-live/output"
+      - name: Collect complete native source and session-tree evidence
+        if: always()
+        env:
+          PAIR_KEY: ${{ matrix.key }}
+        run: |
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/cohort.py collect \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --plan "$GLM_QA_PLAN" \
+            --candidate "$GLM_QA_CANDIDATE" --pair "$PAIR_KEY" --output "$RUNNER_TEMP/glm-live/output"
+      - name: Score retained complete answers with the unchanged main GLM self-judge
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-local/judging.py \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --plan "$GLM_QA_PLAN" \
+            --candidate "$GLM_QA_CANDIDATE" --output "$RUNNER_TEMP/glm-live/output"
+      - name: Keep a failed or incomplete pair visibly failed
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'glm-live/output'
+          c=json.loads((root/'collection.json').read_text());j=json.loads((root/'judgements.json').read_text())
+          assert c['all_valid'] and all(r['status']=='scored' for r in j['profiles'])
+          PY
+      - name: Scan the exact retained live evidence
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GLM_API_KEY --root "$RUNNER_TEMP/glm-live"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zvec-qa-glm-local-pair-${{ matrix.key }}
+          path: ${{ runner.temp }}/glm-live/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+  aggregate:
+    needs: [preflight, pair]
+    if: always() && github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute && needs.preflight.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zvec-qa-glm-local-pair-*
+          path: ${{ runner.temp }}/glm-pairs
+      - name: Emit raw and filtered groups without dropping missing planned rows
+        env:
+          PYTHONPATH: ${{ github.workspace }}/benchmarks/zvec-qa-glm-local:${{ github.workspace }}/benchmarks/opencode-qa-pilot:${{ github.workspace }}/benchmarks/native-claude-qa-pilot
+        run: |
+          python3 benchmarks/zvec-qa-glm-local/results.py \
+            --plan benchmarks/zvec-qa-glm-local/plan-v1.json --raw-root "$RUNNER_TEMP/glm-pairs" \
+            --output "$RUNNER_TEMP/glm-report"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zvec-qa-glm-local-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/glm-report/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
