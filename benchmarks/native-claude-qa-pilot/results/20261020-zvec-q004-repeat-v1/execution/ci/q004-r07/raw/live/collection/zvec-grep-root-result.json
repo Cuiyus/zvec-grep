@@ -1,0 +1,50 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 541216,
+  "duration_ms": 541594,
+  "fast_mode_state": "off",
+  "is_error": false,
+  "modelUsage": {
+    "qwen3.8-max": {
+      "cacheCreationInputTokens": 39303,
+      "cacheReadInputTokens": 863824,
+      "contextWindow": 200000,
+      "costUSD": 1.1160957499999997,
+      "inputTokens": 138,
+      "maxOutputTokens": 32000,
+      "outputTokens": 17514,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 36,
+  "permission_denials": [],
+  "result": "## Setup: what `zvec.init(optimize_threads=4)` establishes\n\n`init()` maps `optimize_threads` into the config dict (`python/zvec/zvec.py:162-163`, applied at `:173`), the binding validates it positive and stores it (`src/binding/python/model/common/python_config.cc:154-157`), and `GlobalConfig::Instance().initialize(data)` (`:193`) in turn calls `GlobalResource::Instance().initialize()` (`src/db/common/config.cc:140`), which creates the global optimize pool **once** (`std::call_once`) with `optimize_thread_count` workers: `src/db/common/global_resource.cc:21-33` (pool at 27-29; accessor `global_resource.h:31-34`). So the global pool has exactly 4 workers. `OptimizeOption.concurrency` defaults to 0 \u2014 `src/include/zvec/db/options.h:57` (`// default use config.optimize_thread_pool`), bound at `src/binding/python/model/param/python_param.cc:2192`.\n\n`CollectionImpl::optimize` forwards `options.concurrency_` into `build_compact_task` (`src/db/collection.cc:952, 988-990`); `CompactTask` carries `concurrency_` (`src/db/index/segment/segment_helper.h:54-79`) through `ExecuteCompactTask` (`segment_helper.cc:98, 150`) into `MergeWithOptionalReuse` (`segment_helper.cc:799`; call sites 668-671, 695-698, 743-744).\n\n## 1. Pool and worker-count selection per invocation\n\nThe selection is identical in both merge entry points \u2014 `SegmentHelper::MergeWithOptionalReuse` (`src/db/index/segment/segment_helper.cc:804-811`) and `SegmentImpl::merge_vector_indexer` (`src/db/index/segment/segment.cc:1560-1567`):\n\n- **A (`concurrency=0`)**: `merge_options.pool = GlobalResource::Instance().optimize_thread_pool()` (the 4-worker global pool) and `write_concurrency = pool->count()` = 4 (`segment_helper.cc:805-808`).\n- **B (`concurrency=2`)**: the `pool` field stays `nullptr` (`vector_column_params.h:72-75`) and `write_concurrency = 2` (`segment_helper.cc:809-811`). **B does not touch, resize, or reconfigure the global pool** \u2014 it simply bypasses it.\n\nThe options reach the core via `VectorColumnIndexer::merge` \u2192 `index->merge(..., {write_concurrency, pool})` (`src/db/index/column/vector_column/vector_column_indexer.cc:103-131`, esp. 130). In `core_interface::Index::merge` (`src/core/interface/index.cc:1416-1446`):\n\n- **A**: `options.pool != nullptr` \u2192 `reducer->set_thread_pool(options.pool)` (1437; raw-pointer store, `src/include/zvec/core/framework/index_reducer.h:173`) and `effective_write_concurrency = min(4, pool->count())` = 4 (1438-1439). The reducer **borrows the global 4-worker pool**.\n- **B**: `options.pool == nullptr` \u2192 a **local** `ailego::ThreadPool(2, false)` is created, kept alive to cover `reduce()` (1433-1434, 1441-1445), handed to the reducer, and destroyed when `merge` returns. The merge runs on a private 2-worker pool; the global pool remains 4 workers and unused by this call.\n\n## 2. Handoff to the builder's train/build and conversion-training\n\nIn `MixedStreamerReducer::reduce` the pool is mandatory (`mixed_streamer_reducer.cc:211-214`) and a builder-backed target routes to `reduce_with_builder` (218-223, def at 672) \u2192 `index_build` (`src/core/mixed_reducer/mixed_streamer_reducer.cc:742-776`):\n\n- **743-744**: one `BorrowedSingleQueueIndexThreads(*thread_pool_)` adapter is created around whichever pool was selected (global-4 for A, local-2 for B). It borrows \u2014 never owns \u2014 the pool, and `count()` delegates to `pool_.count()` (`src/include/zvec/core/framework/index_threads.h:174-227`, count at 184-187).\n- **745-747**: the optional conversion-training call `IndexConverter::TrainAndTransform(target_builder_converter_, target_holder, threads)` \u2192 `converter->train(two_pass_holder, std::move(threads))` (`src/core/framework/index_converter.cc:27-36`).\n- **760**: `target_builder_->train(threads, target_holder)`.\n- **768**: `target_builder_->build(std::move(threads), target_holder)`.\n\nSo the *same* borrowed-pool adapter is passed, in order, to conversion-train \u2192 `train` \u2192 `build`. Important caveat: this proves the pool is **offered** through the `IndexThreads` interface, not that every builder consumes it for all stages \u2014 implementations may use it only as a count bound or create their own pools (DiskANN below is exactly such a case).\n\n## 3. DiskANN PQ training: the outer chunk pool is *not* the caller's pool\n\n`DiskAnnBuilder::train` (`src/core/algorithm/diskann/diskann_builder.cc:633-680`) receives the borrowed adapter (self-provisioning one only if null, 657-659) and passes it to `train_quantized_data` (665). There (378-427):\n\n```\n// The quantizer creates its own pool, so bound it by the caller's pool.   (:391)\npq_thread_count = max(1, min(build_thread_count_, threads->count()))       (:392-393)\nqp.set(\"thread_count\", pq_thread_count)                                    (:394)\n```\n\n`PqInt8Quantizer::train_all_chunks` then constructs a **fresh, owned** `SingleQueueIndexThreads(thread_count_, false)` for each invocation (`src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-323`; param read at `:142`) and dispatches PQ chunks round-robin across `pool_count = threads->count()` workers (`:326-345`). It is called twice per train (via the OPQ lambda at `:298` and directly at `:305`), each time with a new transient pool.\n\nSo: **not reused** \u2014 the caller's pool is never handed to the chunk dispatch; it only supplies an upper bound. Worker count = `max(1, min(build_thread_count_, caller_pool_count))`, where `build_thread_count_` comes from `PARAM_DISKANN_BUILDER_THREAD_COUNT`, defaulting to `hardware_concurrency` when 0 (`diskann_builder.cc:51-55`). Under the stated assumptions (hw concurrency \u2265 4, builder setting untouched): **A \u2192 min(\u22654, 4) = 4 workers; B \u2192 min(\u22654, 2) = 2 workers**. (The `SingleQueueIndexThreads(size, \u2026)` 0\u2192hardware-concurrency fallback at `index_threads.h:113-116` is unreachable here because of the `max(1, \u2026)` clamp.) The later encode stage similarly derives its count from `threads->count()` (`diskann_builder.cc:452-453`, `generate_quantized_data` called at `:777`).\n\n## 4. What the settings do and do not establish\n\n**Established (worker-pool capacity):**\n- A: the merge runs on the global optimize pool with exactly **4 workers**, created once at init (`global_resource.cc:27-29`), with effective write concurrency `min(4, 4) = 4` (`index.cc:1438-1439`); downstream PQ training is bounded to \u2264 4.\n- B: the merge runs on a per-call **local 2-worker pool** (`index.cc:1441-1445`), destroyed at merge exit; PQ training bounded to \u2264 2; the global pool is unmodified.\n\n**Not established:**\n- **Total process thread count.** A separate global query pool also exists (`global_resource.cc:24-26`), DiskANN and the PQ quantizer spawn additional transient owned pools (`diskann_builder.cc:659, 716`; `pq_int8_quantizer.cc:323`), and Python/binding and other subsystem threads exist; nothing in these settings sums or bounds them.\n- **Actual CPU utilization.** Pool size is a capacity ceiling, not a usage guarantee: stages are partly sequential (materialization, serialize/dump), the single-queue adapters throttle submission (`index_threads.h`, `kMaxQueueSize`), chunk round-robin leaves workers idle when `num_chunk < pool_count`, workers may block or idle between tasks, and thread binding is off by default (`optimize_thread_binding=false`, `config.cc:43`), so OS scheduling decides real core usage.",
+  "session_id": "93a22edf-3351-46f1-8ffd-210b477cbd82",
+  "stop_reason": "end_turn",
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 27,
+  "total_cost_usd": 1.1160957499999997,
+  "ttft_ms": 6105,
+  "ttft_stream_ms": 2593,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 39303
+    },
+    "cache_creation_input_tokens": 39303,
+    "cache_read_input_tokens": 863824,
+    "inference_geo": "",
+    "input_tokens": 138,
+    "iterations": [],
+    "output_tokens": 17514,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "aeae0652-0cb1-4b45-8f4c-4497e574090e"
+}

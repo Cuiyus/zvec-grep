@@ -73,6 +73,21 @@ Seven integrity tests and four actual Harbor command previews passed locally.
 The fork Linux preflight must pass at the execution commit before the explicit
 20-trial dispatch. Push alone runs no solver.
 
+All ten confirmation jobs have now completed in
+[fork run 39380248003](https://github.com/Cuiyus/zvec-grep/actions/runs/39380248003).
+The [execution archive](results/20261020-zvec-q004-repeat-v1/execution/retained-evidence-manifest.json)
+preserves all original 20 answers, trajectories, API-bound retention receipts
+and independent execution reviews. All 730 original checks passed; the parent
+also rehashed 1,490 catalog reference occurrences. The
+[raw resource estimates](results/20261020-zvec-q004-repeat-v1/raw-resources/raw-resource-statistics.json)
+show 50.66% less complete input (paired 95% interval 39.92%–60.17%),
+24.42% less agent time (13.25%–33.93%), and 2.47% more cold full-slot time
+(reduction interval −15.88%–8.61%). Anonymous quality grading and source-scope
+semantic review are still in progress. One conditional outside-directory
+fallback remains unresolvable from its trace and is preserved as strict-scope
+unknown; these resource observations establish no favorable valid benchmark.
+No score trimming is computed before complete quality judgments are available.
+
 
 The separately reviewed [q005 runtime/API case](../zvec-issue-qa/tasks/q005/instruction.md)
 now has a [native preparation package](results/20261020-q005-native-preparation-v1/README.md).
@@ -98,3 +113,13 @@ pooled with serial same-host timing results.
 The reusable install archive is retained once in preflight. Worker and joint
 uploads omit that duplicate static input while preserving its exact hash and
 derivation and every original experimental output, reducing result downloads.
+
+The latest frozen q005 revision passed all 22 Linux checks, two actual native
+profile command previews and 18 original-record collection comparisons in
+[preflight 39383111550](https://github.com/Cuiyus/zvec-grep/actions/runs/39383111550).
+After q004 execution completed, exactly one pair was dispatched in
+[run 39383511290](https://github.com/Cuiyus/zvec-grep/actions/runs/39383511290).
+Both original profile workers are running; no q005 result is claimed.
+The [admission and dispatch evidence](provenance/native-q005-v1/ci-admission-r2/retained-evidence-manifest.json)
+binds the execution commit, unchanged current upstream Rust tree, source and
+grading controls, full preflight byte checks, and the single dispatch intent.
