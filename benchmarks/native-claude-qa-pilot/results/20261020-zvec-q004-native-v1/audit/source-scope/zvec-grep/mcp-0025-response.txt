@@ -1,0 +1,702 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (4):
+  Q1 [primary]: optimize_threads init global optimize worker pool OptimizeOption concurrency selection for vector index merge
+  Q2 [primary]: OptimizeOption concurrency worker pool selection merge vector index optimize
+  Q3 [primary]: optimize_threads global worker pool init configuration python bindings
+  Q4 [primary]: target builder train build worker pool passed conversion training merge
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector python/zvec/model/param/__init__.pyi:1255-1286
+groups: Q1#1 (fts+vector), Q2#1 (fts+vector)
+source:
+1255	class OptimizeOption:
+1256	    """
+1257	
+1258	    Options for optimizing a collection (e.g., merging segments).
+1259	
+1260	    Attributes:
+1261	        concurrency (int): Number of threads to use during optimization.
+1262	            If 0, the system will choose an optimal value automatically.
+1263	            Default is 0.
+1264	
+...
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/index/segment/segment.cc:1549-1575
+groups: Q1#3 (fts+vector), Q2#2 (fts+vector)
+source:
+1549	Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(
+1550	    const std::string &index_file_path, const FieldSchema &field,
+1551	    const std::vector<VectorColumnIndexer::Ptr> &source_indexers,
+1552	    int concurrency) {
+1553	  VectorColumnIndexer::Ptr vector_indexer =
+1554	      std::make_shared<VectorColumnIndexer>(index_file_path, field);
+1555	
+1556	  vector_column_params::ReadOptions options{options_.enable_mmap_, true};
+1557	
+1558	  auto s = vector_indexer->open(options);
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/ailego/parallel/thread_pool.cc:93-122
+groups: Q3#1 (fts+vector), Q4#14 (fts+vector)
+source:
+93	ThreadPool::ThreadPool(uint32_t size, bool binding) {
+94	  const uint32_t max_size = SafeWorkerCount();
+95	  const uint32_t safe_size = std::min(std::max(size, 1u), max_size);
+96	  if (safe_size != size) {
+97	    LOG_WARN(
+98	        "ThreadPool worker count[%u] is outside supported range[1, %u], "
+99	        "clamped to %u",
+100	        size, max_size, safe_size);
+101	  }
+102	
+...
+
+#4 [group_coverage: Q4] matchedBy=fts+vector src/core/mixed_reducer/mixed_streamer_reducer.cc:742-777
+groups: Q4#1 (fts+vector)
+source:
+742	int MixedStreamerReducer::index_build(IndexHolder::Pointer target_holder) {
+743	  auto threads =
+744	      std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_);
+745	  if (target_builder_converter_) {
+746	    int ret = core::IndexConverter::TrainAndTransform(target_builder_converter_,
+747	                                                      target_holder, threads);
+748	    if (ret != 0) {
+749	      LOG_ERROR("Failed to convert target holder, ret=%d", ret);
+750	      return merged_holder_ && merged_holder_->status() != 0
+751	                 ? merged_holder_->status()
+...
+
+#5 [global_fill] matchedBy=fts+vector src/core/interface/index.cc:1416-1526
+groups: Q1#8 (fts+vector), Q2#5 (fts+vector), Q4#4 (fts+vector)
+source:
+1416	int Index::merge(const std::vector<Index::Pointer> &indexes,
+1417	                 const IndexFilter &filter, const MergeOptions &options) {
+1418	  if (indexes.empty()) {
+1419	    return core::IndexError_Success;
+1420	  }
+1421	  // ivf need builder
+1422	  auto reducer =
+1423	      core::IndexFactory::CreateStreamerReducer("MixedStreamerReducer");
+1424	  if (reducer == nullptr) {
+1425	    LOG_ERROR("Failed to create reducer");
+...
+
+#6 [global_fill] matchedBy=fts+vector src/include/zvec/core/framework/index_runner.h:682-684
+groups: Q1#2 (fts+vector), Q2#12 (fts+vector), Q3#5 (fts+vector)
+source:
+682	int optimize(IndexThreads::Pointer threads) {
+683	    return this->optimize_impl(threads);
+684	  }
+
+#7 matchedBy=fts+vector src/db/common/global_resource.h:31-34
+groups: Q1#6 (fts+vector), Q2#13 (fts+vector), Q3#2 (fts+vector)
+source:
+31	ailego::ThreadPool *optimize_thread_pool() {
+32	    initialize();
+33	    return optimize_thread_pool_.get();
+34	  }
+
+#8 matchedBy=fts+vector src/db/index/segment/segment_helper.cc:799-858
+groups: Q1#4 (fts+vector), Q2#3 (fts+vector)
+source:
+799	Status SegmentHelper::MergeWithOptionalReuse(
+800	    const std::string &output_index_path, const FieldSchema &index_field,
+801	    std::vector<VectorColumnIndexer::Ptr> source_indexers,
+802	    const IndexFilter::Ptr &filter, int concurrency,
+803	    VectorColumnIndexer::Ptr *merged_indexer) {
+804	  vector_column_params::MergeOptions merge_options;
+805	  if (concurrency == 0) {
+806	    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+807	    merge_options.write_concurrency =
+808	        static_cast<uint32_t>(merge_options.pool->count());
+...
+
+#9 matchedBy=fts+vector src/include/zvec/db/options.h:56-58
+groups: Q1#5 (fts+vector), Q2#4 (fts+vector)
+source:
+56	struct CreateIndexOptions {
+57	  int concurrency_{0};  // default use config.optimize_thread_pool
+58	}
+
+#10 matchedBy=fts+vector python/zvec/model/collection.py:231-238
+groups: Q1#7 (fts+vector), Q2#6 (fts+vector)
+source:
+231	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+232	        """Optimize the collection (e.g., merge segments, rebuild index).
+233	
+234	        Args:
+235	            option (Optional[OptimizeOption], optional): Optimization options.
+236	                Defaults to ``OptimizeOption()``.
+237	        """
+238	        self._obj.Optimize(option)
+
+#11 matchedBy=fts+vector src/db/common/global_resource.cc:21-33
+groups: Q1#12 (fts+vector), Q3#3 (fts+vector)
+source:
+21	void GlobalResource::initialize() {
+22	  static std::once_flag flag;
+23	  std::call_once(flag, [this]() {
+24	    this->query_thread_pool_.reset(new ailego::ThreadPool(
+25	        GlobalConfig::Instance().query_thread_count(),
+26	        GlobalConfig::Instance().query_thread_binding()));
+27	    this->optimize_thread_pool_.reset(new ailego::ThreadPool(
+28	        GlobalConfig::Instance().optimize_thread_count(),
+29	        GlobalConfig::Instance().optimize_thread_binding()));
+30	    zvec::ailego::MemoryLimitPool::get_instance().init(
+...
+
+#12 matchedBy=fts+vector src/db/index/column/vector_column/vector_column_indexer.cc:103-134
+groups: Q1#11 (fts+vector), Q2#7 (fts+vector)
+source:
+103	Status VectorColumnIndexer::merge(
+104	    const std::vector<VectorColumnIndexer::Ptr> &indexers,
+105	    const IndexFilter::Ptr &filter,
+106	    const vector_column_params::MergeOptions &merge_options) {
+107	  if (index == nullptr) {
+108	    return Status::InvalidArgument("Index not opened");
+109	  }
+110	
+111	  if (indexers.empty()) {
+112	    return Status::OK();
+...
+
+#13 matchedBy=fts+vector src/core/interface/indexes/ivf_index.cc:452-479
+groups: Q2#19 (fts+vector), Q4#2 (fts+vector)
+source:
+452	int IVFIndex::merge(const std::vector<Index::Pointer> &indexes,
+453	                    const IndexFilter &filter, const MergeOptions &options) {
+454	  if (indexes.empty()) {
+455	    return 0;
+456	  }
+457	  if (is_trained_) {
+458	    // Dumping to a loaded index would overwrite its file before the existing
+459	    // streamer rejects open(). Rebuilding requires a separate target index.
+460	    LOG_ERROR("Cannot merge into a trained IVF index; use a new target");
+461	    return core::IndexError_Unsupported;
+...
+
+#14 matchedBy=fts+vector src/include/zvec/c_api.h:3538-3539
+groups: Q1#9 (fts+vector), Q2#11 (fts+vector)
+source:
+3538	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3539	zvec_collection_optimize(zvec_collection_t *collection);
+
+#15 matchedBy=fts+vector src/db/index/segment/segment_helper.h:288-292
+groups: Q1#15 (fts+vector), Q2#8 (fts+vector)
+source:
+288	static Status MergeWithOptionalReuse(
+289	      const std::string &output_index_path, const FieldSchema &index_field,
+290	      std::vector<VectorColumnIndexer::Ptr> source_indexers,
+291	      const IndexFilter::Ptr &filter, int concurrency,
+292	      VectorColumnIndexer::Ptr *merged_indexer);
+
+#16 matchedBy=fts+vector src/db/index/column/vector_column/vector_column_params.h:72-75
+groups: Q1#14 (fts+vector), Q2#9 (fts+vector)
+source:
+72	struct MergeOptions {
+73	  uint32_t write_concurrency{1};
+74	  ailego::ThreadPool *pool{nullptr};
+75	}
+
+#17 matchedBy=fts+vector python/zvec/__init__.pyi:163
+groups: Q1#13 (fts+vector), Q2#10 (fts+vector)
+source:
+163	def Optimize(self, arg0: param.OptimizeOption) -> None: ...
+
+#18 matchedBy=fts+vector python/zvec/model/param/__init__.pyi:1272-1279
+groups: Q1#17 (fts+vector), Q3#8 (fts+vector)
+source:
+1272	def __init__(self, concurrency: typing.SupportsInt = 0) -> None:
+1273	        """
+1274	        Constructs an OptimizeOption instance.
+1275	
+1276	        Args:
+1277	            concurrency (int, optional): Number of concurrent threads.
+1278	                0 means auto-detect. Defaults to 0.
+1279	        """
+
+#19 matchedBy=fts+vector src/binding/c/c_api.cc:6801-6813
+groups: Q1#10 (fts+vector), Q2#15 (fts+vector)
+source:
+6801	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6802	  if (!collection) {
+6803	    set_last_error("Invalid argument: collection cannot be null");
+6804	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6805	  }
+6806	
+6807	  ZVEC_TRY_RETURN_ERROR(
+6808	      "Exception occurred",
+6809	      auto coll_ptr =
+6810	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#20 matchedBy=fts+vector python/tests/detail/test_db_config.py:181-183
+groups: Q1#18 (fts+vector), Q3#9 (fts+vector)
+source:
+181	@run_in_subprocess
+182	    def test_optimize_threads(self):
+183	        zvec.init(optimize_threads=1)
+
+#21 matchedBy=fts+vector src/db/index/segment/segment.cc:309-312
+groups: Q1#20 (fts+vector), Q2#17 (fts+vector)
+source:
+309	Result<VectorColumnIndexer::Ptr> merge_vector_indexer(
+310	      const std::string &index_file_path, const FieldSchema &field,
+311	      const std::vector<VectorColumnIndexer::Ptr> &source_indexers,
+312	      int concurrency);
+
+#22 matchedBy=fts+vector src/include/zvec/core/framework/index_builder.h:51-59
+groups: Q4#3 (fts+vector)
+source:
+51	static int TrainAndBuild(const IndexBuilder::Pointer &builder,
+52	                           IndexHolder::Pointer holder) {
+53	    auto two_pass_holder = IndexHelper::MakeTwoPassHolder(std::move(holder));
+54	    int ret = builder->train(two_pass_holder);
+55	    if (ret == 0) {
+56	      ret = builder->build(std::move(two_pass_holder));
+57	    }
+58	    return ret;
+59	  }
+
+#23 matchedBy=fts+vector src/include/zvec/c_api.h:715-716
+groups: Q3#4 (fts+vector)
+source:
+715	ZVEC_EXPORT uint32_t ZVEC_CALL
+716	zvec_config_data_get_optimize_thread_count(const zvec_config_data_t *config);
+
+#24 matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder.cc:616-631
+groups: Q4#5 (fts+vector)
+source:
+616	int DiskAnnBuilder::train(const IndexTrainer::Pointer & /*trainer*/) {
+617	  if (state_ != BUILD_STATE_INITED) {
+618	    LOG_ERROR("Init the builder before DiskAnnBuilder::train");
+619	    return IndexError_NoReady;
+620	  }
+621	
+622	  LOG_INFO("Begin DiskAnnBuilder::train by trainer");
+623	
+624	  stats_.set_trained_count(0UL);
+625	  stats_.set_trained_costtime(0UL);
+...
+
+#25 matchedBy=fts+vector src/include/zvec/ailego/parallel/thread_pool.h:32-408
+groups: Q3#6 (fts+vector)
+source:
+32	class ZVEC_AILEGO_API ThreadPool {
+33	 public:
+34	  /*! Thread Pool Task Group
+35	   */
+36	  class TaskGroup : public std::enable_shared_from_this<TaskGroup> {
+37	   public:
+38	    using Pointer = std::shared_ptr<TaskGroup>;
+39	
+40	    //! Constructor
+41	    TaskGroup(ThreadPool *pool) : pool_(pool) {}
+...
+
+#26 matchedBy=fts+vector src/core/algorithm/ivf/ivf_builder.cc:350-422
+groups: Q4#6 (fts+vector)
+source:
+350	int IVFBuilder::train(const IndexTrainer::Pointer &trainer) {
+351	  LOG_DEBUG("Begin IVFBuilder::train by trainer");
+352	  ailego::ElapsedTime timer;
+353	
+354	  if (state_ != INITED) {
+355	    LOG_ERROR("IVFBuilder train failed, wrong state=%d", state_);
+356	    return IndexError_Runtime;
+357	  }
+358	
+359	  if (!trainer) {
+...
+
+#27 matchedBy=fts+vector src/include/zvec/ailego/parallel/thread_queue.h:32-290
+groups: Q3#7 (fts+vector)
+source:
+32	class ThreadQueue {
+33	 public:
+34	  /*! Thread Worker (One Thread One Worker)
+35	   */
+36	  class ThreadWorker {
+37	   public:
+38	    //! Constructor
+39	    ThreadWorker(ThreadQueue *owner) : owner_(owner) {}
+40	
+41	    //! Destructor
+...
+
+#28 matchedBy=fts+vector src/core/interface/indexes/diskann_index.cc:224-246
+groups: Q4#7 (fts+vector)
+source:
+224	int DiskAnnIndex::train() {
+225	  if (is_trained_) return 0;
+226	  if (build_stage_ == BuildStage::kCollecting) {
+227	    int ret = reset_builder();
+228	    if (ret != 0) return ret;
+229	    ret = generate_holder();
+230	    if (ret != 0) return ret;
+231	    ret = builder_->train(holder_);
+232	    if (ret != 0) return ret;
+233	    build_stage_ = BuildStage::kTrained;
+...
+
+#29 matchedBy=fts+vector tools/core/local_builder_original.cc:984-1396
+groups: Q4#8 (fts+vector)
+source:
+984	int do_build(YAML::Node &config_root, YAML::Node &config_common) {
+985	  string build_file = config_common["BuildFile"].as<string>();
+986	  VecsIndexHolder::Pointer build_holder(new VecsIndexHolder);
+987	  if (!build_holder->load(build_file)) {
+988	    cerr << "Load input error: " << build_file << endl;
+989	    return -1;
+990	  }
+991	  IndexMeta meta;
+992	  meta = build_holder->index_meta();
+993	
+...
+
+#30 matchedBy=fts+vector tests/core/mixed_reducer/merged_provider_index_holder_test.cc:806-827
+groups: Q4#9 (fts+vector)
+source:
+806	TEST(MergedProviderIndexHolderTest, ConverterUsesReducerThreadPool) {
+807	  auto source = MakeStreamer({{0, 0.0F}, {1, 1.0F}});
+808	  ailego::ThreadPool pool(2, false);
+809	  auto converter =
+810	      std::make_shared<ThreadRecordingConverter>(source->meta(), &pool);
+811	  auto builder = std::make_shared<RetainingTestBuilder>("IVFBuilder", &pool);
+812	  MixedStreamerReducer reducer;
+813	  ailego::Params params;
+814	  params.set(PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS, 1);
+815	  ASSERT_EQ(0, reducer.init(params));
+...
+
+#31 matchedBy=fts+vector tools/core/recall.cc:32-54
+groups: Q3#10 (fts+vector)
+source:
+32	Recall(size_t threads, const string &output, size_t batch_count,
+33	         FilterMode filter_mode)
+34	      : threads_(threads),
+35	        output_(output),
+36	        batch_count_(batch_count),
+37	        filter_mode_{filter_mode} {
+38	    if (threads_ == 0) {
+39	      pool_ = make_shared<ThreadPool>();
+40	      threads_ = pool_->count();
+41	      cout << "Using cpu count as thread pool count[" << threads_ << "]"
+...
+
+#32 matchedBy=fts+vector src/core/algorithm/flat_sparse/flat_sparse_builder.cc:78-93
+groups: Q4#10 (fts+vector)
+source:
+78	int FlatSparseBuilder::train(const IndexTrainer::Pointer & /*trainer*/) {
+79	  if (state_ != BUILD_STATE_INITED) {
+80	    LOG_ERROR("Init the builder before FlatSparseBuilder::train");
+81	    return IndexError_NoReady;
+82	  }
+83	
+84	  LOG_INFO("Begin FlatSparseBuilder::train by trainer");
+85	
+86	  stats_.set_trained_count(0UL);
+87	  stats_.set_trained_costtime(0UL);
+...
+
+#33 matchedBy=fts+vector tools/core/bench.cc:30-50
+groups: Q3#11 (fts+vector)
+source:
+30	Bench(size_t threads, size_t bench_secs, size_t batch_count,
+31	        RetrievalMode &retrieval_mode, FilterMode filter_mode)
+32	      : threads_(threads),
+33	        bench_secs_(bench_secs),
+34	        batch_count_(batch_count),
+35	        retrieval_mode_{retrieval_mode},
+36	        filter_mode_{filter_mode} {
+37	    if (threads_ == 0) {
+38	      pool_ = make_shared<ThreadPool>();
+39	      threads_ = pool_->count();
+...
+
+#34 matchedBy=fts+vector tools/core/local_builder.cc:948-1142
+groups: Q4#11 (fts+vector)
+source:
+948	int do_build_sparse(YAML::Node &config_root, YAML::Node &config_common) {
+949	  string build_file = config_common["BuildFile"].as<string>();
+950	  VecsIndexSparseHolder::Pointer build_holder(new VecsIndexSparseHolder);
+951	  if (!build_holder->load(build_file)) {
+952	    LOG_ERROR("Load input error: %s", build_file.c_str());
+953	    return -1;
+954	  }
+955	  IndexMeta meta;
+956	  meta = build_holder->index_meta();
+957	
+...
+
+#35 matchedBy=fts+vector tools/core/recall_original.cc:73-95
+groups: Q3#12 (fts+vector)
+source:
+73	Recall(size_t threads, const string &output, size_t batch_count,
+74	         FilterMode filter_mode)
+75	      : threads_(threads),
+76	        output_(output),
+77	        batch_count_(batch_count),
+78	        filter_mode_{filter_mode} {
+79	    if (threads_ == 0) {
+80	      pool_ = make_shared<ThreadPool>();
+81	      threads_ = pool_->count();
+82	      cout << "Using cpu count as thread pool count[" << threads_ << "]"
+...
+
+#36 matchedBy=fts+vector src/include/zvec/core/framework/index_streamer.h:69
+groups: Q4#12 (fts+vector)
+source:
+69	virtual void merge_trained_meta(const IndexMeta & /*meta*/) {}
+
+#37 matchedBy=fts+vector tools/core/bench_original.cc:65-85
+groups: Q3#13 (fts+vector)
+source:
+65	Bench(size_t threads, size_t bench_secs, size_t batch_count,
+66	        RetrievalMode &retrieval_mode, FilterMode filter_mode)
+67	      : threads_(threads),
+68	        bench_secs_(bench_secs),
+69	        batch_count_(batch_count),
+70	        retrieval_mode_{retrieval_mode},
+71	        filter_mode_{filter_mode} {
+72	    if (threads_ == 0) {
+73	      pool_ = make_shared<ThreadPool>();
+74	      threads_ = pool_->count();
+...
+
+#38 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_builder.cc:197-212
+groups: Q4#13 (fts+vector)
+source:
+197	int HnswSparseBuilder::train(const IndexTrainer::Pointer & /*trainer*/) {
+198	  if (state_ != BUILD_STATE_INITED) {
+199	    LOG_ERROR("Init the builder before HnswSparseBuilder::train");
+200	    return IndexError_NoReady;
+201	  }
+202	
+203	  LOG_INFO("Begin HnswSparseBuilder::train by trainer");
+204	
+205	  stats_.set_trained_count(0UL);
+206	  stats_.set_trained_costtime(0UL);
+...
+
+#39 matchedBy=fts+vector src/include/zvec/core/interface/index_param.h:54-57
+groups: Q2#14 (fts+vector)
+source:
+54	struct MergeOptions {
+55	  uint32_t write_concurrency = 1;
+56	  ailego::ThreadPool *pool = nullptr;
+57	}
+
+#40 matchedBy=fts+vector python/zvec/zvec.py:29-173
+groups: Q3#14 (fts+vector)
+source:
+29	def init(
+30	    *,
+31	    log_type: Optional[LogType] = None,
+32	    log_level: Optional[LogLevel] = None,
+33	    log_dir: Optional[str] = "./logs",
+34	    log_basename: Optional[str] = "zvec.log",
+35	    log_file_size: Optional[int] = 2048,
+36	    log_overdue_days: Optional[int] = 7,
+37	    query_threads: Optional[int] = None,
+38	    optimize_threads: Optional[int] = None,
+...
+
+#41 matchedBy=fts+vector src/db/common/global_resource.h:22-39
+groups: Q3#15 (fts+vector)
+source:
+22	class GlobalResource : public ailego::Singleton<GlobalResource> {
+23	 public:
+24	  void initialize();
+25	
+26	  ailego::ThreadPool *query_thread_pool() {
+27	    initialize();
+28	    return query_thread_pool_.get();
+29	  }
+30	
+31	  ailego::ThreadPool *optimize_thread_pool() {
+...
+
+#42 matchedBy=fts+vector src/turbo/quantizer/common/pq_quantizer/pq_opq.h:51-53
+groups: Q4#15 (fts+vector)
+source:
+51	void train(void *data, size_t num, const char *name,
+52	             const TrainCodebook &train_codebook,
+53	             const Reconstruct &reconstruct);
+
+#43 matchedBy=fts+vector src/db/collection.cc:111
+groups: Q1#16 (fts+vector)
+source:
+111	Status optimize(const OptimizeOptions &options) override;
+
+#44 matchedBy=fts+vector src/db/collection.cc:952-1124
+groups: Q2#16 (fts+vector)
+source:
+952	Status CollectionImpl::optimize(const OptimizeOptions &options) {
+953	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+954	
+955	  // Serialize against other maintenance operations for the whole optimize.
+956	  std::lock_guard maintenance_lock(maintenance_mtx_);
+957	
+958	  std::vector<Segment::Ptr> persist_segments;
+959	
+960	  // Phase 1: exclusively seal the current writing segment and snapshot
+961	  // the persisted segment set.
+...
+
+#45 matchedBy=fts+vector src/include/zvec/core/framework/index_threads.h:189-191
+groups: Q3#16 (fts+vector)
+source:
+189	void stop() override {
+190	    pool_.stop();
+191	  }
+
+#46 matchedBy=fts+vector src/turbo/quantizer/pq_int4_quantizer/pq_int4_quantizer.cc:324-361
+groups: Q4#16 (fts+vector)
+source:
+324	void PqInt4Quantizer::train_all_chunks(const void *data, size_t num,
+325	                                       size_t stride, uint32_t max_iters) {
+326	  // Create thread pool.
+327	  auto threads =
+328	      std::make_shared<SingleQueueIndexThreads>(thread_count_, false);
+329	  auto task_group = threads->make_group();
+330	
+331	  // Distribute chunks across threads.
+332	  std::atomic<size_t> finished{0};
+333	  size_t pool_count = threads->count();
+...
+
+#47 matchedBy=fts+vector src/ailego/algorithm/lloyd_cluster.h:147-149
+groups: Q3#17 (fts+vector)
+source:
+147	void init_centroids(ThreadPoolType &pool, const G &g = G()) {
+148	    g(this, pool);
+149	  }
+
+#48 matchedBy=fts+vector src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-357
+groups: Q4#17 (fts+vector)
+source:
+319	void PqInt8Quantizer::train_all_chunks(const void *data, size_t num,
+320	                                       size_t stride, uint32_t max_iters) {
+321	  // Create thread pool.
+322	  auto threads =
+323	      std::make_shared<SingleQueueIndexThreads>(thread_count_, false);
+324	  auto task_group = threads->make_group();
+325	
+326	  // Distribute chunks across threads, dispatched by data type.
+327	  std::atomic<size_t> finished{0};
+328	  size_t pool_count = threads->count();
+...
+
+#49 matchedBy=fts+vector src/core/interface/indexes/diskann_index.cc:361-374
+groups: Q2#18 (fts+vector)
+source:
+361	int DiskAnnIndex::merge(const std::vector<Index::Pointer> &indexes,
+362	                        const IndexFilter &filter,
+363	                        const MergeOptions &options) {
+364	  if (indexes.empty()) return 0;
+365	  if (is_trained_) return core::IndexError_Unsupported;
+366	  int ret = reset_builder();
+367	  if (ret != 0) return ret;
+368	  build_stage_ = BuildStage::kCollecting;
+369	  ret = Index::merge(indexes, filter, options);
+370	  if (ret != 0) return ret;
+...
+
+#50 matchedBy=fts+vector src/include/zvec/c_api.h:706-708
+groups: Q3#18 (fts+vector)
+source:
+706	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+707	zvec_config_data_set_optimize_thread_count(zvec_config_data_t *config,
+708	                                           uint32_t thread_count);
+
+#51 matchedBy=vector src/core/algorithm/ivf_rabitq/ivf_rabitq_builder.cc:384-481
+groups: Q4#18 (vector)
+source:
+384	int IvfRabitqBuilder::train(IndexThreads::Pointer threads,
+385	                            IndexHolder::Pointer holder) {
+386	  if (state_ != INITED) {
+387	    LOG_ERROR("IvfRabitqBuilder train failed, wrong state=%d",
+388	              static_cast<int>(state_));
+389	    return IndexError_Runtime;
+390	  }
+391	
+392	  ailego::ElapsedTime timer;
+393	
+...
+
+#52 matchedBy=fts+vector src/include/zvec/core/framework/index_threads.h:113-116
+groups: Q1#19 (fts+vector)
+source:
+113	SingleQueueIndexThreads(uint32_t size, bool binding)
+114	      : pool_(
+115	            size > 0 ? size : std::max(std::thread::hardware_concurrency(), 1u),
+116	            binding) {}
+
+#53 matchedBy=vector src/binding/c/c_api.cc:656-665
+groups: Q3#19 (vector)
+source:
+656	zvec_error_code_t zvec_config_data_set_optimize_thread_count(
+657	    zvec_config_data_t *config, uint32_t thread_count) {
+658	  if (!config) {
+659	    SET_LAST_ERROR(ZVEC_ERROR_INVALID_ARGUMENT, "Config pointer is null");
+660	    return ZVEC_ERROR_INVALID_ARGUMENT;
+661	  }
+662	  auto *cpp_config = reinterpret_cast<zvec::GlobalConfig::ConfigData *>(config);
+663	  cpp_config->optimize_thread_count = thread_count;
+664	  return ZVEC_OK;
+665	}
+
+#54 matchedBy=fts src/core/algorithm/ivf_rabitq/ivf_rabitq_builder.h:33-89
+groups: Q4#19 (fts)
+source:
+33	class IvfRabitqBuilder : public IndexBuilder {
+34	 public:
+35	  IvfRabitqBuilder();
+36	  ~IvfRabitqBuilder() override;
+37	
+38	  IvfRabitqBuilder(const IvfRabitqBuilder &) = delete;
+39	  IvfRabitqBuilder &operator=(const IvfRabitqBuilder &) = delete;
+40	
+41	  //! Initialize the builder
+42	  int init(const IndexMeta &meta, const ailego::Params &params) override;
+...
+
+#55 matchedBy=fts+vector src/db/index/column/vector_column/vector_column_indexer.h:69-71
+groups: Q2#20 (fts+vector)
+source:
+69	Status merge(const std::vector<VectorColumnIndexer::Ptr> &indexers,
+70	               const IndexFilter::Ptr &filter = nullptr,
+71	               const vector_column_params::MergeOptions &merge_options = {});
+
+#56 matchedBy=fts+vector tests/db/common/global_resource_test.cc:23-45
+groups: Q3#20 (fts+vector)
+source:
+23	TEST(GlobalResource, UsesEffectiveCountsAndDisablesBindingByDefault) {
+24	  GlobalConfig::ConfigData config;
+25	  config.query_thread_count = 2;
+26	  config.optimize_thread_count = 1;
+27	  EXPECT_FALSE(config.query_thread_binding);
+28	  EXPECT_FALSE(config.optimize_thread_binding);
+29	
+30	  const auto status = GlobalConfig::Instance().initialize(config);
+31	  ASSERT_TRUE(status.ok()) << status.message();
+32	  EXPECT_FALSE(GlobalConfig::Instance().query_thread_binding());
+...
+
+#57 matchedBy=fts+vector src/core/algorithm/flat_sparse/flat_sparse_builder.cc:60-76
+groups: Q4#20 (fts+vector)
+source:
+60	int FlatSparseBuilder::train(IndexThreads::Pointer,
+61	                             IndexSparseHolder::Pointer /*holder*/) {
+62	  if (state_ != BUILD_STATE_INITED) {
+63	    LOG_ERROR("Init the builder before FlatSparseBuilder::train");
+64	    return IndexError_NoReady;
+65	  }
+66	
+67	  LOG_INFO("Begin FlatSparseBuilder::train");
+68	
+69	  stats_.set_trained_count(0UL);
+...

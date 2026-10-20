@@ -50,9 +50,17 @@ For each task/profile, score-tail trimming retains eight of the ten original tup
 
 The cancelled [three-task study status](results/20261020-repeat-v1/STATUS.md) retains its original preparation and preflight history. The [q001 report](results/20261020-zvec-q001-repeat-v1/README.md) is the final status of the replacement cohort, not a continuation of the cancelled sampling plan.
 
-The next zvec QA candidate is the unchanged, previously reviewed [q004 architecture question](../zvec-issue-qa/tasks/q004/instruction.md). The [native preparation adapter](architecture_preparation_v1.py) exports its full 1,596-file source with the original native image/verifier templates; the [identity adapter](architecture_identity_v1.py) keeps the existing verifier body and binds it to q004. This is a new native-stack development preparation, not an unobserved holdout: q004's earlier custom-agent results are known and remain separate. The [host-only grading contract](architecture-grader-contract-v1.json) preserves the original ten atomic point units and all core/citation gates. It adds no regression-test requirement and explicitly retains unknown grading interpretations.
+The [q004 architecture question](../zvec-issue-qa/tasks/q004/instruction.md) uses the unchanged, previously reviewed assets. The [native preparation adapter](architecture_preparation_v1.py) exports its full 1,596-file source with the original native image/verifier templates; the [identity adapter](architecture_identity_v1.py) keeps the existing verifier body and binds it to q004. This is a separate native-stack development case, not an unobserved holdout: q004's earlier custom-agent results are known and remain separate. The [host-only grading contract](architecture-grader-contract-v1.json) preserves the original ten atomic point units and all core/citation gates. It adds no regression-test requirement and explicitly retains unknown grading interpretations.
 
 The [provider-free preparation evidence](results/20261020-q004-native-preparation-v1/README.md) verifies the exact source export and both Harbor task hashes, four input-integrity tests, rejection of retained q001 evidence as q004, and two real native command previews pointing at `zvec-q004`. No model, Docker trial or paid CI run was executed in that phase. The subsequent [one-pair execution plan](architecture-live-plan-v1.json) and [decision](architecture-execution-decision-v1.json) now freeze exactly one fresh baseline→zg development pair. The private adapter retains the original native execution/collection bodies. Twelve local tests and actual command generation passed; the [local receipts](provenance/native-q004-v1/local-preflight-verification.json) retain their raw evidence. Source-only grading preparation found no current blocker, with reviewer reuse/exposure recorded. Linux preflight must pass on the same commit before explicit solver dispatch; push alone does not run providers. The original q001-q003 plans, source packages, results and statistical rules are unchanged.
+
+The completed [q004 development result](results/20261020-zvec-q004-native-v1/README.md)
+retains both original answers and two independent anonymous model grades: both
+profiles scored 10/10 and passed the original citation gates. All 70 execution
+checks and the separate source/retrieval audit pass. Complete model input fell
+60.52%, agent phase time fell 11.29%, and the full cold slot took 13.29% longer.
+This is an input-efficiency candidate from one pair, with no trimming or stable
+effect claim. A subsequent ten-per-profile confirmation must exclude this pair.
 
 
 The separately reviewed [q005 runtime/API case](../zvec-issue-qa/tasks/q005/instruction.md)
