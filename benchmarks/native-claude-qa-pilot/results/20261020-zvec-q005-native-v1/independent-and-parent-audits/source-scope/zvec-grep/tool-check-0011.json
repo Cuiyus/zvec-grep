@@ -1,0 +1,383 @@
+{
+  "ordinal": 11,
+  "session": "root",
+  "name": "Bash",
+  "tool_id": "toolu_8fdf5fbe62864193b0bbfdc6",
+  "evidence": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-q005-live-v1-audit/source-scope/zvec-grep/extracted/tools/tool-0011.json",
+    "bytes": 26109,
+    "sha256": "078bc4afe21df9f775bf84b66d86bb87f359c386b3753d623625703b1785f67b"
+  },
+  "mechanical_check": {
+    "full_command": "sed -n 1650,1702p /workspace/src/db/collection.cc | cat -n | sed 's/^/   /' | head -60; echo ===; sed -n 2515,2535p /workspace/src/db/collection.cc; echo ===; grep -rn \"CollectionSchema::validate\\|schema.validate\\|schema->validate\" /workspace/src/core /workspace/src/db --include=*.cc | grep -iv test | head",
+    "shell_semantics_review_required": true,
+    "metadata": {
+      "stdout": "        1\tResult<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n        2\t                                                WriteMode mode) {\n        3\t  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n        4\t\n        5\t  std::shared_lock lock(schema_handle_mtx_);\n        6\t\n        7\t  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n        8\t  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n        9\t\n       10\t  for (auto &&doc : docs) {\n       11\t    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n       12\t    CHECK_RETURN_STATUS_EXPECTED(s);\n       13\t  }\n       14\t\n       15\t  // TODO: The granularity of the write_lock is too coarse.\n       16\t  std::lock_guard write_lock(write_mtx_);\n       17\t\n       18\t  WriteResults results;\n       19\t  // validate write batch size\n       20\t  if (docs.size() > kMaxWriteBatchSize) {\n       21\t    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n       22\t        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n       23\t        kMaxWriteBatchSize));\n       24\t  }\n       25\t\n       26\t  for (auto &&doc : docs) {\n       27\t    if (need_switch_to_new_segment()) {\n       28\t      auto s = switch_to_new_segment_for_writing();\n       29\t      CHECK_RETURN_STATUS_EXPECTED(s);\n       30\t    }\n       31\t\n       32\t    Status s;\n       33\t\n       34\t    switch (mode) {\n       35\t      case WriteMode::UPSERT:\n       36\t        s = handle_upsert(doc);\n       37\t        break;\n       38\t      case WriteMode::UPDATE:\n       39\t        s = handle_update(doc);\n       40\t        break;\n       41\t      case WriteMode::INSERT:\n       42\t        s = handle_insert(doc);\n       43\t        break;\n       44\t      default:\n       45\t        s = Status::InvalidArgument(\"Invalid write mode\");\n       46\t    }\n       47\t\n       48\t    results.push_back(s);\n       49\t  }\n       50\t\n       51\t  return results;\n       52\t}\n       53\t\n===\n  // check path\n  if (path_.empty()) {\n    return Status::InvalidArgument(\"path validate failed: path is empty\");\n  }\n  if (!FileHelper::PathSimpleValidation(path_)) {\n    return Status::InvalidArgument(\"path validate failed: path[\", path_,\n                                   \"] is not a valid path\");\n  }\n  if (ailego::FileHelper::IsExist(path_.c_str())) {\n    return Status::InvalidArgument(\"path validate failed: path[\", path_,\n                                   \"] exists, create expects a path that does \"\n                                   \"not exist\");\n  }\n\n  // check schema\n  auto s = schema_->validate();\n  CHECK_RETURN_STATUS(s);\n\n  if (!ailego::FileHelper::MakePath(path_.c_str())) {\n    return Status::InvalidArgument(\n        \"create collection path failed: \", path_,\n===\n/workspace/src/db/collection.cc:645:  s = new_schema->validate();\n/workspace/src/db/collection.cc:1255:      auto s = schema->validate();\n/workspace/src/db/collection.cc:1310:        s = schema->validate();\n/workspace/src/db/index/common/schema.cc:406:Status CollectionSchema::validate() const {",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+    },
+    "native_content": "        1\tResult<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n        2\t                                                WriteMode mode) {\n        3\t  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n        4\t\n        5\t  std::shared_lock lock(schema_handle_mtx_);\n        6\t\n        7\t  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n        8\t  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n        9\t\n       10\t  for (auto &&doc : docs) {\n       11\t    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n       12\t    CHECK_RETURN_STATUS_EXPECTED(s);\n       13\t  }\n       14\t\n       15\t  // TODO: The granularity of the write_lock is too coarse.\n       16\t  std::lock_guard write_lock(write_mtx_);\n       17\t\n       18\t  WriteResults results;\n       19\t  // validate write batch size\n       20\t  if (docs.size() > kMaxWriteBatchSize) {\n       21\t    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n       22\t        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n       23\t        kMaxWriteBatchSize));\n       24\t  }\n       25\t\n       26\t  for (auto &&doc : docs) {\n       27\t    if (need_switch_to_new_segment()) {\n       28\t      auto s = switch_to_new_segment_for_writing();\n       29\t      CHECK_RETURN_STATUS_EXPECTED(s);\n       30\t    }\n       31\t\n       32\t    Status s;\n       33\t\n       34\t    switch (mode) {\n       35\t      case WriteMode::UPSERT:\n       36\t        s = handle_upsert(doc);\n       37\t        break;\n       38\t      case WriteMode::UPDATE:\n       39\t        s = handle_update(doc);\n       40\t        break;\n       41\t      case WriteMode::INSERT:\n       42\t        s = handle_insert(doc);\n       43\t        break;\n       44\t      default:\n       45\t        s = Status::InvalidArgument(\"Invalid write mode\");\n       46\t    }\n       47\t\n       48\t    results.push_back(s);\n       49\t  }\n       50\t\n       51\t  return results;\n       52\t}\n       53\t\n===\n  // check path\n  if (path_.empty()) {\n    return Status::InvalidArgument(\"path validate failed: path is empty\");\n  }\n  if (!FileHelper::PathSimpleValidation(path_)) {\n    return Status::InvalidArgument(\"path validate failed: path[\", path_,\n                                   \"] is not a valid path\");\n  }\n  if (ailego::FileHelper::IsExist(path_.c_str())) {\n    return Status::InvalidArgument(\"path validate failed: path[\", path_,\n                                   \"] exists, create expects a path that does \"\n                                   \"not exist\");\n  }\n\n  // check schema\n  auto s = schema_->validate();\n  CHECK_RETURN_STATUS(s);\n\n  if (!ailego::FileHelper::MakePath(path_.c_str())) {\n    return Status::InvalidArgument(\n        \"create collection path failed: \", path_,\n===\n/workspace/src/db/collection.cc:645:  s = new_schema->validate();\n/workspace/src/db/collection.cc:1255:      auto s = schema->validate();\n/workspace/src/db/collection.cc:1310:        s = schema->validate();\n/workspace/src/db/index/common/schema.cc:406:Status CollectionSchema::validate() const {",
+    "stdout_equals_native_content": true,
+    "source_matches_are_candidates_not_access_proof": true,
+    "numbered_source_rows": [
+      {
+        "output_line": 77,
+        "text": "/workspace/src/db/collection.cc:645:  s = new_schema->validate();",
+        "source_path": "src/db/collection.cc",
+        "source_line": 645,
+        "returned_text": "  s = new_schema->validate();",
+        "source_text": "  s = new_schema->validate();",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 78,
+        "text": "/workspace/src/db/collection.cc:1255:      auto s = schema->validate();",
+        "source_path": "src/db/collection.cc",
+        "source_line": 1255,
+        "returned_text": "      auto s = schema->validate();",
+        "source_text": "      auto s = schema->validate();",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 79,
+        "text": "/workspace/src/db/collection.cc:1310:        s = schema->validate();",
+        "source_path": "src/db/collection.cc",
+        "source_line": 1310,
+        "returned_text": "        s = schema->validate();",
+        "source_text": "        s = schema->validate();",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 80,
+        "text": "/workspace/src/db/index/common/schema.cc:406:Status CollectionSchema::validate() const {",
+        "source_path": "src/db/index/common/schema.cc",
+        "source_line": 406,
+        "returned_text": "Status CollectionSchema::validate() const {",
+        "source_text": "Status CollectionSchema::validate() const {",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      }
+    ],
+    "unclassified_output_rows": [
+      {
+        "output_line": 1,
+        "text": "        1\tResult<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,"
+      },
+      {
+        "output_line": 2,
+        "text": "        2\t                                                WriteMode mode) {"
+      },
+      {
+        "output_line": 3,
+        "text": "        3\t  CHECK_READONLY_RETURN_STATUS_EXPECTED();"
+      },
+      {
+        "output_line": 4,
+        "text": "        4\t"
+      },
+      {
+        "output_line": 5,
+        "text": "        5\t  std::shared_lock lock(schema_handle_mtx_);"
+      },
+      {
+        "output_line": 6,
+        "text": "        6\t"
+      },
+      {
+        "output_line": 7,
+        "text": "        7\t  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);"
+      },
+      {
+        "output_line": 8,
+        "text": "        8\t  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);"
+      },
+      {
+        "output_line": 9,
+        "text": "        9\t"
+      },
+      {
+        "output_line": 10,
+        "text": "       10\t  for (auto &&doc : docs) {"
+      },
+      {
+        "output_line": 11,
+        "text": "       11\t    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);"
+      },
+      {
+        "output_line": 12,
+        "text": "       12\t    CHECK_RETURN_STATUS_EXPECTED(s);"
+      },
+      {
+        "output_line": 13,
+        "text": "       13\t  }"
+      },
+      {
+        "output_line": 14,
+        "text": "       14\t"
+      },
+      {
+        "output_line": 15,
+        "text": "       15\t  // TODO: The granularity of the write_lock is too coarse."
+      },
+      {
+        "output_line": 16,
+        "text": "       16\t  std::lock_guard write_lock(write_mtx_);"
+      },
+      {
+        "output_line": 17,
+        "text": "       17\t"
+      },
+      {
+        "output_line": 18,
+        "text": "       18\t  WriteResults results;"
+      },
+      {
+        "output_line": 19,
+        "text": "       19\t  // validate write batch size"
+      },
+      {
+        "output_line": 20,
+        "text": "       20\t  if (docs.size() > kMaxWriteBatchSize) {"
+      },
+      {
+        "output_line": 21,
+        "text": "       21\t    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument("
+      },
+      {
+        "output_line": 22,
+        "text": "       22\t        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \","
+      },
+      {
+        "output_line": 23,
+        "text": "       23\t        kMaxWriteBatchSize));"
+      },
+      {
+        "output_line": 24,
+        "text": "       24\t  }"
+      },
+      {
+        "output_line": 25,
+        "text": "       25\t"
+      },
+      {
+        "output_line": 26,
+        "text": "       26\t  for (auto &&doc : docs) {"
+      },
+      {
+        "output_line": 27,
+        "text": "       27\t    if (need_switch_to_new_segment()) {"
+      },
+      {
+        "output_line": 28,
+        "text": "       28\t      auto s = switch_to_new_segment_for_writing();"
+      },
+      {
+        "output_line": 29,
+        "text": "       29\t      CHECK_RETURN_STATUS_EXPECTED(s);"
+      },
+      {
+        "output_line": 30,
+        "text": "       30\t    }"
+      },
+      {
+        "output_line": 31,
+        "text": "       31\t"
+      },
+      {
+        "output_line": 32,
+        "text": "       32\t    Status s;"
+      },
+      {
+        "output_line": 33,
+        "text": "       33\t"
+      },
+      {
+        "output_line": 34,
+        "text": "       34\t    switch (mode) {"
+      },
+      {
+        "output_line": 35,
+        "text": "       35\t      case WriteMode::UPSERT:"
+      },
+      {
+        "output_line": 36,
+        "text": "       36\t        s = handle_upsert(doc);"
+      },
+      {
+        "output_line": 37,
+        "text": "       37\t        break;"
+      },
+      {
+        "output_line": 38,
+        "text": "       38\t      case WriteMode::UPDATE:"
+      },
+      {
+        "output_line": 39,
+        "text": "       39\t        s = handle_update(doc);"
+      },
+      {
+        "output_line": 40,
+        "text": "       40\t        break;"
+      },
+      {
+        "output_line": 41,
+        "text": "       41\t      case WriteMode::INSERT:"
+      },
+      {
+        "output_line": 42,
+        "text": "       42\t        s = handle_insert(doc);"
+      },
+      {
+        "output_line": 43,
+        "text": "       43\t        break;"
+      },
+      {
+        "output_line": 44,
+        "text": "       44\t      default:"
+      },
+      {
+        "output_line": 45,
+        "text": "       45\t        s = Status::InvalidArgument(\"Invalid write mode\");"
+      },
+      {
+        "output_line": 46,
+        "text": "       46\t    }"
+      },
+      {
+        "output_line": 47,
+        "text": "       47\t"
+      },
+      {
+        "output_line": 48,
+        "text": "       48\t    results.push_back(s);"
+      },
+      {
+        "output_line": 49,
+        "text": "       49\t  }"
+      },
+      {
+        "output_line": 50,
+        "text": "       50\t"
+      },
+      {
+        "output_line": 51,
+        "text": "       51\t  return results;"
+      },
+      {
+        "output_line": 52,
+        "text": "       52\t}"
+      },
+      {
+        "output_line": 53,
+        "text": "       53\t"
+      },
+      {
+        "output_line": 54,
+        "text": "==="
+      },
+      {
+        "output_line": 55,
+        "text": "  // check path"
+      },
+      {
+        "output_line": 56,
+        "text": "  if (path_.empty()) {"
+      },
+      {
+        "output_line": 57,
+        "text": "    return Status::InvalidArgument(\"path validate failed: path is empty\");"
+      },
+      {
+        "output_line": 58,
+        "text": "  }"
+      },
+      {
+        "output_line": 59,
+        "text": "  if (!FileHelper::PathSimpleValidation(path_)) {"
+      },
+      {
+        "output_line": 60,
+        "text": "    return Status::InvalidArgument(\"path validate failed: path[\", path_,"
+      },
+      {
+        "output_line": 61,
+        "text": "                                   \"] is not a valid path\");"
+      },
+      {
+        "output_line": 62,
+        "text": "  }"
+      },
+      {
+        "output_line": 63,
+        "text": "  if (ailego::FileHelper::IsExist(path_.c_str())) {"
+      },
+      {
+        "output_line": 64,
+        "text": "    return Status::InvalidArgument(\"path validate failed: path[\", path_,"
+      },
+      {
+        "output_line": 65,
+        "text": "                                   \"] exists, create expects a path that does \""
+      },
+      {
+        "output_line": 66,
+        "text": "                                   \"not exist\");"
+      },
+      {
+        "output_line": 67,
+        "text": "  }"
+      },
+      {
+        "output_line": 68,
+        "text": ""
+      },
+      {
+        "output_line": 69,
+        "text": "  // check schema"
+      },
+      {
+        "output_line": 70,
+        "text": "  auto s = schema_->validate();"
+      },
+      {
+        "output_line": 71,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 72,
+        "text": ""
+      },
+      {
+        "output_line": 73,
+        "text": "  if (!ailego::FileHelper::MakePath(path_.c_str())) {"
+      },
+      {
+        "output_line": 74,
+        "text": "    return Status::InvalidArgument("
+      },
+      {
+        "output_line": 75,
+        "text": "        \"create collection path failed: \", path_,"
+      },
+      {
+        "output_line": 76,
+        "text": "==="
+      }
+    ],
+    "do_not_compare_pipeline_ordinal_to_sorted_glob_order": true
+  },
+  "manual_review_status": "pending"
+}

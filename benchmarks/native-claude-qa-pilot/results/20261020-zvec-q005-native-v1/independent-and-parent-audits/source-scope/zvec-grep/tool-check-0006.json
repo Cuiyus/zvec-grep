@@ -1,0 +1,323 @@
+{
+  "ordinal": 6,
+  "session": "root",
+  "name": "Bash",
+  "tool_id": "toolu_430b0cae063846ea90f4b5e1",
+  "evidence": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-q005-live-v1-audit/source-scope/zvec-grep/extracted/tools/tool-0006.json",
+    "bytes": 22169,
+    "sha256": "1e385686223db1f14533714b776ba7491577158f604ea971e0db7111226d60b6"
+  },
+  "mechanical_check": {
+    "full_command": "grep -rn \"unwrap_expected\" /workspace/src/binding/python --include=*.h --include=*.cc -l; echo ---; grep -rn \"Result<WriteResults> .*::insert\\|Result<WriteResults> insert\" /workspace/src --include=*.cc --include=*.h | grep -v binding | head; echo ---; sed -n 700,760p /workspace/src/db/index/common/doc.cc",
+    "shell_semantics_review_required": true,
+    "metadata": {
+      "stdout": "/workspace/src/binding/python/model/python_collection.cc\n---\n/workspace/src/include/zvec/db/collection.h:94:  virtual Result<WriteResults> insert(std::vector<Doc> &docs) = 0;\n/workspace/src/db/collection.cc:124:  Result<WriteResults> insert(std::vector<Doc> &docs) override;\n/workspace/src/db/collection.cc:1593:Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {\n---\n  std::string pk(reinterpret_cast<const char *>(ptr), pk_len);\n  ptr += pk_len;\n  doc->set_pk(pk);\n\n  float score = read_value_from_buffer<float>(ptr);\n  doc->set_score(score);\n\n  uint64_t doc_id = read_value_from_buffer<uint64_t>(ptr);\n  doc->set_doc_id(doc_id);\n\n  Operator op;\n  read_from_buffer(ptr, &op, sizeof(op));\n  doc->set_operator(op);\n\n  uint32_t field_count = read_value_from_buffer<uint32_t>(ptr);\n\n  for (uint32_t i = 0; i < field_count; ++i) {\n    uint32_t name_len = read_value_from_buffer<uint32_t>(ptr);\n    std::string field_name(reinterpret_cast<const char *>(ptr), name_len);\n    ptr += name_len;\n\n    Doc::Value value = deserialize_value(ptr);\n    doc->fields_[field_name] = value;\n  }\n\n  return doc;\n}\n\nStatus Doc::validate_and_sanitize(const CollectionSchema::Ptr &schema,\n                                  bool is_update) {\n  if (!schema) {\n    return Status::InternalError(\"schema is null during doc validation\");\n  }\n\n  if (auto s = validate_document_id(pk_); !s.ok()) {\n    return s;\n  }\n\n  // check doc fields match schema\n  for (auto &[name, value] : fields_) {\n    if (!schema->has_field(name)) {\n      return Status::InvalidArgument(\n          \"Invalid doc[\", format_name(pk_), \"]: field[\", format_name(name),\n          \"] does not exist in the collection schema\");\n    }\n  }\n\n  const auto &fields = schema->fields();\n  for (auto const &field_schema : fields) {\n    auto field_name = field_schema->name();\n    auto field_pair = fields_.find(field_name);\n    if (field_pair == fields_.end()) {\n      if (field_schema->nullable() || is_update) {\n        continue;\n      }\n      return Status::InvalidArgument(\"Invalid doc[\", format_name(pk_),\n                                     \"]: field[\", field_name,\n                                     \"] is required but not provided\");\n    } else {\n      if (std::holds_alternative<std::monostate>(field_pair->second)) {\n        if (field_schema->nullable()) {",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+    },
+    "native_content": "/workspace/src/binding/python/model/python_collection.cc\n---\n/workspace/src/include/zvec/db/collection.h:94:  virtual Result<WriteResults> insert(std::vector<Doc> &docs) = 0;\n/workspace/src/db/collection.cc:124:  Result<WriteResults> insert(std::vector<Doc> &docs) override;\n/workspace/src/db/collection.cc:1593:Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {\n---\n  std::string pk(reinterpret_cast<const char *>(ptr), pk_len);\n  ptr += pk_len;\n  doc->set_pk(pk);\n\n  float score = read_value_from_buffer<float>(ptr);\n  doc->set_score(score);\n\n  uint64_t doc_id = read_value_from_buffer<uint64_t>(ptr);\n  doc->set_doc_id(doc_id);\n\n  Operator op;\n  read_from_buffer(ptr, &op, sizeof(op));\n  doc->set_operator(op);\n\n  uint32_t field_count = read_value_from_buffer<uint32_t>(ptr);\n\n  for (uint32_t i = 0; i < field_count; ++i) {\n    uint32_t name_len = read_value_from_buffer<uint32_t>(ptr);\n    std::string field_name(reinterpret_cast<const char *>(ptr), name_len);\n    ptr += name_len;\n\n    Doc::Value value = deserialize_value(ptr);\n    doc->fields_[field_name] = value;\n  }\n\n  return doc;\n}\n\nStatus Doc::validate_and_sanitize(const CollectionSchema::Ptr &schema,\n                                  bool is_update) {\n  if (!schema) {\n    return Status::InternalError(\"schema is null during doc validation\");\n  }\n\n  if (auto s = validate_document_id(pk_); !s.ok()) {\n    return s;\n  }\n\n  // check doc fields match schema\n  for (auto &[name, value] : fields_) {\n    if (!schema->has_field(name)) {\n      return Status::InvalidArgument(\n          \"Invalid doc[\", format_name(pk_), \"]: field[\", format_name(name),\n          \"] does not exist in the collection schema\");\n    }\n  }\n\n  const auto &fields = schema->fields();\n  for (auto const &field_schema : fields) {\n    auto field_name = field_schema->name();\n    auto field_pair = fields_.find(field_name);\n    if (field_pair == fields_.end()) {\n      if (field_schema->nullable() || is_update) {\n        continue;\n      }\n      return Status::InvalidArgument(\"Invalid doc[\", format_name(pk_),\n                                     \"]: field[\", field_name,\n                                     \"] is required but not provided\");\n    } else {\n      if (std::holds_alternative<std::monostate>(field_pair->second)) {\n        if (field_schema->nullable()) {",
+    "stdout_equals_native_content": true,
+    "source_matches_are_candidates_not_access_proof": true,
+    "numbered_source_rows": [
+      {
+        "output_line": 3,
+        "text": "/workspace/src/include/zvec/db/collection.h:94:  virtual Result<WriteResults> insert(std::vector<Doc> &docs) = 0;",
+        "source_path": "src/include/zvec/db/collection.h",
+        "source_line": 94,
+        "returned_text": "  virtual Result<WriteResults> insert(std::vector<Doc> &docs) = 0;",
+        "source_text": "  virtual Result<WriteResults> insert(std::vector<Doc> &docs) = 0;",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 4,
+        "text": "/workspace/src/db/collection.cc:124:  Result<WriteResults> insert(std::vector<Doc> &docs) override;",
+        "source_path": "src/db/collection.cc",
+        "source_line": 124,
+        "returned_text": "  Result<WriteResults> insert(std::vector<Doc> &docs) override;",
+        "source_text": "  Result<WriteResults> insert(std::vector<Doc> &docs) override;",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 5,
+        "text": "/workspace/src/db/collection.cc:1593:Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {",
+        "source_path": "src/db/collection.cc",
+        "source_line": 1593,
+        "returned_text": "Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {",
+        "source_text": "Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      }
+    ],
+    "unclassified_output_rows": [
+      {
+        "output_line": 1,
+        "text": "/workspace/src/binding/python/model/python_collection.cc"
+      },
+      {
+        "output_line": 2,
+        "text": "---"
+      },
+      {
+        "output_line": 6,
+        "text": "---"
+      },
+      {
+        "output_line": 7,
+        "text": "  std::string pk(reinterpret_cast<const char *>(ptr), pk_len);"
+      },
+      {
+        "output_line": 8,
+        "text": "  ptr += pk_len;"
+      },
+      {
+        "output_line": 9,
+        "text": "  doc->set_pk(pk);"
+      },
+      {
+        "output_line": 10,
+        "text": ""
+      },
+      {
+        "output_line": 11,
+        "text": "  float score = read_value_from_buffer<float>(ptr);"
+      },
+      {
+        "output_line": 12,
+        "text": "  doc->set_score(score);"
+      },
+      {
+        "output_line": 13,
+        "text": ""
+      },
+      {
+        "output_line": 14,
+        "text": "  uint64_t doc_id = read_value_from_buffer<uint64_t>(ptr);"
+      },
+      {
+        "output_line": 15,
+        "text": "  doc->set_doc_id(doc_id);"
+      },
+      {
+        "output_line": 16,
+        "text": ""
+      },
+      {
+        "output_line": 17,
+        "text": "  Operator op;"
+      },
+      {
+        "output_line": 18,
+        "text": "  read_from_buffer(ptr, &op, sizeof(op));"
+      },
+      {
+        "output_line": 19,
+        "text": "  doc->set_operator(op);"
+      },
+      {
+        "output_line": 20,
+        "text": ""
+      },
+      {
+        "output_line": 21,
+        "text": "  uint32_t field_count = read_value_from_buffer<uint32_t>(ptr);"
+      },
+      {
+        "output_line": 22,
+        "text": ""
+      },
+      {
+        "output_line": 23,
+        "text": "  for (uint32_t i = 0; i < field_count; ++i) {"
+      },
+      {
+        "output_line": 24,
+        "text": "    uint32_t name_len = read_value_from_buffer<uint32_t>(ptr);"
+      },
+      {
+        "output_line": 25,
+        "text": "    std::string field_name(reinterpret_cast<const char *>(ptr), name_len);"
+      },
+      {
+        "output_line": 26,
+        "text": "    ptr += name_len;"
+      },
+      {
+        "output_line": 27,
+        "text": ""
+      },
+      {
+        "output_line": 28,
+        "text": "    Doc::Value value = deserialize_value(ptr);"
+      },
+      {
+        "output_line": 29,
+        "text": "    doc->fields_[field_name] = value;"
+      },
+      {
+        "output_line": 30,
+        "text": "  }"
+      },
+      {
+        "output_line": 31,
+        "text": ""
+      },
+      {
+        "output_line": 32,
+        "text": "  return doc;"
+      },
+      {
+        "output_line": 33,
+        "text": "}"
+      },
+      {
+        "output_line": 34,
+        "text": ""
+      },
+      {
+        "output_line": 35,
+        "text": "Status Doc::validate_and_sanitize(const CollectionSchema::Ptr &schema,"
+      },
+      {
+        "output_line": 36,
+        "text": "                                  bool is_update) {"
+      },
+      {
+        "output_line": 37,
+        "text": "  if (!schema) {"
+      },
+      {
+        "output_line": 38,
+        "text": "    return Status::InternalError(\"schema is null during doc validation\");"
+      },
+      {
+        "output_line": 39,
+        "text": "  }"
+      },
+      {
+        "output_line": 40,
+        "text": ""
+      },
+      {
+        "output_line": 41,
+        "text": "  if (auto s = validate_document_id(pk_); !s.ok()) {"
+      },
+      {
+        "output_line": 42,
+        "text": "    return s;"
+      },
+      {
+        "output_line": 43,
+        "text": "  }"
+      },
+      {
+        "output_line": 44,
+        "text": ""
+      },
+      {
+        "output_line": 45,
+        "text": "  // check doc fields match schema"
+      },
+      {
+        "output_line": 46,
+        "text": "  for (auto &[name, value] : fields_) {"
+      },
+      {
+        "output_line": 47,
+        "text": "    if (!schema->has_field(name)) {"
+      },
+      {
+        "output_line": 48,
+        "text": "      return Status::InvalidArgument("
+      },
+      {
+        "output_line": 49,
+        "text": "          \"Invalid doc[\", format_name(pk_), \"]: field[\", format_name(name),"
+      },
+      {
+        "output_line": 50,
+        "text": "          \"] does not exist in the collection schema\");"
+      },
+      {
+        "output_line": 51,
+        "text": "    }"
+      },
+      {
+        "output_line": 52,
+        "text": "  }"
+      },
+      {
+        "output_line": 53,
+        "text": ""
+      },
+      {
+        "output_line": 54,
+        "text": "  const auto &fields = schema->fields();"
+      },
+      {
+        "output_line": 55,
+        "text": "  for (auto const &field_schema : fields) {"
+      },
+      {
+        "output_line": 56,
+        "text": "    auto field_name = field_schema->name();"
+      },
+      {
+        "output_line": 57,
+        "text": "    auto field_pair = fields_.find(field_name);"
+      },
+      {
+        "output_line": 58,
+        "text": "    if (field_pair == fields_.end()) {"
+      },
+      {
+        "output_line": 59,
+        "text": "      if (field_schema->nullable() || is_update) {"
+      },
+      {
+        "output_line": 60,
+        "text": "        continue;"
+      },
+      {
+        "output_line": 61,
+        "text": "      }"
+      },
+      {
+        "output_line": 62,
+        "text": "      return Status::InvalidArgument(\"Invalid doc[\", format_name(pk_),"
+      },
+      {
+        "output_line": 63,
+        "text": "                                     \"]: field[\", field_name,"
+      },
+      {
+        "output_line": 64,
+        "text": "                                     \"] is required but not provided\");"
+      },
+      {
+        "output_line": 65,
+        "text": "    } else {"
+      },
+      {
+        "output_line": 66,
+        "text": "      if (std::holds_alternative<std::monostate>(field_pair->second)) {"
+      },
+      {
+        "output_line": 67,
+        "text": "        if (field_schema->nullable()) {"
+      }
+    ],
+    "do_not_compare_pipeline_ordinal_to_sorted_glob_order": true
+  },
+  "manual_review_status": "pending"
+}

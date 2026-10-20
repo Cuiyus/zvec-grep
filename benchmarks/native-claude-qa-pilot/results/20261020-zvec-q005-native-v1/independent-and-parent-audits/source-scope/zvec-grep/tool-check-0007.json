@@ -1,0 +1,830 @@
+{
+  "ordinal": 7,
+  "session": "root",
+  "name": "Bash",
+  "tool_id": "toolu_5aa9ba3a12f24137bf7f2ebf",
+  "evidence": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-q005-live-v1-audit/source-scope/zvec-grep/extracted/tools/tool-0007.json",
+    "bytes": 40753,
+    "sha256": "fb1994a3066957f4d67e0de28f1cece4f17c9b1a55ec36b572d90bc890845910"
+  },
+  "mechanical_check": {
+    "full_command": "sed -n 1500,1700p /workspace/src/db/collection.cc",
+    "shell_semantics_review_required": true,
+    "metadata": {
+      "stdout": "  schema_ = new_schema;\n\n  return Status::OK();\n}\n\nStatus CollectionImpl::alter_column(const std::string &column_name,\n                                    const std::string &rename,\n                                    const FieldSchema::Ptr &new_column_schema,\n                                    const AlterColumnOptions &options) {\n  CHECK_COLLECTION_READONLY_RETURN_STATUS;\n\n  std::lock_guard maintenance_lock(maintenance_mtx_);\n\n  std::unique_lock lock(schema_handle_mtx_);\n  CHECK_RETURN_STATUS(check_no_active_iterators(\"alter_column\"));\n\n  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS(closed_, false);\n\n  auto field_copy = new_column_schema\n                        ? std::make_shared<FieldSchema>(*new_column_schema)\n                        : nullptr;\n  auto s = validate(column_name, field_copy, \"\", rename, ColumnOp::ALTER);\n  CHECK_RETURN_STATUS(s);\n\n  // forbidden writing until index is ready\n  std::lock_guard write_lock(write_mtx_);\n\n  if (!rename.empty()) {\n    field_copy =\n        std::make_shared<FieldSchema>(*schema_->get_field(column_name));\n    field_copy->set_name(rename);\n  }\n\n  auto new_schema = std::make_shared<CollectionSchema>(*schema_);\n  s = new_schema->alter_field(column_name, field_copy);\n  CHECK_RETURN_STATUS(s);\n\n  if (writing_segment_->has_record()) {\n    s = switch_to_new_segment_for_writing();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  Version new_version = version_manager_->get_current_version();\n\n  // alter column on segment manager\n  s = segment_manager_->alter_column(column_name, field_copy,\n                                     options.concurrency_);\n  CHECK_RETURN_STATUS(s);\n\n  // reset writing segment with new schema\n  auto id = writing_segment_->id();\n  auto min_doc_id = writing_segment_->meta()->min_doc_id();\n\n  s = writing_segment_->destroy();\n  CHECK_RETURN_STATUS(s);\n  writing_segment_.reset();\n\n  SegmentOptions seg_options;\n  seg_options.enable_mmap_ = options_.enable_mmap_;\n  seg_options.max_buffer_size_ = options_.max_buffer_size_;\n  seg_options.read_only_ = options_.read_only_;\n  auto writing_segment =\n      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,\n                             delete_store_, version_manager_, seg_options);\n  if (!writing_segment) {\n    return writing_segment.error();\n  }\n  writing_segment_ = writing_segment.value();\n\n  // update new version\n  new_version.set_schema(*new_schema);\n  new_version.reset_writing_segment_meta(writing_segment_->meta());\n\n  auto new_segment_metas = segment_manager_->get_segments_meta();\n  for (auto meta : new_segment_metas) {\n    s = new_version.update_persisted_segment_meta(meta);\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = version_manager_->apply(new_version);\n  CHECK_RETURN_STATUS(s);\n\n  // persist manifest\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  schema_ = new_schema;\n\n  return Status::OK();\n}\n\nResult<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::INSERT);\n}\n\nResult<WriteResults> CollectionImpl::update(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPDATE);\n}\n\nResult<WriteResults> CollectionImpl::upsert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPSERT);\n}\n\nStatus CollectionImpl::internal_fetch_by_doc(const Doc &doc,\n                                             Doc::Ptr *doc_out) {\n  // Called from handle_update(), i.e. under write_impl()'s write_mtx_.\n  auto segments = get_all_segments_unsafe();\n  uint64_t doc_id;\n  bool has = id_map_->has(doc.pk_ref(), &doc_id);\n  if (!has) {\n    return Status::NotFound(\"Document not found\");\n  }\n  if (delete_store_->is_deleted(doc_id)) {\n    return Status::NotFound(\"Document already deleted\");\n  }\n\n  auto segment = local_segment_by_doc_id(doc_id, segments);\n  if (!segment) {\n    LOG_WARN(\"doc_id: %zu segment not found\", (size_t)doc_id);\n    return Status::InternalError(\"Segment not found\");\n  }\n\n  auto old_doc = segment->fetch(doc_id, std::nullopt, true);\n  if (!old_doc) {\n    LOG_WARN(\"doc_id: %zu fetch doc failed\", (size_t)doc_id);\n    return Status::InternalError(\"Fetch doc failed\");\n  }\n  *doc_out = old_doc;\n  return Status::OK();\n}\n\nStatus CollectionImpl::handle_upsert(Doc &doc) {\n  return writing_segment_->upsert(doc);\n}\n\nStatus CollectionImpl::handle_update(Doc &doc) {\n  Doc::Ptr old_doc{nullptr};\n  auto s = internal_fetch_by_doc(doc, &old_doc);\n  CHECK_RETURN_STATUS(s);\n\n  old_doc->merge(doc);\n  return writing_segment_->update(*old_doc);\n}\n\nStatus CollectionImpl::handle_insert(Doc &doc) {\n  return writing_segment_->insert(doc);\n}\n\nResult<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+    },
+    "native_content": "  schema_ = new_schema;\n\n  return Status::OK();\n}\n\nStatus CollectionImpl::alter_column(const std::string &column_name,\n                                    const std::string &rename,\n                                    const FieldSchema::Ptr &new_column_schema,\n                                    const AlterColumnOptions &options) {\n  CHECK_COLLECTION_READONLY_RETURN_STATUS;\n\n  std::lock_guard maintenance_lock(maintenance_mtx_);\n\n  std::unique_lock lock(schema_handle_mtx_);\n  CHECK_RETURN_STATUS(check_no_active_iterators(\"alter_column\"));\n\n  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS(closed_, false);\n\n  auto field_copy = new_column_schema\n                        ? std::make_shared<FieldSchema>(*new_column_schema)\n                        : nullptr;\n  auto s = validate(column_name, field_copy, \"\", rename, ColumnOp::ALTER);\n  CHECK_RETURN_STATUS(s);\n\n  // forbidden writing until index is ready\n  std::lock_guard write_lock(write_mtx_);\n\n  if (!rename.empty()) {\n    field_copy =\n        std::make_shared<FieldSchema>(*schema_->get_field(column_name));\n    field_copy->set_name(rename);\n  }\n\n  auto new_schema = std::make_shared<CollectionSchema>(*schema_);\n  s = new_schema->alter_field(column_name, field_copy);\n  CHECK_RETURN_STATUS(s);\n\n  if (writing_segment_->has_record()) {\n    s = switch_to_new_segment_for_writing();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  Version new_version = version_manager_->get_current_version();\n\n  // alter column on segment manager\n  s = segment_manager_->alter_column(column_name, field_copy,\n                                     options.concurrency_);\n  CHECK_RETURN_STATUS(s);\n\n  // reset writing segment with new schema\n  auto id = writing_segment_->id();\n  auto min_doc_id = writing_segment_->meta()->min_doc_id();\n\n  s = writing_segment_->destroy();\n  CHECK_RETURN_STATUS(s);\n  writing_segment_.reset();\n\n  SegmentOptions seg_options;\n  seg_options.enable_mmap_ = options_.enable_mmap_;\n  seg_options.max_buffer_size_ = options_.max_buffer_size_;\n  seg_options.read_only_ = options_.read_only_;\n  auto writing_segment =\n      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,\n                             delete_store_, version_manager_, seg_options);\n  if (!writing_segment) {\n    return writing_segment.error();\n  }\n  writing_segment_ = writing_segment.value();\n\n  // update new version\n  new_version.set_schema(*new_schema);\n  new_version.reset_writing_segment_meta(writing_segment_->meta());\n\n  auto new_segment_metas = segment_manager_->get_segments_meta();\n  for (auto meta : new_segment_metas) {\n    s = new_version.update_persisted_segment_meta(meta);\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = version_manager_->apply(new_version);\n  CHECK_RETURN_STATUS(s);\n\n  // persist manifest\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  schema_ = new_schema;\n\n  return Status::OK();\n}\n\nResult<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::INSERT);\n}\n\nResult<WriteResults> CollectionImpl::update(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPDATE);\n}\n\nResult<WriteResults> CollectionImpl::upsert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPSERT);\n}\n\nStatus CollectionImpl::internal_fetch_by_doc(const Doc &doc,\n                                             Doc::Ptr *doc_out) {\n  // Called from handle_update(), i.e. under write_impl()'s write_mtx_.\n  auto segments = get_all_segments_unsafe();\n  uint64_t doc_id;\n  bool has = id_map_->has(doc.pk_ref(), &doc_id);\n  if (!has) {\n    return Status::NotFound(\"Document not found\");\n  }\n  if (delete_store_->is_deleted(doc_id)) {\n    return Status::NotFound(\"Document already deleted\");\n  }\n\n  auto segment = local_segment_by_doc_id(doc_id, segments);\n  if (!segment) {\n    LOG_WARN(\"doc_id: %zu segment not found\", (size_t)doc_id);\n    return Status::InternalError(\"Segment not found\");\n  }\n\n  auto old_doc = segment->fetch(doc_id, std::nullopt, true);\n  if (!old_doc) {\n    LOG_WARN(\"doc_id: %zu fetch doc failed\", (size_t)doc_id);\n    return Status::InternalError(\"Fetch doc failed\");\n  }\n  *doc_out = old_doc;\n  return Status::OK();\n}\n\nStatus CollectionImpl::handle_upsert(Doc &doc) {\n  return writing_segment_->upsert(doc);\n}\n\nStatus CollectionImpl::handle_update(Doc &doc) {\n  Doc::Ptr old_doc{nullptr};\n  auto s = internal_fetch_by_doc(doc, &old_doc);\n  CHECK_RETURN_STATUS(s);\n\n  old_doc->merge(doc);\n  return writing_segment_->update(*old_doc);\n}\n\nStatus CollectionImpl::handle_insert(Doc &doc) {\n  return writing_segment_->insert(doc);\n}\n\nResult<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;",
+    "stdout_equals_native_content": true,
+    "source_matches_are_candidates_not_access_proof": true,
+    "numbered_source_rows": [],
+    "unclassified_output_rows": [
+      {
+        "output_line": 1,
+        "text": "  schema_ = new_schema;"
+      },
+      {
+        "output_line": 2,
+        "text": ""
+      },
+      {
+        "output_line": 3,
+        "text": "  return Status::OK();"
+      },
+      {
+        "output_line": 4,
+        "text": "}"
+      },
+      {
+        "output_line": 5,
+        "text": ""
+      },
+      {
+        "output_line": 6,
+        "text": "Status CollectionImpl::alter_column(const std::string &column_name,"
+      },
+      {
+        "output_line": 7,
+        "text": "                                    const std::string &rename,"
+      },
+      {
+        "output_line": 8,
+        "text": "                                    const FieldSchema::Ptr &new_column_schema,"
+      },
+      {
+        "output_line": 9,
+        "text": "                                    const AlterColumnOptions &options) {"
+      },
+      {
+        "output_line": 10,
+        "text": "  CHECK_COLLECTION_READONLY_RETURN_STATUS;"
+      },
+      {
+        "output_line": 11,
+        "text": ""
+      },
+      {
+        "output_line": 12,
+        "text": "  std::lock_guard maintenance_lock(maintenance_mtx_);"
+      },
+      {
+        "output_line": 13,
+        "text": ""
+      },
+      {
+        "output_line": 14,
+        "text": "  std::unique_lock lock(schema_handle_mtx_);"
+      },
+      {
+        "output_line": 15,
+        "text": "  CHECK_RETURN_STATUS(check_no_active_iterators(\"alter_column\"));"
+      },
+      {
+        "output_line": 16,
+        "text": ""
+      },
+      {
+        "output_line": 17,
+        "text": "  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);"
+      },
+      {
+        "output_line": 18,
+        "text": "  CHECK_CLOSED_RETURN_STATUS(closed_, false);"
+      },
+      {
+        "output_line": 19,
+        "text": ""
+      },
+      {
+        "output_line": 20,
+        "text": "  auto field_copy = new_column_schema"
+      },
+      {
+        "output_line": 21,
+        "text": "                        ? std::make_shared<FieldSchema>(*new_column_schema)"
+      },
+      {
+        "output_line": 22,
+        "text": "                        : nullptr;"
+      },
+      {
+        "output_line": 23,
+        "text": "  auto s = validate(column_name, field_copy, \"\", rename, ColumnOp::ALTER);"
+      },
+      {
+        "output_line": 24,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 25,
+        "text": ""
+      },
+      {
+        "output_line": 26,
+        "text": "  // forbidden writing until index is ready"
+      },
+      {
+        "output_line": 27,
+        "text": "  std::lock_guard write_lock(write_mtx_);"
+      },
+      {
+        "output_line": 28,
+        "text": ""
+      },
+      {
+        "output_line": 29,
+        "text": "  if (!rename.empty()) {"
+      },
+      {
+        "output_line": 30,
+        "text": "    field_copy ="
+      },
+      {
+        "output_line": 31,
+        "text": "        std::make_shared<FieldSchema>(*schema_->get_field(column_name));"
+      },
+      {
+        "output_line": 32,
+        "text": "    field_copy->set_name(rename);"
+      },
+      {
+        "output_line": 33,
+        "text": "  }"
+      },
+      {
+        "output_line": 34,
+        "text": ""
+      },
+      {
+        "output_line": 35,
+        "text": "  auto new_schema = std::make_shared<CollectionSchema>(*schema_);"
+      },
+      {
+        "output_line": 36,
+        "text": "  s = new_schema->alter_field(column_name, field_copy);"
+      },
+      {
+        "output_line": 37,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 38,
+        "text": ""
+      },
+      {
+        "output_line": 39,
+        "text": "  if (writing_segment_->has_record()) {"
+      },
+      {
+        "output_line": 40,
+        "text": "    s = switch_to_new_segment_for_writing();"
+      },
+      {
+        "output_line": 41,
+        "text": "    CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 42,
+        "text": "  }"
+      },
+      {
+        "output_line": 43,
+        "text": ""
+      },
+      {
+        "output_line": 44,
+        "text": "  Version new_version = version_manager_->get_current_version();"
+      },
+      {
+        "output_line": 45,
+        "text": ""
+      },
+      {
+        "output_line": 46,
+        "text": "  // alter column on segment manager"
+      },
+      {
+        "output_line": 47,
+        "text": "  s = segment_manager_->alter_column(column_name, field_copy,"
+      },
+      {
+        "output_line": 48,
+        "text": "                                     options.concurrency_);"
+      },
+      {
+        "output_line": 49,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 50,
+        "text": ""
+      },
+      {
+        "output_line": 51,
+        "text": "  // reset writing segment with new schema"
+      },
+      {
+        "output_line": 52,
+        "text": "  auto id = writing_segment_->id();"
+      },
+      {
+        "output_line": 53,
+        "text": "  auto min_doc_id = writing_segment_->meta()->min_doc_id();"
+      },
+      {
+        "output_line": 54,
+        "text": ""
+      },
+      {
+        "output_line": 55,
+        "text": "  s = writing_segment_->destroy();"
+      },
+      {
+        "output_line": 56,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 57,
+        "text": "  writing_segment_.reset();"
+      },
+      {
+        "output_line": 58,
+        "text": ""
+      },
+      {
+        "output_line": 59,
+        "text": "  SegmentOptions seg_options;"
+      },
+      {
+        "output_line": 60,
+        "text": "  seg_options.enable_mmap_ = options_.enable_mmap_;"
+      },
+      {
+        "output_line": 61,
+        "text": "  seg_options.max_buffer_size_ = options_.max_buffer_size_;"
+      },
+      {
+        "output_line": 62,
+        "text": "  seg_options.read_only_ = options_.read_only_;"
+      },
+      {
+        "output_line": 63,
+        "text": "  auto writing_segment ="
+      },
+      {
+        "output_line": 64,
+        "text": "      Segment::CreateAndOpen(path_, *new_schema, id, min_doc_id, id_map_,"
+      },
+      {
+        "output_line": 65,
+        "text": "                             delete_store_, version_manager_, seg_options);"
+      },
+      {
+        "output_line": 66,
+        "text": "  if (!writing_segment) {"
+      },
+      {
+        "output_line": 67,
+        "text": "    return writing_segment.error();"
+      },
+      {
+        "output_line": 68,
+        "text": "  }"
+      },
+      {
+        "output_line": 69,
+        "text": "  writing_segment_ = writing_segment.value();"
+      },
+      {
+        "output_line": 70,
+        "text": ""
+      },
+      {
+        "output_line": 71,
+        "text": "  // update new version"
+      },
+      {
+        "output_line": 72,
+        "text": "  new_version.set_schema(*new_schema);"
+      },
+      {
+        "output_line": 73,
+        "text": "  new_version.reset_writing_segment_meta(writing_segment_->meta());"
+      },
+      {
+        "output_line": 74,
+        "text": ""
+      },
+      {
+        "output_line": 75,
+        "text": "  auto new_segment_metas = segment_manager_->get_segments_meta();"
+      },
+      {
+        "output_line": 76,
+        "text": "  for (auto meta : new_segment_metas) {"
+      },
+      {
+        "output_line": 77,
+        "text": "    s = new_version.update_persisted_segment_meta(meta);"
+      },
+      {
+        "output_line": 78,
+        "text": "    CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 79,
+        "text": "  }"
+      },
+      {
+        "output_line": 80,
+        "text": ""
+      },
+      {
+        "output_line": 81,
+        "text": "  s = version_manager_->apply(new_version);"
+      },
+      {
+        "output_line": 82,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 83,
+        "text": ""
+      },
+      {
+        "output_line": 84,
+        "text": "  // persist manifest"
+      },
+      {
+        "output_line": 85,
+        "text": "  s = version_manager_->flush();"
+      },
+      {
+        "output_line": 86,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 87,
+        "text": ""
+      },
+      {
+        "output_line": 88,
+        "text": "  schema_ = new_schema;"
+      },
+      {
+        "output_line": 89,
+        "text": ""
+      },
+      {
+        "output_line": 90,
+        "text": "  return Status::OK();"
+      },
+      {
+        "output_line": 91,
+        "text": "}"
+      },
+      {
+        "output_line": 92,
+        "text": ""
+      },
+      {
+        "output_line": 93,
+        "text": "Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {"
+      },
+      {
+        "output_line": 94,
+        "text": "  return write_impl(docs, WriteMode::INSERT);"
+      },
+      {
+        "output_line": 95,
+        "text": "}"
+      },
+      {
+        "output_line": 96,
+        "text": ""
+      },
+      {
+        "output_line": 97,
+        "text": "Result<WriteResults> CollectionImpl::update(std::vector<Doc> &docs) {"
+      },
+      {
+        "output_line": 98,
+        "text": "  return write_impl(docs, WriteMode::UPDATE);"
+      },
+      {
+        "output_line": 99,
+        "text": "}"
+      },
+      {
+        "output_line": 100,
+        "text": ""
+      },
+      {
+        "output_line": 101,
+        "text": "Result<WriteResults> CollectionImpl::upsert(std::vector<Doc> &docs) {"
+      },
+      {
+        "output_line": 102,
+        "text": "  return write_impl(docs, WriteMode::UPSERT);"
+      },
+      {
+        "output_line": 103,
+        "text": "}"
+      },
+      {
+        "output_line": 104,
+        "text": ""
+      },
+      {
+        "output_line": 105,
+        "text": "Status CollectionImpl::internal_fetch_by_doc(const Doc &doc,"
+      },
+      {
+        "output_line": 106,
+        "text": "                                             Doc::Ptr *doc_out) {"
+      },
+      {
+        "output_line": 107,
+        "text": "  // Called from handle_update(), i.e. under write_impl()'s write_mtx_."
+      },
+      {
+        "output_line": 108,
+        "text": "  auto segments = get_all_segments_unsafe();"
+      },
+      {
+        "output_line": 109,
+        "text": "  uint64_t doc_id;"
+      },
+      {
+        "output_line": 110,
+        "text": "  bool has = id_map_->has(doc.pk_ref(), &doc_id);"
+      },
+      {
+        "output_line": 111,
+        "text": "  if (!has) {"
+      },
+      {
+        "output_line": 112,
+        "text": "    return Status::NotFound(\"Document not found\");"
+      },
+      {
+        "output_line": 113,
+        "text": "  }"
+      },
+      {
+        "output_line": 114,
+        "text": "  if (delete_store_->is_deleted(doc_id)) {"
+      },
+      {
+        "output_line": 115,
+        "text": "    return Status::NotFound(\"Document already deleted\");"
+      },
+      {
+        "output_line": 116,
+        "text": "  }"
+      },
+      {
+        "output_line": 117,
+        "text": ""
+      },
+      {
+        "output_line": 118,
+        "text": "  auto segment = local_segment_by_doc_id(doc_id, segments);"
+      },
+      {
+        "output_line": 119,
+        "text": "  if (!segment) {"
+      },
+      {
+        "output_line": 120,
+        "text": "    LOG_WARN(\"doc_id: %zu segment not found\", (size_t)doc_id);"
+      },
+      {
+        "output_line": 121,
+        "text": "    return Status::InternalError(\"Segment not found\");"
+      },
+      {
+        "output_line": 122,
+        "text": "  }"
+      },
+      {
+        "output_line": 123,
+        "text": ""
+      },
+      {
+        "output_line": 124,
+        "text": "  auto old_doc = segment->fetch(doc_id, std::nullopt, true);"
+      },
+      {
+        "output_line": 125,
+        "text": "  if (!old_doc) {"
+      },
+      {
+        "output_line": 126,
+        "text": "    LOG_WARN(\"doc_id: %zu fetch doc failed\", (size_t)doc_id);"
+      },
+      {
+        "output_line": 127,
+        "text": "    return Status::InternalError(\"Fetch doc failed\");"
+      },
+      {
+        "output_line": 128,
+        "text": "  }"
+      },
+      {
+        "output_line": 129,
+        "text": "  *doc_out = old_doc;"
+      },
+      {
+        "output_line": 130,
+        "text": "  return Status::OK();"
+      },
+      {
+        "output_line": 131,
+        "text": "}"
+      },
+      {
+        "output_line": 132,
+        "text": ""
+      },
+      {
+        "output_line": 133,
+        "text": "Status CollectionImpl::handle_upsert(Doc &doc) {"
+      },
+      {
+        "output_line": 134,
+        "text": "  return writing_segment_->upsert(doc);"
+      },
+      {
+        "output_line": 135,
+        "text": "}"
+      },
+      {
+        "output_line": 136,
+        "text": ""
+      },
+      {
+        "output_line": 137,
+        "text": "Status CollectionImpl::handle_update(Doc &doc) {"
+      },
+      {
+        "output_line": 138,
+        "text": "  Doc::Ptr old_doc{nullptr};"
+      },
+      {
+        "output_line": 139,
+        "text": "  auto s = internal_fetch_by_doc(doc, &old_doc);"
+      },
+      {
+        "output_line": 140,
+        "text": "  CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 141,
+        "text": ""
+      },
+      {
+        "output_line": 142,
+        "text": "  old_doc->merge(doc);"
+      },
+      {
+        "output_line": 143,
+        "text": "  return writing_segment_->update(*old_doc);"
+      },
+      {
+        "output_line": 144,
+        "text": "}"
+      },
+      {
+        "output_line": 145,
+        "text": ""
+      },
+      {
+        "output_line": 146,
+        "text": "Status CollectionImpl::handle_insert(Doc &doc) {"
+      },
+      {
+        "output_line": 147,
+        "text": "  return writing_segment_->insert(doc);"
+      },
+      {
+        "output_line": 148,
+        "text": "}"
+      },
+      {
+        "output_line": 149,
+        "text": ""
+      },
+      {
+        "output_line": 150,
+        "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,"
+      },
+      {
+        "output_line": 151,
+        "text": "                                                WriteMode mode) {"
+      },
+      {
+        "output_line": 152,
+        "text": "  CHECK_READONLY_RETURN_STATUS_EXPECTED();"
+      },
+      {
+        "output_line": 153,
+        "text": ""
+      },
+      {
+        "output_line": 154,
+        "text": "  std::shared_lock lock(schema_handle_mtx_);"
+      },
+      {
+        "output_line": 155,
+        "text": ""
+      },
+      {
+        "output_line": 156,
+        "text": "  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);"
+      },
+      {
+        "output_line": 157,
+        "text": "  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);"
+      },
+      {
+        "output_line": 158,
+        "text": ""
+      },
+      {
+        "output_line": 159,
+        "text": "  for (auto &&doc : docs) {"
+      },
+      {
+        "output_line": 160,
+        "text": "    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);"
+      },
+      {
+        "output_line": 161,
+        "text": "    CHECK_RETURN_STATUS_EXPECTED(s);"
+      },
+      {
+        "output_line": 162,
+        "text": "  }"
+      },
+      {
+        "output_line": 163,
+        "text": ""
+      },
+      {
+        "output_line": 164,
+        "text": "  // TODO: The granularity of the write_lock is too coarse."
+      },
+      {
+        "output_line": 165,
+        "text": "  std::lock_guard write_lock(write_mtx_);"
+      },
+      {
+        "output_line": 166,
+        "text": ""
+      },
+      {
+        "output_line": 167,
+        "text": "  WriteResults results;"
+      },
+      {
+        "output_line": 168,
+        "text": "  // validate write batch size"
+      },
+      {
+        "output_line": 169,
+        "text": "  if (docs.size() > kMaxWriteBatchSize) {"
+      },
+      {
+        "output_line": 170,
+        "text": "    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument("
+      },
+      {
+        "output_line": 171,
+        "text": "        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \","
+      },
+      {
+        "output_line": 172,
+        "text": "        kMaxWriteBatchSize));"
+      },
+      {
+        "output_line": 173,
+        "text": "  }"
+      },
+      {
+        "output_line": 174,
+        "text": ""
+      },
+      {
+        "output_line": 175,
+        "text": "  for (auto &&doc : docs) {"
+      },
+      {
+        "output_line": 176,
+        "text": "    if (need_switch_to_new_segment()) {"
+      },
+      {
+        "output_line": 177,
+        "text": "      auto s = switch_to_new_segment_for_writing();"
+      },
+      {
+        "output_line": 178,
+        "text": "      CHECK_RETURN_STATUS_EXPECTED(s);"
+      },
+      {
+        "output_line": 179,
+        "text": "    }"
+      },
+      {
+        "output_line": 180,
+        "text": ""
+      },
+      {
+        "output_line": 181,
+        "text": "    Status s;"
+      },
+      {
+        "output_line": 182,
+        "text": ""
+      },
+      {
+        "output_line": 183,
+        "text": "    switch (mode) {"
+      },
+      {
+        "output_line": 184,
+        "text": "      case WriteMode::UPSERT:"
+      },
+      {
+        "output_line": 185,
+        "text": "        s = handle_upsert(doc);"
+      },
+      {
+        "output_line": 186,
+        "text": "        break;"
+      },
+      {
+        "output_line": 187,
+        "text": "      case WriteMode::UPDATE:"
+      },
+      {
+        "output_line": 188,
+        "text": "        s = handle_update(doc);"
+      },
+      {
+        "output_line": 189,
+        "text": "        break;"
+      },
+      {
+        "output_line": 190,
+        "text": "      case WriteMode::INSERT:"
+      },
+      {
+        "output_line": 191,
+        "text": "        s = handle_insert(doc);"
+      },
+      {
+        "output_line": 192,
+        "text": "        break;"
+      },
+      {
+        "output_line": 193,
+        "text": "      default:"
+      },
+      {
+        "output_line": 194,
+        "text": "        s = Status::InvalidArgument(\"Invalid write mode\");"
+      },
+      {
+        "output_line": 195,
+        "text": "    }"
+      },
+      {
+        "output_line": 196,
+        "text": ""
+      },
+      {
+        "output_line": 197,
+        "text": "    results.push_back(s);"
+      },
+      {
+        "output_line": 198,
+        "text": "  }"
+      },
+      {
+        "output_line": 199,
+        "text": ""
+      },
+      {
+        "output_line": 200,
+        "text": "  return results;"
+      }
+    ],
+    "do_not_compare_pipeline_ordinal_to_sorted_glob_order": true
+  },
+  "manual_review_status": "pending"
+}

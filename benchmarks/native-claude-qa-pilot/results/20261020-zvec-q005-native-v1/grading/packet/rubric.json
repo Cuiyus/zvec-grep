@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "task_id": "q005",
+  "status": "Source-reviewed semantics; canonical acceptance is recorded separately in provenance.",
+  "source_repository": "https://github.com/alibaba/zvec.git",
+  "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+  "origin_issue": 395,
+  "question_sha256": "02018cd483b233297065b7114b483d58ecbfce106155f3e2fa54e2c579bf968c",
+  "maximum_score": 10,
+  "units": [
+    {
+      "id": "C1.1",
+      "points": 1,
+      "claim": "The proposed Unicode/space/slash/emoji collection name passes identifier validation.",
+      "curated_evidence": [
+        "E02",
+        "E03",
+        "E14"
+      ]
+    },
+    {
+      "id": "C1.2",
+      "points": 1,
+      "claim": "The non-ASCII scalar field name is rejected by the distinct ASCII field rule.",
+      "curated_evidence": [
+        "E03",
+        "E13"
+      ]
+    },
+    {
+      "id": "C2.1",
+      "points": 1,
+      "claim": "The stated Unicode/space/slash/emoji document ID is valid under this version's identifier rule.",
+      "curated_evidence": [
+        "E02",
+        "E03",
+        "E15"
+      ]
+    },
+    {
+      "id": "C2.2",
+      "points": 1,
+      "claim": "The document limit is 1024 UTF-8 bytes: 341 Han characters =1023 bytes passes; 342=1026 fails.",
+      "curated_evidence": [
+        "E01",
+        "E02",
+        "E16"
+      ]
+    },
+    {
+      "id": "C3.1",
+      "points": 1,
+      "claim": "The actual TAB in the middle ID is forbidden and yields identifier INVALID_ARGUMENT.",
+      "curated_evidence": [
+        "E02",
+        "E04",
+        "E17"
+      ]
+    },
+    {
+      "id": "C3.2",
+      "points": 1,
+      "claim": "In the TAB batch no document is inserted because all document validation precedes every write.",
+      "curated_evidence": [
+        "E04",
+        "E06",
+        "E07"
+      ]
+    },
+    {
+      "id": "C4.1",
+      "points": 1,
+      "claim": "The TAB batch raises Python ValueError through the overall unexpected result; it does not return a three-item status list.",
+      "curated_evidence": [
+        "E06",
+        "E07",
+        "E08",
+        "E09",
+        "E10"
+      ]
+    },
+    {
+      "id": "C4.2",
+      "points": 1,
+      "claim": "The duplicate batch returns per-document statuses in order: OK, ALREADY_EXISTS, OK; it does not raise merely because the middle write status is ALREADY_EXISTS.",
+      "curated_evidence": [
+        "E06",
+        "E08",
+        "E09",
+        "E10",
+        "E11",
+        "E18"
+      ]
+    },
+    {
+      "id": "C5.1",
+      "points": 1,
+      "claim": "The first and last fresh documents in the duplicate batch are inserted; processing continues after the duplicate write status.",
+      "curated_evidence": [
+        "E06",
+        "E11",
+        "E12"
+      ]
+    },
+    {
+      "id": "C5.2",
+      "points": 1,
+      "claim": "The existing seed-id document keeps old payload: INSERT checks for an existing ID and returns before mutation; this is not UPSERT.",
+      "curated_evidence": [
+        "E11"
+      ]
+    }
+  ],
+  "scoring_rules": [
+    "Each unit is one independent factual 0/1 decision; preserve null when material interpretation is unresolved. No keyword, fixed function name or fixed curated evidence ID is required.",
+    "Assess factual points separately from citation support. Submitted equivalent call-site/callee evidence is accepted, and reviewer-added evidence cannot repair absent answer citations.",
+    "A response need not enumerate every forbidden Unicode control, every reserved field name, every wrapper, every optional I/O path or all identifier limits not asked.",
+    "In the stated no-other-errors scenario, failure before any write is a prevalidation property; do not credit a claim of general insert transaction atomicity. A claim of partial writes after arbitrary storage errors is outside the question, not required.",
+    "The overall expected result versus a successful vector containing a non-OK Status must be distinguished. Do not turn a per-item ALREADY_EXISTS into a thrown runtime_error by applying the overall unwrap mapper to each item.",
+    "Source tests are corroborating code, not executed runtime observations. No required patch, regression test or official SWE-QA grading claim."
+  ],
+  "limits": [
+    "Exact source review and canonical/export receipts are host-only provenance; execution requires a separate frozen native plan. No native q005 answer exists at authoring.",
+    "The original issue requests relaxed identifier rules. Batch-failure probes are explicitly authored source scenarios, not claimed historical observations from that issue.",
+    "All hypothetical I/O/state/concurrency assumptions are explicit. Source confirms control flow, not a measured runtime outcome."
+  ],
+  "task_type": "runtime_api_behavior_qa",
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "path": "src/db/index/common/identifier_validation.h",
+      "start_line": 22,
+      "end_line": 29,
+      "file_bytes": 1041,
+      "file_sha256": "b36fa323134a9930473f5eea9b6b7178025bca67875279d41f7172105a0b3dfb",
+      "span_sha256": "d6ae977004058911467a8b24ee1c9f765e70782d4594a35f28f9edf54955fb61",
+      "supports": "Identifier byte limits and validator declarations",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E02",
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 28,
+      "end_line": 80,
+      "file_bytes": 4527,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "98ef3c6a849c3c2976471d7082dfb913c44850b367156cc43204f7fae8733b43",
+      "supports": "Forbidden decoded controls, UTF-8 iteration, byte-length check",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E03",
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 91,
+      "end_line": 130,
+      "file_bytes": 4527,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "cb3e7da721632fece38ca665551e466c84f700a90b6ba99047775c46b05e7936",
+      "supports": "Distinct document/collection versus field validators",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E04",
+      "path": "src/db/index/common/doc.cc",
+      "start_line": 728,
+      "end_line": 737,
+      "file_bytes": 45256,
+      "file_sha256": "217223974ed1aa7382a92c7ede04c52f9a0cf2b93470053dd56eab0a7d5a6bb2",
+      "span_sha256": "73c38717eabd2cd6aafc4baee22725db66a4d70e00b88b73d9e6771049e9f651",
+      "supports": "Document validation invokes ID validation before any field checks",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E05",
+      "path": "src/db/collection.cc",
+      "start_line": 1593,
+      "end_line": 1603,
+      "file_bytes": 96283,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "538e234bb02772dad5ffab7636c148dc5ccfd0583a605304bdab7e713625a413",
+      "supports": "Insert routes to shared write_impl in INSERT mode",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E06",
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1709,
+      "file_bytes": 96283,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "71aece5eacf59e097ad7b9f89814e1764cc46877d3660a1fd9089ca4a8ecc117",
+      "supports": "Whole-batch validation before write loop; per-item write statuses continue",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E07",
+      "path": "src/db/common/typedef.h",
+      "start_line": 180,
+      "end_line": 184,
+      "file_bytes": 9031,
+      "file_sha256": "7481533f08fa62764b027c6931f01bfd7dc63175308d49503deb888e386170a8",
+      "span_sha256": "9d2ccb559c41440776b78a724dcc31528c10a237505718e1140d851cb99aa99c",
+      "supports": "Failed validation yields an unexpected overall Result",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E08",
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 84,
+      "file_bytes": 17445,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "0f753b94246ebed326775e3c2ca39b8d25b5b1a9186a9384325eba7ce745b4d0",
+      "supports": "Expected error mapping including INVALID_ARGUMENT to ValueError",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E09",
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 284,
+      "end_line": 295,
+      "file_bytes": 17445,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "e728ab1b59a8df059263cd254b0b31bf8a055a3ade535a4b447bcb803e5e4f47",
+      "supports": "Insert binding unwraps the overall expected value",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E10",
+      "path": "python/zvec/model/collection.py",
+      "start_line": 337,
+      "end_line": 354,
+      "file_bytes": 27039,
+      "file_sha256": "eab65fddb6a5c1b7fcc01e93c0bc784c5ee922f9fe6afe22903fbb09d19a1bfb",
+      "span_sha256": "b8b7a7dbe5cf7d62bab0701dd81639bf8f17a8d64d29f8db478a38be05f5805c",
+      "supports": "Python list conversion, native Insert and list return",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E11",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 990,
+      "end_line": 1006,
+      "file_bytes": 175464,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "8f685d4ca0f9d8c8a5cb124d151d0c702e14d16b5b1d9fa98c261c37bd48c3e4",
+      "supports": "Existing-key error before WAL or insertion; existing payload remains",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E12",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 924,
+      "end_line": 968,
+      "file_bytes": 175464,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "f4b01b90fe87460a8302ed012b79128a83392459ad635833c8e2386f9d08c80c",
+      "supports": "Successful internal insert updates ID map, stores and index components",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E13",
+      "path": "src/db/index/common/schema.cc",
+      "start_line": 84,
+      "end_line": 91,
+      "file_bytes": 27054,
+      "file_sha256": "2a141255ce1e21240ce4efef553924c57e21d98da41667918ea23be42ff6fd48",
+      "span_sha256": "1b893b7f89a9e6681ca557cfad69f12d9bd305042d7e3d9004745280f4264665",
+      "supports": "Field validation enters distinct identifier validator",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E14",
+      "path": "src/db/index/common/schema.cc",
+      "start_line": 406,
+      "end_line": 413,
+      "file_bytes": 27054,
+      "file_sha256": "2a141255ce1e21240ce4efef553924c57e21d98da41667918ea23be42ff6fd48",
+      "span_sha256": "fd884d7396316369fb2b4fd0cd35aa78b792b9da908d8e3492ad5fd1aaeb3039",
+      "supports": "Collection validation enters Unicode-capable collection validator",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E15",
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 61,
+      "end_line": 87,
+      "file_bytes": 12925,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "b5bfe0b29047f04929cd4c6bfe9a6d89069494473f6e7441d531817cec94f138",
+      "supports": "Source-only corroboration of accepted Unicode, punctuation and spaces",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E16",
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 100,
+      "end_line": 120,
+      "file_bytes": 12925,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "3b73c2f9bc0492855e49bd1d78b1b59478887afd6cdf18fac8cd0d8752ec2bcb",
+      "supports": "Source-only corroboration of UTF-8 byte limits",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E17",
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 160,
+      "end_line": 187,
+      "file_bytes": 12925,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "13e6485c79bf9e16f2cdbcf8f98a0a093f9897e3762d6403a1c14c6cd277eac5",
+      "supports": "Source-only corroboration of TAB/control rejection",
+      "source_only_not_executed": true
+    },
+    {
+      "id": "E18",
+      "path": "python/tests/test_collection.py",
+      "start_line": 572,
+      "end_line": 584,
+      "file_bytes": 47097,
+      "file_sha256": "c2eb92ac12ba8eb1baece51e4d22c3a42dc05cadf47ab75176884c9cc8b3486f",
+      "span_sha256": "f1d6183b6c11d1decf0a9a43d57b25184e2284db4983c29f8911780168964e19",
+      "supports": "Source-only corroboration of duplicate insert returned status",
+      "source_only_not_executed": true
+    }
+  ],
+  "success_rule": {
+    "total_at_least": 8,
+    "mandatory_units": [
+      "C3.1",
+      "C3.2",
+      "C4.1",
+      "C4.2",
+      "C5.1",
+      "C5.2"
+    ],
+    "core_citations_required_for": [
+      "Invalid ID validation to whole-batch prevalidation before writes",
+      "Overall Result error through Python exception mapping",
+      "Duplicate inside per-document write loop with continuation",
+      "Existing ID early return before payload mutation"
+    ],
+    "nonempty_final": true,
+    "no_material_contradiction_to_any_asked_conclusion": true
+  },
+  "provenance": "evaluator/provenance/q005/canonical-normalization.json"
+}

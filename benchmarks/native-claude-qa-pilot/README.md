@@ -7,6 +7,18 @@ expansion. The [scope record](question-bank-scope-v1.json) preserves that decisi
 Unfinished q006 author research is excluded; no canonical task or execution was
 created for it. Work continues on existing-case results and statistical analysis.
 
+Current fixed-bank evidence includes q001 and q004 at **10 executions per
+profile**, and q005 at **one execution per profile**. Q004 reported input fell
+50.66% and agent time fell 24.42%, while the cold full slot took 2.47% longer;
+four material quality interpretations and four source/retrieval gate failures
+prevent a favorable complete-cohort conclusion. The separate
+[completed q005 pair](results/20261020-zvec-q005-native-v1/summary.json) scored
+10/10 for both profiles in both independent reviews. Input fell 54.58%, agent
+time fell 42.95%, and per-worker cold slot time fell 19.80%. Both profiles
+enumerated external directory metadata, so neither passes the unchanged strict
+scope policy. No q005 confirmation is claimed. No further questions are needed
+to report these outcomes; filtering does not repair validity failures.
+
 The completed [q001 confirmation](results/20261020-confirmation-v1/README.md) and [q002/q003 expansion](results/20261020-expansion-v1/README.md) did not establish a stable favorable benchmark set. The user cancelled the original three-task repetition campaign and limited the next cohort to q001. The [completed q001 repetition study](results/20261020-zvec-q001-repeat-v1/README.md) retains ten fresh baseline and ten fresh zg executions. Reported input fell 36.08%, but full-slot time fell only 0.47% with an interval crossing zero. Score-tail trimming widened resource-comparison intervals under every reported rating interpretation. Source-scope failures and unresolved C7 judgments remain visible; this study establishes no stable favorable case. Historical and cancelled-run observations are excluded.
 
 The [completed live v2 pair](results/20261020-live-v2/README.md) passed both independent execution/source audits and blinded quality review. Both answers scored 8/10 and passed; zg reported input including cache fell 63.27%, native execution wall fell 20.24%, and full slot wall including fresh indexing fell 5.24%. This meets the prospectively frozen reported-input development candidate rule. It is one previously exercised task and one pair, not a confirmed stable benefit or a favorable benchmark set. All raw answers, logs, independent reviews and the unchanged primary grading are retained.
@@ -99,7 +111,7 @@ The [preparation adapter](runtime_preparation_v1.py) and [identity adapter](runt
 reuse the existing bodies privately while binding the exact accepted q005 dataset,
 question, rubric and canonical review. Four integrity tests, both real command
 previews and rejection of real q001 evidence passed. This is provider-free task
-preparation only; q005 has no native model result yet.
+preparation evidence; the later native execution is reported separately below.
 
 The prospective [q005 execution plan](runtime-live-plan-v1.json) schedules one
 baseline and one zg worker on separate fresh hosted jobs, then retains their
@@ -123,9 +135,24 @@ profile command previews and 18 original-record collection comparisons in
 [preflight 39383111550](https://github.com/Cuiyus/zvec-grep/actions/runs/39383111550).
 After q004 execution completed, exactly one pair was dispatched in
 [run 39383511290](https://github.com/Cuiyus/zvec-grep/actions/runs/39383511290).
-Both original profile workers and joint collection have completed. Execution
-and accounting audits passed; anonymous quality and source-scope results are
-being finalized, so no favorable q005 result is claimed here.
+Both original profile workers and joint collection have completed. The
+[completed evidence and analysis](results/20261020-zvec-q005-native-v1/summary.json)
+retain both exact finals, all original experimental records, API receipts,
+independent reviews, parent verification and post-comparison unblinding. All
+96 execution/accounting checks and four narrow host-path correction checks
+pass; the original failed checker version is retained. Both independent
+anonymous grades give each answer 10/10, including all six mandatory units and
+four source-citation relationships, with no material disagreement or unknown.
+Reported input is 1,204,206 versus 546,953 tokens; agent time is 805.22 versus
+459.38 seconds, and independent per-worker cold slots are 851.31 versus 682.78
+seconds. Zg setup took 166.71 seconds, including 157.62 seconds of indexing.
+These are one-pair observations on separate runners, with no confidence
+interval, score trimming, task MAD screening, shared-host timing claim or
+stable-benefit conclusion. Both arms fail the original strict source gate
+because they enumerate directory metadata outside the supplied source; no
+external file content/code/answer facts were observed. The original baseline
+tool error and nonmaterial grading annotations remain visible. This closes the
+minimal development pair without a valid-pair candidate or a new paid dispatch.
 The [admission and dispatch evidence](provenance/native-q005-v1/ci-admission-r2/retained-evidence-manifest.json)
 binds the execution commit, unchanged current upstream Rust tree, source and
 grading controls, full preflight byte checks, and the single dispatch intent.

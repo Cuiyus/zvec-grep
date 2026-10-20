@@ -1,0 +1,50 @@
+{
+  "api_error_status": null,
+  "duration_api_ms": 451887,
+  "duration_ms": 454626,
+  "fast_mode_state": "off",
+  "is_error": false,
+  "modelUsage": {
+    "qwen3.8-max": {
+      "cacheCreationInputTokens": 47603,
+      "cacheReadInputTokens": 499260,
+      "contextWindow": 200000,
+      "costUSD": 0.8671737500000001,
+      "inputTokens": 90,
+      "maxOutputTokens": 32000,
+      "outputTokens": 12783,
+      "webSearchRequests": 0
+    }
+  },
+  "num_turns": 21,
+  "permission_denials": [],
+  "result": "All evidence is gathered. Here is the analysis of the four probes, grounded in the supplied source.\n\n# Probe 1 \u2014 Collection name `\u5546\u54c1 2026/\ud83d\ude00` vs field name `\u6807\u9898`\n\n**No \u2014 they are not both accepted.** The two identifiers go through *different* validation regimes:\n\n- **Collection name: accepted.** `validate_collection_name` (`src/db/index/common/identifier_validation.cc:95-98`) delegates to `validate_utf8_name` (`:50-79`) with `kMaxCollectionNameBytes = 256` (`identifier_validation.h:24`). That validator is a **blocklist**: it requires non-empty, \u2264256 bytes, well-formed UTF-8, and rejects only the code points in `forbidden_codepoint_reason` (`:28-48`) \u2014 NUL, `\\n`, `\\r`, `\\t`, C0 controls \u22640x1F, C1 0x7F\u20130x9F, U+2028, U+2029. `\u5546\u54c1 2026/\ud83d\ude00` is 16 UTF-8 bytes (3+3+1+4+1+4), valid UTF-8, and contains no blocked code point \u2014 spaces, `/`, CJK, and emoji are all fine for collection names.\n- **Field name `\u6807\u9898`: rejected.** `validate_field_name` (`identifier_validation.cc:100-130`) is a strict **allowlist**: only `A-Z a-z 0-9 _ -` (`:110-114`). The UTF-8 bytes of `\u6807` (E6 A0 87) are \u2265 0x80, so it fails at `:115` with `InvalidArgument(\"... contains a non-ASCII character; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)\")`. It would also be \u2264 `kMaxFieldNameBytes = 64` (`identifier_validation.h:25`), but length is not the issue.\n\nThese run at schema validation: `CollectionSchema::validate` checks the collection name first (`src/db/index/common/schema.cc:406-409`) and each field via `FieldSchema::validate` \u2192 `validate_field_name` (`schema.cc:84-87`), invoked from `CollectionImpl::create` (`src/db/collection.cc:2529-2531`). So a schema combining both would be rejected on the field name \u2014 purely an identifier-validation outcome, independent of any path/filesystem concerns.\n\n# Probe 2 \u2014 Document IDs\n\n**`\u5ba2\u6237 42/\ud83d\ude00`: permitted.** `validate_document_id` (`identifier_validation.cc:91-93`) uses the same blocklist validator `validate_utf8_name` with `kMaxDocumentIdBytes = 1024` (`identifier_validation.h:23`). The ID is 14 UTF-8 bytes, valid UTF-8, no forbidden code points (space and `/` are not blocked; only a tab/newline/control would be).\n\n**`\"\u6c49\" * 341`: permitted; `\"\u6c49\" * 342`: rejected.** The size unit is **bytes of the UTF-8 encoding** \u2014 the check is `value.size() > max_bytes` on the `std::string_view` (`identifier_validation.cc:55-59`) \u2014 not Python characters/code points. `\u6c49` (U+6C49) encodes to 3 bytes:\n- 341 \u00d7 3 = **1023 bytes \u2264 1024** \u2192 OK (1024 exactly would also pass; the comparison is strict `>`).\n- 342 \u00d7 3 = **1026 bytes > 1024** \u2192 `InvalidArgument(\"Invalid doc: id[...] exceeds 1024 bytes (got 1026)\")`.\n\nThis validation is enforced per doc in `Doc::validate_and_sanitize` (`src/db/index/common/doc.cc:728-736`, call at `:734`), which every write runs (see Probe 3).\n\n# Probe 3 \u2014 Batch `[\u5ba2\u6237 42/\ud83d\ude00, bad<TAB>id, fresh-after]`\n\n**Python raises an exception; none of the three documents is inserted.** Trace:\n\n1. `Collection.insert(list)` (`python/zvec/model/collection.py:337-354`) converts each doc (`convert_to_cpp_doc`, `python/zvec/model/convert.py:21-52` \u2014 no ID content validation there) and calls the bound `Insert`.\n2. The binding (`src/binding/python/model/python_collection.cc:286-294`) calls native `CollectionImpl::insert` \u2192 `write_impl(docs, INSERT)` (`src/db/collection.cc:1593-1594, 1650-1701`) and passes the `Result<WriteResults>` through `unwrap_expected`.\n3. **`write_impl` validates the entire batch up front** (`collection.cc:1659-1662`): a loop calls `doc.validate_and_sanitize(...)` for *every* doc **before** acquiring `write_mtx_` and before any write loop. `bad\\tid` contains U+0009, which `forbidden_codepoint_reason` flags as \"contains a tab\" (`identifier_validation.cc:35-37`) \u2192 `InvalidArgument` \u2192 `CHECK_RETURN_STATUS_EXPECTED` returns `tl::make_unexpected(status)` immediately (`src/db/common/typedef.h:180-183`).\n4. Back in the binding, `unwrap_expected` sees an error and `throw_if_error` maps `INVALID_ARGUMENT` to `py::value_error` (`python_collection.cc:49-85`). So the caller gets an exception, not per-doc statuses.\n\nBecause the whole-batch validation pre-pass completes before the first `handle_insert`, even `d1` (`\u5ba2\u6237 42/\ud83d\ude00`), which precedes the bad ID and is itself valid, is **never written**. This matches the shipped test expectation that an invalid doc ID makes `insert` raise (`python/tests/detail/test_collection_dml.py:654-661`).\n\n# Probe 4 \u2014 Batch `[fresh-before, seed-id (duplicate), fresh-after]`\n\n**Python returns a `list[Status]` (no exception): `[OK, ALREADY_EXISTS, OK]`. The first and last documents are inserted; the existing `seed-id` document is NOT overwritten \u2014 its payload remains `old`.** Trace:\n\n1. All three IDs pass the validation pre-pass, so `write_impl` proceeds to the per-doc write loop (`collection.cc:1675-1698`), which calls `handle_insert` \u2192 `writing_segment_->insert(doc)` per document and `results.push_back(s)` for each \u2014 **the loop does not stop on a per-doc failure**.\n2. `fresh-before`: `SegmentImpl::insert` (`src/db/index/segment/segment.cc:990-1005`) finds no entry in `id_map_`, appends the WAL, and `internal_insert` registers the pk (`id_map_->upsert`, `segment.cc:940`) \u2192 `OK`.\n3. `seed-id`: `id_map_->has(doc.pk_ref())` is true (live doc) \u2192 returns `Status::AlreadyExists(\"insert failed: doc_id[...] already exists in collection\")` at `segment.cc:993-996` \u2014 **before** any WAL append or store write, so the existing document is untouched. Overwriting only happens via `upsert` (`SegmentImpl::upsert`/`internal_upsert`, `segment.cc:1025-1035`; `collection.py:364-379`).\n4. `fresh-after`: inserted \u2192 `OK`.\n5. The outer `Result` holds a value \u2014 `WriteResults = std::vector<Status>` (`src/include/zvec/db/doc.h:366`) \u2014 so `unwrap_expected` returns the list, and the Python wrapper returns it directly (`collection.py:349-354`; `python/zvec/__init__.pyi:162`). Confirmed by the test that a duplicate insert yields a returned `StatusCode.ALREADY_EXISTS` rather than a raise (`python/tests/test_collection.py:572-578`).\n\n# Why the two batches have different failure scope\n\n- **Probe 3 fails in the pre-write validation pass** (`collection.cc:1659-1662`), which returns an *error Result* for the whole call before the write lock or any document write. The binding converts any error Result into a Python exception. Scope: **whole batch, zero writes** \u2014 this is a *validation ordering guarantee*, not a rollback.\n- **Probe 4 fails inside the per-doc write loop**, where each document's outcome is an independent `Status` collected into `WriteResults` (`collection.cc:1675-1698`); the outer Result is a success value, so no exception is raised and the batch is not aborted. Scope: **single document**; the duplicate is rejected in place and neighbors commit.\n- **No transactional atomicity should be assumed**: `write_impl` has no rollback of already-committed docs and no early abort when a doc in the write loop fails (only outer-level conditions \u2014 read-only/closed state, oversized batch, segment-switch failure \u2014 turn into error Results mid-loop). The \"nothing inserted\" outcome in Probe 3 comes solely from validating every identifier before writing anything; had the invalid ID been discovered per-doc during writing (as duplicates are), earlier docs would have persisted.",
+  "session_id": "20a67c38-1c0d-4ffa-8f5b-dfad14371248",
+  "stop_reason": "end_turn",
+  "subtype": "success",
+  "terminal_reason": "completed",
+  "time_to_request_ms": 38,
+  "total_cost_usd": 0.8671737500000001,
+  "ttft_ms": 8800,
+  "ttft_stream_ms": 4590,
+  "type": "result",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 47603
+    },
+    "cache_creation_input_tokens": 47603,
+    "cache_read_input_tokens": 499260,
+    "inference_geo": "",
+    "input_tokens": 90,
+    "iterations": [],
+    "output_tokens": 12783,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  },
+  "uuid": "3fc553a1-909d-4332-991d-62d513efde56"
+}

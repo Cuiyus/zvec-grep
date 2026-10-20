@@ -1,0 +1,427 @@
+{
+  "ordinal": 1,
+  "session": "root",
+  "name": "Bash",
+  "tool_id": "toolu_0286215f7dbe4f38880c56d9",
+  "evidence": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-q005-live-v1-audit/source-scope/zvec-grep/extracted/tools/tool-0001.json",
+    "bytes": 26376,
+    "sha256": "8b9f7e4bcb07c13ebccce5fdcad97576d3d45359f07b50a318a42d818e852d7a"
+  },
+  "mechanical_check": {
+    "full_command": "grep -rn \"define CHECK_RETURN_STATUS_EXPECTED\\|define CHECK_RETURN_STATUS\\b\" /workspace/src | head; echo ---; grep -rn \"unwrap_expected\\|throw_if_error\" /workspace/src/binding/python --include=*.h | head; echo ---; sed -n 380,470p /workspace/src/db/index/common/schema.cc",
+    "shell_semantics_review_required": true,
+    "metadata": {
+      "stdout": "/workspace/src/db/common/typedef.h:175:#define CHECK_RETURN_STATUS(status) \\\n/workspace/src/db/common/typedef.h:180:#define CHECK_RETURN_STATUS_EXPECTED(status) \\\n---\n---\n  }\n\n  oss << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\"\n      << indent(indent_level + 1)\n      << \"data_type: \" << DataTypeCodeBook::AsString(data_type_) << \",\\n\";\n\n  if (is_vector_field()) {\n    if (is_dense_vector()) {\n      oss << indent(indent_level + 1) << \"dimension: \" << dimension_ << \",\\n\";\n    }\n  } else {\n    oss << indent(indent_level + 1)\n        << \"nullable: \" << (nullable_ ? \"true\" : \"false\") << \",\\n\";\n  }\n\n  if (index_params_) {\n    oss << indent(indent_level + 1)\n        << \"index_params: \" << index_params_->to_string() << \"\\n\";\n  } else {\n    oss << indent(indent_level + 1) << \"index_params: null\\n\";\n  }\n\n  oss << indent(indent_level) << \"}\";\n  return oss.str();\n}\n\nStatus CollectionSchema::validate() const {\n  if (auto s = validate_collection_name(name_); !s.ok()) {\n    return s;\n  }\n  std::unordered_set<std::string> names;\n  for (const auto &field : fields_) {\n    if (!field) {\n      return Status::InvalidArgument(\n          \"Invalid schema: field schema must not be null\");\n    }\n    if (!names.insert(field->name()).second) {\n      return Status::InvalidArgument(\"Invalid schema: duplicate field name [\",\n                                     format_name(field->name()),\n                                     \"]; field names must be unique\");\n    }\n  }\n  if (forward_fields().size() > kMaxScalarFieldSize) {\n    return Status::InvalidArgument(\n        \"Invalid schema: collection[\", format_name(name_),\n        \"]'s field size must <= \", kMaxScalarFieldSize);\n  }\n  if (max_doc_count_per_segment_ < MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD) {\n    return Status::InvalidArgument(\n        \"Invalid schema: max_doc_count_per_segment must >= \",\n        MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD);\n  }\n  if (fields_.empty()) {\n    return Status::InvalidArgument(\"Invalid schema: collection[\",\n                                   format_name(name_), \"] has no fields\");\n  }\n  auto v_fields = vector_fields();\n  if (v_fields.size() > kMaxVectorFieldSize) {\n    return Status::InvalidArgument(\n        \"Invalid schema: collection[\", format_name(name_),\n        \"]'s vector field size must <= \", kMaxVectorFieldSize);\n  }\n  for (auto &field : fields_) {\n    auto s = field->validate();\n    CHECK_RETURN_STATUS(s);\n  }\n  return Status::OK();\n}\n\nstd::string CollectionSchema::to_string() const {\n  std::ostringstream oss;\n  oss << \"CollectionSchema{\"\n      << \"name:'\" << name_ << \"'\"\n      << \",max_doc_count_per_segment:\" << max_doc_count_per_segment_\n      << \",fields:[\";\n\n  for (size_t i = 0; i < fields_.size(); ++i) {\n    if (i > 0) oss << \",\";\n    oss << fields_[i]->to_string();\n  }\n\n  oss << \"]}\";\n  return oss.str();\n}\n\n\nstd::string CollectionSchema::to_string_formatted(int indent_level) const {\n  std::ostringstream oss;\n  oss << indent(indent_level) << \"CollectionSchema{\\n\"\n      << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\"\n      << indent(indent_level + 1)",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+    },
+    "native_content": "/workspace/src/db/common/typedef.h:175:#define CHECK_RETURN_STATUS(status) \\\n/workspace/src/db/common/typedef.h:180:#define CHECK_RETURN_STATUS_EXPECTED(status) \\\n---\n---\n  }\n\n  oss << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\"\n      << indent(indent_level + 1)\n      << \"data_type: \" << DataTypeCodeBook::AsString(data_type_) << \",\\n\";\n\n  if (is_vector_field()) {\n    if (is_dense_vector()) {\n      oss << indent(indent_level + 1) << \"dimension: \" << dimension_ << \",\\n\";\n    }\n  } else {\n    oss << indent(indent_level + 1)\n        << \"nullable: \" << (nullable_ ? \"true\" : \"false\") << \",\\n\";\n  }\n\n  if (index_params_) {\n    oss << indent(indent_level + 1)\n        << \"index_params: \" << index_params_->to_string() << \"\\n\";\n  } else {\n    oss << indent(indent_level + 1) << \"index_params: null\\n\";\n  }\n\n  oss << indent(indent_level) << \"}\";\n  return oss.str();\n}\n\nStatus CollectionSchema::validate() const {\n  if (auto s = validate_collection_name(name_); !s.ok()) {\n    return s;\n  }\n  std::unordered_set<std::string> names;\n  for (const auto &field : fields_) {\n    if (!field) {\n      return Status::InvalidArgument(\n          \"Invalid schema: field schema must not be null\");\n    }\n    if (!names.insert(field->name()).second) {\n      return Status::InvalidArgument(\"Invalid schema: duplicate field name [\",\n                                     format_name(field->name()),\n                                     \"]; field names must be unique\");\n    }\n  }\n  if (forward_fields().size() > kMaxScalarFieldSize) {\n    return Status::InvalidArgument(\n        \"Invalid schema: collection[\", format_name(name_),\n        \"]'s field size must <= \", kMaxScalarFieldSize);\n  }\n  if (max_doc_count_per_segment_ < MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD) {\n    return Status::InvalidArgument(\n        \"Invalid schema: max_doc_count_per_segment must >= \",\n        MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD);\n  }\n  if (fields_.empty()) {\n    return Status::InvalidArgument(\"Invalid schema: collection[\",\n                                   format_name(name_), \"] has no fields\");\n  }\n  auto v_fields = vector_fields();\n  if (v_fields.size() > kMaxVectorFieldSize) {\n    return Status::InvalidArgument(\n        \"Invalid schema: collection[\", format_name(name_),\n        \"]'s vector field size must <= \", kMaxVectorFieldSize);\n  }\n  for (auto &field : fields_) {\n    auto s = field->validate();\n    CHECK_RETURN_STATUS(s);\n  }\n  return Status::OK();\n}\n\nstd::string CollectionSchema::to_string() const {\n  std::ostringstream oss;\n  oss << \"CollectionSchema{\"\n      << \"name:'\" << name_ << \"'\"\n      << \",max_doc_count_per_segment:\" << max_doc_count_per_segment_\n      << \",fields:[\";\n\n  for (size_t i = 0; i < fields_.size(); ++i) {\n    if (i > 0) oss << \",\";\n    oss << fields_[i]->to_string();\n  }\n\n  oss << \"]}\";\n  return oss.str();\n}\n\n\nstd::string CollectionSchema::to_string_formatted(int indent_level) const {\n  std::ostringstream oss;\n  oss << indent(indent_level) << \"CollectionSchema{\\n\"\n      << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\"\n      << indent(indent_level + 1)",
+    "stdout_equals_native_content": true,
+    "source_matches_are_candidates_not_access_proof": true,
+    "numbered_source_rows": [
+      {
+        "output_line": 1,
+        "text": "/workspace/src/db/common/typedef.h:175:#define CHECK_RETURN_STATUS(status) \\",
+        "source_path": "src/db/common/typedef.h",
+        "source_line": 175,
+        "returned_text": "#define CHECK_RETURN_STATUS(status) \\",
+        "source_text": "#define CHECK_RETURN_STATUS(status) \\",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      },
+      {
+        "output_line": 2,
+        "text": "/workspace/src/db/common/typedef.h:180:#define CHECK_RETURN_STATUS_EXPECTED(status) \\",
+        "source_path": "src/db/common/typedef.h",
+        "source_line": 180,
+        "returned_text": "#define CHECK_RETURN_STATUS_EXPECTED(status) \\",
+        "source_text": "#define CHECK_RETURN_STATUS_EXPECTED(status) \\",
+        "source_text_exact": true,
+        "pipeline_input_ordinal": null,
+        "pipeline_input_ordinal_not_a_source_line": false,
+        "requires_binding_to_full_command_operands": true
+      }
+    ],
+    "unclassified_output_rows": [
+      {
+        "output_line": 3,
+        "text": "---"
+      },
+      {
+        "output_line": 4,
+        "text": "---"
+      },
+      {
+        "output_line": 5,
+        "text": "  }"
+      },
+      {
+        "output_line": 6,
+        "text": ""
+      },
+      {
+        "output_line": 7,
+        "text": "  oss << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\""
+      },
+      {
+        "output_line": 8,
+        "text": "      << indent(indent_level + 1)"
+      },
+      {
+        "output_line": 9,
+        "text": "      << \"data_type: \" << DataTypeCodeBook::AsString(data_type_) << \",\\n\";"
+      },
+      {
+        "output_line": 10,
+        "text": ""
+      },
+      {
+        "output_line": 11,
+        "text": "  if (is_vector_field()) {"
+      },
+      {
+        "output_line": 12,
+        "text": "    if (is_dense_vector()) {"
+      },
+      {
+        "output_line": 13,
+        "text": "      oss << indent(indent_level + 1) << \"dimension: \" << dimension_ << \",\\n\";"
+      },
+      {
+        "output_line": 14,
+        "text": "    }"
+      },
+      {
+        "output_line": 15,
+        "text": "  } else {"
+      },
+      {
+        "output_line": 16,
+        "text": "    oss << indent(indent_level + 1)"
+      },
+      {
+        "output_line": 17,
+        "text": "        << \"nullable: \" << (nullable_ ? \"true\" : \"false\") << \",\\n\";"
+      },
+      {
+        "output_line": 18,
+        "text": "  }"
+      },
+      {
+        "output_line": 19,
+        "text": ""
+      },
+      {
+        "output_line": 20,
+        "text": "  if (index_params_) {"
+      },
+      {
+        "output_line": 21,
+        "text": "    oss << indent(indent_level + 1)"
+      },
+      {
+        "output_line": 22,
+        "text": "        << \"index_params: \" << index_params_->to_string() << \"\\n\";"
+      },
+      {
+        "output_line": 23,
+        "text": "  } else {"
+      },
+      {
+        "output_line": 24,
+        "text": "    oss << indent(indent_level + 1) << \"index_params: null\\n\";"
+      },
+      {
+        "output_line": 25,
+        "text": "  }"
+      },
+      {
+        "output_line": 26,
+        "text": ""
+      },
+      {
+        "output_line": 27,
+        "text": "  oss << indent(indent_level) << \"}\";"
+      },
+      {
+        "output_line": 28,
+        "text": "  return oss.str();"
+      },
+      {
+        "output_line": 29,
+        "text": "}"
+      },
+      {
+        "output_line": 30,
+        "text": ""
+      },
+      {
+        "output_line": 31,
+        "text": "Status CollectionSchema::validate() const {"
+      },
+      {
+        "output_line": 32,
+        "text": "  if (auto s = validate_collection_name(name_); !s.ok()) {"
+      },
+      {
+        "output_line": 33,
+        "text": "    return s;"
+      },
+      {
+        "output_line": 34,
+        "text": "  }"
+      },
+      {
+        "output_line": 35,
+        "text": "  std::unordered_set<std::string> names;"
+      },
+      {
+        "output_line": 36,
+        "text": "  for (const auto &field : fields_) {"
+      },
+      {
+        "output_line": 37,
+        "text": "    if (!field) {"
+      },
+      {
+        "output_line": 38,
+        "text": "      return Status::InvalidArgument("
+      },
+      {
+        "output_line": 39,
+        "text": "          \"Invalid schema: field schema must not be null\");"
+      },
+      {
+        "output_line": 40,
+        "text": "    }"
+      },
+      {
+        "output_line": 41,
+        "text": "    if (!names.insert(field->name()).second) {"
+      },
+      {
+        "output_line": 42,
+        "text": "      return Status::InvalidArgument(\"Invalid schema: duplicate field name [\","
+      },
+      {
+        "output_line": 43,
+        "text": "                                     format_name(field->name()),"
+      },
+      {
+        "output_line": 44,
+        "text": "                                     \"]; field names must be unique\");"
+      },
+      {
+        "output_line": 45,
+        "text": "    }"
+      },
+      {
+        "output_line": 46,
+        "text": "  }"
+      },
+      {
+        "output_line": 47,
+        "text": "  if (forward_fields().size() > kMaxScalarFieldSize) {"
+      },
+      {
+        "output_line": 48,
+        "text": "    return Status::InvalidArgument("
+      },
+      {
+        "output_line": 49,
+        "text": "        \"Invalid schema: collection[\", format_name(name_),"
+      },
+      {
+        "output_line": 50,
+        "text": "        \"]'s field size must <= \", kMaxScalarFieldSize);"
+      },
+      {
+        "output_line": 51,
+        "text": "  }"
+      },
+      {
+        "output_line": 52,
+        "text": "  if (max_doc_count_per_segment_ < MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD) {"
+      },
+      {
+        "output_line": 53,
+        "text": "    return Status::InvalidArgument("
+      },
+      {
+        "output_line": 54,
+        "text": "        \"Invalid schema: max_doc_count_per_segment must >= \","
+      },
+      {
+        "output_line": 55,
+        "text": "        MAX_DOC_COUNT_PER_SEGMENT_MIN_THRESHOLD);"
+      },
+      {
+        "output_line": 56,
+        "text": "  }"
+      },
+      {
+        "output_line": 57,
+        "text": "  if (fields_.empty()) {"
+      },
+      {
+        "output_line": 58,
+        "text": "    return Status::InvalidArgument(\"Invalid schema: collection[\","
+      },
+      {
+        "output_line": 59,
+        "text": "                                   format_name(name_), \"] has no fields\");"
+      },
+      {
+        "output_line": 60,
+        "text": "  }"
+      },
+      {
+        "output_line": 61,
+        "text": "  auto v_fields = vector_fields();"
+      },
+      {
+        "output_line": 62,
+        "text": "  if (v_fields.size() > kMaxVectorFieldSize) {"
+      },
+      {
+        "output_line": 63,
+        "text": "    return Status::InvalidArgument("
+      },
+      {
+        "output_line": 64,
+        "text": "        \"Invalid schema: collection[\", format_name(name_),"
+      },
+      {
+        "output_line": 65,
+        "text": "        \"]'s vector field size must <= \", kMaxVectorFieldSize);"
+      },
+      {
+        "output_line": 66,
+        "text": "  }"
+      },
+      {
+        "output_line": 67,
+        "text": "  for (auto &field : fields_) {"
+      },
+      {
+        "output_line": 68,
+        "text": "    auto s = field->validate();"
+      },
+      {
+        "output_line": 69,
+        "text": "    CHECK_RETURN_STATUS(s);"
+      },
+      {
+        "output_line": 70,
+        "text": "  }"
+      },
+      {
+        "output_line": 71,
+        "text": "  return Status::OK();"
+      },
+      {
+        "output_line": 72,
+        "text": "}"
+      },
+      {
+        "output_line": 73,
+        "text": ""
+      },
+      {
+        "output_line": 74,
+        "text": "std::string CollectionSchema::to_string() const {"
+      },
+      {
+        "output_line": 75,
+        "text": "  std::ostringstream oss;"
+      },
+      {
+        "output_line": 76,
+        "text": "  oss << \"CollectionSchema{\""
+      },
+      {
+        "output_line": 77,
+        "text": "      << \"name:'\" << name_ << \"'\""
+      },
+      {
+        "output_line": 78,
+        "text": "      << \",max_doc_count_per_segment:\" << max_doc_count_per_segment_"
+      },
+      {
+        "output_line": 79,
+        "text": "      << \",fields:[\";"
+      },
+      {
+        "output_line": 80,
+        "text": ""
+      },
+      {
+        "output_line": 81,
+        "text": "  for (size_t i = 0; i < fields_.size(); ++i) {"
+      },
+      {
+        "output_line": 82,
+        "text": "    if (i > 0) oss << \",\";"
+      },
+      {
+        "output_line": 83,
+        "text": "    oss << fields_[i]->to_string();"
+      },
+      {
+        "output_line": 84,
+        "text": "  }"
+      },
+      {
+        "output_line": 85,
+        "text": ""
+      },
+      {
+        "output_line": 86,
+        "text": "  oss << \"]}\";"
+      },
+      {
+        "output_line": 87,
+        "text": "  return oss.str();"
+      },
+      {
+        "output_line": 88,
+        "text": "}"
+      },
+      {
+        "output_line": 89,
+        "text": ""
+      },
+      {
+        "output_line": 90,
+        "text": ""
+      },
+      {
+        "output_line": 91,
+        "text": "std::string CollectionSchema::to_string_formatted(int indent_level) const {"
+      },
+      {
+        "output_line": 92,
+        "text": "  std::ostringstream oss;"
+      },
+      {
+        "output_line": 93,
+        "text": "  oss << indent(indent_level) << \"CollectionSchema{\\n\""
+      },
+      {
+        "output_line": 94,
+        "text": "      << indent(indent_level + 1) << \"name: '\" << name_ << \"',\\n\""
+      },
+      {
+        "output_line": 95,
+        "text": "      << indent(indent_level + 1)"
+      }
+    ],
+    "do_not_compare_pipeline_ordinal_to_sorted_glob_order": true
+  },
+  "manual_review_status": "pending"
+}
