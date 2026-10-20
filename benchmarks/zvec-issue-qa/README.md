@@ -181,3 +181,31 @@ all succeeded, but neither prospective quality nor efficiency signal appeared.
 The [frozen verdict](../claude-qa-pilot/results/20261019/answer-verification-v1/pair-verdict.json)
 therefore stops that instruction branch. These development pairs are reported
 separately and do not establish a favorable benchmark set.
+
+
+## Separately prepared runtime/API behavior candidate
+
+[dataset-runtime-v1.json](dataset-runtime-v1.json) freezes q005 from closed issue
+[#395](https://github.com/alibaba/zvec/issues/395). It continues the saved bounded
+candidate pool in its original order: #294 lint tooling and #622 CMake/compiler
+configuration were excluded by the recorded runtime/API scope, then #395 was the
+first source-verified eligible case. Selection happened while the separate q004
+native pilot was running, before its answers were collected; no q005 solver,
+retrieval or indexing run has occurred. Known other-task outcomes remain separate.
+
+The [question](tasks/q005/instruction.md) asks about external identifier migration,
+UTF-8 byte limits, and how an invalid identifier versus an existing identifier
+changes a Python insert batch's exception, statuses and written state. The
+[10 independent factual units](evaluator/q005.json) distinguish whole-batch
+prevalidation from per-document write errors and preserve separate citation
+gates. Independent source and exact-asset reviews found no blocking findings;
+[provenance](evaluator/provenance/q005/canonical-asset-review.json) records their
+input hashes, reviewer exposure and limits.
+
+An actual provider-free export verified all 1,596 files at immutable source
+`1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa`, 18 evidence spans and the complete
+inventory. It includes implemented identifier behavior and existing tests, with
+no claim that a historical bug was reproduced. The source and host-only evidence
+are separate. A native task package, execution plan and Linux preflight still
+need to be prepared before any q005 model execution; this preparation establishes
+no quality or efficiency result.
