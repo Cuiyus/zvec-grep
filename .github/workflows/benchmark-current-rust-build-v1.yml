@@ -1,0 +1,102 @@
+name: Benchmark current-main Rust candidate v1
+run-name: benchmark Rust ae1ac57 / Linux only / no providers
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths: ['.github/workflows/benchmark-current-rust-build-v1.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: benchmark-current-rust-build-v1-${{ github.repository }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+jobs:
+  linux:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: source/rust
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: zvec-ai/zvec-grep
+          ref: ae1ac57d489542508e016bba5d868bc38c3c095a
+          path: source
+          persist-credentials: false
+      - name: Bind source and verify current main Rust before building
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/current-rust-candidate"
+          test "$(git rev-parse HEAD)" = ae1ac57d489542508e016bba5d868bc38c3c095a
+          test "$(git rev-parse HEAD:rust)" = 577d1fd05902ba844bc9c85e2cc58d64f425252e
+          gh api repos/zvec-ai/zvec-grep/commits/main > "$RUNNER_TEMP/current-rust-candidate/current-upstream.json"
+          tip=$(python3 -c 'import json,os; from pathlib import Path; print(json.loads((Path(os.environ["RUNNER_TEMP"])/"current-rust-candidate/current-upstream.json").read_text())["sha"])')
+          gh api "repos/zvec-ai/zvec-grep/git/trees/$tip" > "$RUNNER_TEMP/current-rust-candidate/current-upstream-tree.json"
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'current-rust-candidate'
+          tree=json.loads((root/'current-upstream-tree.json').read_text())
+          assert next(r['sha'] for r in tree['tree'] if r['path']=='rust')=='577d1fd05902ba844bc9c85e2cc58d64f425252e'
+          record={'source_repository':'zvec-ai/zvec-grep','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'rust_tree':subprocess.check_output(['git','rev-parse','HEAD:rust'],text=True).strip(),'build_repository':os.environ['GITHUB_REPOSITORY'],'build_head_sha':os.environ['GITHUB_SHA'],'run_id':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),'target':'linux-x64-gnu','providers_called':False,'published':False}
+          (root/'source-binding.json').write_text(json.dumps(record,indent=2)+'\n')
+          PY
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            source/rust/target/release/
+          key: benchmark-rust-release-v1-linux-x64-gnu-${{ hashFiles('source/rust/Cargo.lock', 'source/rust/rust-toolchain.toml') }}
+      - name: Build the current native target using its upstream script
+        run: npm run build
+      - name: Package and smoke-test using the unchanged upstream scripts
+        run: |
+          npm run release:platform -- --no-build --target linux-x64-gnu
+          npm run release:smoke -- --no-build --target linux-x64-gnu
+      - name: Retain exact package checksums and build identity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,shutil,subprocess
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'current-rust-candidate'
+          files=sorted(Path('dist/npm/release/tarballs').glob('zvec-zvec-grep-linux-x64-gnu-*.tgz'))
+          assert len(files)==1
+          records=[]
+          for p in files:
+              data=p.read_bytes();shutil.copyfile(p,root/p.name)
+              records.append({'file':p.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+          record={'packages':records,'cargo_version':subprocess.check_output(['cargo','--version'],text=True).strip(),'node_version':subprocess.check_output(['node','--version'],text=True).strip(),'upstream_build_and_packaged_smoke_passed':True,'providers_called':False,'published':False}
+          (root/'package-verification.json').write_text(json.dumps(record,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-current-rust-linux-x64-gnu
+          path: ${{ runner.temp }}/current-rust-candidate/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
