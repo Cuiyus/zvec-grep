@@ -1,9 +1,7 @@
 # Current-task repeat study status
 
-Preparation is complete. Paid execution has **not started**.
+[Run39362575248](https://github.com/Cuiyus/zvec-grep/actions/runs/39362575248) was cancelled at the user’s request to reduce waiting time and scope. Immediately before cancellation,0/30pairs had completed,3were active and27queued. Final CI metadata is retained in [user-cancelled](user-cancelled/closure.json). Partial artifacts are retained separately and excluded from the replacement cohort. This phase is incomplete; it establishes no stability conclusion.
 
-[Preflight revision 1](preflight-r1/diagnosis.json) failed before setup because upstream merged a CI-only commit after the local freeze; no solver ran. Its always-run scan also exposed an uninitialized-path handling error. Full run/job metadata and logs are retained.
+The user clarified10baseline and10zg executions per task, with zvecQA first. The replacement phase runs only q001:10freshpairs,20executions total, at most5pairs in parallel. Its new outer plan supersedes this phase’s sampling decision while retaining the unchanged native runtime and identity controls.
 
-Revision 2 checks the complete current Rust tree and retains actual main/tree metadata, allowing unrelated non-Rust changes while blocking a changed Rust implementation. It initializes retention early and uses a byte-identical standalone copy of the upstream stdlib secret scanner even when setup is incomplete. The original native solver/runtime, tasks, scoring, schedule and statistical policies are unchanged. Nine targeted driver tests, 14 shell blocks, two embedded Python blocks, a cross-chunk scan canary and final real control validation passed. The revised exact commit must pass fork provider-free preflight before the single paid dispatch.
-
-The original [preparation manifest](preparation-manifest.json) and [README](README.md) describe the immutable preparation snapshot at commit `c3c626587f465ee938646f3275b3acfa585aed13`. Subsequent status and preflight records are additional evidence.
+The original frozen plans, preparation manifest, failed provider-free preflight and all prior phases remain unchanged. The cancelled run is not pooled with the replacement study.
