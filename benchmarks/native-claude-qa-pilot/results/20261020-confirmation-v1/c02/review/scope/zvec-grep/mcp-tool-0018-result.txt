@@ -1,0 +1,469 @@
+freshness: fresh
+results: served_from_current_index
+background_refresh: scheduled
+query groups (3):
+  Q1 [primary]: collection open recovery replay WAL redo log recovered documents loaded into memory segment
+  Q2 [primary]: optimize() implementation merge segments flush persist collection
+  Q3 [primary]: insert document path write ahead log append buffer flush sealed segment
+selection: primary-group coverage then global_fill; prioritized<=6; all candidates detailed
+
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/index/segment/segment.cc:4193-4301
+groups: Q1#1 (fts+vector)
+source:
+4193	Status SegmentImpl::recover() {
+4194	  // recover mem block meta
+4195	  auto &mem_block = segment_meta_->writing_forward_block().value();
+4196	  doc_id_allocator_.store(mem_block.min_doc_id());
+4197	
+4198	  std::string wal_file_path =
+4199	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4200	  if (!std::filesystem::exists(wal_file_path)) {
+4201	    LOG_INFO("WAL recovery skipped: no WAL file exists [%s]",
+4202	             wal_file_path.c_str());
+...
+
+#2 [group_coverage: Q2] matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q2#1 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#3 [group_coverage: Q3] matchedBy=fts+vector src/core/utility/buffer_storage.cc:1051-1407
+groups: Q3#1 (fts+vector)
+source:
+1051	int append_segment(const std::string &id, size_t size) {
+1052	    // Persist any pending data_size/padding/CRC mutations from prior
+1053	    // write()/resize() before we re-hash and rewrite the segment_meta.
+1054	    this->flush_index();
+1055	
+1056	    AllShardsExclusiveLatch latch(mapping_shards_);
+1057	
+1058	    if (!buffer_pool_ || !buffer_pool_handle_) {
+1059	      LOG_ERROR("append_segment: pool not ready, file[%s]", file_name_.c_str());
+1060	      return IndexError_Runtime;
+...
+
+#4 [global_fill] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#2 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#5 [global_fill] matchedBy=fts+vector src/include/zvec/c_api.h:3354-3355
+groups: Q2#2 (fts+vector)
+source:
+3354	ZVEC_EXPORT zvec_error_code_t ZVEC_CALL
+3355	zvec_collection_optimize(zvec_collection_t *collection);
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q3#2 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#7 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#3 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#8 matchedBy=fts+vector python/zvec/model/collection.py:154-161
+groups: Q2#3 (fts+vector)
+source:
+154	def optimize(self, option: OptimizeOption = OptimizeOption()) -> None:
+155	        """Optimize the collection (e.g., merge segments, rebuild index).
+156	
+157	        Args:
+158	            option (Optional[OptimizeOption], optional): Optimization options.
+159	                Defaults to ``OptimizeOption()``.
+160	        """
+161	        self._obj.Optimize(option)
+
+#9 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:29-50
+groups: Q3#3 (fts+vector)
+source:
+29	int LocalWalFile::append(std::string &&data) {
+30	  WalRecord record;
+31	  record.length_ = data.size();
+32	  record.crc_ = ailego::Crc32c::Hash(
+33	      reinterpret_cast<const void *>(data.data()), record.length_, 0);
+34	  record.content_ = std::forward<std::string>(data);
+35	
+36	  if (write_record(record) < 0) {
+37	    WLOG_ERROR("Wal write record error. record.length_[%zu]",
+38	               (size_t)record.length_);
+...
+
+#10 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:67
+groups: Q1#4 (fts+vector)
+source:
+67	int open(const WalOptions &wal_option) override;
+
+#11 matchedBy=fts+vector src/binding/c/c_api.cc:6553-6567
+groups: Q2#4 (fts+vector)
+source:
+6553	zvec_error_code_t zvec_collection_optimize(zvec_collection_t *collection) {
+6554	  if (!collection) {
+6555	    set_last_error("Invalid argument: collection cannot be null");
+6556	    return ZVEC_ERROR_INVALID_ARGUMENT;
+6557	  }
+6558	
+6559	  ZVEC_TRY_RETURN_ERROR(
+6560	      "Exception occurred",
+6561	      auto coll_ptr =
+6562	          reinterpret_cast<std::shared_ptr<zvec::Collection> *>(collection);
+...
+
+#12 matchedBy=fts+vector src/core/framework/index_mapping.cc:423-477
+groups: Q3#4 (fts+vector)
+source:
+423	int IndexMapping::flush(void) {
+424	  if ((file_.size() < index_size_) && !file_.truncate(index_size_)) {
+425	    LOG_ERROR("Failed to truncate file size %zu, %s", index_size_,
+426	              ailego::FileHelper::GetLastErrorString().c_str());
+427	    return IndexError_TruncateFile;
+428	  }
+429	
+430	  for (auto iter = segments_.begin(); iter != segments_.end(); ++iter) {
+431	    SegmentInfo &segment_info = iter->second;
+432	    Segment *item = &segment_info.segment;
+...
+
+#13 matchedBy=fts+vector src/core/utility/memory_read_storage.cc:173-196
+groups: Q1#5 (fts+vector)
+source:
+173	int open(const std::string &path, bool) override {
+174	    rope_ = IndexMemory::Instance()->open(path);
+175	    if (!rope_) {
+176	      LOG_ERROR("Failed to open memory rope %s", path.c_str());
+177	      return IndexError_NoExist;
+178	    }
+179	    if (rope_->empty()) {
+180	      LOG_ERROR("The memory rope %s is empty.", path.c_str());
+181	      return IndexError_NoExist;
+182	    }
+...
+
+#14 matchedBy=fts+vector python/zvec/__init__.pyi:160
+groups: Q2#5 (fts+vector)
+source:
+160	def Optimize(self, arg0: param.OptimizeOption) -> None: ...
+
+#15 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_column_indexer_write.cc:435-463
+groups: Q3#5 (fts+vector)
+source:
+435	Status InvertedColumnIndexer::seal() {
+436	  if (read_only_) {
+437	    return Status::PermissionDenied();
+438	  }
+439	
+440	  Status status = flush_special_values();
+441	  if (!status.ok()) {
+442	    LOG_ERROR("Failed to flush special values to %s", ID().c_str());
+443	    return status;
+444	  }
+...
+
+#16 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.cc:70-113
+groups: Q1#6 (fts+vector)
+source:
+70	int LocalWalFile::open(const WalOptions &wal_option) {
+71	  CHECK_STATUS(opened_, false);
+72	  if (wal_option.create_new) {
+73	    if (FileHelper::FileExists(wal_path_)) {
+74	      WLOG_ERROR("Wal open error. file already exist create_new[%d]",
+75	                 wal_option.create_new);
+76	      return -1;
+77	    }
+78	
+79	    if (!file_.create(wal_path_, false)) {
+...
+
+#17 matchedBy=fts+vector src/include/zvec/db/collection.h:75-76
+groups: Q2#6 (fts+vector)
+source:
+75	virtual Status Optimize(const OptimizeOptions &options = OptimizeOptions{
+76	                              0}) = 0;
+
+#18 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_chunk.cc:141-161
+groups: Q3#6 (fts+vector)
+source:
+141	int ChunkBroker::flush(uint64_t checkpoint) {
+142	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+143	
+144	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+145	  stats_.set_update_time(chunk_meta_.update_time);
+146	
+147	  size_t size =
+148	      chunk_meta_segment_->write(0UL, &chunk_meta_, sizeof(HnswChunkMeta));
+149	  if (ailego_unlikely(size != sizeof(HnswChunkMeta))) {
+150	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#19 matchedBy=fts+vector src/include/zvec/core/framework/index_segment_storage.h:153-171
+groups: Q1#7 (fts+vector)
+source:
+153	int open(const std::string &, bool) override {
+154	    if (!parent_) {
+155	      LOG_ERROR("Failed to load an empty segment");
+156	      return IndexError_NoReady;
+157	    }
+158	
+159	    auto read_data = [this](size_t offset, const void **data, size_t len) {
+160	      return this->parent_->read(offset, data, len);
+161	    };
+162	
+...
+
+#20 matchedBy=fts+vector src/db/index/segment/segment.cc:1642-1668
+groups: Q2#7 (fts+vector)
+source:
+1642	Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(
+1643	    const std::string &index_file_path, const std::string &column,
+1644	    const FieldSchema &field, int concurrency) {
+1645	  VectorColumnIndexer::Ptr vector_indexer =
+1646	      std::make_shared<VectorColumnIndexer>(index_file_path, field);
+1647	
+1648	  vector_column_params::ReadOptions options{options_.enable_mmap_, true};
+1649	
+1650	  auto s = vector_indexer->Open(options);
+1651	  CHECK_RETURN_STATUS_EXPECTED(s);
+...
+
+#21 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_chunk.cc:143-163
+groups: Q3#7 (fts+vector)
+source:
+143	int HnswRabitqChunkBroker::flush(uint64_t checkpoint) {
+144	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+145	
+146	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+147	  stats_.set_update_time(chunk_meta_.update_time);
+148	
+149	  size_t size =
+150	      chunk_meta_segment_->write(0UL, &chunk_meta_, sizeof(HnswChunkMeta));
+151	  if (ailego_unlikely(size != sizeof(HnswChunkMeta))) {
+152	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#22 matchedBy=fts+vector src/db/index/segment/segment.cc:4324-4340
+groups: Q1#8 (fts+vector)
+source:
+4324	Status SegmentImpl::append_wal(const Doc &doc) {
+4325	  std::vector<uint8_t> buf = doc.serialize();
+4326	
+4327	  if (!wal_file_) {
+4328	    auto s = open_wal_file();
+4329	    CHECK_RETURN_STATUS(s);
+4330	  }
+4331	
+4332	  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));
+4333	  if (ret != 0) {
+...
+
+#23 matchedBy=fts+vector src/db/index/segment/segment_helper.cc:791-850
+groups: Q2#8 (fts+vector)
+source:
+791	Status SegmentHelper::MergeWithOptionalReuse(
+792	    const std::string &output_index_path, const FieldSchema &index_field,
+793	    std::vector<VectorColumnIndexer::Ptr> source_indexers,
+794	    const IndexFilter::Ptr &filter, int concurrency,
+795	    VectorColumnIndexer::Ptr *merged_indexer) {
+796	  vector_column_params::MergeOptions merge_options;
+797	  if (concurrency == 0) {
+798	    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();
+799	    merge_options.write_concurrency =
+800	        GlobalConfig::Instance().optimize_thread_count();
+...
+
+#24 matchedBy=fts+vector src/db/index/column/inverted_column/inverted_indexer.cc:127-149
+groups: Q3#8 (fts+vector)
+source:
+127	Status InvertedIndexer::seal() {
+128	  Status s;
+129	  for (const auto &[_, indexer] : indexers_) {
+130	    if (indexer->is_sealed()) {
+131	      continue;
+132	    }
+133	    if (s = indexer->seal(); !s.ok()) {
+134	      LOG_ERROR("Failed to seal %s", indexer->ID().c_str());
+135	    }
+136	  }
+...
+
+#25 matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#9 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#26 matchedBy=fts+vector src/include/zvec/ailego/buffer/vector_page_table.h:240
+groups: Q2#9 (fts+vector)
+source:
+240	int flush_all();
+
+#27 matchedBy=fts+vector src/core/algorithm/flat/flat_streamer_entity.cc:107-126
+groups: Q3#9 (fts+vector)
+source:
+107	int FlatStreamerEntity::flush_linear_meta(void) {
+108	  if (!storage_) {
+109	    return 0;
+110	  }
+111	
+112	  meta_.update_time = ailego::Realtime::Seconds();
+113	  meta_.revision_id = stats_.revision_id();
+114	  stats_.set_update_time(meta_.update_time);
+115	  auto segment = storage_->get(FLAT_LINEAR_META_SEG_ID);
+116	  if (ailego_unlikely(!segment)) {
+...
+
+#28 matchedBy=fts+vector src/core/algorithm/hnsw/hnsw_streamer_entity.h:971
+groups: Q1#10 (fts+vector)
+source:
+971	int build_contiguous_memory();
+
+#29 matchedBy=fts+vector src/db/index/column/fts_column/fts_rocksdb_reducer.h:102-103
+groups: Q2#10 (fts+vector)
+source:
+102	Result<void> merge_and_flush_postings(
+103	      const roaring::Roaring &delete_row_id_bitmap);
+
+#30 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:46-96
+groups: Q3#10 (fts+vector)
+source:
+46	class LocalWalFile : public WalFile {
+47	 public:
+48	  LocalWalFile(const LocalWalFile &) = delete;
+49	  LocalWalFile &operator=(const LocalWalFile &) = delete;
+50	
+51	  //! Constructor
+52	  LocalWalFile(const std::string &wal_path) : wal_path_(wal_path) {}
+53	
+54	  //! Destructor
+55	  ~LocalWalFile() {
+...
+
+#31 matchedBy=fts+vector src/db/collection.cc:308-329
+groups: Q1#11 (fts+vector)
+source:
+308	Status CollectionImpl::Open(const CollectionOptions &options) {
+309	  options_ = options;
+310	
+311	  if (schema_ != nullptr && options_.read_only_) {
+312	    return Status::InvalidArgument(
+313	        "Unable to create collection with read-only mode.");
+314	  }
+315	
+316	  Status s;
+317	  if (schema_ == nullptr) {
+...
+
+#32 matchedBy=fts+vector src/db/collection.cc:2084-2086
+groups: Q2#11 (fts+vector)
+source:
+2084	std::vector<Segment::Ptr> CollectionImpl::get_all_persist_segments() const {
+2085	  return segment_manager_->get_segments();
+2086	}
+
+#33 matchedBy=fts+vector src/core/algorithm/hnsw_sparse/hnsw_sparse_chunk.cc:138-158
+groups: Q3#11 (fts+vector)
+source:
+138	int SparseChunkBroker::flush(uint64_t checkpoint) {
+139	  ailego_assert_with(chunk_meta_segment_, "invalid meta segment");
+140	
+141	  chunk_meta_.update_time = ailego::Realtime::Seconds();
+142	  stats_.set_update_time(chunk_meta_.update_time);
+143	
+144	  size_t size = chunk_meta_segment_->write(0UL, &chunk_meta_,
+145	                                           sizeof(HnswSparseChunkMeta));
+146	  if (ailego_unlikely(size != sizeof(HnswSparseChunkMeta))) {
+147	    LOG_ERROR("Storage write data failed, wsize=%zu", size);
+...
+
+#34 matchedBy=fts+vector src/db/index/common/version_manager.cc:190-241
+groups: Q1#12 (fts+vector)
+source:
+190	Result<VersionManager::Ptr> VersionManager::Recovery(const std::string &path) {
+191	  namespace fs = std::filesystem;
+192	  auto u8path = ailego::FileHelper::PathFromUtf8(path);
+193	  if (!fs::exists(u8path)) {
+194	    LOG_ERROR("VersionManager::Recovery: path %s does not exist", path.c_str());
+195	    return tl::make_unexpected(
+196	        Status::NotFound("path ", path, " does not exist"));
+197	  }
+198	  if (!fs::is_directory(u8path)) {
+199	    LOG_ERROR("VersionManager::Recovery: path %s is not a directory",
+...
+
+#35 matchedBy=fts+vector src/core/utility/buffer_storage.cc:897-906
+groups: Q2#12 (fts+vector)
+source:
+897	int flush_index(void) {
+898	    if (!index_dirty_.load(std::memory_order_relaxed)) {
+899	      return 0;
+900	    }
+901	    // Exclusive all-shards latch excludes the lock-free hot path while we
+902	    // hash meta_buf and pwrite footer; without it segments_meta_crc would
+903	    // not match the bytes on disk.
+904	    AllShardsExclusiveLatch latch(mapping_shards_);
+905	    return flush_index_locked();
+906	  }
+
+#36 matchedBy=fts+vector tests/core/utility/buffer_storage_write_test.cc:645-680
+groups: Q3#12 (fts+vector)
+source:
+645	TEST_F(BufferStorageWriteTest, InterleavedAppendAndWrite) {
+646	  auto storage = OpenWritable();
+647	  ASSERT_TRUE(storage);
+648	
+649	  // Append and write first segment
+650	  ASSERT_EQ(0, storage->append("seg1", 4096));
+651	  auto seg1 = storage->get("seg1");
+652	  ASSERT_TRUE(seg1);
+653	  std::string d1 = "first_data";
+654	  EXPECT_EQ(d1.size(), seg1->write(0, d1.data(), d1.size()));
+...
