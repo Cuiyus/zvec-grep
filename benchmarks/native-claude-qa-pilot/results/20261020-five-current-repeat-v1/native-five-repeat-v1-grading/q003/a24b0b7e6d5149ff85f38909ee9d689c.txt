@@ -1,0 +1,45 @@
+# Root-cause analysis: post-delete `optimize()` corrupts ID↔vector association (zvec checkout)
+
+## The invariant that is broken
+
+Everything in a segment is joined by **row position**: vector-index keys are block-relative row positions (`block_doc_id`, `segment.cc:702-705` at insert; `block_doc_id = segment_doc_id - block_offset` at fetch, `segment.cc:1282`), search-result keys are consumed directly as segment row ids (`vector_recall_node.cc:225-231`), and `get_global_doc_id(row) = doc_ids_[row]` (`segment.cc:4444-4450`). The invariant: **for every live row r, the vector index must hold r's vector under key r − block_offset** — never a dense rank among survivors — unless the forward side is renumbered in the same operation.
+
+## Failure chain, step by step
+
+**Insert (no index).** Vectors go to flat/memory indexers keyed by writing-block row position (`SegmentImpl::InsertVector`, `segment.cc:674-711`, key at 702-705); `doc_ids_.push_back(g_doc_id)` at `segment.cc:914`. No HNSW exists yet.
+
+**Delete.** `internal_delete` only marks `delete_store_->mark_deleted(...)` (`segment.cc:933-936`). `doc_ids_`, the forward store, and the flat vector blocks keep all 28 rows.
+
+**optimize().** Phase 1 seals the writing segment (`collection.cc:929-937`). Phase 2 `build_compact_task` computes 3/28 ≈ 0.107 < `COMPACT_DELETE_RATIO_THRESHOLD = 0.3` (`constants.h:41`, `collection.cc:1100-1104`) → `rebuild = false`; single segment → `CreateVectorIndexTask` (`collection.cc:1160-1164`), not skipped because `all_vector_index_ready()` is false (`segment.cc:1819`).
+
+**Index build.** `create_all_vector_index → create_vector_index → merge_vector_indexer` calls `vector_indexer->Merge(to_merge_indexers, filter_, ...)` (`segment.cc:1511`) — passing the live segment's delete-aware `SegmentIndexFilter` (`segment.cc:464-476`: row → `doc_ids_[row]` → `delete_store_->is_deleted`). `Merge` forwards to `Index::merge` (`vector_column_indexer.cc:103-134` → `core/interface/index.cc:1016-1077`), which sets `PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE=true` (`index.cc:1049-1050`).
+
+**The defect — `MixedStreamerReducer::read_vec`** (`mixed_streamer_reducer.cc:255-326`): line 288 correctly skips filtered rows (rows 0–2), but line 318 enqueues each survivor with a **fresh dense sequential pkey `(*next_id)++`** instead of its original key (`iterator->key() + id_offset`), and `add_vec` writes that pkey into the HNSW via `add_with_id_impl` (line 375). Note `enable_pk_rewrite_` is parsed at init (`mixed_streamer_reducer.cc:30-31`) but **never read anywhere** — the renumbering is unconditional (the `// TODO: use id instead of key` comments at lines 148, 317, 374 mark the known gap). So the 25 survivors land at keys 0–24: row k (k ≥ 3) → key k−3.
+
+**Publish.** A `BlockMeta` claiming `doc_count = doc_ids_.size() = 28`, min/max = `doc_ids_.front()/back()` is recorded (`segment.cc:1569-1576`) even though the file holds 25 keys; the indexer is reloaded in place (`reload_vector_index`, `collection.cc:1063-1070`) and the version is flushed (`collection.cc:1036-1040`). Read-only reopen reloads the same persisted HNSW file (`Open` → `load_vector_index_blocks`, `segment.cc:497-499`) and rebuilds `doc_ids_` (28 entries) from the forward PK column (`segment.cc:3875-3914`) — hence the discrepancy survives reopen.
+
+## Resulting symptoms (unit basis vectors, COSINE)
+
+- Search with doc-000k's reference vector (k ≥ 6) hits key k−3 → resolves via `doc_ids_[k−3]` → returns **doc-(k−3), a wrong live ID**; include-vector then fetches that wrong row consistently, so scalar data looks intact.
+- k = 3,4,5 → keys 0,1,2 → rows 0–2, which are deleted → dropped by the query-time delete filter (`query_params.filter = doc_filter_`, `vector_recall_node.cc:163-169`) → **live docs omitted**.
+- doc-0025..27 sit at keys 22–24 → always resolve to doc-0022..24 → **tail live docs never returned**.
+- Get-by-id with vector for doc-0025..27 → `segment_doc_id` 25–27 → `Fetch(25..27)` on a 25-key index → **payload fetch fails** (`segment.cc:1294-1301`) while scalar columns (untouched 28-row forward store) succeed.
+
+**Why counts/scalars agree:** `doc_count(filter)` iterates `doc_ids_` against the delete store (`segment.cc:616-627`) and scalar enumeration reads the forward store; neither ever reads the vector index file. Both say 25 while the HNSW is misaligned.
+
+## The two controls
+
+- **Optimize empty collection first — no help:** with no persisted segments, `optimize()` returns at `collection.cc:940-942` (`writing_segment_->has_record()` false at 929). No index is built, so the later post-delete build follows the identical broken path.
+- **Optimize the 28 live docs before deleting — avoids it:** the merge runs with `filter_` whose `is_filtered` is always false (empty delete store), so `(*next_id)++` coincidentally equals every original key → correct 0..27 HNSW. `all_vector_index_ready()` becomes true, so the post-delete optimize **skips the task entirely** (`skip_task`, `collection.cc:1131-1135`); deletes are then handled purely by query-time filtering. The bug only manifests when the *first* index build happens while deletes already exist.
+
+## The large-delete-fraction path (contrast)
+
+At ≥30% deleted, `rebuild = true` → `CompactTask` **with** the filter (`collection.cc:1100-1127, 1166-1168`) → `ExecuteCompactTask` (`segment_helper.cc:100-175`): `ReduceScalar` writes a **new forward store containing only survivors** and records position-keyed `delete_row_id_bitmap` (`segment_helper.cc:127-135`; `FilterRecordBatch` adds `i + row_id_offset` at line 969); `ReduceVectorIndex` then merges with a `RowIdFilter` over that same bitmap (`segment_helper.cc:85-98, 146-153, 638-675`), and `CanReuseFirstIndexer` returns false whenever a filter is present (`segment_helper.cc:767-772`). The reducer again renumbers densely to 0..24 — but the new segment's rows/`doc_ids_` were renumbered in the *same ascending scan order* (inputs sorted by min_doc_id, `segment_helper.cc:108-111`), so key k ↔ row k ↔ k-th survivor. Both sides compact identically; the invariant holds. FTS shares the bitmap for the same reason (`segment_helper.h:302-312`).
+
+## Fix invariant and regression check
+
+**Invariant to preserve:** after any maintenance operation, for every live segment row r covered by a vector block: the index contains exactly one entry under key r − block_offset and it is `doc_ids_[r]`'s vector; deleted rows may be absent, but surviving keys must equal their original row positions — dense renumbering is legal only when the forward side is renumbered in the same atomic operation (the rebuild path). Natural fixes: honor the dead `enable_pk_rewrite_` flag / pass `iterator->key() + id_offset` as the pkey when a filter is active; or don't pass `filter_` in `merge_vector_indexer` (index deleted rows too — query filtering already hides them, matching control 2's healthy end state); or route any segment with deletes through the rebuild path. (Whether the HNSW streamer tolerates non-contiguous keys needs per-engine verification; `BlockMeta.doc_count` at `segment.cc:1575` must also stay consistent.)
+
+**Regression check (association, not counts):** insert N docs with distinct unit-basis vectors, references saved externally; delete a *leading prefix* (rows 0–2 — maximal shift) keeping the ratio below 0.3; flush + `optimize()`; repeat the assertions after a read-only reopen. Then, for **every live ID**: (a) top-1 search with its reference vector returns exactly that ID; (b) get-by-id with include-vector succeeds and returns a byte-identical vector; (c) the returned scalar label matches the one stored for that ID; and no deleted ID ever appears. Parameterize delete position (head/middle/tail), delete ratio straddling 0.3 (both maintenance paths), and multiple blocks/segments (exercises `id_offset` accumulation, `mixed_streamer_reducer.cc:190-194`). A count-only check passes on the corrupt build because `doc_count`/scalar enumeration never touch the vector file; the identity assertions fail immediately (doc-0006's query returning doc-0003).
+
+**Scope caveats:** conclusions are drawn from the read paths cited above; I did not audit the HNSW streamer's `add_with_id_impl` internals or the collection-side construction of `doc_filter_` beyond its use in `vector_recall_node.cc`, and per your instruction nothing was edited or executed.

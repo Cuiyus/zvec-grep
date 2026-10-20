@@ -1,0 +1,55 @@
+All evidence is gathered. Here is the analysis, grounded entirely in the supplied source.
+
+# Identifier validation rules (the shared foundation)
+
+All three identifier validators live in `src/db/index/common/identifier_validation.{h,cc}`:
+
+- **Limits** (`identifier_validation.h:23-25`): `kMaxDocumentIdBytes = 1024`, `kMaxCollectionNameBytes = 256`, `kMaxFieldNameBytes = 64` — all in **UTF-8 bytes**, checked via `value.size()` on the `std::string` after the pybind11 str→C++ conversion (`identifier_validation.cc:55-59`).
+- **`validate_utf8_name`** (`identifier_validation.cc:50-79`, used by doc IDs and collection names): rejects empty, over-limit, invalid UTF-8, and a forbidden-codepoint set (`identifier_validation.cc:28-48`): NUL, `\n`, `\r`, `\t`, all C0 controls (≤ 0x1F), DEL/C1 (0x7F–0x9F), U+2028, U+2029. **Any other Unicode is allowed** — CJK, spaces, `/`, emoji.
+- **`validate_field_name`** (`identifier_validation.cc:100-130`) is far stricter: every byte must be `[A-Za-z0-9_-]`; any byte ≥ 0x80 fails with "contains a non-ASCII character" (`identifier_validation.cc:110-124`), plus a reserved-name check (`125-128`).
+
+These run natively, not in Python: the Python `CollectionSchema`/`FieldSchema` constructors only type-check and check UTF-8-encodability (`python/zvec/model/schema/collection_schema.py:66-86`, `field_schema.py:107-129`). The native rules fire from `CollectionSchema::validate()` → `validate_collection_name` (`src/db/index/common/schema.cc:406-408`) and per-field `FieldSchema::validate()` → `validate_field_name` (`schema.cc:443`, `schema.cc:84-86`), invoked during `CollectionImpl::create()` (`src/db/collection.cc:2530-2531`) and reached from Python via `create_and_open` → `_Collection.CreateAndOpen` (`python/zvec/zvec.py:176-214`, `src/binding/python/model/python_collection.cc:146-155`, `src/db/collection.cc:372-381`, `418-433`).
+
+# Probe 1 — collection name `商品 2026/😀` vs field name `标题`: **not both accepted**
+
+- **Collection name: accepted.** 16 UTF-8 bytes (3+3+1+4+1+4) ≤ 256, valid UTF-8, and none of its code points (CJK, space, digits, `/`, U+1F600) are in the forbidden set — `validate_collection_name` (`identifier_validation.cc:95-98`) passes it.
+- **Field name `标题`: rejected.** Its bytes are all ≥ 0x80, so `validate_field_name` fails with "contains a non-ASCII character" (`identifier_validation.cc:110-124`). Field names are ASCII-only `[A-Za-z0-9_-]`.
+- Net effect: schema validation fails on the field name even though the collection name is fine. (Per the probe's scope: this is the identifier-validation verdict, independent of the separate path validation at `collection.cc:2516-2527` and of when the Python constructor does/doesn't raise.)
+
+# Probe 2 — document IDs
+
+`validate_document_id` uses the permissive `validate_utf8_name` with the 1024-byte cap (`identifier_validation.cc:91-93`), and is called first inside `Doc::validate_and_sanitize` (`src/db/index/common/doc.cc:728-736`).
+
+- **`客户 42/😀`: permitted.** 14 bytes (3+3+1+2+1+4), no forbidden code points. Spaces, slashes, and emoji are legal in doc IDs (unlike field names).
+- **`"汉" * 341`: permitted.** 汉 = U+6C49 = 3 UTF-8 bytes → 1023 bytes ≤ 1024.
+- **`"汉" * 342`: rejected.** 1026 bytes > 1024 → `InvalidArgument` "exceeds 1024 bytes (got 1026)" (`identifier_validation.cc:55-59`).
+- **Size unit and limit:** the limit is `kMaxDocumentIdBytes = 1024` measured in **bytes of the UTF-8 encoding**, not Python characters/code points — which is exactly why the 341/342 boundary falls where it does (341×3 = 1023 fits; 342×3 = 1026 doesn't).
+
+# Probe 3 — batch [`客户 42/😀`, `bad<TAB>id`, `fresh-after`]: **exception, nothing inserted**
+
+Trace of the Python/native boundary:
+
+1. `Collection.insert` converts each `Doc` (`convert_to_cpp_doc` just calls `_doc.set_pk(doc.id)` — no ID-charset validation in Python; `python/zvec/model/collection.py:337-354`, `python/zvec/model/convert.py:21-32`, and `set_pk` is a plain setter, `src/binding/python/model/python_doc.cc:54`).
+2. The binding calls native `Collection::insert` → `write_impl` (`python_collection.cc:286-294`, `collection.cc:1593-1595`).
+3. **`write_impl` validates the entire batch before any write**: the loop at `collection.cc:1659-1662` runs `doc.validate_and_sanitize` on every doc, *before* the write lock (`1665`) and the write loop (`1675`). `bad\tid` contains U+0009 → "contains a tab" (`identifier_validation.cc:35-37`) → `InvalidArgument`, and `CHECK_RETURN_STATUS_EXPECTED` returns the whole call as an error (`src/db/common/typedef.h:180-183`).
+4. The error `Result` reaches `unwrap_expected` → `throw_if_error`, which maps `INVALID_ARGUMENT` to `py::value_error` (`python_collection.cc:49-85`).
+
+**Result:** Python **raises `ValueError`** (no per-document statuses are returned), and **none of the three documents are inserted** — including the valid `客户 42/😀` and `fresh-after`, because the failure happens in the pre-write validation phase, before `handle_insert` is ever reached.
+
+# Probe 4 — batch [`fresh-before`, `seed-id` (exists), `fresh-after`]: **status list returned, duplicate rejected, no overwrite**
+
+1. All three IDs pass `validate_document_id` — duplication is *not* part of identifier validation — so the pre-validation phase (`collection.cc:1659-1662`) succeeds.
+2. The write loop (`collection.cc:1675-1698`) processes docs one at a time: `handle_insert` → `writing_segment_->insert(doc)` (`collection.cc:1646-1648`).
+3. `SegmentImpl::insert` checks the collection-wide ID map (shared across segments — passed in at `collection.cc:1717-1719`) **before appending WAL or mutating anything**: an existing pk returns `Status::AlreadyExists("insert failed: doc_id[...] already exists in collection")` (`src/db/index/segment/segment.cc:990-1005`).
+4. Back in `write_impl`, that status is merely `results.push_back(s)` (`collection.cc:1697`) and the loop **continues** — a per-doc write failure never aborts the batch (only segment-switch errors at `1676-1679` do).
+
+**Result:** the native call returns a valued `Result<WriteResults>` (`WriteResults = std::vector<Status>`, `src/include/zvec/db/doc.h:366`), so `unwrap_expected` does **not** throw and Python returns a **list of 3 `Status` objects**: `[OK, AlreadyExists, OK]` (bound with `ok()`/`code()`/`message()`, `src/binding/python/typing/python_type.cc:189-217`). `fresh-before` and `fresh-after` **are inserted**. The existing `seed-id` document is **not overwritten or touched** — plain `insert` never replaces; the duplicate check fails before any WAL/write, and only `upsert` does mark-deleted-then-insert (`segment.cc:975-982`).
+
+# Why the two batches have different failure scopes
+
+They do **not** share a scope, and the difference is structural in `write_impl` (`collection.cc:1650-1701`), which has two distinct phases:
+
+- **Phase 1 — batch-wide validation (`1659-1662`)**: every doc's identifiers and schema conformance are checked *before* the write lock and before any mutation. Any single failure aborts the entire call as an error `Result`, which the binding converts to a Python exception (`python_collection.cc:70-85`). Probe 3 dies here → **whole-batch failure, zero writes**.
+- **Phase 2 — per-doc write loop (`1675-1698`)**: conditions only detectable at write time (duplicate pk) produce a `Status` per document that is collected, not thrown → **single-doc failure; the rest of the batch commits**. Probe 4 dies here for one doc only.
+
+**Validation guarantee vs. atomicity assumption:** the "nothing is inserted" outcome in probe 3 is a *validation-ordering guarantee* — the code checks everything first — not a transaction. There is **no atomicity or rollback anywhere in the write path**: in phase 2, docs written before a failing doc stay written (probe 4 demonstrates this), and even a single doc's `internal_insert` writes id-map, forward store, and indexes sequentially with early returns and no undo (`segment.cc:924-968`). So one should rely on the pre-validation phase for identifier/schema guarantees, but must *not* assume a mixed-outcome batch is all-or-nothing: any per-doc write-phase failure (like `AlreadyExists`) leaves the earlier successes committed.

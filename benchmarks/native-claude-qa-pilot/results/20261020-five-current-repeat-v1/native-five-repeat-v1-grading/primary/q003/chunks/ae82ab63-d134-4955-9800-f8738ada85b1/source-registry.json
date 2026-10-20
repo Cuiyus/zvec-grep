@@ -1,0 +1,590 @@
+{
+  "schema_version": 1,
+  "task_id": "q003",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-five-repeat-v1-preparation/prepared/reserves/q003/tasks/zvec-q003/environment/source",
+  "source_commit": "68078e55e7ae9d705b8829b5d416e022060bebf7",
+  "verification": {
+    "files": 1519,
+    "inventory_sha256": "6a8e86bf6f9138573b5bd279e3fb077fad586a1b9b33179a9df7fc94a61b8ada",
+    "exact_file_set_and_bytes_verified": true,
+    "curated_spans_verified": 29
+  },
+  "spans": {
+    "src/db/index/segment/segment.cc:868-935": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 868,
+      "end_line": 935,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "02a3046daba8476092063043d1bcee33e9ad8cb7a081ab11efcca5cc11a207a5",
+      "text": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  {\n    // Combined indexers and scalar readers copy this metadata under the\n    // column lock. Publish the row only after its scalar/vector writes finish.\n    std::unique_lock<std::shared_mutex> col_lock(seg_col_mtx_);\n    auto &mem_block = segment_meta_->writing_forward_block().value();\n    mem_block.max_doc_id_ = g_doc_id;\n    mem_block.doc_count_ = mem_block.doc_count_ + 1;\n  }\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::internal_update(Doc &doc) {\n  delete_store_->mark_deleted(doc.doc_id());\n  return internal_insert(doc);\n}\n\nStatus SegmentImpl::internal_upsert(Doc &doc) {\n  uint64_t g_doc_id;\n  bool exist = id_map_->has(doc.pk(), &g_doc_id);\n  if (exist) {\n    delete_store_->mark_deleted(g_doc_id);\n  }\n  return internal_insert(doc);\n}\n\nStatus SegmentImpl::internal_delete(const Doc &doc) {\n  delete_store_->mark_deleted(doc.doc_id());\n  id_map_->remove(doc.pk());\n"
+    },
+    "src/db/collection.cc:529-544": {
+      "path": "src/db/collection.cc",
+      "start_line": 529,
+      "end_line": 544,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "2d5b938ca12a37a9919d8f6c25d39583b8a385937a1bd5009120d8dc56281966",
+      "text": "  auto segments = get_all_segments();\n\n  CollectionStats stats;\n  auto vector_fields = schema_->vector_fields();\n  if (segments.empty()) {\n    stats.doc_count = 0;\n    for (auto &field : vector_fields) {\n      stats.index_completeness[field->name()] =\n          1;  // if no doc, completeness is 1\n    }\n    return stats;\n  }\n\n  for (auto &segment : segments) {\n    stats.doc_count += segment->doc_count(delete_store_->make_filter());\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:616-626": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 616,
+      "end_line": 626,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "1bb16bb8275b06eb963f477d970c65458ee9c0409556eef19f0388474f76f26e",
+      "text": "uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n  uint64_t doc_count = doc_ids_.size();\n  if (filter) {\n    for (const auto &doc_id : doc_ids_) {\n      if (filter->is_filtered(doc_id)) {\n        doc_count--;\n      }\n    }\n  }\n\n  return doc_count;\n"
+    },
+    "src/db/collection.cc:910-952": {
+      "path": "src/db/collection.cc",
+      "start_line": 910,
+      "end_line": 952,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "b9bb920fd2055fbc96404180c683ca92b6f7b842e4ffe84205ce39977309ae33",
+      "text": "Status CollectionImpl::optimize(const OptimizeOptions &options) {\n  CHECK_COLLECTION_READONLY_RETURN_STATUS;\n\n  // Serialize against other maintenance operations for the whole optimize.\n  std::lock_guard maintenance_lock(maintenance_mtx_);\n\n  std::vector<Segment::Ptr> persist_segments;\n\n  // Phase 1: exclusively seal the current writing segment and snapshot\n  // the persisted segment set.\n  {\n    std::unique_lock schema_lock(schema_handle_mtx_);\n    // Nothing has been built yet, so failing fast leaves nothing to clean.\n    CHECK_RETURN_STATUS(check_no_active_iterators(\"optimize\"));\n    std::lock_guard write_lock(write_mtx_);\n\n    CHECK_DESTROY_RETURN_STATUS(destroyed_, false);\n    CHECK_CLOSED_RETURN_STATUS(closed_, false);\n\n    if (writing_segment_->has_record()) {\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n  }\n\n  if (persist_segments.size() == 0) {\n    return Status::OK();\n  }\n\n  // Phase 2: lock-free compact. Readers and writers proceed freely.\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n\n  // execute segment compact task\n  auto s = execute_compact_task(tasks);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/collection.cc:1086-1173": {
+      "path": "src/db/collection.cc",
+      "start_line": 1086,
+      "end_line": 1173,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "f3165071a4addf46c9dee759ec4120e50a682fe84df2beb04ec3fb2ba6c2e1b0",
+      "text": "std::vector<SegmentTask::Ptr> CollectionImpl::build_compact_task(\n    const CollectionSchema::Ptr &schema,\n    const std::vector<Segment::Ptr> &segments, int concurrency,\n    const IndexFilter::Ptr filter) {\n  std::vector<SegmentTask::Ptr> tasks;\n  if (segments.empty()) return tasks;\n\n  bool rebuild = false;\n  size_t current_doc_count = 0;\n  size_t current_actual_doc_count = 0;\n  for (auto &segment : segments) {\n    current_doc_count += segment->doc_count();\n    current_actual_doc_count += segment->doc_count(filter);\n  }\n  if (current_actual_doc_count <\n      current_doc_count * (1 - COMPACT_DELETE_RATIO_THRESHOLD)) {\n    // if delete ratio is large enough, rebuild\n    rebuild = true;\n  }\n\n  auto max_doc_count_per_segment = schema->max_doc_count_per_segment();\n\n  std::vector<Segment::Ptr> current_group;\n  current_doc_count = 0;\n  current_actual_doc_count = 0;\n\n  for (const auto &seg : segments) {\n    uint64_t doc_count = seg->doc_count();\n    uint64_t actual_doc_count = seg->doc_count(filter);\n\n    if (!current_group.empty()) {\n      SegmentTask::Ptr task;\n      bool skip_task{false};\n      if (rebuild) {\n        if (current_actual_doc_count + actual_doc_count >\n            max_doc_count_per_segment) {\n          // only create SegmentCompactTask when rebuild=true\n          task = SegmentTask::CreateCompactTask(\n              CompactTask{path_, schema, current_group,\n                          allocate_segment_id_for_tmp_segment(), filter,\n                          !options_.enable_mmap_, concurrency});\n        }\n      } else {\n        if (current_doc_count + doc_count > max_doc_count_per_segment) {\n          // check current_group size\n          if (current_group.size() == 1) {\n            task =\n                SegmentTask::CreateCreateVectorIndexTask(CreateVectorIndexTask{\n                    current_group[0], \"\", nullptr, concurrency});\n            skip_task = current_group[0]->all_vector_index_ready();\n          } else {\n            task = SegmentTask::CreateCompactTask(\n                CompactTask{path_, schema, current_group,\n                            allocate_segment_id_for_tmp_segment(), nullptr,\n                            !options_.enable_mmap_, concurrency});\n          }\n        }\n      }\n\n      if (task) {\n        current_group.clear();\n        current_doc_count = 0;\n        current_actual_doc_count = 0;\n        if (!skip_task) {\n          tasks.push_back(task);\n        }\n      }\n    }\n\n    current_group.push_back(seg);\n    current_doc_count += doc_count;\n    current_actual_doc_count += actual_doc_count;\n  }\n\n  if (current_group.size() > 0) {\n    SegmentTask::Ptr task;\n    if (current_group.size() == 1 && !rebuild) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n    } else {\n      task = SegmentTask::CreateCompactTask(CompactTask{\n          path_, schema, current_group, allocate_segment_id_for_tmp_segment(),\n          rebuild ? filter : nullptr, !options_.enable_mmap_, concurrency});\n    }\n    tasks.push_back(task);\n  }\n\n  return tasks;\n"
+    },
+    "src/db/common/constants.h:35-45": {
+      "path": "src/db/common/constants.h",
+      "start_line": 35,
+      "end_line": 45,
+      "file_sha256": "bf3fc2f3614c88e3241b887314011d3370fc0b0dd5df13b8c27e6317a8df0972",
+      "span_sha256": "c765593242ebdce79a06f0ebd78d5407d3365bc3fa24db9ecbd50d8be92c6c02",
+      "text": "const int kSparseMaxDimSize = 16384;\n\nconst int64_t kMaxRecordBatchNumRows = 4096;\n\nconstexpr uint32_t MAX_ARRAY_FIELD_LEN = 32;\n\nconst float COMPACT_DELETE_RATIO_THRESHOLD = 0.3f;\n\nconst std::regex COLLECTION_NAME_REGEX(\"^[a-zA-Z0-9_-]{3,64}$\");\n\nconst std::regex FIELD_NAME_REGEX(\"^[a-zA-Z0-9_-]{1,32}$\");\n"
+    },
+    "src/db/index/segment/segment.cc:464-475": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 464,
+      "end_line": 475,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "2b5f976f9ac7e64f63617ed650fbe4396864f9c49acb411f46871f74228c59b5",
+      "text": "bool SegmentImpl::SegmentIndexFilter::is_filtered(uint64_t id) const {\n  auto impl = impl_.lock();\n  if (!impl) return false;\n  auto result = impl->get_global_doc_id(id);\n  if (!result.has_value()) {\n    return false;\n  }\n  uint64_t doc_id = result.value();\n  if (delete_store_ && delete_store_->is_deleted(doc_id)) {\n    return true;\n  }\n  return false;\n"
+    },
+    "src/db/index/segment/segment.cc:1466-1578": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1466,
+      "end_line": 1578,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "3d7116702f5528d0951ce88fff42e7328cc80d1e26c0dc5bf6ea6cbb9ee2cb7b",
+      "text": "Status SegmentImpl::create_all_vector_index(\n    int concurrency, SegmentMeta::Ptr *segment_meta,\n    std::unordered_map<std::string, VectorColumnIndexer::Ptr> *vector_indexers,\n    std::unordered_map<std::string, VectorColumnIndexer::Ptr>\n        *quant_vector_indexers) {\n  const auto &vector_fields = collection_schema_->vector_fields();\n\n  auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n  new_segment_meta->remove_writing_forward_block();\n\n  std::set<std::string> vector_field_names;\n  for (const auto &field : vector_fields) {\n    auto s = create_vector_index(field->name(), field->index_params(),\n                                 concurrency, &new_segment_meta,\n                                 vector_indexers, quant_vector_indexers);\n    CHECK_RETURN_STATUS(s);\n    vector_field_names.insert(field->name());\n  }\n\n  new_segment_meta->set_indexed_vector_fields(vector_field_names);\n  *segment_meta = new_segment_meta;\n\n  return Status::OK();\n}\n\nResult<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(\n    const std::string &index_file_path, const std::string &column,\n    const FieldSchema &field, int concurrency) {\n  VectorColumnIndexer::Ptr vector_indexer =\n      std::make_shared<VectorColumnIndexer>(index_file_path, field);\n\n  vector_column_params::ReadOptions options{options_.enable_mmap_, true};\n\n  auto s = vector_indexer->Open(options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  std::vector<VectorColumnIndexer::Ptr> to_merge_indexers =\n      vector_indexers_[column];\n  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n  s = vector_indexer->Merge(to_merge_indexers, filter_, merge_options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  s = vector_indexer->Flush();\n  CHECK_RETURN_STATUS_EXPECTED(s);\n\n  return vector_indexer;\n}\n\nStatus SegmentImpl::create_vector_index(\n    const std::string &column, const IndexParams::Ptr &index_params,\n    int concurrency, SegmentMeta::Ptr *segment_meta,\n    std::unordered_map<std::string, VectorColumnIndexer::Ptr> *vector_indexers,\n    std::unordered_map<std::string, VectorColumnIndexer::Ptr>\n        *quant_vector_indexers) {\n  auto field = collection_schema_->get_vector_field(column);\n  SegmentMeta::Ptr new_segment_meta;\n  if (*segment_meta == nullptr) {\n    new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n    new_segment_meta->remove_writing_forward_block();\n  } else {\n    new_segment_meta = *segment_meta;\n  }\n\n  if (segment_meta_->vector_indexed(column) &&\n      *field->index_params() == *index_params) {\n    // if segment is already indexed and index params are same, skip create\n    *segment_meta = new_segment_meta;\n    return Status::OK();\n  }\n  new_segment_meta->add_indexed_vector_field(column);\n\n  auto vector_index_params =\n      std::dynamic_pointer_cast<VectorIndexParams>(index_params);\n\n  if (vector_index_params->quantize_type() == QuantizeType::UNDEFINED) {\n    auto block_id = allocate_block_id();\n\n    auto field_with_new_index_params = std::make_shared<FieldSchema>(*field);\n    field_with_new_index_params->set_index_params(index_params);\n\n    std::string index_file_path = FileHelper::MakeVectorIndexPath(\n        path_, column, segment_meta_->id(), block_id);\n    if (FileHelper::FileExists(index_file_path)) {\n      LOG_WARN(\n          \"Index file[%s] already exists (possible crash residue); cleaning \"\n          \"and overwriting.\",\n          index_file_path.c_str());\n      FileHelper::RemoveFile(index_file_path);\n    }\n    auto vector_indexer = merge_vector_indexer(\n        index_file_path, column, *field_with_new_index_params, concurrency);\n    if (!vector_indexer.has_value()) {\n      return vector_indexer.error();\n    }\n\n    vector_indexers->insert({column, vector_indexer.value()});\n\n    new_segment_meta->remove_vector_persisted_block(column);\n    BlockMeta block;\n    block.set_id(block_id);\n    block.set_type(BlockType::VECTOR_INDEX);\n    block.set_columns({column});\n    block.set_min_doc_id(doc_ids_.front());\n    block.set_max_doc_id(doc_ids_.back());\n    block.set_doc_count(doc_ids_.size());\n    new_segment_meta->add_persisted_block(block);\n\n    *segment_meta = new_segment_meta;\n"
+    },
+    "src/db/index/column/vector_column/vector_column_indexer.cc:103-132": {
+      "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+      "start_line": 103,
+      "end_line": 132,
+      "file_sha256": "4ac1bc0ff808647562e06b5252296b4b3e3be602b6debee8b26a296368003d48",
+      "span_sha256": "405d8a73a889cbc45feaed5e8902f9b229ecb43ab22df08ac9530347b4e0e631",
+      "text": "Status VectorColumnIndexer::Merge(\n    const std::vector<VectorColumnIndexer::Ptr> &indexers,\n    const IndexFilter::Ptr &filter,\n    const vector_column_params::MergeOptions &merge_options) {\n  if (index == nullptr) {\n    return Status::InvalidArgument(\"Index not opened\");\n  }\n\n  if (indexers.empty()) {\n    return Status::OK();\n  }\n\n  auto engine_indexers = std::vector<core_interface::Index::Pointer>();\n\n  for (auto &indexer : indexers) {\n    if (indexer->index_file_path() == this->index_file_path()) {\n      continue;\n    }\n    engine_indexers.push_back(indexer->index);\n  }\n  auto engine_filter =\n      ProximaEngineHelper::convert_to_engine_filter(filter.get());\n  if (engine_filter == nullptr) {\n    return Status::InvalidArgument(\"Failed to convert filter\");\n  }\n  if (0 !=\n      index->merge(engine_indexers, *engine_filter,\n                   {merge_options.write_concurrency, merge_options.pool})) {\n    return Status::InternalError(\"Failed to merge index\");\n  }\n"
+    },
+    "src/core/interface/index.cc:1016-1076": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1016,
+      "end_line": 1076,
+      "file_sha256": "5d850cfddbbbeeed943925349bb9073a3a9caf27c04b0ee5c40fc013bed3687b",
+      "span_sha256": "153f2f3c776921205fa65c060ef50d9f9a67d8e05de4a2984a466e072cc1ba2a",
+      "text": "int Index::merge(const std::vector<Index::Pointer> &indexes,\n                 const IndexFilter &filter, const MergeOptions &options) {\n  if (indexes.empty()) {\n    return core::IndexError_Success;\n  }\n  // ivf need builder\n  auto reducer =\n      core::IndexFactory::CreateStreamerReducer(\"MixedStreamerReducer\");\n  if (reducer == nullptr) {\n    LOG_ERROR(\"Failed to create reducer\");\n    return core::IndexError_Runtime;\n  }\n\n  if (options.write_concurrency == 0) {\n    LOG_ERROR(\"Write concurrency must be greater than 0\");\n    return core::IndexError_InvalidArgument;\n  }\n  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n\n  ailego::Params reducer_params;\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,\n                     true);\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,\n                     effective_write_concurrency);\n  if (reducer->init(reducer_params) != 0) {\n    LOG_ERROR(\"Failed to init reducer\");\n    return core::IndexError_Runtime;\n  }\n  if (reducer->set_target_streamer_wiht_info(builder_, streamer_, converter_,\n                                             reformer_,\n                                             input_vector_meta_) != 0) {\n    LOG_ERROR(\"Failed to set target streamer\");\n    return core::IndexError_Runtime;\n  }\n\n  for (const auto &index : indexes) {\n    if (reducer->feed_streamer_with_reformer(index->streamer_,\n                                             index->reformer_) != 0) {\n      LOG_ERROR(\"Failed to feed streamer\");\n      return core::IndexError_Runtime;\n    }\n  }\n  if (reducer->reduce(filter) != 0) {\n    LOG_ERROR(\"Failed to reduce\");\n    return core::IndexError_Runtime;\n  }\n  is_trained_ = true;\n  return 0;\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-325": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 255,
+      "end_line": 325,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "91e0749ccc20a2a57645191065584c733177f7f903730472bccfc912ad00c1ac",
+      "text": "int MixedStreamerReducer::read_vec(size_t source_streamer_index,\n                                   const IndexProvider::Pointer &provider,\n                                   const IndexFilter &filter,\n                                   const uint32_t id_offset,\n                                   uint32_t *next_id) {\n  const auto &streamer = streamers_[source_streamer_index];\n  const auto &reformer = source_streamers_reformers_[source_streamer_index];\n  const IndexQueryMeta source_streamer_query_meta{streamer->meta().data_type(),\n                                                  streamer->meta().dimension()};\n\n  bool need_revert = (target_streamer_->meta().reformer_name() !=\n                          streamer->meta().reformer_name() &&\n                      reformer != nullptr);\n  if (target_builder_ && reformer) {\n    need_revert = true;\n  }\n\n  if (!provider) {\n    LOG_ERROR(\"Source provider is null, index=%zu\", source_streamer_index);\n    return IndexError_Runtime;\n  }\n  IndexProvider::Iterator::Pointer iterator = provider->create_iterator();\n  if (!iterator) {\n    LOG_ERROR(\"Failed to create source provider iterator, index=%zu\",\n              source_streamer_index);\n    return IndexError_Runtime;\n  }\n\n  while (iterator->is_valid()) {\n    if (stop_flag_ != nullptr && stop_flag_->load(std::memory_order_relaxed)) {\n      LOG_DEBUG(\"read_vec cancelled.\");\n      return 0;\n    }\n    if (filter(iterator->key() + (uint64_t)id_offset)) {\n      (*stats_.mutable_filtered_count())++;\n      iterator->next();\n      continue;\n    }\n\n    const void *vector_data = iterator->data();\n    if (!vector_data) {\n      LOG_ERROR(\"Failed to read source vector, index=%zu key=%zu\",\n                source_streamer_index, static_cast<size_t>(iterator->key()));\n      return IndexError_ReadData;\n    }\n\n    std::vector<uint8_t> bytes;\n    if (need_revert) {\n      std::string new_vector;\n      if (reformer->revert(vector_data, source_streamer_query_meta,\n                           &new_vector) != 0) {\n        LOG_ERROR(\"Failed to revert the vector\");\n        return IndexError_Runtime;\n      }\n      bytes.resize(new_vector.size());\n      memcpy(bytes.data(), new_vector.data(), bytes.size());\n    } else {\n      // TODO: eliminate the copy\n      bytes.resize(provider->element_size());\n      memcpy(bytes.data(), vector_data, bytes.size());\n    }\n\n    // TODO: use id instead of key\n    if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {\n      LOG_ERROR(\"Produce vector to queue failed. key[%lu]\",\n                (size_t)iterator->key());\n      return IndexError_Runtime;\n    }\n    iterator->next();\n  }\n  return 0;\n"
+    },
+    "src/db/index/segment/segment.cc:1028-1127": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1028,
+      "end_line": 1127,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "6797769c3a4c4e2ba4f58149e2983cfb641da1a46c5f6d0bee8056fc022d5c9b",
+      "text": "Doc::Ptr SegmentImpl::Fetch(\n    uint64_t g_doc_id,\n    const std::optional<std::vector<std::string>> &output_fields,\n    bool include_vector) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (g_doc_id > segment_meta_->max_doc_id()) {\n    LOG_ERROR(\"g_doc_id[%zu] not exist in segment[%d] \", (size_t)g_doc_id,\n              id());\n    return nullptr;\n  }\n\n  int segment_doc_id = 0;\n  auto it = std::lower_bound(doc_ids_.begin(), doc_ids_.end(), g_doc_id);\n  if (it != doc_ids_.end() && *it == g_doc_id) {\n    segment_doc_id = static_cast<int>(std::distance(doc_ids_.begin(), it));\n  } else {\n    LOG_ERROR(\n        \"g_doc_id[%zu] not found in doc_ids_[%zu], min_doc_id[%zu] \"\n        \"max_doc_id[%zu], meta[%s]\",\n        (size_t)g_doc_id, doc_ids_.size(), (size_t)doc_ids_.front(),\n        (size_t)doc_ids_.back(), segment_meta_->to_string_formatted().c_str());\n    return nullptr;\n  }\n\n  std::vector<std::string> forward_columns;\n  forward_columns.push_back(GLOBAL_DOC_ID);\n  forward_columns.push_back(USER_ID);\n  if (!output_fields.has_value()) {\n    // No output_fields specified: return all forward fields\n    for (const auto &field : collection_schema_->forward_fields()) {\n      forward_columns.push_back(field->name());\n    }\n  } else {\n    // output_fields specified: only return requested fields that exist\n    const auto &requested = *output_fields;\n    std::unordered_set<std::string> requested_set(requested.begin(),\n                                                  requested.end());\n    for (const auto &field : collection_schema_->forward_fields()) {\n      if (requested_set.count(field->name())) {\n        forward_columns.push_back(field->name());\n      }\n    }\n  }\n\n  // Build result schema\n  std::vector<std::shared_ptr<arrow::Field>> fields;\n  for (size_t i = 0; i < forward_columns.size(); ++i) {\n    const auto &col = forward_columns[i];\n    if (col == GLOBAL_DOC_ID) {\n      fields.push_back(arrow::field(GLOBAL_DOC_ID, arrow::uint64()));\n    } else if (col == USER_ID) {\n      fields.push_back(arrow::field(USER_ID, arrow::utf8()));\n    } else {\n      auto *field = collection_schema_->get_field(col);\n      std::shared_ptr<arrow::Field> arrow_field;\n      auto status = ConvertFieldSchemaToArrowField(field, &arrow_field);\n      if (!status.ok()) {\n        LOG_ERROR(\"Convert field schema failed: %s\",\n                  field->to_string().c_str());\n        return nullptr;\n      }\n      fields.push_back(std::move(arrow_field));\n    }\n  }\n  auto result_schema = std::make_shared<arrow::Schema>(fields);\n\n  // fetch forward columns\n  auto exec_batch = fetch(forward_columns, segment_doc_id);\n  if (!exec_batch) {\n    LOG_ERROR(\"Fetch failed, doc_id: %zu\", (size_t)g_doc_id);\n    return nullptr;\n  }\n  if (exec_batch->length != 1) {\n    LOG_ERROR(\"Fetch failed, doc_id: %zu, num_rows: %zu != 1\", (size_t)g_doc_id,\n              (size_t)exec_batch->length);\n    return nullptr;\n  }\n\n  if (exec_batch->num_values() != (int)forward_columns.size()) {\n    LOG_ERROR(\"table column size error, expect %zu, actual %d\",\n              forward_columns.size(), exec_batch->num_values());\n    return nullptr;\n  }\n\n  auto doc = std::make_shared<Doc>();\n\n  // column 0 is the global doc_id\n  if (auto doc_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(\n          (*exec_batch)[0].scalar())) {\n    doc->set_doc_id(doc_id_scalar->value);\n  } else {\n    LOG_ERROR(\"Global doc id scalar is not of int64 type\");\n    return nullptr;\n  }\n\n  // column 1 is the uid(pk)\n  if (auto str_scalar = std::dynamic_pointer_cast<arrow::StringScalar>(\n          (*exec_batch)[1].scalar())) {\n    doc->set_pk(std::string(str_scalar->view()));\n"
+    },
+    "src/db/index/segment/segment.cc:1268-1308": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1268,
+      "end_line": 1308,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "382f536061eeb2a11a88040784d9701d4acd02367d4ac03c0c6a8cec51e1738f",
+      "text": "  // fetch vector\n  if (!include_vector) {\n    return doc;\n  }\n  // Segment switching can dump a block without seg_mtx_. Keep the block\n  // offsets and indexer lookup in the same snapshot as the flush handoff.\n  std::shared_lock<std::shared_mutex> col_lock(seg_col_mtx_);\n  for (const auto &field : collection_schema_->vector_fields()) {\n    int block_idx = find_persist_block_id(BlockType::VECTOR_INDEX,\n                                          segment_doc_id, field->name());\n    if (block_idx != -1) {\n      const auto &block_offsets =\n          get_persist_block_offsets(BlockType::VECTOR_INDEX, field->name());\n      auto block_offset = block_offsets[block_idx];\n      auto block_doc_id = segment_doc_id - block_offset;\n\n      auto column_name = field->name();\n      auto iter = vector_indexers_.find(column_name);\n      if (iter != vector_indexers_.end()) {\n        const auto &vector_indexers = iter->second;\n        if (block_idx >= (int)vector_indexers.size()) {\n          LOG_ERROR(\"block_idx[%d] out of range[%lu]\", block_idx,\n                    vector_indexers.size());\n          continue;\n        }\n        auto vector_indexer = vector_indexers[block_idx];\n        auto fetch_result = vector_indexer->Fetch(block_doc_id);\n        if (!fetch_result) {\n          LOG_ERROR(\n              \"vector indexer fetch failed, block_doc_id: %d, block_idx: %d, \"\n              \"segment_doc_id: %d\",\n              block_doc_id, block_idx, segment_doc_id);\n          return nullptr;\n        }\n        const auto &vector_buffer = fetch_result.value();\n        auto status =\n            ConvertVectorDataBufferToDocField(field, vector_buffer, doc.get());\n        if (!status.ok()) {\n          LOG_ERROR(\"convert vector data buffer to doc field failed %s\",\n                    status.message().c_str());\n        }\n"
+    },
+    "src/db/index/column/vector_column/combined_vector_column_indexer.cc:54-75": {
+      "path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+      "start_line": 54,
+      "end_line": 75,
+      "file_sha256": "d5a5b9e32530945d7cc37bdcc1916ec49d8cb54cd4dbf04aecaf0f5455c0a267",
+      "span_sha256": "d9a972edf32804b2921821a36922522882a81b252f4c92dc601e909cbb8c9754",
+      "text": "class VectorResultAccumulator {\n public:\n  // Collect plain topk results from each block after translating block-local\n  // doc IDs back to segment-level IDs.\n  void AddBlock(uint32_t block_offset, VectorIndexResults *results) {\n    auto &docs = results->docs();\n    auto &reverted_vectors = results->reverted_vector_list();\n    auto &reverted_sparse_values = results->reverted_sparse_values_list();\n    docs_.reserve(docs_.size() + docs.size());\n\n    for (size_t i = 0; i < docs.size(); ++i) {\n      auto doc = std::move(docs[i]);\n      doc.set_key(block_offset + doc.key());\n\n      ResultDoc result_doc{std::move(doc), {}, {}};\n      if (i < reverted_vectors.size()) {\n        result_doc.reverted_vector = std::move(reverted_vectors[i]);\n      }\n      if (i < reverted_sparse_values.size()) {\n        result_doc.reverted_sparse_values =\n            std::move(reverted_sparse_values[i]);\n      }\n"
+    },
+    "src/db/sqlengine/planner/vector_recall_node.cc:216-237": {
+      "path": "src/db/sqlengine/planner/vector_recall_node.cc",
+      "start_line": 216,
+      "end_line": 237,
+      "file_sha256": "ac32505fd2c3918cef8e98003420f002605ce3cecfc8203d72ef7530b9aee5d3",
+      "span_sha256": "417f85420d495d7ab2f792603f75f3d531d499fbec1708f2a84ec0749c1d98c1",
+      "text": "arrow::Result<std::shared_ptr<arrow::RecordBatch>>\nVectorRecallNode::State::collect_batch() {\n  // collect a batch\n  std::vector<int> indices;\n  indices.reserve(self_->batch_size_);\n  arrow::FloatBuilder builder;\n  arrow::StringBuilder group_id_builder;\n  for (int i = 0; iter_->valid() && i < self_->batch_size_;\n       i++, iter_->next()) {\n    indices.push_back(iter_->doc_id());\n    ARROW_RETURN_NOT_OK(builder.Append(iter_->score()));\n    if (self_->query_info_->group_by()) {\n      ARROW_RETURN_NOT_OK(group_id_builder.Append(iter_->group_id()));\n    }\n  }\n  auto table = self_->segment_->fetch(self_->fetched_columns_, indices);\n  if (!table) {\n    return arrow::Status::ExecutionError(\"fetch table failed\");\n  }\n  auto batch = table->CombineChunksToBatch();\n  if (!batch.ok()) {\n    return arrow::Status::ExecutionError(\"combine chunks to batch failed:\",\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:68-85": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 85,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "798960ee6e5ec418f9e1e0a712442682980967424babe63d533b763370b011be",
+      "text": "bool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n"
+    },
+    "src/db/index/segment/segment_helper.cc:100-171": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 100,
+      "end_line": 171,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "3d655de412e9bbf40faf5cdc2b6dd3a93f0b4d2722b0d455bab453d0676afe22",
+      "text": "Status SegmentHelper::ExecuteCompactTask(CompactTask &task) {\n  // input\n  auto collection_path = task.collection_path_;\n  auto schema = task.schema_;\n  auto input_segments = task.input_segments_;\n  auto filter = task.filter_;\n  auto output_segment_id = task.output_segment_id_;\n\n  // input_segments must be pre-sorted by ascending min_doc_id so the\n  // shared delete_row_id_bitmap (built by FilterRecordBatch, consumed by\n  // both vector and FTS reducers) is well-defined.  Guaranteed upstream by\n  // SegmentManager::get_segments().\n  auto columns = schema->forward_field_names();\n\n  // make segment path\n  auto output_segment_path =\n      FileHelper::MakeTempSegmentPath(collection_path, output_segment_id);\n  if (!FileHelper::CreateDirectory(output_segment_path)) {\n    LOG_ERROR(\"Create directory failed: %s\", output_segment_path.c_str());\n    return Status::InternalError(\"Create directory failed: %s\",\n                                 output_segment_path.c_str());\n  }\n\n  std::function<BlockID()> block_id_generator =\n      [block_id = BlockID{0}]() mutable { return block_id++; };\n\n  // iterate every doc, build forward and invert indexer\n  roaring::Roaring delete_row_id_bitmap;\n  uint64_t min_doc_id{std::numeric_limits<uint64_t>::max()};\n  uint64_t max_doc_id{0};\n  uint32_t doc_count{0};\n  std::vector<BlockMeta> block_metas;\n  Status s = ReduceScalar(schema, input_segments, output_segment_path, columns,\n                          filter, task.forward_use_parquet_, block_id_generator,\n                          &delete_row_id_bitmap, &block_metas, &min_doc_id,\n                          &max_doc_id, &doc_count);\n  CHECK_RETURN_STATUS(s);\n\n  if (doc_count == 0) {\n    FileHelper::RemoveDirectory(output_segment_path);\n    return Status::OK();\n  }\n\n  // Leave row_id_filter null when there are no deletes or\n  // create_compaction_task with rebuild=false, so downstream merge\n  // can take a faster per-doc path that skips the filter callback entirely.\n  std::shared_ptr<RowIdFilter> row_id_filter;\n  if (!delete_row_id_bitmap.isEmpty()) {\n    row_id_filter = std::make_shared<RowIdFilter>(delete_row_id_bitmap);\n  }\n\n  s = ReduceVectorIndex(schema, input_segments, output_segment_path,\n                        row_id_filter, block_id_generator, min_doc_id,\n                        max_doc_id, doc_count, task.concurrency_, &block_metas);\n  CHECK_RETURN_STATUS(s);\n\n  LOG_INFO(\"Compacted vector index\");\n\n  s = ReduceFts(schema, input_segments, output_segment_path,\n                delete_row_id_bitmap, block_id_generator, &block_metas);\n  CHECK_RETURN_STATUS(s);\n\n  LOG_INFO(\"Compacted fts index\");\n\n  auto new_segment_meta = std::make_shared<SegmentMeta>();\n  new_segment_meta->set_id(task.output_segment_id_);\n  new_segment_meta->set_persisted_blocks(block_metas);\n  std::set<std::string> indexed_vector_fields;\n  for (auto &field : schema->vector_fields()) {\n    indexed_vector_fields.emplace(field->name());\n  }\n  new_segment_meta->set_indexed_vector_fields(indexed_vector_fields);\n"
+    },
+    "src/db/index/segment/segment_helper.cc:232-280": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 232,
+      "end_line": 280,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "93862ae6c3cfaeba33b0ae6117bbddeb8835b976bc1e920f1ea9bb0642ecfd20",
+      "text": "  for (auto &segment : input_segments) {\n    auto reader = segment->scan(all_reduce_columns);\n    if (reader == nullptr) {\n      return Status::InternalError(\"scan segment failed\");\n    }\n\n    while (true) {\n      auto batch = reader->Next();\n      if (!batch.ok()) {\n        return Status::InternalError(\"reader next failed: \",\n                                     batch.status().message());\n      }\n\n      auto batch_value = batch.ValueOrDie();\n\n      if (!batch_value) {\n        break;\n      }\n\n      if (batch_value->num_rows() == 0) continue;\n\n      std::shared_ptr<arrow::RecordBatch> filtered_batch;\n      auto as =\n          FilterRecordBatch(batch_value, filter, row_id_offset, &filtered_batch,\n                            delete_row_id_bitmap, min_doc_id, max_doc_id);\n      if (!as.ok()) {\n        return Status::InternalError(\"filter record batch failed: \",\n                                     as.message());\n      }\n\n      row_id_offset += batch_value->num_rows();\n\n      if (!filtered_batch || filtered_batch->num_rows() == 0) {\n        continue;\n      }\n\n      // forward\n      as = forward_writer->insert_batch(filtered_batch);\n      if (!as.ok()) {\n        return Status::InternalError(\"writer insert failed: \", as.message());\n      }\n\n      // invert index\n      if (invert_indexer) {\n        auto s = ReduceScalarIndex(invert_indexer, filtered_batch, *doc_count);\n        CHECK_RETURN_STATUS(s);\n      }\n\n      *doc_count += filtered_batch->num_rows();\n"
+    },
+    "src/db/index/segment/segment_helper.cc:934-995": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 934,
+      "end_line": 995,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "fdccde00925901b952966a88fdb963117fa34f6f6e83831c8ccb2640c6c95c8e",
+      "text": "arrow::Status SegmentHelper::FilterRecordBatch(\n    const std::shared_ptr<arrow::RecordBatch> &batch,\n    const IndexFilter::Ptr filter, uint32_t row_id_offset,\n    std::shared_ptr<arrow::RecordBatch> *filterd,\n    roaring::Roaring *delete_row_id_bitmap, uint64_t *min_doc_id,\n    uint64_t *max_doc_id) {\n  if (!filter) {\n    *filterd = batch;\n    for (int64_t i = 0; i < batch->num_rows(); ++i) {\n      // column 0 is doc_id\n      auto result = batch->column(0)->GetScalar(i);\n      if (!result.ok()) {\n        return result.status();\n      }\n      uint64_t doc_id =\n          std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;\n      *min_doc_id = std::min(*min_doc_id, doc_id);\n      *max_doc_id = std::max(*max_doc_id, doc_id);\n    }\n    return arrow::Status::OK();\n  }\n\n  std::vector<uint64_t> selected_indices;\n  for (int64_t i = 0; i < batch->num_rows(); ++i) {\n    auto result = batch->column(0)->GetScalar(i);\n    if (!result.ok()) {\n      return result.status();\n    }\n    uint64_t doc_id =\n        std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;\n    if (!filter->is_filtered(doc_id)) {\n      selected_indices.push_back(i);\n      *min_doc_id = std::min(*min_doc_id, doc_id);\n      *max_doc_id = std::max(*max_doc_id, doc_id);\n    } else {\n      delete_row_id_bitmap->add(i + row_id_offset);\n    }\n  }\n\n  if (selected_indices.empty()) {\n    return arrow::Status::OK();\n  }\n\n  arrow::UInt64Builder builder;\n  ARROW_RETURN_NOT_OK(builder.AppendValues(selected_indices));\n  std::shared_ptr<arrow::Array> selection_array;\n  ARROW_RETURN_NOT_OK(builder.Finish(&selection_array));\n\n  std::vector<std::shared_ptr<arrow::Array>> filtered_columns;\n  for (int i = 0; i < batch->num_columns(); ++i) {\n    arrow::Datum out;\n    ARROW_ASSIGN_OR_RAISE(\n        out, arrow::compute::Take(batch->column(i), selection_array));\n    filtered_columns.push_back(out.make_array());\n  }\n\n  auto filtered_batch = arrow::RecordBatch::Make(\n      batch->schema(), static_cast<int64_t>(selected_indices.size()),\n      filtered_columns);\n\n  *filterd = filtered_batch;\n\n"
+    },
+    "src/db/collection.cc:1009-1070": {
+      "path": "src/db/collection.cc",
+      "start_line": 1009,
+      "end_line": 1070,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "ad5ed749b1b72e98be39e01a0ba9788f5a8fbe4e61b20abe0f4b9006ffdd552f",
+      "text": "    Version new_version = version_manager_->get_current_version();\n\n    for (auto &task : tasks) {\n      auto task_info = task->task_info();\n\n      if (std::holds_alternative<CompactTask>(task_info)) {\n        auto compact_task = std::get<CompactTask>(task_info);\n\n        if (compact_task.output_segment_meta_) {\n          s = new_version.add_persisted_segment_meta(\n              compact_task.output_segment_meta_);\n          CHECK_RETURN_STATUS(s);\n          new_version.set_next_segment_id(segment_id_allocator_.load());\n        }\n\n        for (auto input_segment : compact_task.input_segments_) {\n          s = new_version.remove_persisted_segment_meta(input_segment->id());\n          CHECK_RETURN_STATUS(s);\n        }\n      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {\n        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);\n        s = new_version.update_persisted_segment_meta(\n            create_index_task.output_segment_meta_);\n        CHECK_RETURN_STATUS(s);\n      }\n    }\n\n    s = version_manager_->apply(new_version);\n    CHECK_RETURN_STATUS(s);\n\n    s = version_manager_->flush();\n    CHECK_RETURN_STATUS(s);\n\n    // publish new segments, retire compacted inputs and reload rebuilt\n    // vector indexes\n    size_t opened_index = 0;\n    for (auto &task : tasks) {\n      auto task_info = task->task_info();\n\n      if (std::holds_alternative<CompactTask>(task_info)) {\n        auto compact_task = std::get<CompactTask>(task_info);\n\n        if (compact_task.output_segment_meta_) {\n          if (opened_index >= opened_segments.size()) {\n            return Status::InternalError(\"opened_segments index out of bounds\");\n          }\n          s = segment_manager_->add_segment(opened_segments[opened_index++]);\n          CHECK_RETURN_STATUS(s);\n        }\n\n        for (auto input_segment : compact_task.input_segments_) {\n          s = segment_manager_->destroy_segment(input_segment->id());\n          CHECK_RETURN_STATUS(s);\n        }\n      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {\n        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);\n\n        s = create_index_task.input_segment_->reload_vector_index(\n            *schema_, create_index_task.output_segment_meta_,\n            create_index_task.output_vector_indexers_,\n            create_index_task.output_quant_vector_indexers_);\n        CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/index/segment/segment.cc:536-556": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 536,
+      "end_line": 556,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "21cfaecde1e3c8f9cc032cf39c1865cde5ce5ebc9b171c3bd62f0e2e84c7f7c2",
+      "text": "Status SegmentImpl::Create(const SegmentOptions &options, uint64_t min_doc_id) {\n  options_ = options;\n  filter_ =\n      std::make_shared<SegmentIndexFilter>(delete_store_, shared_from_this());\n\n  // init memory forward block\n  auto block_id = allocate_block_id();\n  std::vector<std::string> columns{GLOBAL_DOC_ID, USER_ID};\n  std::vector<std::string> schema_forward_fields =\n      collection_schema_->forward_field_names();\n  columns.insert(columns.end(), schema_forward_fields.begin(),\n                 schema_forward_fields.end());\n\n  segment_meta_->set_writing_forward_block(\n      {block_id, BlockType::SCALAR, min_doc_id, min_doc_id, 0, columns});\n  auto vector_fields = collection_schema_->vector_fields();\n  for (auto &field : vector_fields) {\n    if (field->index_params()->type() == IndexType::FLAT) {\n      segment_meta_->add_indexed_vector_field(field->name());\n    }\n  }\n"
+    },
+    "src/db/index/common/meta.h:341-355": {
+      "path": "src/db/index/common/meta.h",
+      "start_line": 341,
+      "end_line": 355,
+      "file_sha256": "95b922926cba785f864caa2f9ff772a57ac230e15519ed23bac1b5b31fbee2a9",
+      "span_sha256": "7639c73b13a90cb46e1da9424270f35d710db85b14882dc6ea34b9c0144a00e1",
+      "text": "  bool vector_indexed(const std::string &field) const {\n    return indexed_vector_fields_.count(field) > 0;\n  }\n\n  void add_indexed_vector_field(const std::string &field) {\n    indexed_vector_fields_.insert(field);\n  }\n\n  std::set<std::string> indexed_vector_fields() const {\n    return indexed_vector_fields_;\n  }\n\n  void set_indexed_vector_fields(const std::set<std::string> &fields) {\n    indexed_vector_fields_ = fields;\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:4117-4138": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4117,
+      "end_line": 4138,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "37faf3600f1059178b8dcb9403916126a26c086a4d3124063fd86117417c6477",
+      "text": "  // create and open memory vector indexer\n  for (const auto &field : collection_schema_->vector_fields()) {\n    auto index_params =\n        std::dynamic_pointer_cast<VectorIndexParams>(field->index_params());\n\n    if (index_params->quantize_type() == QuantizeType::UNDEFINED) {\n      // create normal vector indexer\n      FieldSchema normal_field(*field);\n      normal_field.set_index_params(MakeDefaultVectorIndexParams(\n          index_params->metric_type(),\n          index_params->use_flat_contiguous_memory(),\n          segment_detail::FlatStorageDataTypeForField(\n              field->data_type(), index_params->flat_data_type())));\n      auto block_id = allocate_block_id();\n      auto vector_indexer =\n          create_vector_indexer(field->name(), normal_field, block_id);\n      if (!vector_indexer) {\n        return Status::InternalError(\"Create vector column indexer failed: \",\n                                     field->name());\n      }\n      memory_vector_indexers_.insert({field->name(), vector_indexer});\n    } else {\n"
+    },
+    "src/include/zvec/db/index_params.h:570-578": {
+      "path": "src/include/zvec/db/index_params.h",
+      "start_line": 570,
+      "end_line": 578,
+      "file_sha256": "78db0e38fcfe1c209f4cb825dbfbac5dd8004c3027280ea43d04ad81baf5d9fd",
+      "span_sha256": "ba0419f68b07195d193bade95728f4310ef369bee87453dd759ecad0bdc3dadd",
+      "text": "// define default index params\nconst FlatIndexParams DefaultVectorIndexParams(MetricType::IP);\n\ninline FlatIndexParams MakeDefaultVectorIndexParams(\n    MetricType metric_type, bool use_contiguous_memory = false,\n    DataType storage_data_type = DataType::UNDEFINED) {\n  return FlatIndexParams(metric_type, QuantizeType::UNDEFINED, {},\n                         use_contiguous_memory, storage_data_type);\n}\n"
+    },
+    "src/db/index/segment/segment.cc:4382-4396": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4382,
+      "end_line": 4396,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "5d0990a7e309c912ea8c9249f52bfd7cb84670f6399a1ee02637cebc221c6954",
+      "text": "  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1470-1486": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1470,
+      "end_line": 1486,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "7736c96c037024fbbb0071fba6686bfabeb92718ffe83572548036b573ed7e1b",
+      "text": "        *quant_vector_indexers) {\n  const auto &vector_fields = collection_schema_->vector_fields();\n\n  auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n  new_segment_meta->remove_writing_forward_block();\n\n  std::set<std::string> vector_field_names;\n  for (const auto &field : vector_fields) {\n    auto s = create_vector_index(field->name(), field->index_params(),\n                                 concurrency, &new_segment_meta,\n                                 vector_indexers, quant_vector_indexers);\n    CHECK_RETURN_STATUS(s);\n    vector_field_names.insert(field->name());\n  }\n\n  new_segment_meta->set_indexed_vector_fields(vector_field_names);\n  *segment_meta = new_segment_meta;\n"
+    },
+    "src/db/index/segment/segment.cc:1525-1540": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1525,
+      "end_line": 1540,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "8e58980d421b4d91b221074c8c5c2a5ccd9f5f425dea48bd1ea319c417c95e14",
+      "text": "  auto field = collection_schema_->get_vector_field(column);\n  SegmentMeta::Ptr new_segment_meta;\n  if (*segment_meta == nullptr) {\n    new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n    new_segment_meta->remove_writing_forward_block();\n  } else {\n    new_segment_meta = *segment_meta;\n  }\n\n  if (segment_meta_->vector_indexed(column) &&\n      *field->index_params() == *index_params) {\n    // if segment is already indexed and index params are same, skip create\n    *segment_meta = new_segment_meta;\n    return Status::OK();\n  }\n  new_segment_meta->add_indexed_vector_field(column);\n"
+    },
+    "src/db/sqlengine/planner/query_planner.cc:467-493": {
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 467,
+      "end_line": 493,
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "9c3f72c004e87b875feda7e917d65a2635e420adb71934c0e795808c35d0acee",
+      "text": "Result<PlanInfo::Ptr> QueryPlanner::forward_scan(\n    Segment::Ptr seg, QueryInfo::Ptr query_info,\n    std::unique_ptr<arrow::compute::Expression> forward_filter) {\n  auto reader = seg->scan(query_info->get_all_fetched_scalar_field_names());\n  auto schema = reader->schema();\n  ac::Declaration node{\n      \"record_batch_reader_source\",\n      ac::RecordBatchReaderSourceNodeOptions{std::move(reader)}};\n\n  auto seg_filter = seg->get_filter();\n  if (seg_filter) {\n    cp::Expression check_not_filtered =\n        cp::call(kCheckNotFiltered, {cp::field_ref(LOCAL_ROW_ID)},\n                 std::make_shared<CheckNotFilteredOp::Options>(seg_filter));\n    node =\n        ac::Declaration{\"filter\",\n                        {std::move(node)},\n                        ac::FilterNodeOptions(std::move(check_not_filtered))};\n  }\n\n  if (forward_filter) {\n    node = ac::Declaration{\"filter\",\n                           {std::move(node)},\n                           ac::FilterNodeOptions(std::move(*forward_filter))};\n  }\n\n  if (query_info->is_include_vector()) {\n"
+    },
+    "src/db/sqlengine/planner/ops/check_not_filtered_op.cc:21-41": {
+      "path": "src/db/sqlengine/planner/ops/check_not_filtered_op.cc",
+      "start_line": 21,
+      "end_line": 41,
+      "file_sha256": "c3f007817c4ca97fe4d28e90829a43c901a81824e8b1ea7183d4cd54051088a7",
+      "span_sha256": "d8ac2e2f044665796cd384002fd17357ab0bee85027849065cbcb4bbfb8793f6",
+      "text": "arrow::Status CheckNotFilteredOp::CheckNotFilteredFunction(\n    cp::KernelContext *ctx, const cp::ExecSpan &batch, cp::ExecResult *out) {\n  CheckNotFilteredState *state =\n      static_cast<CheckNotFilteredState *>(ctx->state());\n  auto *filter = state->args.filter.get();\n  if (filter == nullptr) {\n    return arrow::Status::ExecutionError(\"filter is null\");\n  }\n\n  auto row_span = batch[0].array.GetSpan<uint64_t>(1, batch.length);\n  std::shared_ptr<arrow::BooleanBuilder> builder =\n      std::make_shared<arrow::BooleanBuilder>(ctx->memory_pool());\n  ARROW_RETURN_NOT_OK(builder->Reserve(batch.length));\n  for (int i = 0; i < batch.length; i++) {\n    builder->UnsafeAppend(!filter->is_filtered(row_span[i]));\n  }\n  std::shared_ptr<arrow::Array> result_array;\n  ARROW_RETURN_NOT_OK(builder->Finish(&result_array));\n\n  out->value = std::move(result_array->data());\n  return arrow::Status::OK();\n"
+    },
+    "src/db/index/segment/segment.cc:933-937": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 933,
+      "end_line": 937,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "b87fbcad59c26090989f5a890940357806502b75f787929f8be84b70d0ff2fa8",
+      "text": "Status SegmentImpl::internal_delete(const Doc &doc) {\n  delete_store_->mark_deleted(doc.doc_id());\n  id_map_->remove(doc.pk());\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:616-627": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 616,
+      "end_line": 627,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+      "text": "uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n  uint64_t doc_count = doc_ids_.size();\n  if (filter) {\n    for (const auto &doc_id : doc_ids_) {\n      if (filter->is_filtered(doc_id)) {\n        doc_count--;\n      }\n    }\n  }\n\n  return doc_count;\n}\n"
+    },
+    "src/db/collection.cc:1096-1104": {
+      "path": "src/db/collection.cc",
+      "start_line": 1096,
+      "end_line": 1104,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "ccc1fd327992da4301352899b1aedcf06b2ce606af7e06053d6f5cba99c43ff4",
+      "text": "  for (auto &segment : segments) {\n    current_doc_count += segment->doc_count();\n    current_actual_doc_count += segment->doc_count(filter);\n  }\n  if (current_actual_doc_count <\n      current_doc_count * (1 - COMPACT_DELETE_RATIO_THRESHOLD)) {\n    // if delete ratio is large enough, rebuild\n    rebuild = true;\n  }\n"
+    },
+    "src/db/common/constants.h:41-41": {
+      "path": "src/db/common/constants.h",
+      "start_line": 41,
+      "end_line": 41,
+      "file_sha256": "bf3fc2f3614c88e3241b887314011d3370fc0b0dd5df13b8c27e6317a8df0972",
+      "span_sha256": "0ff7b0c5b5e3b3ccef24beabfd5be3dc57584f1891f110e2db6142ddf3c64fdf",
+      "text": "const float COMPACT_DELETE_RATIO_THRESHOLD = 0.3f;\n"
+    },
+    "src/db/collection.cc:1100-1104": {
+      "path": "src/db/collection.cc",
+      "start_line": 1100,
+      "end_line": 1104,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "c07dec20c13b42326c799a0615a1a2dd4eed335d1c2b36e8bd90ffa7ab8eb7cd",
+      "text": "  if (current_actual_doc_count <\n      current_doc_count * (1 - COMPACT_DELETE_RATIO_THRESHOLD)) {\n    // if delete ratio is large enough, rebuild\n    rebuild = true;\n  }\n"
+    },
+    "src/db/collection.cc:929-948": {
+      "path": "src/db/collection.cc",
+      "start_line": 929,
+      "end_line": 948,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "9a1b757749744ec2b78ec865d1df3f8d27b9e2d73635e31476720562ef1d75e3",
+      "text": "    if (writing_segment_->has_record()) {\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n  }\n\n  if (persist_segments.size() == 0) {\n    return Status::OK();\n  }\n\n  // Phase 2: lock-free compact. Readers and writers proceed freely.\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n"
+    },
+    "src/db/collection.cc:1160-1171": {
+      "path": "src/db/collection.cc",
+      "start_line": 1160,
+      "end_line": 1171,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "d3f98db67e5db550cdca11de38d8ed18a90f969fb3cec0fd82caa6024748be9e",
+      "text": "  if (current_group.size() > 0) {\n    SegmentTask::Ptr task;\n    if (current_group.size() == 1 && !rebuild) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n    } else {\n      task = SegmentTask::CreateCompactTask(CompactTask{\n          path_, schema, current_group, allocate_segment_id_for_tmp_segment(),\n          rebuild ? filter : nullptr, !options_.enable_mmap_, concurrency});\n    }\n    tasks.push_back(task);\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1534-1540": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1534,
+      "end_line": 1540,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "2e7c035e91cc94eba94ffd53c9a7b2c1d0b8a6cfa61edd7ed3d45a241ce7d512",
+      "text": "  if (segment_meta_->vector_indexed(column) &&\n      *field->index_params() == *index_params) {\n    // if segment is already indexed and index params are same, skip create\n    *segment_meta = new_segment_meta;\n    return Status::OK();\n  }\n  new_segment_meta->add_indexed_vector_field(column);\n"
+    },
+    "src/db/index/segment/segment.cc:4352-4424": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4352,
+      "end_line": 4424,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "b916e1bc4c53524438ee1feb2f98a02a25d19569ddc3112fb5c74892c464e587",
+      "text": "Status SegmentImpl::finish_memory_components() {\n  // flush() holds seg_col_mtx_ exclusively through this transfer and the\n  // installation of the next writing block.\n  auto block = segment_meta_->writing_forward_block().value();\n\n  // close for loading persist block\n  auto s = memory_store_->close();\n  CHECK_RETURN_STATUS(s);\n  memory_store_.reset();\n\n  // load forward store\n  auto persist_forward_store_path = FileHelper::MakeForwardBlockPath(\n      path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n  BaseForwardStore::Ptr persist_store;\n  if (options_.enable_mmap_) {\n    persist_store =\n        std::make_shared<MmapForwardStore>(persist_forward_store_path);\n  } else {\n    persist_store =\n        std::make_shared<BufferPoolForwardStore>(persist_forward_store_path);\n  }\n  s = persist_store->Open();\n  CHECK_RETURN_STATUS(s);\n  persist_stores_.push_back(persist_store);\n\n  BlockMeta b{block.id_,         block.type_,      block.min_doc_id_,\n              block.max_doc_id_, block.doc_count_, block.columns_};\n  segment_meta_->add_persisted_block(b);\n\n  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n\n  // remove quant indexer from memory to persist\n  for (auto &[column_name, indexer] : quant_memory_vector_indexers_) {\n    auto block_id = quant_memory_vector_block_ids_[column_name];\n    BlockMeta block_meta(block_id, BlockType::VECTOR_INDEX_QUANTIZE,\n                         block.min_doc_id_, block.max_doc_id_, block.doc_count_,\n                         {column_name});\n\n    auto it = quant_vector_indexers_.find(column_name);\n    if (it == quant_vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers;\n      vector_indexers.push_back(indexer);\n      quant_vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(block_meta);\n  }\n\n  // clear memory vector indexers\n  memory_vector_indexers_.clear();\n  quant_memory_vector_indexers_.clear();\n  memory_vector_block_ids_.clear();\n  quant_memory_vector_block_ids_.clear();\n\n  fresh_persist_block_offset();\n  return Status::OK();\n}\n"
+    },
+    "src/db/collection.cc:1160-1164": {
+      "path": "src/db/collection.cc",
+      "start_line": 1160,
+      "end_line": 1164,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "c890ae23809b510913c659b71863d883f8d9193de330e1593e3d608b4eb02b91",
+      "text": "  if (current_group.size() > 0) {\n    SegmentTask::Ptr task;\n    if (current_group.size() == 1 && !rebuild) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n"
+    },
+    "src/db/index/segment/segment.cc:551-556": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 551,
+      "end_line": 556,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "5bf15bc28518eba85401824e04a9e17d34e2b32de480eb6ffacdf4c9999070a4",
+      "text": "  auto vector_fields = collection_schema_->vector_fields();\n  for (auto &field : vector_fields) {\n    if (field->index_params()->type() == IndexType::FLAT) {\n      segment_meta_->add_indexed_vector_field(field->name());\n    }\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1491-1516": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1491,
+      "end_line": 1516,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "3a798d163d6f1fe9af7777ac4c27fdde1c27bae91e8b1e32e0d04aac9d344174",
+      "text": "Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(\n    const std::string &index_file_path, const std::string &column,\n    const FieldSchema &field, int concurrency) {\n  VectorColumnIndexer::Ptr vector_indexer =\n      std::make_shared<VectorColumnIndexer>(index_file_path, field);\n\n  vector_column_params::ReadOptions options{options_.enable_mmap_, true};\n\n  auto s = vector_indexer->Open(options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  std::vector<VectorColumnIndexer::Ptr> to_merge_indexers =\n      vector_indexers_[column];\n  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n  s = vector_indexer->Merge(to_merge_indexers, filter_, merge_options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  s = vector_indexer->Flush();\n  CHECK_RETURN_STATUS_EXPECTED(s);\n\n  return vector_indexer;\n"
+    },
+    "src/core/interface/index.cc:1048-1071": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1048,
+      "end_line": 1071,
+      "file_sha256": "5d850cfddbbbeeed943925349bb9073a3a9caf27c04b0ee5c40fc013bed3687b",
+      "span_sha256": "cfbedb7e0c914d0b6d47d3ec76a3e25771e3ef19758c524d00b6646a196c16dd",
+      "text": "  ailego::Params reducer_params;\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,\n                     true);\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,\n                     effective_write_concurrency);\n  if (reducer->init(reducer_params) != 0) {\n    LOG_ERROR(\"Failed to init reducer\");\n    return core::IndexError_Runtime;\n  }\n  if (reducer->set_target_streamer_wiht_info(builder_, streamer_, converter_,\n                                             reformer_,\n                                             input_vector_meta_) != 0) {\n    LOG_ERROR(\"Failed to set target streamer\");\n    return core::IndexError_Runtime;\n  }\n\n  for (const auto &index : indexes) {\n    if (reducer->feed_streamer_with_reformer(index->streamer_,\n                                             index->reformer_) != 0) {\n      LOG_ERROR(\"Failed to feed streamer\");\n      return core::IndexError_Runtime;\n    }\n  }\n  if (reducer->reduce(filter) != 0) {\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:283-325": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 283,
+      "end_line": 325,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "df3d9cf1f283702472fb55c1f38674f5ddebe0f86e55bc13cc9ca04ef039dfe2",
+      "text": "  while (iterator->is_valid()) {\n    if (stop_flag_ != nullptr && stop_flag_->load(std::memory_order_relaxed)) {\n      LOG_DEBUG(\"read_vec cancelled.\");\n      return 0;\n    }\n    if (filter(iterator->key() + (uint64_t)id_offset)) {\n      (*stats_.mutable_filtered_count())++;\n      iterator->next();\n      continue;\n    }\n\n    const void *vector_data = iterator->data();\n    if (!vector_data) {\n      LOG_ERROR(\"Failed to read source vector, index=%zu key=%zu\",\n                source_streamer_index, static_cast<size_t>(iterator->key()));\n      return IndexError_ReadData;\n    }\n\n    std::vector<uint8_t> bytes;\n    if (need_revert) {\n      std::string new_vector;\n      if (reformer->revert(vector_data, source_streamer_query_meta,\n                           &new_vector) != 0) {\n        LOG_ERROR(\"Failed to revert the vector\");\n        return IndexError_Runtime;\n      }\n      bytes.resize(new_vector.size());\n      memcpy(bytes.data(), new_vector.data(), bytes.size());\n    } else {\n      // TODO: eliminate the copy\n      bytes.resize(provider->element_size());\n      memcpy(bytes.data(), vector_data, bytes.size());\n    }\n\n    // TODO: use id instead of key\n    if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {\n      LOG_ERROR(\"Produce vector to queue failed. key[%lu]\",\n                (size_t)iterator->key());\n      return IndexError_Runtime;\n    }\n    iterator->next();\n  }\n  return 0;\n"
+    },
+    "src/db/index/segment/segment.cc:1511-1511": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1511,
+      "end_line": 1511,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "2e3b8a38bfa4d22dd86c19c9e22381355d2da40b5a63b9a99d9908da66e000d7",
+      "text": "  s = vector_indexer->Merge(to_merge_indexers, filter_, merge_options);\n"
+    },
+    "src/db/index/segment/segment.cc:464-476": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 464,
+      "end_line": 476,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "b49d137125c7a2971d7523481145237333ccd303f57392f704ed8c2b57eb16ab",
+      "text": "bool SegmentImpl::SegmentIndexFilter::is_filtered(uint64_t id) const {\n  auto impl = impl_.lock();\n  if (!impl) return false;\n  auto result = impl->get_global_doc_id(id);\n  if (!result.has_value()) {\n    return false;\n  }\n  uint64_t doc_id = result.value();\n  if (delete_store_ && delete_store_->is_deleted(doc_id)) {\n    return true;\n  }\n  return false;\n}\n"
+    },
+    "src/core/interface/index.cc:1016-1077": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1016,
+      "end_line": 1077,
+      "file_sha256": "5d850cfddbbbeeed943925349bb9073a3a9caf27c04b0ee5c40fc013bed3687b",
+      "span_sha256": "fbaf0b1b4a0f81d2ce6ec59989a89b9e77c3cc45362f9289e679138796043af1",
+      "text": "int Index::merge(const std::vector<Index::Pointer> &indexes,\n                 const IndexFilter &filter, const MergeOptions &options) {\n  if (indexes.empty()) {\n    return core::IndexError_Success;\n  }\n  // ivf need builder\n  auto reducer =\n      core::IndexFactory::CreateStreamerReducer(\"MixedStreamerReducer\");\n  if (reducer == nullptr) {\n    LOG_ERROR(\"Failed to create reducer\");\n    return core::IndexError_Runtime;\n  }\n\n  if (options.write_concurrency == 0) {\n    LOG_ERROR(\"Write concurrency must be greater than 0\");\n    return core::IndexError_InvalidArgument;\n  }\n  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n\n  ailego::Params reducer_params;\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,\n                     true);\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,\n                     effective_write_concurrency);\n  if (reducer->init(reducer_params) != 0) {\n    LOG_ERROR(\"Failed to init reducer\");\n    return core::IndexError_Runtime;\n  }\n  if (reducer->set_target_streamer_wiht_info(builder_, streamer_, converter_,\n                                             reformer_,\n                                             input_vector_meta_) != 0) {\n    LOG_ERROR(\"Failed to set target streamer\");\n    return core::IndexError_Runtime;\n  }\n\n  for (const auto &index : indexes) {\n    if (reducer->feed_streamer_with_reformer(index->streamer_,\n                                             index->reformer_) != 0) {\n      LOG_ERROR(\"Failed to feed streamer\");\n      return core::IndexError_Runtime;\n    }\n  }\n  if (reducer->reduce(filter) != 0) {\n    LOG_ERROR(\"Failed to reduce\");\n    return core::IndexError_Runtime;\n  }\n  is_trained_ = true;\n  return 0;\n}\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 255,
+      "end_line": 326,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "7fe4753259a7647bef4b752ce52467cde2bd2de7be40c554636fb4d966fa3ecc",
+      "text": "int MixedStreamerReducer::read_vec(size_t source_streamer_index,\n                                   const IndexProvider::Pointer &provider,\n                                   const IndexFilter &filter,\n                                   const uint32_t id_offset,\n                                   uint32_t *next_id) {\n  const auto &streamer = streamers_[source_streamer_index];\n  const auto &reformer = source_streamers_reformers_[source_streamer_index];\n  const IndexQueryMeta source_streamer_query_meta{streamer->meta().data_type(),\n                                                  streamer->meta().dimension()};\n\n  bool need_revert = (target_streamer_->meta().reformer_name() !=\n                          streamer->meta().reformer_name() &&\n                      reformer != nullptr);\n  if (target_builder_ && reformer) {\n    need_revert = true;\n  }\n\n  if (!provider) {\n    LOG_ERROR(\"Source provider is null, index=%zu\", source_streamer_index);\n    return IndexError_Runtime;\n  }\n  IndexProvider::Iterator::Pointer iterator = provider->create_iterator();\n  if (!iterator) {\n    LOG_ERROR(\"Failed to create source provider iterator, index=%zu\",\n              source_streamer_index);\n    return IndexError_Runtime;\n  }\n\n  while (iterator->is_valid()) {\n    if (stop_flag_ != nullptr && stop_flag_->load(std::memory_order_relaxed)) {\n      LOG_DEBUG(\"read_vec cancelled.\");\n      return 0;\n    }\n    if (filter(iterator->key() + (uint64_t)id_offset)) {\n      (*stats_.mutable_filtered_count())++;\n      iterator->next();\n      continue;\n    }\n\n    const void *vector_data = iterator->data();\n    if (!vector_data) {\n      LOG_ERROR(\"Failed to read source vector, index=%zu key=%zu\",\n                source_streamer_index, static_cast<size_t>(iterator->key()));\n      return IndexError_ReadData;\n    }\n\n    std::vector<uint8_t> bytes;\n    if (need_revert) {\n      std::string new_vector;\n      if (reformer->revert(vector_data, source_streamer_query_meta,\n                           &new_vector) != 0) {\n        LOG_ERROR(\"Failed to revert the vector\");\n        return IndexError_Runtime;\n      }\n      bytes.resize(new_vector.size());\n      memcpy(bytes.data(), new_vector.data(), bytes.size());\n    } else {\n      // TODO: eliminate the copy\n      bytes.resize(provider->element_size());\n      memcpy(bytes.data(), vector_data, bytes.size());\n    }\n\n    // TODO: use id instead of key\n    if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {\n      LOG_ERROR(\"Produce vector to queue failed. key[%lu]\",\n                (size_t)iterator->key());\n      return IndexError_Runtime;\n    }\n    iterator->next();\n  }\n  return 0;\n}\n"
+    },
+    "src/db/index/segment/segment.cc:1568-1576": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1568,
+      "end_line": 1576,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "b7e0b80c97b54f7de3d1fbfb8c6cc383881f75bbabe43121742f4fe6968995cb",
+      "text": "    new_segment_meta->remove_vector_persisted_block(column);\n    BlockMeta block;\n    block.set_id(block_id);\n    block.set_type(BlockType::VECTOR_INDEX);\n    block.set_columns({column});\n    block.set_min_doc_id(doc_ids_.front());\n    block.set_max_doc_id(doc_ids_.back());\n    block.set_doc_count(doc_ids_.size());\n    new_segment_meta->add_persisted_block(block);\n"
+    },
+    "src/db/index/segment/segment.cc:1569-1576": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1569,
+      "end_line": 1576,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "ee7ce40934f2b0d2d46097576925d907ed111f1e589ebba8e7e19f723d1092e9",
+      "text": "    BlockMeta block;\n    block.set_id(block_id);\n    block.set_type(BlockType::VECTOR_INDEX);\n    block.set_columns({column});\n    block.set_min_doc_id(doc_ids_.front());\n    block.set_max_doc_id(doc_ids_.back());\n    block.set_doc_count(doc_ids_.size());\n    new_segment_meta->add_persisted_block(block);\n"
+    },
+    "src/db/collection.cc:1028-1071": {
+      "path": "src/db/collection.cc",
+      "start_line": 1028,
+      "end_line": 1071,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "2f79c2011e60e2bba0e678040f8785e3432f1a4b14d666c41b37077ca17007b1",
+      "text": "      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {\n        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);\n        s = new_version.update_persisted_segment_meta(\n            create_index_task.output_segment_meta_);\n        CHECK_RETURN_STATUS(s);\n      }\n    }\n\n    s = version_manager_->apply(new_version);\n    CHECK_RETURN_STATUS(s);\n\n    s = version_manager_->flush();\n    CHECK_RETURN_STATUS(s);\n\n    // publish new segments, retire compacted inputs and reload rebuilt\n    // vector indexes\n    size_t opened_index = 0;\n    for (auto &task : tasks) {\n      auto task_info = task->task_info();\n\n      if (std::holds_alternative<CompactTask>(task_info)) {\n        auto compact_task = std::get<CompactTask>(task_info);\n\n        if (compact_task.output_segment_meta_) {\n          if (opened_index >= opened_segments.size()) {\n            return Status::InternalError(\"opened_segments index out of bounds\");\n          }\n          s = segment_manager_->add_segment(opened_segments[opened_index++]);\n          CHECK_RETURN_STATUS(s);\n        }\n\n        for (auto input_segment : compact_task.input_segments_) {\n          s = segment_manager_->destroy_segment(input_segment->id());\n          CHECK_RETURN_STATUS(s);\n        }\n      } else if (std::holds_alternative<CreateVectorIndexTask>(task_info)) {\n        auto create_index_task = std::get<CreateVectorIndexTask>(task_info);\n\n        s = create_index_task.input_segment_->reload_vector_index(\n            *schema_, create_index_task.output_segment_meta_,\n            create_index_task.output_vector_indexers_,\n            create_index_task.output_quant_vector_indexers_);\n        CHECK_RETURN_STATUS(s);\n      }\n"
+    },
+    "src/db/collection.cc:929-942": {
+      "path": "src/db/collection.cc",
+      "start_line": 929,
+      "end_line": 942,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "bccfda16348b121c19262eb46697a009ec7d3e7a6ac8e0599764ac47f6cb7dec",
+      "text": "    if (writing_segment_->has_record()) {\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n  }\n\n  if (persist_segments.size() == 0) {\n    return Status::OK();\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1473-1486": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1473,
+      "end_line": 1486,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "c97d0fbb8f8077e047a02341e4e7a6cd2be2c8c5852e8b810a47f986db98c435",
+      "text": "  auto new_segment_meta = std::make_shared<SegmentMeta>(*segment_meta_);\n  new_segment_meta->remove_writing_forward_block();\n\n  std::set<std::string> vector_field_names;\n  for (const auto &field : vector_fields) {\n    auto s = create_vector_index(field->name(), field->index_params(),\n                                 concurrency, &new_segment_meta,\n                                 vector_indexers, quant_vector_indexers);\n    CHECK_RETURN_STATUS(s);\n    vector_field_names.insert(field->name());\n  }\n\n  new_segment_meta->set_indexed_vector_fields(vector_field_names);\n  *segment_meta = new_segment_meta;\n"
+    },
+    "src/db/index/segment/segment.cc:1534-1539": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1534,
+      "end_line": 1539,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "8fedb3034477694c2dd481bd236eb294693e741602101b939f8b06ac7cdb53fc",
+      "text": "  if (segment_meta_->vector_indexed(column) &&\n      *field->index_params() == *index_params) {\n    // if segment is already indexed and index params are same, skip create\n    *segment_meta = new_segment_meta;\n    return Status::OK();\n  }\n"
+    },
+    "src/db/index/segment/segment_helper.cc:100-160": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 100,
+      "end_line": 160,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "1b8dfaf909cd6e529f480346788783e20edd18d6c647fea2ee2a9e69bd60f9c5",
+      "text": "Status SegmentHelper::ExecuteCompactTask(CompactTask &task) {\n  // input\n  auto collection_path = task.collection_path_;\n  auto schema = task.schema_;\n  auto input_segments = task.input_segments_;\n  auto filter = task.filter_;\n  auto output_segment_id = task.output_segment_id_;\n\n  // input_segments must be pre-sorted by ascending min_doc_id so the\n  // shared delete_row_id_bitmap (built by FilterRecordBatch, consumed by\n  // both vector and FTS reducers) is well-defined.  Guaranteed upstream by\n  // SegmentManager::get_segments().\n  auto columns = schema->forward_field_names();\n\n  // make segment path\n  auto output_segment_path =\n      FileHelper::MakeTempSegmentPath(collection_path, output_segment_id);\n  if (!FileHelper::CreateDirectory(output_segment_path)) {\n    LOG_ERROR(\"Create directory failed: %s\", output_segment_path.c_str());\n    return Status::InternalError(\"Create directory failed: %s\",\n                                 output_segment_path.c_str());\n  }\n\n  std::function<BlockID()> block_id_generator =\n      [block_id = BlockID{0}]() mutable { return block_id++; };\n\n  // iterate every doc, build forward and invert indexer\n  roaring::Roaring delete_row_id_bitmap;\n  uint64_t min_doc_id{std::numeric_limits<uint64_t>::max()};\n  uint64_t max_doc_id{0};\n  uint32_t doc_count{0};\n  std::vector<BlockMeta> block_metas;\n  Status s = ReduceScalar(schema, input_segments, output_segment_path, columns,\n                          filter, task.forward_use_parquet_, block_id_generator,\n                          &delete_row_id_bitmap, &block_metas, &min_doc_id,\n                          &max_doc_id, &doc_count);\n  CHECK_RETURN_STATUS(s);\n\n  if (doc_count == 0) {\n    FileHelper::RemoveDirectory(output_segment_path);\n    return Status::OK();\n  }\n\n  // Leave row_id_filter null when there are no deletes or\n  // create_compaction_task with rebuild=false, so downstream merge\n  // can take a faster per-doc path that skips the filter callback entirely.\n  std::shared_ptr<RowIdFilter> row_id_filter;\n  if (!delete_row_id_bitmap.isEmpty()) {\n    row_id_filter = std::make_shared<RowIdFilter>(delete_row_id_bitmap);\n  }\n\n  s = ReduceVectorIndex(schema, input_segments, output_segment_path,\n                        row_id_filter, block_id_generator, min_doc_id,\n                        max_doc_id, doc_count, task.concurrency_, &block_metas);\n  CHECK_RETURN_STATUS(s);\n\n  LOG_INFO(\"Compacted vector index\");\n\n  s = ReduceFts(schema, input_segments, output_segment_path,\n                delete_row_id_bitmap, block_id_generator, &block_metas);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/index/segment/segment_helper.cc:253-280": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 253,
+      "end_line": 280,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "343b9d49957283cbd8997a2469c08247a0e677797065feffbf61d6f887c6b556",
+      "text": "      std::shared_ptr<arrow::RecordBatch> filtered_batch;\n      auto as =\n          FilterRecordBatch(batch_value, filter, row_id_offset, &filtered_batch,\n                            delete_row_id_bitmap, min_doc_id, max_doc_id);\n      if (!as.ok()) {\n        return Status::InternalError(\"filter record batch failed: \",\n                                     as.message());\n      }\n\n      row_id_offset += batch_value->num_rows();\n\n      if (!filtered_batch || filtered_batch->num_rows() == 0) {\n        continue;\n      }\n\n      // forward\n      as = forward_writer->insert_batch(filtered_batch);\n      if (!as.ok()) {\n        return Status::InternalError(\"writer insert failed: \", as.message());\n      }\n\n      // invert index\n      if (invert_indexer) {\n        auto s = ReduceScalarIndex(invert_indexer, filtered_batch, *doc_count);\n        CHECK_RETURN_STATUS(s);\n      }\n\n      *doc_count += filtered_batch->num_rows();\n"
+    },
+    "src/db/index/segment/segment_helper.cc:934-997": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 934,
+      "end_line": 997,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "437229587f2fdfb7c8aab3b147a6b478996b46a820e9788eeb1a98cbc5fb1e18",
+      "text": "arrow::Status SegmentHelper::FilterRecordBatch(\n    const std::shared_ptr<arrow::RecordBatch> &batch,\n    const IndexFilter::Ptr filter, uint32_t row_id_offset,\n    std::shared_ptr<arrow::RecordBatch> *filterd,\n    roaring::Roaring *delete_row_id_bitmap, uint64_t *min_doc_id,\n    uint64_t *max_doc_id) {\n  if (!filter) {\n    *filterd = batch;\n    for (int64_t i = 0; i < batch->num_rows(); ++i) {\n      // column 0 is doc_id\n      auto result = batch->column(0)->GetScalar(i);\n      if (!result.ok()) {\n        return result.status();\n      }\n      uint64_t doc_id =\n          std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;\n      *min_doc_id = std::min(*min_doc_id, doc_id);\n      *max_doc_id = std::max(*max_doc_id, doc_id);\n    }\n    return arrow::Status::OK();\n  }\n\n  std::vector<uint64_t> selected_indices;\n  for (int64_t i = 0; i < batch->num_rows(); ++i) {\n    auto result = batch->column(0)->GetScalar(i);\n    if (!result.ok()) {\n      return result.status();\n    }\n    uint64_t doc_id =\n        std::dynamic_pointer_cast<arrow::UInt64Scalar>(*result)->value;\n    if (!filter->is_filtered(doc_id)) {\n      selected_indices.push_back(i);\n      *min_doc_id = std::min(*min_doc_id, doc_id);\n      *max_doc_id = std::max(*max_doc_id, doc_id);\n    } else {\n      delete_row_id_bitmap->add(i + row_id_offset);\n    }\n  }\n\n  if (selected_indices.empty()) {\n    return arrow::Status::OK();\n  }\n\n  arrow::UInt64Builder builder;\n  ARROW_RETURN_NOT_OK(builder.AppendValues(selected_indices));\n  std::shared_ptr<arrow::Array> selection_array;\n  ARROW_RETURN_NOT_OK(builder.Finish(&selection_array));\n\n  std::vector<std::shared_ptr<arrow::Array>> filtered_columns;\n  for (int i = 0; i < batch->num_columns(); ++i) {\n    arrow::Datum out;\n    ARROW_ASSIGN_OR_RAISE(\n        out, arrow::compute::Take(batch->column(i), selection_array));\n    filtered_columns.push_back(out.make_array());\n  }\n\n  auto filtered_batch = arrow::RecordBatch::Make(\n      batch->schema(), static_cast<int64_t>(selected_indices.size()),\n      filtered_columns);\n\n  *filterd = filtered_batch;\n\n  return arrow::Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment_helper.cc:146-153": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 146,
+      "end_line": 153,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "f8cbaa93e61ceb5b2663fae167a9e796cfb3651096c87fca943cf519739bc0bc",
+      "text": "  std::shared_ptr<RowIdFilter> row_id_filter;\n  if (!delete_row_id_bitmap.isEmpty()) {\n    row_id_filter = std::make_shared<RowIdFilter>(delete_row_id_bitmap);\n  }\n\n  s = ReduceVectorIndex(schema, input_segments, output_segment_path,\n                        row_id_filter, block_id_generator, min_doc_id,\n                        max_doc_id, doc_count, task.concurrency_, &block_metas);\n"
+    },
+    "src/db/index/segment/segment.cc:2067-2084": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2067,
+      "end_line": 2084,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "8d52670475dc92957c4c432e353107ffb271d97737b5979884669f3207a7edcf",
+      "text": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n"
+    },
+    "src/db/index/common/delete_store.h:96-100": {
+      "path": "src/db/index/common/delete_store.h",
+      "start_line": 96,
+      "end_line": 100,
+      "file_sha256": "87e37c4666ebec15a2d658799be2c7260c00140b8d5210efcf368e2f9ea935fe",
+      "span_sha256": "7ee59396e274999c38bec0e7ec9fe84ada00d1911555332b8d7f5e632f82f2eb",
+      "text": "  void mark_deleted(uint64_t doc_id) {\n    bitmap_.add(doc_id);\n    empty_ = false;\n    modified_since_last_flush_ = true;\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:4444-4452": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4444,
+      "end_line": 4452,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "f90f77ece580bf923954756fa13cf80ca6ec92f3aa59c6d38d0cd35304610b7b",
+      "text": "Result<uint64_t> SegmentImpl::get_global_doc_id(uint32_t segment_doc_id) const {\n  std::lock_guard lock(seg_mtx_);\n  if (segment_doc_id >= doc_ids_.size()) {\n    return tl::make_unexpected(\n        Status::InvalidArgument(\"segment_doc_id out of range\"));\n  }\n  return doc_ids_[segment_doc_id];\n}\n\n"
+    },
+    "src/db/index/segment/segment.cc:4117-4137": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4117,
+      "end_line": 4137,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "549caa8415030edfe92ff5ab7c57dd28fde948616604884ebd47cf9aa5a62f6b",
+      "text": "  // create and open memory vector indexer\n  for (const auto &field : collection_schema_->vector_fields()) {\n    auto index_params =\n        std::dynamic_pointer_cast<VectorIndexParams>(field->index_params());\n\n    if (index_params->quantize_type() == QuantizeType::UNDEFINED) {\n      // create normal vector indexer\n      FieldSchema normal_field(*field);\n      normal_field.set_index_params(MakeDefaultVectorIndexParams(\n          index_params->metric_type(),\n          index_params->use_flat_contiguous_memory(),\n          segment_detail::FlatStorageDataTypeForField(\n              field->data_type(), index_params->flat_data_type())));\n      auto block_id = allocate_block_id();\n      auto vector_indexer =\n          create_vector_indexer(field->name(), normal_field, block_id);\n      if (!vector_indexer) {\n        return Status::InternalError(\"Create vector column indexer failed: \",\n                                     field->name());\n      }\n      memory_vector_indexers_.insert({field->name(), vector_indexer});\n"
+    },
+    "src/db/collection.cc:1162-1164": {
+      "path": "src/db/collection.cc",
+      "start_line": 1162,
+      "end_line": 1164,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "07c6880a1703d16f7ba2678ab783b5ae0124e03d1dc8bd74560c1306b9886c86",
+      "text": "    if (current_group.size() == 1 && !rebuild) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:288-292": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 288,
+      "end_line": 292,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "ae5ed18a98961e0f9aaecc050e401bfa8e7e3835b50b05cbf7c808c46f056e97",
+      "text": "    if (filter(iterator->key() + (uint64_t)id_offset)) {\n      (*stats_.mutable_filtered_count())++;\n      iterator->next();\n      continue;\n    }\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:317-322": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 317,
+      "end_line": 322,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "46133c791f0f6c4c98c79ec421881db5793d61791fefadb6de98bf652ac64fc0",
+      "text": "    // TODO: use id instead of key\n    if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {\n      LOG_ERROR(\"Produce vector to queue failed. key[%lu]\",\n                (size_t)iterator->key());\n      return IndexError_Runtime;\n    }\n"
+    },
+    "src/db/index/segment/segment.cc:1573-1576": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1573,
+      "end_line": 1576,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "e9a8e8dc268f88e5ec46bcf66dff5e36444a916957948f51c8cfbaa0fe163bca",
+      "text": "    block.set_min_doc_id(doc_ids_.front());\n    block.set_max_doc_id(doc_ids_.back());\n    block.set_doc_count(doc_ids_.size());\n    new_segment_meta->add_persisted_block(block);\n"
+    },
+    "src/db/index/segment/segment_helper.cc:127-153": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 127,
+      "end_line": 153,
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "893dfe3e8567df895c5e129d207eba05764596dd89925c65d570c5df224287b9",
+      "text": "  roaring::Roaring delete_row_id_bitmap;\n  uint64_t min_doc_id{std::numeric_limits<uint64_t>::max()};\n  uint64_t max_doc_id{0};\n  uint32_t doc_count{0};\n  std::vector<BlockMeta> block_metas;\n  Status s = ReduceScalar(schema, input_segments, output_segment_path, columns,\n                          filter, task.forward_use_parquet_, block_id_generator,\n                          &delete_row_id_bitmap, &block_metas, &min_doc_id,\n                          &max_doc_id, &doc_count);\n  CHECK_RETURN_STATUS(s);\n\n  if (doc_count == 0) {\n    FileHelper::RemoveDirectory(output_segment_path);\n    return Status::OK();\n  }\n\n  // Leave row_id_filter null when there are no deletes or\n  // create_compaction_task with rebuild=false, so downstream merge\n  // can take a faster per-doc path that skips the filter callback entirely.\n  std::shared_ptr<RowIdFilter> row_id_filter;\n  if (!delete_row_id_bitmap.isEmpty()) {\n    row_id_filter = std::make_shared<RowIdFilter>(delete_row_id_bitmap);\n  }\n\n  s = ReduceVectorIndex(schema, input_segments, output_segment_path,\n                        row_id_filter, block_id_generator, min_doc_id,\n                        max_doc_id, doc_count, task.concurrency_, &block_metas);\n"
+    },
+    "src/db/index/segment/segment.cc:675-712": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 675,
+      "end_line": 712,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "ab68d6da8a2367380733ecfb5d3db4a9ba7f71c26783d7bccd542ff49e974cf2",
+      "text": "Status SegmentImpl::InsertVector(VectorColumnIndexer::Ptr &indexer,\n                                 const Doc &doc,\n                                 const FieldSchema::Ptr &field) {\n  auto value = doc.get<ValueType>(field->name());\n  if (value.has_value()) {\n    vector_column_params::VectorData vector_data;\n    if constexpr (std::is_same_v<ValueType,\n                                 std::pair<std::vector<uint32_t>,\n                                           std::vector<float16_t>>>) {\n      const std::vector<uint32_t> &sparse_indices = value.value().first;\n      const std::vector<float16_t> &sparse_value = value.value().second;\n      vector_data.vector = vector_column_params::SparseVector{\n          (uint32_t)sparse_indices.size(), (void *)sparse_indices.data(),\n          (void *)sparse_value.data()};\n    } else if constexpr (std::is_same_v<ValueType,\n                                        std::pair<std::vector<uint32_t>,\n                                                  std::vector<float>>>) {\n      const std::vector<uint32_t> &sparse_indices = value.value().first;\n      const std::vector<float> &sparse_value = value.value().second;\n      vector_data.vector = vector_column_params::SparseVector{\n          (uint32_t)sparse_indices.size(), (void *)sparse_indices.data(),\n          (void *)sparse_value.data()};\n    } else {\n      vector_data.vector =\n          vector_column_params::DenseVector{value.value().data()};\n    }\n\n    auto &mem_block_meta = segment_meta_->writing_forward_block().value();\n    auto &block_doc_id = mem_block_meta.doc_count_;\n\n    return indexer->Insert(vector_data, block_doc_id);\n  } else {\n    LOG_WARN(\"Field %s not found or is null for doc: %s\", field->name().c_str(),\n             doc.to_detail_string().c_str());\n  }\n  return Status::OK();\n}\n\n"
+    },
+    "src/db/index/segment/segment.cc:2067-2135": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2067,
+      "end_line": 2135,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "eb39c03c40fc72743836d40d9818eea3007f6fbda339f933f2c8465f68f9a788",
+      "text": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n\n  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush WAL: segment[\", id(), \"]\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n  }\n\n  // flush quant vector indexer\n  for (const auto &indexer : quant_memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n  }\n\n"
+    },
+    "src/db/index/segment/segment.cc:553-554": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 553,
+      "end_line": 554,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "2a692bb99d08f1f10108909c360eeb3957b33e91b51f5f39d7878d6195c28aa9",
+      "text": "    if (field->index_params()->type() == IndexType::FLAT) {\n      segment_meta_->add_indexed_vector_field(field->name());\n"
+    },
+    "src/db/collection.cc:1159-1165": {
+      "path": "src/db/collection.cc",
+      "start_line": 1159,
+      "end_line": 1165,
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "5354413c1e1e123bc15d667f5bd9c718c3a58deae8fd6321acc20dd9e8334800",
+      "text": "\n  if (current_group.size() > 0) {\n    SegmentTask::Ptr task;\n    if (current_group.size() == 1 && !rebuild) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n    } else {\n"
+    },
+    "src/db/index/segment/segment.cc:464-474": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 464,
+      "end_line": 474,
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "1b6c32322e1ce804beb11a828fdcdfc25b4750864d109c5f0cf95499e1a71454",
+      "text": "bool SegmentImpl::SegmentIndexFilter::is_filtered(uint64_t id) const {\n  auto impl = impl_.lock();\n  if (!impl) return false;\n  auto result = impl->get_global_doc_id(id);\n  if (!result.has_value()) {\n    return false;\n  }\n  uint64_t doc_id = result.value();\n  if (delete_store_ && delete_store_->is_deleted(doc_id)) {\n    return true;\n  }\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:318-318": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 318,
+      "end_line": 318,
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "cac3210514d7e79bf262ae17e0be07dbbc60e7819314753580b49a66e992f97e",
+      "text": "    if (!mt_list_.produce(VectorItem((*next_id)++, std::move(bytes)))) {\n"
+    }
+  }
+}

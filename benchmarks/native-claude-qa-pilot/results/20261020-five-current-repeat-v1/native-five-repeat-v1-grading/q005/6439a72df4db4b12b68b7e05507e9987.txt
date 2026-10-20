@@ -1,0 +1,41 @@
+## Summary of the mechanism
+
+Two distinct enforcement points matter, and the probes split cleanly across them:
+
+- **Identifier validation** (`src/db/index/common/identifier_validation.cc`): collection names and document IDs share `validate_utf8_name` (lines 50–79) — non‑empty, ≤ a max in **UTF‑8 bytes**, well‑formed UTF‑8, and no codepoint in the forbidden set (lines 28–48): NUL, `\n`, `\r`, `\t`, C0 controls ≤ 0x1F, C1 0x7F–0x9F, U+2028/U+2029. CJK, emoji, spaces and `/` are all fine. **Field names use a stricter, ASCII‑only rule** (`validate_field_name`, lines 100–130): only `[A-Za-z0-9_-]`; any byte ≥ 0x80 is rejected as "contains a non-ASCII character" (lines 110–124), plus reserved internal names (lines 81–86, 125–128). Limits: doc ID 1024 B, collection name 256 B, field name 64 B (`identifier_validation.h:23–25`). Call sites: `CollectionSchema::validate()` → `validate_collection_name` (`src/db/index/common/schema.cc:406–408`) and per‑field `FieldSchema::validate()` → `validate_field_name` (`schema.cc:85`); `Doc::validate_and_sanitize` → `validate_document_id` (`src/db/index/common/doc.cc:734`).
+- **Write path**: Python `Collection.insert` (`python/zvec/model/collection.py:337–356`) → pybind `Insert` (`src/binding/python/model/python_collection.cc:286–294`) → `CollectionImpl::insert` → `write_impl` (`src/db/collection.cc:1593–1595, 1650–1710`). `write_impl` first validates **every** doc (`validate_and_sanitize`, error aborts the whole call via `CHECK_RETURN_STATUS_EXPECTED`) *before* taking `write_mtx_` and before any execution; then it runs a per‑doc loop pushing each doc's `Status` into `WriteResults` (`std::vector<Status>`, `src/include/zvec/db/doc.h:366`) and **continues past failures**. `unwrap_expected`/`throw_if_error` (`python_collection.cc:49–85`) turns only the batch‑level error into a Python exception (`INVALID_ARGUMENT` → `ValueError`).
+
+## Probe 1 — collection name yes, field name no
+
+- `商品 2026/😀` as a **collection name: accepted.** 16 UTF‑8 bytes (3+3+1+4+1+4) ≤ 256; no forbidden codepoints (space, digits, `/`, emoji are all ordinary). Matches the tests: `"集合 / 2026 🔎"` round‑trips (`python/tests/test_name_validation.py:33`) and `u8"中文€😀"` is accepted (`tests/db/index/common/identifier_validation_test.cc:185`).
+- `标题` as a **field name: rejected.** Its bytes are ≥ 0x80, so `validate_field_name` returns InvalidArgument "contains a non-ASCII character; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)" (`identifier_validation.cc:110–124`; ASCII set confirmed by `identifier_validation_test.cc:220–237`).
+
+So the two identifiers are **not** treated alike: the Unicode‑tolerant `validate_utf8_name` governs collection names/doc IDs, while field names are ASCII‑only.
+
+## Probe 2 — document IDs: byte‑measured, 1024‑byte cap
+
+- `客户 42/😀`: **permitted** — 14 UTF‑8 bytes, no forbidden codepoints (`validate_document_id` → `validate_utf8_name`, `identifier_validation.cc:91–93`). Cf. `"订单-2026-🙂"` in `test_name_validation.py:52`.
+- Size unit: **UTF‑8 bytes**, not Python characters — the check is `value.size() > max_bytes` on the UTF‑8‑encoded `std::string_view` produced by the pybind11 `str`→`std::string` conversion (`identifier_validation.cc:55–59`), with `kMaxDocumentIdBytes = 1024` (`identifier_validation.h:23`). `MeasuresLimitsInUtf8Bytes` (`identifier_validation_test.cc:96–115`) confirms the byte semantics.
+- 汉 (U+6C49) is 3 bytes: `"汉" * 341` = **1023 bytes → permitted**; `"汉" * 342` = **1026 bytes → rejected** with `Invalid doc: id[...] exceeds 1024 bytes (got 1026)`. (Test analog: `"界"*341 + "a"` = 1024 B ok, `"界"*341 + "ab"` = 1025 B rejected, `test_name_validation.py:54, 82`.)
+
+## Probe 3 — invalid ID in the batch: Python raises; nothing is inserted
+
+`insert` **raises `ValueError`; no per‑document statuses are produced, and none of d1–d3 is inserted** — including the valid `客户 42/😀` (d1) and `fresh-after` (d3).
+
+Trace: `write_impl` runs the validation pass over all docs *first*, before acquiring `write_mtx_` and before executing any write (`collection.cc:1650–1675`); `validate_and_sanitize` calls `validate_document_id` first (`doc.cc:734`). d2's `bad\tid` contains U+0009 → "contains a tab" (`identifier_validation.cc:35–37`) → InvalidArgument → `CHECK_RETURN_STATUS_EXPECTED` returns the batch‑level error → `unwrap_expected` maps INVALID_ARGUMENT to `py::value_error` (`python_collection.cc:49–67, 69–85`). The behavior is pinned by `test_invalid_id_rejects_batch_before_writing` (`test_name_validation.py:75–111`): `pytest.raises(ValueError)`, message starts with `"Invalid doc:"`, and the valid doc in the same batch is not fetchable afterward.
+
+## Probe 4 — duplicate against a live doc: per‑document statuses; neighbors inserted; no overwrite
+
+`insert` **returns a list `[Status(OK), Status(ALREADY_EXISTS), Status(OK)]` — no exception**:
+
+- All three IDs pass pre‑validation, so the batch reaches the execution loop. `handle_insert` → `SegmentImpl::insert` checks the collection‑wide `id_map_` and returns `Status::AlreadyExists` for `seed-id` **before writing anything** (`segment.cc:990–996`; `collection.cc:1646–1648`).
+- `write_impl` pushes each doc's status and continues (`results.push_back(s)`; no abort, no rollback), so `fresh-before` and `fresh-after` **are inserted**.
+- The existing `seed-id` document is **not overwritten**; its payload stays `old`. `insert` never replaces: mark‑deleted + re‑insert exists only in `internal_upsert` (`segment.cc:975–982`), reachable only through `WriteMode::UPSERT` → `handle_upsert` (`collection.cc:1601–1603, 1634–1636`).
+- Per‑doc statuses cross the boundary as data, not exceptions (`WriteResults = std::vector<Status>`, `doc.h:366`; `throw_if_error` applies only to the batch‑level error). Cf. `test_collection.py:572–578`: duplicate insert returns a Status with `StatusCode.ALREADY_EXISTS`.
+
+## Why the two batches have different failure scopes
+
+The scopes differ because the failures occur at different stages of `write_impl`:
+
+- **Probe 3 (validation stage):** identifier rules are a whole‑batch precondition checked before the write lock and before any document is executed. The all‑or‑nothing outcome is a **validation guarantee** — zero writes happen simply because validation precedes writing, not because of any transaction.
+- **Probe 4 (execution stage):** the duplicate is detected per document, inside the loop. Statuses accumulate and iteration continues; there is **no transaction or rollback**, so the batch is explicitly *not* atomic here — documents before and after the failed one remain inserted. Assuming atomicity for execution‑stage failures would be wrong; assuming per‑doc statuses for validation failures would equally be wrong (the call raises instead).

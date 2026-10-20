@@ -1,0 +1,406 @@
+{
+  "schema_version": 1,
+  "task_id": "q002",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-five-repeat-v1-preparation/prepared/reserves/q002/tasks/zvec-q002/environment/source",
+  "source_commit": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+  "verification": {
+    "files": 1216,
+    "inventory_sha256": "173db992114d6afa12b3371826ca896d6090ff4843740d5483fb3512e71ecc57",
+    "exact_file_set_and_bytes_verified": true,
+    "curated_spans_verified": 17
+  },
+  "spans": {
+    "src/db/sqlengine/analyzer/query_node_walker.cc:213-298": {
+      "path": "src/db/sqlengine/analyzer/query_node_walker.cc",
+      "start_line": 213,
+      "end_line": 298,
+      "file_sha256": "54ff97d8e84734e15691bc92c0b837fa1f03bd8d7d7cb3b78502b079988447a4",
+      "span_sha256": "8de7d9029ac9ea30ebb73d6a339d7166d9e97d42bb4c5f34684b1fac49da619d",
+      "text": "  // invert index analysis, if field exists on both forward and index,\n  // as long as the cond conform to index cond criteria,\n  // it is regarded as index cond, not forward cond.\n  if (forward_field->has_invert_index()) {\n    if (const auto ret = check_array_and_contain_compatible(\n            query_rel_node, forward_field, true);\n        ret != std::nullopt) {\n      return ret.value();\n    }\n    // data type of index only support string, numeric and vector, and:\n    // string supports all op,\n    const auto field_data_type = forward_field->element_data_type();\n    const bool is_string_field = field_data_type == zvec::DataType::STRING;\n    // numeric supports all op except like, ( as well as bool )\n    const bool is_numeric_field_without_like =\n        query_node->op() != QueryNodeOp::Q_LIKE &&\n        (is_numeric_type(field_data_type) ||\n         field_data_type == zvec::DataType::BOOL);\n\n    // if not satisfy, fall back to forward analysis\n    if (is_string_field || is_numeric_field_without_like) {\n      if (!check_and_convert_value_type(field_data_type, right)) {\n        err_msg_ = ailego::StringHelper::Concat(\n            \"field type and value type not match in relation expr. \",\n            query_rel_node->text());\n        return ControlOp::BREAK;\n      }\n\n      // bool op check\n      if (field_data_type == zvec::DataType::BOOL) {\n        if (query_node->op() != QueryNodeOp::Q_EQ &&\n            query_node->op() != QueryNodeOp::Q_NE) {\n          err_msg_ = \"bool type only support EQ and NQ\";\n          return ControlOp::BREAK;\n        }\n      }\n\n      add_invert_filter(query_rel_node.get());\n      // arrive here, it is a index condition.\n      return ControlOp::CONTINUE;\n    }\n  }\n\n  // compared with index_field's check, following check for forward_field:\n  // 1. support BINARY type\n  // 2. validate `like op only on str` in body instead of `if` condition block\n  // 3. use check_and_convert_value_type() instead of field_type_vs_value_type()\n  //        to convert numeric values to str & not support BINARY\n  if (forward_field != nullptr) {\n    if (const auto ret = check_array_and_contain_compatible(\n            query_rel_node, forward_field, false);\n        ret != std::nullopt) {\n      return ret.value();\n    }\n    // data type of forward only support binary, string, bool, int and float\n    if (forward_field->element_data_type() == zvec::DataType::BINARY ||\n        forward_field->element_data_type() == zvec::DataType::STRING ||\n        forward_field->element_data_type() == zvec::DataType::BOOL ||\n        is_numeric_type(forward_field->element_data_type())) {\n      if (!field_type_vs_value_type(forward_field->element_data_type(),\n                                    right)) {\n        err_msg_ = ailego::StringHelper::Concat(\n            \"forward field type and value type not match in relation expr. \",\n            query_rel_node->text());\n        return ControlOp::BREAK;\n      }\n\n      // bool op check\n      if (forward_field->element_data_type() == zvec::DataType::BOOL) {\n        if (query_node->op() != QueryNodeOp::Q_EQ &&\n            query_node->op() != QueryNodeOp::Q_NE) {\n          err_msg_ = \"bool type only support EQ and NQ\";\n          return ControlOp::BREAK;\n        }\n      }\n\n      // like only works on string\n      if (query_node->op() == QueryNodeOp::Q_LIKE &&\n          forward_field->element_data_type() != zvec::DataType::STRING) {\n        err_msg_ = \"operator LIKE only works on string\";\n        return ControlOp::BREAK;\n      }\n\n      add_forward_filter(query_rel_node.get(), field_name);\n      // arrive here, it is a forward.\n      return ControlOp::CONTINUE;\n"
+    },
+    "src/db/sqlengine/planner/query_planner.cc:365-422": {
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 365,
+      "end_line": 422,
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "e3019fb189ba769cb811e311acbf68880bbaa2caa2a6dbea9f30ed1368c403d9",
+      "text": "  // optimize plan by instrument query info condition, eg adjust invert cond\n  Optimizer::Ptr optimizer =\n      InvertCondOptimizer::CreateInvertCondOptimizer(schema_);\n  int num_segments = segments.size();\n  std::vector<PlanInfo::Ptr> segment_plans(segments.size());\n  for (int idx = 0; idx < num_segments; ++idx) {\n    auto &segment = segments[idx];\n    auto &segment_query_info = (*query_infos)[idx];\n    bool only_invert_before_opt =\n        segment_query_info->invert_cond() != nullptr &&\n        segment_query_info->filter_cond() == nullptr;\n    if (optimizer) {\n      // Optimize by change query info if needed.\n      if (!optimizer->optimize(segment.get(), segment_query_info.get())) {\n        LOG_DEBUG(\n            \"Not optimized. collection[%s] segment[%zu] \"\n            \"segment_query_info[%s]\",\n            table_name.c_str(), (size_t)segment->id(),\n            segment_query_info->to_string().c_str());\n      } else {\n        LOG_DEBUG(\n            \"Optimized. collection[%s] segment[%zu] segment_query_info[%s]\",\n            table_name.c_str(), (size_t)segment->id(),\n            segment_query_info->to_string().c_str());\n      }\n    }\n    bool only_forward_after_opt =\n        segment_query_info->invert_cond() == nullptr &&\n        segment_query_info->filter_cond() != nullptr;\n    // if only invert cond before opt and only forward cond after opt,\n    // single stage search should be performed as large ratio of docs match\n    // with filter\n    bool single_stage_search = only_invert_before_opt && only_forward_after_opt;\n    std::unique_ptr<arrow::compute::Expression> forward_filter;\n    if (segment_query_info->filter_cond()) {\n      auto filter = parse_filter(segment_query_info->filter_cond().get());\n      if (!filter) {\n        LOG_ERROR(\"Parse filter failed: %s\", filter.error().c_str());\n        return tl::make_unexpected(filter.error());\n      }\n      forward_filter =\n          std::make_unique<cp::Expression>(std::move(filter.value()));\n    }\n\n    Result<PlanInfo::Ptr> seg_plan;\n    if (segment_query_info->vector_cond_info()) {\n      seg_plan = vector_scan(segment, std::move(segment_query_info),\n                             std::move(forward_filter), single_stage_search);\n    } else if (segment_query_info->fts_cond_info()) {\n      seg_plan = fts_scan(segment, std::move(segment_query_info),\n                          std::move(forward_filter), single_stage_search);\n    } else if (segment_query_info->invert_cond()) {\n      seg_plan = invert_scan(segment, std::move(segment_query_info),\n                             std::move(forward_filter));\n    } else {\n      seg_plan = forward_scan(segment, std::move(segment_query_info),\n                              std::move(forward_filter));\n    }\n"
+    },
+    "src/db/sqlengine/planner/query_planner.cc:533-556": {
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 533,
+      "end_line": 556,
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "f599e53be007ad3135815cc95477fad1e5a39325df372dbf436a80c480121177",
+      "text": "DocFilter::Ptr QueryPlanner::build_doc_filter(\n    const Segment::Ptr &seg, const QueryInfo::Ptr &query_info,\n    std::unique_ptr<arrow::compute::Expression> &forward_filter,\n    bool single_stage_search) {\n  std::unique_ptr<ac::Declaration> forward_filter_plan;\n  // if single stage search is not enabled, first run acero plan to get\n  // forward bitmap, then filter during search. otherwise, filter forward\n  // during search.\n  if (forward_filter && !single_stage_search) {\n    ac::RecordBatchReaderSourceNodeOptions source_options{\n        seg->scan(query_info->get_forward_filter_field_names())};\n    forward_filter_plan.reset(new ac::Declaration{ac::Declaration::Sequence({\n        {\"record_batch_reader_source\", std::move(source_options)},\n        {\n            \"project\",\n            ac::ProjectNodeOptions{{std::move(*forward_filter)},\n                                   {kFieldIsValid}},\n        },\n    })});\n    forward_filter.reset();\n  }\n  return std::make_shared<DocFilter>(seg, query_info,\n                                     std::move(forward_filter_plan),\n                                     std::move(forward_filter));\n"
+    },
+    "src/db/sqlengine/planner/query_planner.cc:642-660": {
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 642,
+      "end_line": 660,
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "884d524f0a21ff2e94e1c32af2f093f97b3d175d1ce95a758e992bed3adcb1ed",
+      "text": "Result<PlanInfo::Ptr> QueryPlanner::fts_scan(\n    Segment::Ptr seg, QueryInfo::Ptr query_info,\n    std::unique_ptr<arrow::compute::Expression> forward_filter,\n    bool single_stage_search) {\n  auto doc_filter =\n      build_doc_filter(seg, query_info, forward_filter, single_stage_search);\n\n  auto topn = query_info->query_topn();\n  int batch_size = get_batch_size(*query_info, false);\n  auto recall_node = std::make_shared<FtsRecallNode>(\n      std::move(seg), std::move(query_info), std::move(doc_filter), batch_size);\n\n  auto source_node_options =\n      arrow::acero::SourceNodeOptions{recall_node->schema(), recall_node->gen(),\n                                      arrow::compute::Ordering::Implicit()};\n  ac::Declaration node{\"source\", source_node_options};\n\n  node = ac::Declaration{\n      \"fetch\", {std::move(node)}, ac::FetchNodeOptions{0, topn}};\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:24-85": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 24,
+      "end_line": 85,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "7629e5bd7a1629eceed2495ed2287d5956371e68b9d270d8f5c686ac95ad7286",
+      "text": "Status DocFilter::compute_filter() {\n  if (invert_cond_) {\n    InvertSearch search(segment_.get());\n    auto invert_res = search.exec_invert_cond_tree(invert_cond_.get());\n    if (!invert_res) {\n      return Status::InternalError(\"Execute invert search failed: \",\n                                   invert_res.error().message());\n    }\n    invert_result_ = invert_res.value();\n    invert_filter_ = invert_result_->make_filter();\n  }\n\n  if (forward_plan_) {\n    auto forward_result = arrow::acero::DeclarationToTable(*forward_plan_);\n    if (!forward_result.ok()) {\n      return Status::InternalError(\"Execute filter bitmap failed: \",\n                                   forward_result.status().ToString());\n    }\n    // has only one column with boolean type\n    auto &forward_table = forward_result.ValueUnsafe();\n    if (forward_table->num_columns() != 1 ||\n        forward_table->column(0)->type() != arrow::boolean()) {\n      return Status::InternalError(\"Filter bitmap is not boolean type\");\n    }\n    forward_bitmap_ = forward_table->column(0);\n  }\n\n  if (forward_filter_expr_) {\n    // get schema to bind to Expression\n    auto table = segment_->fetch(query_info_->get_forward_filter_field_names(),\n                                 std::vector<int>{});\n    if (!table) {\n      return Status::InternalError(\"Fetch forward failed\");\n    }\n    auto bind_res = forward_filter_expr_->Bind(*table->schema());\n    if (!bind_res.ok()) {\n      return Status::InternalError(\"Bind forward filter expression failed\",\n                                   bind_res.status().ToString());\n    }\n    *forward_filter_expr_ = bind_res.MoveValueUnsafe();\n  }\n  return Status::OK();\n}\n\nbool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:109-140": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 109,
+      "end_line": 140,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "8ce71a670b127abf9bf65f4cbeeefdd60c2f05917fbb6a65befb255a03d7e746",
+      "text": "std::optional<std::vector<uint64_t>> DocFilter::get_bf_by_keys_and_update(\n    float ratio) {\n  auto meta = segment_->meta();\n  if (!meta) {\n    return std::nullopt;\n  }\n  // TODO: support forward\n  if (!invert_result_) {\n    return std::nullopt;\n  }\n  size_t doc_count = meta->doc_count();\n  uint64_t bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio);\n\n  // decide to use brute force by keys or not\n  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n  } else {\n    LOG_DEBUG(\n        \"Not use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n  }\n  return std::nullopt;\n"
+    },
+    "src/db/sqlengine/planner/fts_recall_node.cc:110-140": {
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 110,
+      "end_line": 140,
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "7b04fd94ff4269e863ccac8cb7e1e01f606209cb93840bd3a7f7b41e02e4b97d",
+      "text": "Result<FtsIndexResults::Ptr> FtsRecallNode::prepare() {\n  auto filter_status = doc_filter_->compute_filter();\n  if (!filter_status.ok()) {\n    return tl::make_unexpected(filter_status);\n  }\n\n  const auto &fts_cond = query_info_->fts_cond_info();\n  if (!fts_cond) {\n    return tl::make_unexpected(\n        Status::InvalidArgument(\"FtsRecallNode: no fts_cond_info in query\"));\n  }\n\n  fts::FtsQueryParams params;\n  params.topk = query_info_->query_topn();\n  // Brute-force path: get_bf_by_keys_and_update also clears invert_filter_\n  // when it returns ids, so the filter set below won't double-check them.\n  if (auto bf_keys = doc_filter_->get_bf_by_keys_and_update(\n          GlobalConfig::Instance().fts_brute_force_by_keys_ratio())) {\n    params.candidate_ids = std::move(bf_keys.value());\n  }\n  // Push down remaining filters (delete / forward) so filtered docs are\n  // skipped during scoring and we still return up to topk results.\n  params.filter = doc_filter_->empty() ? nullptr : doc_filter_;\n\n  auto results =\n      segment_->fts_search(fts_cond->field_name, *fts_cond->fts_ast, params);\n  if (!results) {\n    return tl::make_unexpected(results.error());\n  }\n\n  return std::make_shared<FtsIndexResults>(std::move(results.value()));\n"
+    },
+    "src/db/index/column/fts_column/fts_types.h:24-35": {
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "start_line": 24,
+      "end_line": 35,
+      "file_sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1",
+      "span_sha256": "eefed39202d25efab045e23db2abaed0bf43598da06b54015fbf9576998131fe",
+      "text": "/*! FTS query parameters passed to FtsColumnIndexer::search(). */\nstruct FtsQueryParams {\n  uint32_t topk{10};\n  // Optional filter: returns true if a doc should be EXCLUDED.\n  // Wraps zvec::IndexFilter for push-down filtering inside the search loop.\n  IndexFilter::Ptr filter{nullptr};\n  // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;\n  // when non-empty, FtsColumnIndexer restricts evaluation to this set by\n  // AND-ing it with the root iterator. Filled by the planner via\n  // DocFilter::get_bf_by_keys_and_update when an invert result is highly\n  // selective.\n  std::vector<uint64_t> candidate_ids;\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:194-259": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 194,
+      "end_line": 259,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "ca0359539b52293f5b9cb0858a5f37718871b5fa0dfc612d37c600c4216c0f62",
+      "text": "  auto iter_result = build_iterator(ast);\n  if (!iter_result.has_value()) {\n    LOG_ERROR(\"FtsColumnIndexer::search: build_iterator failed. field[%s] %s\",\n              field_name_.c_str(), iter_result.error().message().c_str());\n    return tl::make_unexpected(iter_result.error());\n  }\n  DocIteratorPtr root_iter = std::move(iter_result.value());\n  if (!root_iter) {\n    // No matching terms found — valid empty result, not an error.\n    return std::vector<FtsResult>{};\n  }\n\n  // Candidate-driven mode: AND a CandidateDocIterator into the root so the\n  // small candidate set leads (Conjunction sorts by cost asc), turning the\n  // posting walk into per-candidate advance()+matches()+score().\n  if (!query_params.candidate_ids.empty()) {\n    std::vector<DocIteratorPtr> musts;\n    musts.reserve(2);\n    musts.push_back(\n        std::make_unique<CandidateDocIterator>(query_params.candidate_ids));\n    musts.push_back(std::move(root_iter));\n    root_iter = std::make_unique<ConjunctionIterator>(\n        std::move(musts), std::vector<DocIteratorPtr>{});\n  }\n\n  const uint32_t topk = query_params.topk;\n  const zvec::IndexFilter *filter_ptr = query_params.filter.get();\n\n  using MinHeap = std::priority_queue<FtsResult, std::vector<FtsResult>,\n                                      std::greater<FtsResult>>;\n  MinHeap min_heap;\n\n  // Filter pushdown: when a filter is present, use the filter-aware next_doc\n  // overload so composite iterators skip filtered docs before paying for\n  // block-max binary search, do_next alignment, or phase-2 position checks.\n  uint32_t doc_id =\n      filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n  while (doc_id != DocIterator::NO_MORE_DOCS) {\n    const uint64_t global_doc_id = static_cast<uint64_t>(doc_id);\n\n    if (root_iter->matches()) {\n      float s = root_iter->score();\n      if (s > 0.0f) {\n        if (min_heap.size() < topk) {\n          min_heap.push({global_doc_id, s});\n          if (min_heap.size() == topk) {\n            root_iter->set_min_competitive_score(min_heap.top().score);\n          }\n        } else if (s > min_heap.top().score) {\n          min_heap.pop();\n          min_heap.push({global_doc_id, s});\n          root_iter->set_min_competitive_score(min_heap.top().score);\n        }\n      }\n    }\n    doc_id =\n        filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n  }\n\n  std::vector<FtsResult> results(min_heap.size());\n  for (auto it = results.rbegin(); it != results.rend(); ++it) {\n    *it = min_heap.top();\n    min_heap.pop();\n  }\n\n  return results;\n"
+    },
+    "src/db/sqlengine/planner/invert_recall_node.cc:30-85": {
+      "path": "src/db/sqlengine/planner/invert_recall_node.cc",
+      "start_line": 30,
+      "end_line": 85,
+      "file_sha256": "6c586eb56007fbbf7d0f26baf865c5aae59e0d7b7030b9cf47106d987b69bb17",
+      "span_sha256": "2b564ff18ebdf0f36fe4b0c071aa62b109a49166bc4e500afa329030ea20756f",
+      "text": "    if (!state.iter_) {\n      auto invert_ret = self->prepare();\n      if (!invert_ret) {\n        return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n            arrow::Status::ExecutionError(\"prepare invert failed:\",\n                                          invert_ret.error().c_str()));\n      }\n      state.invert_result_ = invert_ret.value();\n      state.iter_ = state.invert_result_->create_iterator();\n    }\n\n    if (!state.iter_->valid()) {\n      // return nullopt to indicate end\n      return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n          std::nullopt);\n    }\n\n    // collect a batch\n    std::vector<int> indices;\n    indices.reserve(self->batch_size_);\n    for (int i = 0; state.iter_->valid() && i < self->batch_size_;\n         state.iter_->next()) {\n      if (self->seg_filter_ &&\n          self->seg_filter_->is_filtered(state.iter_->doc_id())) {\n        continue;\n      }\n      i++;\n      indices.push_back(state.iter_->doc_id());\n    }\n    if (indices.empty()) {\n      // return nullopt to indicate end\n      return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n          std::nullopt);\n    }\n\n    auto table = self->segment_->fetch(self->fetched_columns_, indices);\n    if (!table) {\n      return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n          arrow::Status::UnknownError(\"fetch table failed\"));\n    }\n    auto batch = table->CombineChunksToBatch();\n    if (!batch.ok()) {\n      return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n          arrow::Status::ExecutionError(\"combine chunks to batch failed:\",\n                                        batch.status().ToString()));\n    }\n    cp::ExecBatch exec_batch(*batch.ValueUnsafe());\n    return arrow::Future<std::optional<cp::ExecBatch>>::MakeFinished(\n        std::move(exec_batch));\n  };\n}\n\nResult<InvertedSearchResult::Ptr> InvertRecallNode::prepare() {\n  InvertSearch search(segment_.get());\n  return search.exec_invert_cond_tree(query_info_->invert_cond().get());\n}\n"
+    },
+    "src/db/index/column/inverted_column/inverted_search_result.h:48-155": {
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 48,
+      "end_line": 155,
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "297d13165937b31ee5861a311bb1c5967208c0ad43fceb9efadc92a6cc4c6cc7",
+      "text": "  const IndexFilter::Ptr make_filter() const {\n    return bitmap_ ? std::make_shared<Filter>(shared_from_this()) : nullptr;\n  }\n\n\n  explicit InvertedSearchResult() {}\n\n\n  explicit InvertedSearchResult(roaring_bitmap_t *bitmap) : bitmap_(bitmap) {}\n\n\n  ~InvertedSearchResult() override {\n    destroy_bitmap();\n  }\n\n\n  InvertedSearchResult(const InvertedSearchResult &) = delete;\n  InvertedSearchResult(InvertedSearchResult &&) = delete;\n  InvertedSearchResult &operator=(const InvertedSearchResult &) = delete;\n  InvertedSearchResult &operator=(InvertedSearchResult &&) = delete;\n\n\n  bool contains(uint32_t id) const {\n    if (bitmap_) {\n      return roaring_bitmap_contains(bitmap_, id);\n    } else {\n      return false;\n    }\n  }\n\n\n  size_t count() const override {\n    if (bitmap_) {\n      return roaring_bitmap_get_cardinality(bitmap_);\n    } else {\n      return 0;\n    }\n  }\n\n\n  class InvertedIndexIterator : public Iterator {\n   public:\n    explicit InvertedIndexIterator(\n        std::shared_ptr<const InvertedSearchResult> result)\n        : result_(result) {\n      if (result_->bitmap_) {\n        iter_ = roaring_create_iterator(result_->bitmap_);\n      }\n    }\n\n    ~InvertedIndexIterator() override {\n      if (iter_) {\n        roaring_free_uint32_iterator(iter_);\n      }\n    }\n\n    idx_t doc_id() const override {\n      if (!iter_) {\n        return INVALID_DOC_ID;\n      }\n      if (iter_->has_value) {\n        return iter_->current_value;\n      } else {\n        return INVALID_DOC_ID;\n      }\n    }\n\n    float score() const override {\n      return 0.0f;\n    }\n\n    void next() override {\n      if (iter_ && iter_->has_value) {\n        roaring_advance_uint32_iterator(iter_);\n      }\n    }\n\n    bool valid() const override {\n      return iter_ ? iter_->has_value : false;\n    }\n\n   private:\n    const std::shared_ptr<const InvertedSearchResult> result_{};\n    roaring_uint32_iterator_t *iter_{nullptr};\n  };\n\n\n  IteratorUPtr create_iterator() override {\n    return std::make_unique<InvertedIndexIterator>(shared_from_this());\n  }\n\n\n  void extract_ids(std::vector<uint32_t> *ids) const {\n    if (!ids) {\n      LOG_ERROR(\"Failed to extract ids: ids pointer is null\");\n      return;\n    }\n    if (!bitmap_) {\n      return;\n    }\n\n    ids->reserve(static_cast<size_t>(count()));\n    roaring_uint32_iterator_t *iter = roaring_create_iterator(bitmap_);\n    while (iter->has_value) {\n      ids->push_back(iter->current_value);\n      roaring_advance_uint32_iterator(iter);\n    }\n    roaring_free_uint32_iterator(iter);\n"
+    },
+    "src/db/index/column/inverted_column/inverted_search_result.h:173-178": {
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 173,
+      "end_line": 178,
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "8053387db21a4f9e464b57f8d8995cdb095ebc5633e4077b97be3aea7a7059ee",
+      "text": "  void AND(const InvertedSearchResult &other) {\n    if (!bitmap_ || !other.bitmap_) {\n      destroy_bitmap();\n    } else {\n      roaring_bitmap_and_inplace(bitmap_, other.bitmap_);\n    }\n"
+    },
+    "tests/db/index/column/fts_column/fts_column_indexer_test.cc:1765-1805": {
+      "path": "tests/db/index/column/fts_column/fts_column_indexer_test.cc",
+      "start_line": 1765,
+      "end_line": 1805,
+      "file_sha256": "dc8daef7300f9f160033f0780f033a1a3c0a353f8409ca646b526b22c5f4cd97",
+      "span_sha256": "9074b48ec2b4c72f824291b995a5479f335c53f87e6faa8c01c540dc6ec26828",
+      "text": "// Candidate-driven coexists with the existing filter pushdown:\n// candidate_ids narrows the doc set; filter further drops some.\nTEST_F(FtsColumnIndexerTest, BruteForceCoexistsWithFilterPushdown) {\n  auto indexer = make_indexer(\"content\");\n  EXPECT_TRUE(indexer->insert(0, \"alpha\").has_value());\n  EXPECT_TRUE(indexer->insert(1, \"alpha\").has_value());\n  EXPECT_TRUE(indexer->insert(2, \"alpha\").has_value());\n  EXPECT_TRUE(indexer->insert(3, \"alpha\").has_value());\n  EXPECT_TRUE(indexer->flush().has_value());\n\n  FtsQueryParser parser;\n  auto ast = parser.parse(\"alpha\", make_whitespace_pipeline());\n  ASSERT_NE(ast, nullptr);\n\n  zvec::fts::FtsQueryParams qp;\n  qp.topk = 10;\n  qp.candidate_ids = {0, 1, 2};          // candidates restrict to {0,1,2}\n  qp.filter = make_blocked_filter({1});  // further drop doc 1\n  auto ret = indexer->search(*ast, qp);\n  ASSERT_TRUE(ret.has_value());\n  auto results = std::move(ret.value());\n  ASSERT_EQ(results.size(), 2u);\n\n  std::vector<uint64_t> ids;\n  for (const auto &r : results) ids.push_back(r.doc_id);\n  std::sort(ids.begin(), ids.end());\n  EXPECT_EQ(ids[0], 0ull);\n  EXPECT_EQ(ids[1], 2ull);\n}\n\n// Empty candidate_ids takes the regular posting-driven path (the wrap guard\n// requires non-empty), so search still finds all matching docs.\nTEST_F(FtsColumnIndexerTest, BruteForceEmptyCandidatesFallsBack) {\n  auto indexer = make_indexer(\"content\");\n  EXPECT_TRUE(indexer->insert(0, \"alpha beta\").has_value());\n  EXPECT_TRUE(indexer->insert(1, \"alpha gamma\").has_value());\n  EXPECT_TRUE(indexer->flush().has_value());\n\n  std::vector<FtsResult> r;\n  EXPECT_TRUE(search_ok_with_candidates(*indexer, \"alpha\", 10, {}, &r));\n  EXPECT_EQ(r.size(), 2u);\n"
+    },
+    "src/db/sqlengine/planner/vector_recall_node.cc:158-169": {
+      "path": "src/db/sqlengine/planner/vector_recall_node.cc",
+      "start_line": 158,
+      "end_line": 169,
+      "file_sha256": "ac32505fd2c3918cef8e98003420f002605ce3cecfc8203d72ef7530b9aee5d3",
+      "span_sha256": "d6d1e3fdccbeeeb24c867d8a2119289cdc82643de374d80867d87fc69828e8fd",
+      "text": "  vector_column_params::QueryParams query_params;\n  query_params.topk = query_info_->query_topn();\n  query_params.data_type = vector_cond_->vector_schema()->data_type();\n  query_params.dimension = vector_cond_->dimension();\n  query_params.query_params = vector_cond_->query_params();\n  auto brute_force_keys = doc_filter_->get_bf_by_keys_and_update(\n      GlobalConfig::Instance().brute_force_by_keys_ratio());\n  if (brute_force_keys) {\n    query_params.bf_pks.emplace_back(std::move(brute_force_keys.value()));\n  }\n  // set filter after brute force check\n  query_params.filter = doc_filter_->empty() ? nullptr : doc_filter_.get();\n"
+    },
+    "src/db/index/column/vector_column/combined_vector_column_indexer.cc:299-325": {
+      "path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+      "start_line": 299,
+      "end_line": 325,
+      "file_sha256": "4f22a3ff3997308975ab334ad0b008c2e52d78722e582d9a8bb8c2e4def9a9e8",
+      "span_sha256": "f14312c9f97c538864d2de971940c10d909e8b35df8ee78af85a9706e7caab6b",
+      "text": "  // query_params.bf_pks is segment level, here we need to convert it to block\n  // level\n  std::vector<std::vector<uint64_t>> block_bf_pks(indexers_.size());\n\n  if (!query_params.bf_pks.empty()) {\n    // dispatcher pks to corresponding block_bf_pks\n    for (auto &pk : query_params.bf_pks[0]) {\n      for (size_t i = 0; i < block_offsets_.size(); ++i) {\n        if (pk >= block_offsets_[i] &&\n            pk < block_offsets_[i] + blocks_[i].doc_count_) {\n          block_bf_pks[i].push_back(\n              static_cast<uint64_t>(pk - block_offsets_[i]));\n          break;\n        }\n      }\n    }\n  }\n\n  auto q_params = query_params.query_params;\n  for (size_t i = 0; i < indexers_.size(); ++i) {\n    if (!query_params.bf_pks.empty() && block_bf_pks[i].empty()) {\n      LOG_DEBUG(\n          \"query_params has bf_pks, but block_bf_pks[%zu] is empty, just skip \"\n          \"this indexer\",\n          i);\n      continue;\n    }\n"
+    },
+    "src/db/common/config.cc:38-40": {
+      "path": "src/db/common/config.cc",
+      "start_line": 38,
+      "end_line": 40,
+      "file_sha256": "59142d5c2c7963f9557d7ffb627c5fc64b9dbd8181430265fe76a800ea2c69aa",
+      "span_sha256": "2d7800a54a94f7fbb14b38ab775460bef1beae4d094b10e92f096bcc131bb987",
+      "text": "      invert_to_forward_scan_ratio(0.9),\n      brute_force_by_keys_ratio(0.1),\n      fts_brute_force_by_keys_ratio(0.05),\n"
+    },
+    "src/db/sqlengine/planner/optimizer.cc:31-45": {
+      "path": "src/db/sqlengine/planner/optimizer.cc",
+      "start_line": 31,
+      "end_line": 45,
+      "file_sha256": "ed5b5f17b553ce256f131b4dc95206935db1ad417ba9366fa89a26261582bb5a",
+      "span_sha256": "5fdd01938cad9c53e8b2cc436c1e6b0b352dcb72640b94e7d46b699220b609aa",
+      "text": "// return true if invert cond should be convert to forward cond\nbool InvertCondOptimizer::ratio_rule(Segment *segment,\n                                     QueryRelNode *invert_cond) {\n  if (invert_cond == nullptr) {\n    return false;\n  }\n\n  if (invert_cond->op() == QueryNodeOp::Q_LIKE ||\n      invert_cond->op() == QueryNodeOp::Q_IN ||\n      invert_cond->op() == QueryNodeOp::Q_CONTAIN_ANY ||\n      invert_cond->op() == QueryNodeOp::Q_CONTAIN_ALL ||\n      invert_cond->op() == QueryNodeOp::Q_EQ ||\n      invert_cond->op() == QueryNodeOp::Q_NE) {\n    return false;\n  }\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:109-141": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 109,
+      "end_line": 141,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "23bf3d8d98baa4db7be7fa55ff033705c777ef28aec7d72d0e069132a1d91248",
+      "text": "std::optional<std::vector<uint64_t>> DocFilter::get_bf_by_keys_and_update(\n    float ratio) {\n  auto meta = segment_->meta();\n  if (!meta) {\n    return std::nullopt;\n  }\n  // TODO: support forward\n  if (!invert_result_) {\n    return std::nullopt;\n  }\n  size_t doc_count = meta->doc_count();\n  uint64_t bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio);\n\n  // decide to use brute force by keys or not\n  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n  } else {\n    LOG_DEBUG(\n        \"Not use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n  }\n  return std::nullopt;\n}\n"
+    },
+    "src/db/sqlengine/planner/fts_recall_node.cc:124-129": {
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 124,
+      "end_line": 129,
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "1ab718edfb395b3e5a5b69b8b02ba1c8f07f1625ba9616ee0c0887b839653b5f",
+      "text": "  // Brute-force path: get_bf_by_keys_and_update also clears invert_filter_\n  // when it returns ids, so the filter set below won't double-check them.\n  if (auto bf_keys = doc_filter_->get_bf_by_keys_and_update(\n          GlobalConfig::Instance().fts_brute_force_by_keys_ratio())) {\n    params.candidate_ids = std::move(bf_keys.value());\n  }\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:68-85": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 85,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "798960ee6e5ec418f9e1e0a712442682980967424babe63d533b763370b011be",
+      "text": "bool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:68-71": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 71,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "6187a2f7225c2c6f48e8a6dd8760209896b18fceb8706229b41fc7ba4b6dd104",
+      "text": "bool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n"
+    },
+    "src/db/sqlengine/planner/fts_recall_node.cc:130-132": {
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 130,
+      "end_line": 132,
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "b9e66a2e30b7d7cd6ad78f025dfe71ec49cccd8b09821c0835358fc147c5c743",
+      "text": "  // Push down remaining filters (delete / forward) so filtered docs are\n  // skipped during scoring and we still return up to topk results.\n  params.filter = doc_filter_->empty() ? nullptr : doc_filter_;\n"
+    },
+    "src/db/index/column/fts_column/fts_types.h:30-35": {
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "start_line": 30,
+      "end_line": 35,
+      "file_sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1",
+      "span_sha256": "68cba273f0a24a7370453f4214b25a4765bc4a92d96fa316395e48cb3dc75d8f",
+      "text": "  // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;\n  // when non-empty, FtsColumnIndexer restricts evaluation to this set by\n  // AND-ing it with the root iterator. Filled by the planner via\n  // DocFilter::get_bf_by_keys_and_update when an invert result is highly\n  // selective.\n  std::vector<uint64_t> candidate_ids;\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:209-217": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 209,
+      "end_line": 217,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "b800ea04d7947a43f8be51a9f66424f665afd7aedb55bf4c9cce88919a6f7183",
+      "text": "  if (!query_params.candidate_ids.empty()) {\n    std::vector<DocIteratorPtr> musts;\n    musts.reserve(2);\n    musts.push_back(\n        std::make_unique<CandidateDocIterator>(query_params.candidate_ids));\n    musts.push_back(std::move(root_iter));\n    root_iter = std::make_unique<ConjunctionIterator>(\n        std::move(musts), std::vector<DocIteratorPtr>{});\n  }\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:229-230": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 229,
+      "end_line": 230,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "bf16b562302a7d02a49234ce8f058d860a436750e124582c2c04c714c9384c3a",
+      "text": "  uint32_t doc_id =\n      filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n"
+    },
+    "src/db/index/column/inverted_column/inverted_search_result.h:79-137": {
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 79,
+      "end_line": 137,
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "b2ddf4c751dd64e77837e934df731716287d4ffaf7db924d593267471efe0469",
+      "text": "  size_t count() const override {\n    if (bitmap_) {\n      return roaring_bitmap_get_cardinality(bitmap_);\n    } else {\n      return 0;\n    }\n  }\n\n\n  class InvertedIndexIterator : public Iterator {\n   public:\n    explicit InvertedIndexIterator(\n        std::shared_ptr<const InvertedSearchResult> result)\n        : result_(result) {\n      if (result_->bitmap_) {\n        iter_ = roaring_create_iterator(result_->bitmap_);\n      }\n    }\n\n    ~InvertedIndexIterator() override {\n      if (iter_) {\n        roaring_free_uint32_iterator(iter_);\n      }\n    }\n\n    idx_t doc_id() const override {\n      if (!iter_) {\n        return INVALID_DOC_ID;\n      }\n      if (iter_->has_value) {\n        return iter_->current_value;\n      } else {\n        return INVALID_DOC_ID;\n      }\n    }\n\n    float score() const override {\n      return 0.0f;\n    }\n\n    void next() override {\n      if (iter_ && iter_->has_value) {\n        roaring_advance_uint32_iterator(iter_);\n      }\n    }\n\n    bool valid() const override {\n      return iter_ ? iter_->has_value : false;\n    }\n\n   private:\n    const std::shared_ptr<const InvertedSearchResult> result_{};\n    roaring_uint32_iterator_t *iter_{nullptr};\n  };\n\n\n  IteratorUPtr create_iterator() override {\n    return std::make_unique<InvertedIndexIterator>(shared_from_this());\n  }\n"
+    },
+    "src/db/sqlengine/planner/query_planner.cc:533-557": {
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 533,
+      "end_line": 557,
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "50686078fbc97d59464c5431e588c3738e0ccb7b2b6fdf90087c373a04ed296b",
+      "text": "DocFilter::Ptr QueryPlanner::build_doc_filter(\n    const Segment::Ptr &seg, const QueryInfo::Ptr &query_info,\n    std::unique_ptr<arrow::compute::Expression> &forward_filter,\n    bool single_stage_search) {\n  std::unique_ptr<ac::Declaration> forward_filter_plan;\n  // if single stage search is not enabled, first run acero plan to get\n  // forward bitmap, then filter during search. otherwise, filter forward\n  // during search.\n  if (forward_filter && !single_stage_search) {\n    ac::RecordBatchReaderSourceNodeOptions source_options{\n        seg->scan(query_info->get_forward_filter_field_names())};\n    forward_filter_plan.reset(new ac::Declaration{ac::Declaration::Sequence({\n        {\"record_batch_reader_source\", std::move(source_options)},\n        {\n            \"project\",\n            ac::ProjectNodeOptions{{std::move(*forward_filter)},\n                                   {kFieldIsValid}},\n        },\n    })});\n    forward_filter.reset();\n  }\n  return std::make_shared<DocFilter>(seg, query_info,\n                                     std::move(forward_filter_plan),\n                                     std::move(forward_filter));\n}\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:24-107": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 24,
+      "end_line": 107,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "f2a38a9e0de1d376af79fbbb1d6423ea85b5ecd475b370843fcc8796f8d9383c",
+      "text": "Status DocFilter::compute_filter() {\n  if (invert_cond_) {\n    InvertSearch search(segment_.get());\n    auto invert_res = search.exec_invert_cond_tree(invert_cond_.get());\n    if (!invert_res) {\n      return Status::InternalError(\"Execute invert search failed: \",\n                                   invert_res.error().message());\n    }\n    invert_result_ = invert_res.value();\n    invert_filter_ = invert_result_->make_filter();\n  }\n\n  if (forward_plan_) {\n    auto forward_result = arrow::acero::DeclarationToTable(*forward_plan_);\n    if (!forward_result.ok()) {\n      return Status::InternalError(\"Execute filter bitmap failed: \",\n                                   forward_result.status().ToString());\n    }\n    // has only one column with boolean type\n    auto &forward_table = forward_result.ValueUnsafe();\n    if (forward_table->num_columns() != 1 ||\n        forward_table->column(0)->type() != arrow::boolean()) {\n      return Status::InternalError(\"Filter bitmap is not boolean type\");\n    }\n    forward_bitmap_ = forward_table->column(0);\n  }\n\n  if (forward_filter_expr_) {\n    // get schema to bind to Expression\n    auto table = segment_->fetch(query_info_->get_forward_filter_field_names(),\n                                 std::vector<int>{});\n    if (!table) {\n      return Status::InternalError(\"Fetch forward failed\");\n    }\n    auto bind_res = forward_filter_expr_->Bind(*table->schema());\n    if (!bind_res.ok()) {\n      return Status::InternalError(\"Bind forward filter expression failed\",\n                                   bind_res.status().ToString());\n    }\n    *forward_filter_expr_ = bind_res.MoveValueUnsafe();\n  }\n  return Status::OK();\n}\n\nbool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n}\n\nstd::optional<bool> DocFilter::get_forward_bit(uint64_t id) const {\n  if (forward_filter_expr_) {\n    return is_matched_by_forward_filter(id);\n  }\n  if (!forward_bitmap_) {\n    return std::nullopt;\n  }\n  uint64_t rows_seen = 0;\n  for (int c = 0; c < forward_bitmap_->num_chunks(); c++) {\n    const auto &arr = forward_bitmap_->chunk(c);\n    if (id < rows_seen + arr->length()) {\n      auto *bool_array = static_cast<arrow::BooleanArray *>(arr.get());\n      return (*bool_array)[id - rows_seen].value_or(false);\n    }\n    rows_seen += arr->length();\n  }\n  LOG_ERROR(\"ID is out or range: id[%zu] count[%zu]\", (size_t)id,\n            (size_t)rows_seen);\n  return std::nullopt;\n}\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:219-250": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 219,
+      "end_line": 250,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "32562bc04af596a551a5fd24047eb21edc11b757056a47560568d8a8665fda05",
+      "text": "  const uint32_t topk = query_params.topk;\n  const zvec::IndexFilter *filter_ptr = query_params.filter.get();\n\n  using MinHeap = std::priority_queue<FtsResult, std::vector<FtsResult>,\n                                      std::greater<FtsResult>>;\n  MinHeap min_heap;\n\n  // Filter pushdown: when a filter is present, use the filter-aware next_doc\n  // overload so composite iterators skip filtered docs before paying for\n  // block-max binary search, do_next alignment, or phase-2 position checks.\n  uint32_t doc_id =\n      filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n  while (doc_id != DocIterator::NO_MORE_DOCS) {\n    const uint64_t global_doc_id = static_cast<uint64_t>(doc_id);\n\n    if (root_iter->matches()) {\n      float s = root_iter->score();\n      if (s > 0.0f) {\n        if (min_heap.size() < topk) {\n          min_heap.push({global_doc_id, s});\n          if (min_heap.size() == topk) {\n            root_iter->set_min_competitive_score(min_heap.top().score);\n          }\n        } else if (s > min_heap.top().score) {\n          min_heap.pop();\n          min_heap.push({global_doc_id, s});\n          root_iter->set_min_competitive_score(min_heap.top().score);\n        }\n      }\n    }\n    doc_id =\n        filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:68-140": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 140,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "62879e505a80be1d1971c75d5f0c4991b5c5fffd3f3738684014d80b36c1430a",
+      "text": "bool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n}\n\nstd::optional<bool> DocFilter::get_forward_bit(uint64_t id) const {\n  if (forward_filter_expr_) {\n    return is_matched_by_forward_filter(id);\n  }\n  if (!forward_bitmap_) {\n    return std::nullopt;\n  }\n  uint64_t rows_seen = 0;\n  for (int c = 0; c < forward_bitmap_->num_chunks(); c++) {\n    const auto &arr = forward_bitmap_->chunk(c);\n    if (id < rows_seen + arr->length()) {\n      auto *bool_array = static_cast<arrow::BooleanArray *>(arr.get());\n      return (*bool_array)[id - rows_seen].value_or(false);\n    }\n    rows_seen += arr->length();\n  }\n  LOG_ERROR(\"ID is out or range: id[%zu] count[%zu]\", (size_t)id,\n            (size_t)rows_seen);\n  return std::nullopt;\n}\n\nstd::optional<std::vector<uint64_t>> DocFilter::get_bf_by_keys_and_update(\n    float ratio) {\n  auto meta = segment_->meta();\n  if (!meta) {\n    return std::nullopt;\n  }\n  // TODO: support forward\n  if (!invert_result_) {\n    return std::nullopt;\n  }\n  size_t doc_count = meta->doc_count();\n  uint64_t bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio);\n\n  // decide to use brute force by keys or not\n  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n  } else {\n    LOG_DEBUG(\n        \"Not use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n  }\n  return std::nullopt;\n"
+    },
+    "src/db/index/column/inverted_column/inverted_search_result.h:34-85": {
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 34,
+      "end_line": 85,
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "7cef943ade6725a7da34e8713f81e32f78e969a42fa9b3b4558556b363e75175",
+      "text": "  class Filter : public IndexFilter {\n   public:\n    explicit Filter(std::shared_ptr<const InvertedSearchResult> result)\n        : result_(std::move(result)) {};\n\n    bool is_filtered(uint64_t id) const override {\n      return !result_->contains(id);\n    }\n\n   private:\n    const std::shared_ptr<const InvertedSearchResult> result_{};\n  };\n\n\n  const IndexFilter::Ptr make_filter() const {\n    return bitmap_ ? std::make_shared<Filter>(shared_from_this()) : nullptr;\n  }\n\n\n  explicit InvertedSearchResult() {}\n\n\n  explicit InvertedSearchResult(roaring_bitmap_t *bitmap) : bitmap_(bitmap) {}\n\n\n  ~InvertedSearchResult() override {\n    destroy_bitmap();\n  }\n\n\n  InvertedSearchResult(const InvertedSearchResult &) = delete;\n  InvertedSearchResult(InvertedSearchResult &&) = delete;\n  InvertedSearchResult &operator=(const InvertedSearchResult &) = delete;\n  InvertedSearchResult &operator=(InvertedSearchResult &&) = delete;\n\n\n  bool contains(uint32_t id) const {\n    if (bitmap_) {\n      return roaring_bitmap_contains(bitmap_, id);\n    } else {\n      return false;\n    }\n  }\n\n\n  size_t count() const override {\n    if (bitmap_) {\n      return roaring_bitmap_get_cardinality(bitmap_);\n    } else {\n      return 0;\n    }\n  }\n"
+    },
+    "src/db/sqlengine/planner/fts_recall_node.cc:126-129": {
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 126,
+      "end_line": 129,
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "df221afd35789b6cf4ac41650584173e76e38c71956f60e18e24c6f100560ded",
+      "text": "  if (auto bf_keys = doc_filter_->get_bf_by_keys_and_update(\n          GlobalConfig::Instance().fts_brute_force_by_keys_ratio())) {\n    params.candidate_ids = std::move(bf_keys.value());\n  }\n"
+    },
+    "src/db/index/column/fts_column/fts_types.h:35-35": {
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "start_line": 35,
+      "end_line": 35,
+      "file_sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1",
+      "span_sha256": "0def01577d2f6dea745d036b9815ef77a4fbcc83cdca0f6107676c55b977a07f",
+      "text": "  std::vector<uint64_t> candidate_ids;\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:209-209": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 209,
+      "end_line": 209,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "9e6a35bdbbd0bb460086924f33400ef4d00f67133ffd1ad1528e2a417c497434",
+      "text": "  if (!query_params.candidate_ids.empty()) {\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:68-107": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 107,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "950f49df3696a3a12b6f465a014ce8b024c2a0a7f7684d9f166c78030a4df555",
+      "text": "bool DocFilter::empty() const {\n  return !(delete_filter_ || invert_filter_ || forward_plan_ ||\n           forward_filter_expr_);\n}\n\nbool DocFilter::is_filtered(uint64_t id) const {\n  if (delete_filter_ && delete_filter_->is_filtered(id)) {\n    return true;\n  }\n  if (invert_filter_ && invert_filter_->is_filtered(id)) {\n    return true;\n  }\n  auto forward_bit = get_forward_bit(id);\n  if (!forward_bit) {\n    return false;\n  }\n  // revert to return false if forward filter is matched\n  return !forward_bit.value();\n}\n\nstd::optional<bool> DocFilter::get_forward_bit(uint64_t id) const {\n  if (forward_filter_expr_) {\n    return is_matched_by_forward_filter(id);\n  }\n  if (!forward_bitmap_) {\n    return std::nullopt;\n  }\n  uint64_t rows_seen = 0;\n  for (int c = 0; c < forward_bitmap_->num_chunks(); c++) {\n    const auto &arr = forward_bitmap_->chunk(c);\n    if (id < rows_seen + arr->length()) {\n      auto *bool_array = static_cast<arrow::BooleanArray *>(arr.get());\n      return (*bool_array)[id - rows_seen].value_or(false);\n    }\n    rows_seen += arr->length();\n  }\n  LOG_ERROR(\"ID is out or range: id[%zu] count[%zu]\", (size_t)id,\n            (size_t)rows_seen);\n  return std::nullopt;\n}\n"
+    },
+    "src/db/index/column/inverted_column/inverted_column_indexer_search.cc:24-37": {
+      "path": "src/db/index/column/inverted_column/inverted_column_indexer_search.cc",
+      "start_line": 24,
+      "end_line": 37,
+      "file_sha256": "53c8a7c55618d6e031de7a1697e4c797ee340c84f28c73a9940906b784126453",
+      "span_sha256": "9e5b5411b9a99decf679e56f217498a9c0330ea51162abab01b59edc34b38f27",
+      "text": "\n\nResult<roaring_bitmap_t *> InvertedColumnIndexer::get_bitmap_eq(\n    const std::string &term) const {\n  PinnableSlice bitmap_slice;\n  auto s = ctx_.db_->Get(ctx_.read_opts_, cf_terms_, term, &bitmap_slice);\n  if (!s.ok()) {\n    if (s.code() == rocksdb::Status::kNotFound) {\n      return nullptr;\n    }\n    LOG_ERROR(\n        \"Failed to retrieve data for term[%s] from %s, code[%d], reason[%s]\",\n        term.c_str(), ID().c_str(), s.code(), s.ToString().c_str());\n    return tl::make_unexpected(Status::InternalError());\n"
+    },
+    "src/db/index/column/inverted_column/inverted_search_result.h:48-85": {
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 48,
+      "end_line": 85,
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "82dba96ee0b9d89db90ca2e295fdc197082b734ee32141e2feb7f0a33ed30e54",
+      "text": "  const IndexFilter::Ptr make_filter() const {\n    return bitmap_ ? std::make_shared<Filter>(shared_from_this()) : nullptr;\n  }\n\n\n  explicit InvertedSearchResult() {}\n\n\n  explicit InvertedSearchResult(roaring_bitmap_t *bitmap) : bitmap_(bitmap) {}\n\n\n  ~InvertedSearchResult() override {\n    destroy_bitmap();\n  }\n\n\n  InvertedSearchResult(const InvertedSearchResult &) = delete;\n  InvertedSearchResult(InvertedSearchResult &&) = delete;\n  InvertedSearchResult &operator=(const InvertedSearchResult &) = delete;\n  InvertedSearchResult &operator=(InvertedSearchResult &&) = delete;\n\n\n  bool contains(uint32_t id) const {\n    if (bitmap_) {\n      return roaring_bitmap_contains(bitmap_, id);\n    } else {\n      return false;\n    }\n  }\n\n\n  size_t count() const override {\n    if (bitmap_) {\n      return roaring_bitmap_get_cardinality(bitmap_);\n    } else {\n      return 0;\n    }\n  }\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:123-133": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 123,
+      "end_line": 133,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "105231987556e49d8e4517ad375642c86326890db5377c4bd779c831f9003b8d",
+      "text": "  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:209-230": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 209,
+      "end_line": 230,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "ea9ae2901e166cdcb8f3e385ace8b0bc38831affbe46202c82bced3483d32747",
+      "text": "  if (!query_params.candidate_ids.empty()) {\n    std::vector<DocIteratorPtr> musts;\n    musts.reserve(2);\n    musts.push_back(\n        std::make_unique<CandidateDocIterator>(query_params.candidate_ids));\n    musts.push_back(std::move(root_iter));\n    root_iter = std::make_unique<ConjunctionIterator>(\n        std::move(musts), std::vector<DocIteratorPtr>{});\n  }\n\n  const uint32_t topk = query_params.topk;\n  const zvec::IndexFilter *filter_ptr = query_params.filter.get();\n\n  using MinHeap = std::priority_queue<FtsResult, std::vector<FtsResult>,\n                                      std::greater<FtsResult>>;\n  MinHeap min_heap;\n\n  // Filter pushdown: when a filter is present, use the filter-aware next_doc\n  // overload so composite iterators skip filtered docs before paying for\n  // block-max binary search, do_next alignment, or phase-2 position checks.\n  uint32_t doc_id =\n      filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:119-133": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 119,
+      "end_line": 133,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "3e978b5740ff38f629b9013b82c5f1304d729361d055331a6c15f0c3152ce2bf",
+      "text": "  size_t doc_count = meta->doc_count();\n  uint64_t bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio);\n\n  // decide to use brute force by keys or not\n  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:206-217": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 206,
+      "end_line": 217,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "b73aa044b099f11032f1b2098dbfdaeecb0c382e4727b80a16e635209e13391f",
+      "text": "  // Candidate-driven mode: AND a CandidateDocIterator into the root so the\n  // small candidate set leads (Conjunction sorts by cost asc), turning the\n  // posting walk into per-candidate advance()+matches()+score().\n  if (!query_params.candidate_ids.empty()) {\n    std::vector<DocIteratorPtr> musts;\n    musts.reserve(2);\n    musts.push_back(\n        std::make_unique<CandidateDocIterator>(query_params.candidate_ids));\n    musts.push_back(std::move(root_iter));\n    root_iter = std::make_unique<ConjunctionIterator>(\n        std::move(musts), std::vector<DocIteratorPtr>{});\n  }\n"
+    },
+    "src/db/index/column/fts_column/fts_column_indexer.cc:229-250": {
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 229,
+      "end_line": 250,
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "5faff086e55e3533b727a66b6a28d8ceb6b19934fc434c4740584623e15a3bbe",
+      "text": "  uint32_t doc_id =\n      filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n  while (doc_id != DocIterator::NO_MORE_DOCS) {\n    const uint64_t global_doc_id = static_cast<uint64_t>(doc_id);\n\n    if (root_iter->matches()) {\n      float s = root_iter->score();\n      if (s > 0.0f) {\n        if (min_heap.size() < topk) {\n          min_heap.push({global_doc_id, s});\n          if (min_heap.size() == topk) {\n            root_iter->set_min_competitive_score(min_heap.top().score);\n          }\n        } else if (s > min_heap.top().score) {\n          min_heap.pop();\n          min_heap.push({global_doc_id, s});\n          root_iter->set_min_competitive_score(min_heap.top().score);\n        }\n      }\n    }\n    doc_id =\n        filter_ptr ? root_iter->next_doc(filter_ptr) : root_iter->next_doc();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:116-118": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 116,
+      "end_line": 118,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "cb17e4ee20287eff95fd427eb8c70196eb18f9e39c554b367246ad2d7ca37308",
+      "text": "  if (!invert_result_) {\n    return std::nullopt;\n  }\n"
+    },
+    "src/db/sqlengine/planner/vector_recall_node.cc:163-169": {
+      "path": "src/db/sqlengine/planner/vector_recall_node.cc",
+      "start_line": 163,
+      "end_line": 169,
+      "file_sha256": "ac32505fd2c3918cef8e98003420f002605ce3cecfc8203d72ef7530b9aee5d3",
+      "span_sha256": "3e2b841b993a9cc8d5a4dbdcb96854103b03be6b0cd0bbf30fddc477a0df5ec6",
+      "text": "  auto brute_force_keys = doc_filter_->get_bf_by_keys_and_update(\n      GlobalConfig::Instance().brute_force_by_keys_ratio());\n  if (brute_force_keys) {\n    query_params.bf_pks.emplace_back(std::move(brute_force_keys.value()));\n  }\n  // set filter after brute force check\n  query_params.filter = doc_filter_->empty() ? nullptr : doc_filter_.get();\n"
+    },
+    "src/db/sqlengine/planner/fts_recall_node.cc:124-125": {
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 124,
+      "end_line": 125,
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "2f0014e92016b572473bd4c5d63353e2facf19c043f5ee9b08f6d7a455ca735b",
+      "text": "  // Brute-force path: get_bf_by_keys_and_update also clears invert_filter_\n  // when it returns ids, so the filter set below won't double-check them.\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:119-140": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 119,
+      "end_line": 140,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "243947681b9cb7c785e585a71801cd3ca3fbb5c9babe7610555211e752aeede1",
+      "text": "  size_t doc_count = meta->doc_count();\n  uint64_t bf_by_keys_threshold = static_cast<uint64_t>(doc_count * ratio);\n\n  // decide to use brute force by keys or not\n  if (size_t match_count = invert_result_->count();\n      match_count <= bf_by_keys_threshold) {\n    std::vector<uint32_t> ids;\n    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n    LOG_INFO(\n        \"Use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n    return std::vector<uint64_t>(ids.begin(), ids.end());\n  } else {\n    LOG_DEBUG(\n        \"Not use brute force by keys, doc_count[%zu] invert_result_count[%zu] \"\n        \"ratio[%.4f]\",\n        doc_count, match_count, ratio);\n  }\n  return std::nullopt;\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:126-128": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 126,
+      "end_line": 128,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "d507c4fc0b311dfcb8dfbb5edc95df434529cfc0c09c043ab9247e9a8309c617",
+      "text": "    invert_result_->extract_ids(&ids);\n    invert_filter_.reset();\n    invert_result_.reset();\n"
+    },
+    "src/db/sqlengine/planner/doc_filter.cc:133-133": {
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 133,
+      "end_line": 133,
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "332e4d7cd5e98d3099af0bae7407255a8b6c37f9b662bf89fbfb9d2f65106fb7",
+      "text": "    return std::vector<uint64_t>(ids.begin(), ids.end());\n"
+    },
+    "src/db/index/column/fts_column/fts_types.h:25-35": {
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "start_line": 25,
+      "end_line": 35,
+      "file_sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1",
+      "span_sha256": "30bb341dc9970c7ec2479562a726fa2f3608c734e5f505d17ae480c4cbbba065",
+      "text": "struct FtsQueryParams {\n  uint32_t topk{10};\n  // Optional filter: returns true if a doc should be EXCLUDED.\n  // Wraps zvec::IndexFilter for push-down filtering inside the search loop.\n  IndexFilter::Ptr filter{nullptr};\n  // Candidate-driven (brute-force) mode: ascending segment-local doc_ids;\n  // when non-empty, FtsColumnIndexer restricts evaluation to this set by\n  // AND-ing it with the root iterator. Filled by the planner via\n  // DocFilter::get_bf_by_keys_and_update when an invert result is highly\n  // selective.\n  std::vector<uint64_t> candidate_ids;\n"
+    }
+  }
+}

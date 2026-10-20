@@ -1,0 +1,649 @@
+{
+  "schema_version": 1,
+  "task_id": "q004",
+  "task_type": "architecture_configuration_behavior",
+  "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+  "maximum_score": 10,
+  "verification_status": "Status at authoring: source inspection and reproducible corpus-export checks only; task not yet independently reviewed or frozen for execution at that time. Subsequent review/freeze decisions are recorded separately in provenance. No engine test, solver, retrieval/index trial or model call was performed during authoring.",
+  "source_policy": "Current implemented behavior at the exact default-branch head observed during candidate selection; intentionally includes issue fixes and later refactors. Not a hidden-fix task.",
+  "reference_answer": "A passes concurrency=0 into the vector rebuilding/merge path, which selects GlobalResource's optimization pool and uses its count. The initial optimize_threads=4 configuration creates that shared pool with four workers under the stated hardware and initialization assumptions. B carries concurrency=2 and no external pool. Each reached core merge invocation therefore creates a local two-worker ThreadPool whose lifetime covers its reducer execution; it does not resize/replace the global four-worker pool, nor prove that one local pool spans all merges in optimize. The vector-column/core merge boundary carries the count and optional pool, and core merge gives the selected pool to its reducer. Immediately before target builder training/building, the reducer wraps this pool in BorrowedSingleQueueIndexThreads and passes the same adapter to builder train/build and, if present, its builder-side converter TrainAndTransform/train call. This proves argument propagation. The base converter threaded overload may ignore threads, and earlier per-field or merge-source training is outside the requested stage; do not generalize to every converter/training path. DiskANN PQ is a bounded exception to pool reuse: it sets max(1, min(build_thread_count_, caller_threads->count())) as the PQ quantizer thread_count, and train_all_chunks constructs its own outer chunk-dispatch pool using that count. That outer pool is at most four in A or two in B and can be smaller if the builder setting is smaller. This does not cap all PQ threads: individual chunks can use their own one-worker pools. These are capacity and propagation contracts, not guarantees of exact active workers, process-wide OS-thread count, CPU percentage or speedup. Other pools and work exist; no runtime measurement or historical reproduction is claimed.",
+  "question_request_map": [
+    {
+      "request_id": "Q1",
+      "request": "Compare pool identity/count for A and B and whether B changes the global pool.",
+      "criterion_ids": [
+        "C1",
+        "C2"
+      ]
+    },
+    {
+      "request_id": "Q2",
+      "request": "Explain selected-pool argument propagation to target builder train/build and the optional conversion-training call immediately before them, without a universal thread-consumption claim.",
+      "criterion_ids": [
+        "C3"
+      ]
+    },
+    {
+      "request_id": "Q3",
+      "request": "Explain DiskANN outer PQ chunk-dispatch pool identity and worker-count constraint.",
+      "criterion_ids": [
+        "C4"
+      ]
+    },
+    {
+      "request_id": "Q4",
+      "request": "Explain capacity versus process-thread/CPU conclusions.",
+      "criterion_ids": [
+        "C5"
+      ]
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C1",
+      "request_id": "Q1",
+      "points": 2,
+      "critical": true,
+      "claim": "Default operation concurrency uses the shared global optimization pool with four workers.",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "C1.1",
+          "points": 1,
+          "required": "A selects the existing global optimization pool, because operation concurrency is zero.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        },
+        {
+          "id": "C1.2",
+          "points": 1,
+          "required": "That pool has four workers from optimize_threads=4 under the stated hardware/initialization assumptions; zero is a selection sentinel, not a zero-worker pool or fresh hardware-sized pool.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is correct.",
+        "1": "Exactly one point unit is correct; identify it.",
+        "2": "Both point units are correct."
+      },
+      "core_reason": "The default-case identity/count is half of the principal configuration comparison.",
+      "evidence_sets": [
+        [
+          "E01",
+          "E02",
+          "E05",
+          "E19"
+        ],
+        [
+          "E01",
+          "E02",
+          "E06",
+          "E19"
+        ]
+      ],
+      "evidence_sets_are_examples_not_mandatory_location_lists": true,
+      "citation_obligation": "Support the zero-concurrency selection and the configured global pool count.",
+      "not_required": [
+        "Exact Python configuration wrapper names; hardware-default calculation; query-pool sizing."
+      ]
+    },
+    {
+      "id": "C2",
+      "request_id": "Q1",
+      "points": 2,
+      "critical": true,
+      "claim": "Explicit per-operation concurrency creates a local two-worker pool for each reached core merge invocation without resizing the shared global pool.",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "C2.1",
+          "points": 1,
+          "required": "B supplies a count of two without a shared-pool pointer, causing each reached core merge invocation to allocate its own local two-worker pool covering that reducer invocation.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        },
+        {
+          "id": "C2.2",
+          "points": 1,
+          "required": "B uses the merge-local pool rather than changing/resizing the already configured global four-worker optimization pool; do not imply one single private pool necessarily spans every merge in the entire optimize call.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is correct.",
+        "1": "Exactly one point unit is correct; identify it.",
+        "2": "Both point units are correct."
+      },
+      "core_reason": "The explicit override is the other half of the principal comparison; treating it as global mutation changes the answer.",
+      "evidence_sets": [
+        [
+          "E05",
+          "E07",
+          "E09",
+          "E19"
+        ],
+        [
+          "E06",
+          "E07",
+          "E09",
+          "E19"
+        ]
+      ],
+      "evidence_sets_are_examples_not_mandatory_location_lists": true,
+      "citation_obligation": "Support explicit-count selection followed by local pool creation, and distinguish it from the shared-pool branch.",
+      "not_required": [
+        "Exact lifetime/destructor details; behavior for negative concurrency; other APIs with concurrency settings.",
+        "Exact number of merges/pools created during the whole optimize call."
+      ]
+    },
+    {
+      "id": "C3",
+      "request_id": "Q2",
+      "points": 2,
+      "critical": true,
+      "claim": "The selected pool is handed to the reducer; its borrowed adapter is passed to target builder train/build and optional builder-side converter training.",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "C3.1",
+          "points": 1,
+          "required": "The selected pool reaches the core merge/reducer, which passes a borrowed adapter of that same pool to target builder train and build; it does not create a separate hardware-sized adapter at those call sites.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        },
+        {
+          "id": "C3.2",
+          "points": 1,
+          "required": "The optional conversion-training call immediately before those builder calls receives the same adapter through TrainAndTransform and the threaded converter train overload. This establishes argument propagation, not a guarantee that every converter implementation uses the supplied threads.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is correct.",
+        "1": "Exactly one point unit is correct; identify it.",
+        "2": "Both point units are correct."
+      },
+      "core_reason": "Pool selection alone would not explain whether downstream work honors the setting, which is the requested cross-component contract.",
+      "evidence_sets": [
+        [
+          "E08",
+          "E09",
+          "E10",
+          "E11",
+          "E12",
+          "E20"
+        ]
+      ],
+      "evidence_sets_are_examples_not_mandatory_location_lists": true,
+      "citation_obligation": "Support selected pool reaching the reducer and being passed to target builder train/build and the immediately preceding optional converter-training call. One compact call-site span can support several claims; ordinary wrappers need no separate citation. No universal actual-use guarantee is required.",
+      "not_required": [
+        "Every forwarding function; naming or tracing HNSW_RABITQ or IVF_RABITQ; earlier per-field/merge-source preparation; all converter implementations; implementation-by-implementation thread-consumption guarantees."
+      ]
+    },
+    {
+      "id": "C4",
+      "request_id": "Q3",
+      "points": 2,
+      "critical": true,
+      "claim": "DiskANN PQ uses a separately created outer chunk-dispatch pool whose count is bounded by its caller.",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "C4.1",
+          "points": 1,
+          "required": "DiskANN PQ train_all_chunks constructs its own outer pool to distribute chunks, instead of directly borrowing the reducer/builder pool for that dispatch.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        },
+        {
+          "id": "C4.2",
+          "points": 1,
+          "required": "The outer pool is configured as max(1,min(builder configured build-thread count, caller threads count)). Under the supplied hardware assumptions it is at most four for A or two for B, and may be smaller if the builder setting is smaller; exactly four/two requires the builder setting to be at least that value.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is correct.",
+        "1": "Exactly one point unit is correct; identify it.",
+        "2": "Both point units are correct."
+      },
+      "core_reason": "This explicitly requested algorithm exception changes the pool-identity answer; equating all nested training to the shared adapter would be materially wrong.",
+      "evidence_sets": [
+        [
+          "E13",
+          "E15",
+          "E16"
+        ]
+      ],
+      "evidence_sets_are_examples_not_mandatory_location_lists": true,
+      "citation_obligation": "Support both the caller-based cap and actual separate outer PQ chunk-dispatch pool creation; do not turn this into a total PQ/process thread bound.",
+      "not_required": [
+        "DiskANN hardware fallback details when no caller threads are supplied; PQ codebook math; training sample limits; simultaneous activity of all pools.",
+        "Counting per-chunk one-worker pools or total simultaneous PQ workers."
+      ]
+    },
+    {
+      "id": "C5",
+      "request_id": "Q4",
+      "points": 2,
+      "critical": false,
+      "claim": "Pool capacities are not whole-process thread or CPU-utilization guarantees.",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "C5.1",
+          "points": 1,
+          "required": "These counts govern the relevant optimization/rebuild pool capacities and the outer PQ pool cap, not a hard maximum of four/two OS threads across the process; separate query/PQ or other pools can exist.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        },
+        {
+          "id": "C5.2",
+          "points": 1,
+          "required": "Configured capacity does not guarantee that four/two workers are doing useful work at every moment or imply a measured CPU-utilization bound; actual task availability/scheduling and other process work matter.",
+          "zero_anchor": "Missing or materially incorrect; a correct factual statement is not zeroed merely for missing citation.",
+          "full_anchor": "States this fact or an equivalent explanation correctly."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is correct.",
+        "1": "Exactly one point unit is correct; identify it.",
+        "2": "Both point units are correct."
+      },
+      "core_reason": "This is the requested scope caveat; its omission loses ordinary points, while an explicit opposite assertion is a material contradiction defined separately.",
+      "evidence_sets": [
+        [
+          "E02",
+          "E11",
+          "E16",
+          "E17",
+          "E21"
+        ]
+      ],
+      "evidence_sets_are_examples_not_mandatory_location_lists": true,
+      "citation_obligation": "Record supporting locations if supplied; no separate citation gate for this scope caveat.",
+      "not_required": [
+        "Quantifying total process thread count, CPU percentage, parallel speedup, or simultaneous running threads."
+      ]
+    }
+  ],
+  "success_rule": {
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C1",
+      "C2",
+      "C3",
+      "C4"
+    ],
+    "required_full_credit_points": {
+      "C1": 2,
+      "C2": 2,
+      "C3": 2,
+      "C4": 2
+    },
+    "critical_contradictions_allowed": 0,
+    "supporting_citations_required_for_core_claims": true,
+    "final_answer_required": true,
+    "core_citation_gate": {
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ],
+      "rule": "For each core criterion, submitted source citations must jointly support the stated pool/branch relationship and associated count or bound. Accept equivalent frozen-source locations; do not require all curated spans, all forwarding wrappers, exact evidence IDs or a fixed file count. Source-grounded support is a separate axis; missing citations do not erase correct factual points.",
+      "required_record": "For every core claim, record answer citation as submitted, resolved frozen path/line range, support status and why it establishes the relationship. The judge finding an uncited correct source is not a supplied citation."
+    },
+    "rule": "source_grounded_success = nonempty final answer AND total factual points >= 8 AND C1=C2=C3=C4=2 AND core citation support sufficient for C1-C4 AND no substantiated material contradiction. Report factual score, citation support and failure reasons separately."
+  },
+  "citation_policy": {
+    "must_resolve_in_frozen_source": true,
+    "require_claim_support_not_just_overlap": true,
+    "alternative_valid_spans_allowed": true,
+    "whole_file_hit_is_sufficient": false,
+    "format": "repository-relative path plus line number/range; broad but resolvable ranges that actually support the claim are acceptable.",
+    "equivalent_support": "Different implementation locations or combined caller/callee evidence may establish the same behavior. One clear citation may support multiple nearby claims. An ordinary forwarding wrapper need not be cited separately if the meaningful handoff is established.",
+    "test_evidence": "Tests may corroborate precisely asserted behavior but a test name alone does not establish implementation mechanism. Existing tests were inspected, not executed.",
+    "current_source_is_allowed": "This is intentionally current-behavior QA: implementation/tests present in the frozen source, including those added after issue closure, are allowed. External issue/PR histories and evaluator materials are not solver evidence.",
+    "score_without_evidence": "Award correct factual units independently of missing/partial citation support; only the separate citation gate controls source-grounded success.",
+    "support_statuses": [
+      "sufficient",
+      "partial",
+      "missing",
+      "unrelated_or_wrong_revision",
+      "unresolvable"
+    ],
+    "retrieval_only_metrics": "Evidence overlap or span coverage is diagnostic, not a substitute for final-answer facts/citations."
+  },
+  "grading_policy": "Score only the submitted final answer. Each of the ten factual point units is independently 0 or 1. Omission is not contradiction. Do not reward tool choice, shorter cost, longer answers or terminology matching. Extra correct details earn no points; extra errors only affect a scored fact they contradict or a precisely defined material contradiction below. Keep factual points and citation support separate. No repair plan, historical diagnosis, runtime test or exhaustive forwarding trace is required.",
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "path": "src/binding/python/model/common/python_config.cc",
+      "start_line": 153,
+      "end_line": 158,
+      "claim_supported": "Python optimize_threads is validated positive and becomes native optimize_thread_count.",
+      "file_sha256": "89c975b2d3e17fd8b06cb4ea37ba93d5fe2cf5d8f10c7b6db5216e9475172116",
+      "span_sha256": "b3f04c24beec426044686dc96fbfbceeddca683ba444b55fe9cf2752db46a972",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/binding/python/model/common/python_config.cc#L153-L158"
+    },
+    {
+      "id": "E02",
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 21,
+      "end_line": 32,
+      "claim_supported": "Initialization creates separate global query/optimization pools once; optimization count comes from the global configuration.",
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "a527bfc17117a13a6633aa0f73e60a26fa7d02ca863d1f50b5a54f8b0d02d688",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/common/global_resource.cc#L21-L32"
+    },
+    {
+      "id": "E03",
+      "path": "src/db/collection.cc",
+      "start_line": 986,
+      "end_line": 992,
+      "claim_supported": "Operation concurrency is forwarded into vector/compaction task construction.",
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "c587f8e9d2f278d1b0a1147b18cdbe3df113c1bd44bcb88a3bb79cfd320999b5",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/collection.cc#L986-L992"
+    },
+    {
+      "id": "E04",
+      "path": "src/db/collection.cc",
+      "start_line": 1198,
+      "end_line": 1207,
+      "claim_supported": "Both relevant task variants carry the operation concurrency.",
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "afc8c00262de04b7ada851cc830ca155094965e0e770eeef1cc1202d9ed164f2",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/collection.cc#L1198-L1207"
+    },
+    {
+      "id": "E05",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1549,
+      "end_line": 1569,
+      "claim_supported": "Vector-only rebuild uses global pool/count for zero, or sets explicit per-operation count while leaving the pool null.",
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "5ba382f6158673020a69c446902522c994085c1258d3c73dd9d2d49c9808b931",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/index/segment/segment.cc#L1549-L1569"
+    },
+    {
+      "id": "E06",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 799,
+      "end_line": 811,
+      "claim_supported": "Segment merge uses the same pool-selection rule.",
+      "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+      "span_sha256": "b8e30bca91e7268b72712f54a42270aa24e0877694ed1ecb009285193aa27b3f",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/index/segment/segment_helper.cc#L799-L811"
+    },
+    {
+      "id": "E07",
+      "path": "src/db/index/column/vector_column/vector_column_params.h",
+      "start_line": 72,
+      "end_line": 75,
+      "claim_supported": "MergeOptions defaults its pool pointer to null.",
+      "file_sha256": "2e703cc633f80707b11a0d119ae469265332d33ca1e13ba1a81df26105c4dd68",
+      "span_sha256": "ff31bda9c3e0ce972122c263398650be8c2437b33558105bccc1e99dc891239c",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/index/column/vector_column/vector_column_params.h#L72-L75"
+    },
+    {
+      "id": "E08",
+      "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+      "start_line": 123,
+      "end_line": 132,
+      "claim_supported": "Vector-column merge passes count and pool through the core merge boundary.",
+      "file_sha256": "f69ece7d53509eebff6b844ae3a5ba1e9e18e606e6711b9a876e03047a86e5e8",
+      "span_sha256": "6162cdba427d0265d3d73914afcf26b4262708265ccf53401d4ed26e9229c42b",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/db/index/column/vector_column/vector_column_indexer.cc#L123-L132"
+    },
+    {
+      "id": "E09",
+      "path": "src/core/interface/index.cc",
+      "start_line": 1429,
+      "end_line": 1452,
+      "claim_supported": "Core merge borrows a supplied pool or creates an operation-local pool of requested size; supplied pool bounds reducer add concurrency.",
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "deaefd25d6a2ac5122722e75649168e253dc73c7e46a25223f3e34bbc9856f51",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/core/interface/index.cc#L1429-L1452"
+    },
+    {
+      "id": "E10",
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 742,
+      "end_line": 768,
+      "claim_supported": "The same borrowed threads object is passed at the optional converter-training and target-builder train/build call sites; actual consumption is implementation-dependent.",
+      "file_sha256": "1b614674c5b206658a5fd6ebe00c2640bffdfe792ccec5dcc49f6d4a394e1e04",
+      "span_sha256": "14a86c81e15082a2d40ab33c8e5f5b3c4dcb616dfca49379c1fdc5bf785d3339",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/core/mixed_reducer/mixed_streamer_reducer.cc#L742-L768"
+    },
+    {
+      "id": "E11",
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 169,
+      "end_line": 205,
+      "claim_supported": "BorrowedSingleQueueIndexThreads refers to an existing pool and forwards count/work, rather than creating an independent pool.",
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "99be2b80a558efa605250aec1ed3d4fb7f50f7eaf10bb3b51dd1297ef4e9a450",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/include/zvec/core/framework/index_threads.h#L169-L205"
+    },
+    {
+      "id": "E12",
+      "path": "src/core/framework/index_converter.cc",
+      "start_line": 27,
+      "end_line": 35,
+      "claim_supported": "TrainAndTransform passes supplied threads to converter training.",
+      "file_sha256": "130554868620aa1aa68e9ba4c4e1de320be04854bcdd746541b96d251e4b8ccb",
+      "span_sha256": "fdbafed6ead6b9d1ef08f15adee9c195dade0ce5a9a669303a4aa35a951b012b",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/core/framework/index_converter.cc#L27-L35"
+    },
+    {
+      "id": "E13",
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 389,
+      "end_line": 406,
+      "claim_supported": "DiskANN configures its PQ quantizer outer pool count using max(1,min(builder setting,caller count)).",
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "74e7cd736883b452553d0f7569c381acdf743d29e01a2656915257f8cd4d7e4d",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/core/algorithm/diskann/diskann_builder.cc#L389-L406"
+    },
+    {
+      "id": "E14",
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 657,
+      "end_line": 668,
+      "claim_supported": "DiskANN retains supplied training threads; only a null caller argument triggers a fresh default builder pool.",
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "f1623f10afc607a4b5e4a5ee1b9168399a8e797e6c0c8bba6ecfe66bf1529b72",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/core/algorithm/diskann/diskann_builder.cc#L657-L668"
+    },
+    {
+      "id": "E15",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 141,
+      "end_line": 145,
+      "claim_supported": "The PQ quantizer stores its thread_count configuration.",
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "cbc9964c52a734afce550c0ccb4b32f7ef9db473dcc13857501d5616823e6c6a",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc#L141-L145"
+    },
+    {
+      "id": "E16",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 319,
+      "end_line": 340,
+      "claim_supported": "PQ train_all_chunks constructs its own outer chunk-dispatch pool from thread_count.",
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "318ac1eb3821d25c3860d43e6e57b12c7156d379e1ba7d2ce2ac4f58d1fed8f5",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc#L319-L340"
+    },
+    {
+      "id": "E17",
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 112,
+      "end_line": 131,
+      "claim_supported": "Positive SingleQueueIndexThreads size directly sizes its owned pool; only zero invokes hardware fallback.",
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "d48d68dd87225d93ce7cdc2cee4c58074cab798f2023bca4684b8a1d2c4a9673",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/include/zvec/core/framework/index_threads.h#L112-L131"
+    },
+    {
+      "id": "E18",
+      "path": "tests/core/mixed_reducer/merged_provider_index_holder_test.cc",
+      "start_line": 779,
+      "end_line": 827,
+      "claim_supported": "Existing tests assert actual pool identity for builder/converter train/build, not only equal counts. Inspected, not executed.",
+      "file_sha256": "0bb8f8d69f1daa8ea3292c8670547b2a3d2f22428f63616829b425801a820a1d",
+      "span_sha256": "84d91866b3aa1ec4bc7a29891188b362e0f0e460d6e5a47440e97bf0d62862eb",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/tests/core/mixed_reducer/merged_provider_index_holder_test.cc#L779-L827"
+    },
+    {
+      "id": "E19",
+      "path": "src/ailego/parallel/thread_pool.cc",
+      "start_line": 85,
+      "end_line": 100,
+      "claim_supported": "ThreadPool clamps requested size to the positive hardware worker limit; supplied hardware premise makes four/two exact.",
+      "file_sha256": "d8d0d7640c3a2a6eefb4d4a6f404e214c4de2ea43afb91879297d2a35b2c928e",
+      "span_sha256": "e1ad2cbec734bb77bf8484db09061a041d0312588bd1f3f7834c94f179fa865a",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/ailego/parallel/thread_pool.cc#L85-L100"
+    },
+    {
+      "id": "E20",
+      "path": "src/include/zvec/core/framework/index_converter.h",
+      "start_line": 179,
+      "end_line": 188,
+      "claim_supported": "Default threaded converter overload may ignore the supplied threads, so argument propagation is not universal consumption.",
+      "file_sha256": "e5769fc54595169e1b2bbac8e6a7f26b0bf16d292c31f5faf219fdf75fd9d3cd",
+      "span_sha256": "280468021cb974bb11ce2ee390c9606c92d861270342a302843856ac6c09b578",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/include/zvec/core/framework/index_converter.h#L179-L188"
+    },
+    {
+      "id": "E21",
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 179,
+      "end_line": 209,
+      "claim_supported": "Each PQ chunk can create a one-worker pool, so the outer dispatch cap is not a total PQ-worker count.",
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "ef59e9e7d1352774e05501ef6945a3d07d058322d0fac877864b79007e4c68aa",
+      "url": "https://github.com/alibaba/zvec/blob/1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa/src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc#L179-L209"
+    }
+  ],
+  "critical_contradictions": [
+    "D1: Explicitly says concurrency=0 selects a zero-worker pool or always creates a fresh hardware-sized pool despite the supplied global configuration.",
+    "D2: Explicitly says concurrency=2 resizes/reconfigures the global optimization pool, or says a reached core merge ignores it and uses the four-worker global pool.",
+    "D3: Explicitly says the target-builder stage calls train/build or its optional converter train without passing the selected pool adapter, or claims that argument propagation guarantees every converter implementation consumes that pool.",
+    "D4: Explicitly says DiskANN outer PQ chunk-dispatch directly shares the same pool, or that this outer pool is configured above the positive caller count on the shown path.",
+    "D5: Explicitly presents four/two as a hard whole-process OS-thread ceiling or a measured CPU-utilization guarantee."
+  ],
+  "disqualification_policy": {
+    "application": "Only an explicit assertion materially contradicting a scored main conclusion triggers these rules. Quote the actual answer and show conflicting frozen-source evidence. Omissions, unclear wording and correctly rejected hypotheses are not disqualifications. An unresolved factual dispute requires adjudication before declaring pass.",
+    "evidence_required": [
+      "exact short answer quotation",
+      "contradiction ID",
+      "frozen-source path/line evidence or explanation why a measured-runtime claim has no supplied runtime evidence",
+      "effect on the requested conclusion"
+    ],
+    "records": [
+      {
+        "id": "D1",
+        "evidence_ids": [
+          "E01",
+          "E02",
+          "E05",
+          "E06"
+        ]
+      },
+      {
+        "id": "D2",
+        "evidence_ids": [
+          "E05",
+          "E07",
+          "E09"
+        ]
+      },
+      {
+        "id": "D3",
+        "evidence_ids": [
+          "E09",
+          "E10",
+          "E11",
+          "E12",
+          "E20"
+        ]
+      },
+      {
+        "id": "D4",
+        "evidence_ids": [
+          "E13",
+          "E15",
+          "E16"
+        ]
+      },
+      {
+        "id": "D5",
+        "evidence_ids": [
+          "E02",
+          "E16",
+          "E17",
+          "E21"
+        ]
+      }
+    ]
+  },
+  "not_required_or_not_proven": [
+    "Historical issue workload, CPU measurements or reproduction.",
+    "Every optimize call rebuilds or trains; prompt expressly assumes the reached rebuild/training paths.",
+    "All index families, all releases, negative concurrency or re-initialization after resources already exist.",
+    "Hardware CPU count, exact DiskANN builder setting, actual simultaneous worker count, throughput or latency.",
+    "Formal process-wide scheduling/CPU limits.",
+    "Fresh tests passing or engine runtime reproduction.",
+    "No training-data contamination claim.",
+    "Actual thread use by every converter implementation; the requested stage establishes how arguments are supplied.",
+    "End-to-end HNSW_RABITQ training pool coverage; earlier preparation can use threadless APIs.",
+    "One unique local pool for an entire optimize call, which can reach multiple core merges.",
+    "A cap on total PQ threads, including per-chunk worker pools."
+  ],
+  "judge_output_fields": [
+    "task_id",
+    "blinded_answer_id",
+    "answer_sha256",
+    "final_answer_present",
+    "criterion_scores",
+    "point_unit_facts",
+    "supporting_answer_quotes",
+    "citation_support_by_claim",
+    "core_citation_gate_results",
+    "unsupported_claims",
+    "critical_contradictions",
+    "total_points",
+    "maximum_points",
+    "failed_gates",
+    "source_grounded_success",
+    "reviewer_notes"
+  ],
+  "provenance": "evaluator/provenance/q004/author-verification.json"
+}

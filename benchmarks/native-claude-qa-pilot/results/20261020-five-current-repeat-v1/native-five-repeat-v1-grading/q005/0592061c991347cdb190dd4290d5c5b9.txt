@@ -1,0 +1,42 @@
+All evidence is gathered. Here's the complete analysis.
+
+# Summary
+
+The identifier rules live in `src/db/index/common/identifier_validation.{h,cc}`; the batch semantics are decided in `CollectionImpl::write_impl` (`src/db/collection.cc:1650–1701`) and `SegmentImpl::insert` (`src/db/index/segment/segment.cc:990–1005`).
+
+## Probe 1 — Collection name `商品 2026/😀` + field name `标题`: **not both accepted**
+
+- **Collection name: accepted.** `validate_collection_name` (`identifier_validation.cc:95–98`) delegates to `validate_utf8_name` with a 256-byte limit (`kMaxCollectionNameBytes`, `identifier_validation.h:24`). Its only checks (`identifier_validation.cc:50–79`) are: non-empty, ≤256 bytes, decodable UTF-8, and a per-codepoint blocklist limited to NUL, `\n`, `\r`, `\t`, C0/C1 controls (≤0x1F, 0x7F–0x9F), U+2028, U+2029 (`identifier_validation.cc:28–48`). The name is 16 UTF-8 bytes (商3+品3+space1+"2026/"5+😀4) with no blocked codepoints — CJK, spaces, `/`, and emoji are all fine for collection names. It's checked in `CollectionSchema::validate()` (`schema.cc:406–408`).
+- **Field name `标题`: rejected.** `validate_field_name` (`identifier_validation.cc:100–130`) is a **byte-wise ASCII allowlist** `[A-Za-z0-9_-]` (lines 110–113); any byte ≥ 0x80 fails with "contains a non-ASCII character" (line 115). `标` starts with byte `0xE6`, so it's an `InvalidArgument`. (Also a 64-byte cap and reserved-name check, `identifier_validation.h:25`, `identifier_validation.cc:125–128` — not reached.) Called from `FieldSchema::validate()` (`schema.cc:84–87`).
+
+## Probe 2 — Document IDs: **byte-counted, 1024-byte limit**
+
+`validate_document_id` (`identifier_validation.cc:91–93`) uses the same `validate_utf8_name` blocklist with `kMaxDocumentIdBytes = 1024` (`identifier_validation.h:23`), invoked per doc during writes from `Doc::validate_and_sanitize` (`doc.cc:734`).
+
+- `客户 42/😀`: 14 UTF-8 bytes (3+3+1+2+1+4), no forbidden codepoints → **permitted** (like collection names, doc IDs allow any non-control UTF-8).
+- `"汉" * 341`: `汉` (U+6C49) is 3 UTF-8 bytes → 1023 bytes ≤ 1024 → **permitted**.
+- `"汉" * 342`: 1026 bytes > 1024 → **rejected**: "exceeds 1024 bytes (got 1026)" (`identifier_validation.cc:55–59`).
+- The size unit is **bytes of the UTF-8 encoding** (`value.size()`, line 55), not Python characters/codepoints. The cutoff is exactly ⌊1024/3⌋ = 341 `汉` characters.
+
+## Probe 3 — `bad\tid` in the batch: **raises ValueError; zero documents inserted**
+
+Path: `Collection.insert` (`python/zvec/model/collection.py:337–354`; the Python-side `convert_to_cpp_doc` at `convert.py:21–32` only sets the pk — no charset check in Python) → pybind `Insert` (`python_collection.cc:286–294`) → `CollectionImpl::insert` → `write_impl` (`collection.cc:1593–1594, 1650`).
+
+`write_impl` runs a **pre-validation pass over every doc before anything is written** (`collection.cc:1659–1662`). For `bad\tid`, `validate_document_id` hits the TAB rule "contains a tab" (`identifier_validation.cc:35–37`) → `InvalidArgument` → `CHECK_RETURN_STATUS_EXPECTED` returns `tl::make_unexpected(status)` (`typedef.h:180–183`). This aborts **before** the write lock (`collection.cc:1665`) and the per-doc write loop (line 1675). The binding's `unwrap_expected` → `throw_if_error` maps INVALID_ARGUMENT to `py::value_error` (`python_collection.cc:49–66, 78–85`).
+
+Result: Python **raises `ValueError`** and **none of the three documents is inserted** — including the two valid ones. Note the guarantee's nature: this is fail-fast validation *before any write*, not rollback of a partially applied batch.
+
+## Probe 4 — duplicate `seed-id`: **returns 3 per-doc statuses; first and last inserted; existing doc untouched**
+
+All three IDs pass the pre-validation pass. The write loop (`collection.cc:1675–1698`) then processes each doc: `handle_insert` → `writing_segment_->insert(doc)` (`collection.cc:1646–1648`) → `SegmentImpl::insert` (`segment.cc:990–1005`), which checks `id_map_->has(pk)` **before appending to the WAL or mutating anything** and returns `Status::AlreadyExists("insert failed: doc_id[seed-id] already exists in collection")` (lines 993–996). Back in `write_impl`, that status is simply `results.push_back(s)` (line 1697) and the loop **continues** to `fresh-after`.
+
+Because the batch-level call succeeded, `write_impl` returns a `WriteResults` value (not an error), so `unwrap_expected` returns it and Python gets a **`list[Status]` of length 3** — `[OK, AlreadyExists, OK]` — with no exception (`collection.py:334, 345–347`). `fresh-before` and `fresh-after` are inserted. The existing `seed-id` is **not overwritten** and keeps payload `old`: INSERT returns early before any write, and only UPSERT (`segment.cc:975–982`, mark-deleted + reinsert) or UPDATE (`collection.cc:1637–1644`, fetch + merge) ever replace an existing doc.
+
+## Why the two batches have different failure scopes
+
+The native write path has two distinct stages:
+
+1. **Batch-level preconditions → exception.** Identifier validation (`collection.cc:1659–1662`), read-only/closed/destroyed checks (lines 1652–1657), and batch-size overflow (lines 1669–1673) return `tl::make_unexpected`, which the binding (`python_collection.cc:293`, `78–85`) converts to a Python exception. Since doc validation runs before the first write, probe 3 fails with zero side effects.
+2. **Per-doc execution → collected statuses.** Duplicate detection happens inside `SegmentImpl::insert` during the write loop; each doc's `Status` is appended to `WriteResults` and iteration continues (`collection.cc:1675–1698`). So probe 4's failure is scoped to the single document.
+
+**Validation guarantee vs. atomicity:** neither batch is transactional. Probe 3's all-or-nothing outcome comes solely from validating everything before writing anything — if a doc instead failed *during* the write loop (segment-switch failure, I/O error), previously written docs would remain and no rollback occurs. Likewise in probe 4, the two successful inserts persist despite the middle doc's `AlreadyExists` failure; there is no batch rollback. The only durable guarantees are: (a) an invalid identifier rejects the whole call before any mutation, and (b) a duplicate under INSERT never mutates the existing document (checked-and-rejected before WAL append, `segment.cc:993–1001`).

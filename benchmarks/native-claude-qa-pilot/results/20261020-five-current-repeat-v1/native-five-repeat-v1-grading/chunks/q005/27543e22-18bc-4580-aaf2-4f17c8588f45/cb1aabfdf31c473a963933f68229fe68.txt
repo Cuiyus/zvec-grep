@@ -1,0 +1,45 @@
+All evidence is in hand. Here's the analysis of the four probes.
+
+# Probe 1 — Collection name `商品 2026/😀` vs. field name `标题`: **not both accepted**
+
+**Collection name: accepted.** `validate_collection_name` (`src/db/index/common/identifier_validation.cc:95-98`) delegates to `validate_utf8_name` (lines 50-79) with a 256-byte cap (`kMaxCollectionNameBytes = 256`, `identifier_validation.h:24`). The relaxed rule rejects only: empty, over-limit, invalid UTF-8, and the forbidden codepoints enumerated in `forbidden_codepoint_reason` (lines 28-48): NUL, `\n`/`\r`, `\t`, other C0/C1 controls (≤0x1F, 0x7F–0x9F), U+2028, U+2029. `商品 2026/😀` is 16 UTF-8 bytes (3+3+1+4+1+4), valid UTF-8, and contains none of those — spaces, slashes, CJK, and emoji are all permitted. The native C API test uses exactly this shape (`"集合 / 2026"`) as a valid relaxed name (`tests/c/c_api_test.c:1046-1055`). It is checked at schema validation (`src/db/index/common/schema.cc:406-409`).
+
+**Field name: rejected.** `validate_field_name` (`identifier_validation.cc:100-130`) is a *different, strict* rule: an ASCII allowlist of `[A-Za-z0-9_-]` only, ≤64 bytes. `标` (first byte 0xE6 ≥ 0x80) triggers "contains a non-ASCII character; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)" (lines 110-124). Confirmed by native test `validate_field_name(u8"中")` → invalid (`tests/db/index/common/identifier_validation_test.cc:282-291`). It runs via `FieldSchema::validate` (`schema.cc:84-85`), invoked from `CollectionSchema::validate` (`schema.cc:442-445`). So schema creation fails with `InvalidArgument` on the field name even though the collection name is fine.
+
+# Probe 2 — Document IDs
+
+`validate_document_id` (`identifier_validation.cc:91-93`) uses the same relaxed `validate_utf8_name` rules as collection names, but with `kMaxDocumentIdBytes = 1024` (`identifier_validation.h:23`), and is enforced per write via `Doc::validate_and_sanitize` (`src/db/index/common/doc.cc:728-736`).
+
+- **`客户 42/😀`: permitted.** 14 UTF-8 bytes (3+3+1+2+1+4), no forbidden codepoints. The Python test suite round-trips the analogous `"订单-2026-🙂"` (`python/tests/test_name_validation.py:49-58`).
+- **`"汉" * 341`: permitted.** 汉 (U+6C49) encodes to 3 bytes, so 341×3 = **1023 bytes ≤ 1024**.
+- **`"汉" * 342`: rejected.** 342×3 = **1026 bytes**, hitting the check `value.size() > max_bytes` → "Invalid doc: id[...] exceeds 1024 bytes (got 1026)" (`identifier_validation.cc:55-59`).
+- **Size unit:** the limit is on **UTF-8 encoded bytes** (`std::string_view::size()` of the encoded string, line 55), not characters/code points. The bound is inclusive: exactly 1024 bytes is valid — the test suite asserts `"界" * 341 + "a"` (1024 bytes) round-trips (`test_name_validation.py:54`).
+
+# Probe 3 — Batch with an invalid ID (`bad<TAB>id`): **raises; zero documents inserted**
+
+Trace across the boundary:
+
+1. `Collection.insert` (`python/zvec/model/collection.py:337-354`) converts each doc via `convert_to_cpp_doc` (`python/zvec/model/convert.py:21-51`) — no ID validation there (only UTF-8 convertibility); `Doc.__init__` (`python/zvec/model/doc.py:66`) doesn't validate either. Then calls the pybind `Insert` binding (`src/binding/python/model/python_collection.cc:286-294`), which releases the GIL and calls native `CollectionImpl::insert` → `write_impl` (`src/db/collection.cc:1593-1595, 1650`).
+2. **Batch-wide upfront validation pass** (`collection.cc:1659-1662`): *every* doc goes through `Doc::validate_and_sanitize` → `validate_document_id` **before** the write lock is taken and **before** any `handle_insert`. For `bad\tid`, the TAB hits `forbidden_codepoint_reason` → "contains a tab" (`identifier_validation.cc:35-37`) → `InvalidArgument` → `CHECK_RETURN_STATUS_EXPECTED` returns `tl::make_unexpected` for the whole batch (`src/db/common/typedef.h:180-183`).
+3. Back at the boundary, `unwrap_expected` sees the error → `throw_if_error` maps `INVALID_ARGUMENT` to **`py::value_error`** (`python_collection.cc:49-56, 69-85`). Python raises `ValueError`; no `list[Status]` is returned.
+
+**Inserted documents: none** — `客户 42/😀` and `fresh-after` are never written, because the failure occurs in the validation pass that precedes the per-doc write loop (`collection.cc:1675-1698`) entirely. That "nothing is written" property is a **validation-ordering guarantee** (check-all-then-write-any), not a transaction rollback.
+
+# Probe 4 — Batch with a duplicate of live `seed-id`: **returns per-document statuses; partial success; no overwrite**
+
+All three IDs pass the upfront validation pass, so `write_impl` enters the per-doc loop (`collection.cc:1675-1698`). Each doc's `Status` is pushed into `results` (line 1697); the loop has **no early-return on per-doc failure**:
+
+- `fresh-before`: `handle_insert` → `SegmentImpl::insert` (`src/db/index/segment/segment.cc:990-1005`) — pk absent from the collection-wide `id_map_` (shared across segments, `collection.cc:1717-1719, 1762-1766`) → WAL append + `internal_insert` → **OK, inserted**.
+- `seed-id`: the duplicate guard at `segment.cc:993-996` returns `AlreadyExists("insert failed: doc_id[...] already exists in collection")` **before** any WAL append or mutation. The existing document is **not overwritten** — payload stays `old`. (Overwriting is the `upsert` path, `segment.cc:1025-1035`; `insert` never replaces.)
+- `fresh-after`: loop continues → **OK, inserted**.
+
+`write_impl` returns a valued `Result<WriteResults>` where `WriteResults = std::vector<Status>` (`src/include/zvec/db/doc.h:366`), so `unwrap_expected` returns it normally and Python receives a **`list[Status]` of length 3: [OK, ALREADY_EXISTS, OK]** (`collection.py:346-354`; matches `python/tests/test_collection.py:572-582` asserting `StatusCode.ALREADY_EXISTS` per doc). **No exception.**
+
+# Why the two batches differ in failure scope
+
+The asymmetry comes from *where* each check lives, not from any transaction machinery:
+
+- **Invalid identifier** = a *batch-level precondition*. ID/schema validation runs over all docs up front (`collection.cc:1659-1662`) and aborts the whole call with one error before the write loop begins → Python exception, zero writes.
+- **Duplicate ID** = a *per-document runtime condition* detected inside `SegmentImpl::insert` during the write loop; its `Status` is merely collected into the results vector → per-doc statuses, partial success.
+
+Critically, there is **no atomicity guarantee for the write loop itself**: in probe 4, `fresh-before` remains durably inserted (WAL-appended) even though the middle doc failed, and nothing rolls it back. Probe 3's all-or-nothing outcome holds only because validation precedes every write — had a failure occurred mid-loop (e.g., a WAL error), earlier docs' statuses would already be committed. The migration client should therefore treat `insert` batches as: identifier problems fail the whole call with `ValueError`, while duplicate problems yield a mixed `list[Status]` with earlier documents already persisted.

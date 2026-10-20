@@ -1,0 +1,56 @@
+# Root cause: "filter matched zero docs" is silently converted into "no filter at all"
+
+Everything below is **source-based inference** from the snapshot (`alibaba/zvec`); I did not build or execute anything. The one piece of arithmetic I rely on (`(uint64_t)(3 × 0.05f) == 0`) is a direct reading of the cast at `src/db/sqlengine/planner/doc_filter.cc:120`.
+
+## The failure chain for FTS `hello` + a zero-match indexed condition
+
+**1. Routing.** Because `status`/`views` have inverted indexes, `SearchCondCheckWalker` marks those predicates as invert relations (`src/db/sqlengine/analyzer/query_node_walker.cc:196–199`, `:700–703`), and the analyzer lifts them into `invert_cond` (`src/db/sqlengine/analyzer/query_analyzer.cc:276–287`). The selectivity optimizer does not rescue this case: it only rewrites *high-match* conditions to forward scans — a zero-match condition has ratio 0 `< invert_to_forward_scan_ratio` and stays invert (`src/db/sqlengine/planner/optimizer.cc:79–101`). With an FTS clause present, the planner picks `fts_scan` and builds a `DocFilter` holding only the invert condition (`src/db/sqlengine/planner/query_planner.cc:411–415`, `:533–557`, `:643–660`).
+
+**2. The invert search correctly produces an empty set.** `DocFilter::compute_filter()` runs `InvertSearch` (`src/db/sqlengine/planner/doc_filter.cc:24–34`); a term like `'archived'` yields an `InvertedSearchResult` whose roaring bitmap is empty, so `count() == 0` (`src/db/index/column/inverted_column/inverted_search_result.h:79–85`) and `make_filter()` returns a filter that excludes *every* doc (`is_filtered = !contains`, `inverted_search_result.h:34–50`). So far, correct.
+
+**3. The brute-force-by-keys optimization consumes and destroys that state.** `FtsRecallNode::prepare()` calls `get_bf_by_keys_and_update(fts_brute_force_by_keys_ratio)` (`src/db/sqlengine/planner/fts_recall_node.cc:124–129`; default ratio **0.05**, `src/db/common/config.cc:40`). Inside (`doc_filter.cc:109–141`):
+
+- threshold = `(uint64_t)(doc_count × ratio)` = `(uint64_t)(3 × 0.05)` = **0** (`doc_filter.cc:119–120`);
+- `match_count == 0 ≤ 0` → the keys path fires: it extracts ids (**an empty vector**), then **`invert_filter_.reset(); invert_result_.reset();`** (`doc_filter.cc:125–128`), and returns an *engaged* `std::optional` wrapping the empty vector (`doc_filter.cc:133`).
+
+**4. Two independent "empty means none" conflations then drop the constraint entirely:**
+
+- `DocFilter::empty()` tests only *component presence*, not cardinality: `!(delete_filter_ || invert_filter_ || forward_plan_ || forward_filter_expr_)` (`doc_filter.cc:68–71`). After step 3, `invert_filter_` was just cleared; `delete_filter_` is null because nothing was deleted (`SegmentImpl::get_filter()` returns nullptr for an empty delete store, `src/db/index/segment/segment.cc:1613–1614`; wired in at `doc_filter.h:38`); no forward members exist because the predicate went the invert route. So `empty()` returns **true** and `params.filter = nullptr` (`fts_recall_node.cc:130–132`).
+- `FtsQueryParams::candidate_ids` is a plain `std::vector<uint64_t>` (`src/db/index/column/fts_column/fts_types.h:30–35`), which cannot distinguish "no restriction" from "restricted to ∅". `FtsColumnIndexer::search` ANDs a `CandidateDocIterator` into the root **only `if (!query_params.candidate_ids.empty())`** (`src/db/index/column/fts_column/fts_column_indexer.cc:209–217`) — so the empty candidate set is discarded too.
+
+**5. Result:** the search loop runs with `filter_ptr == nullptr` and no candidate conjunction (`fts_column_indexer.cc:220`, `:229–230`, `:249–250`), i.e., an unfiltered walk of the `hello` postings → **{1, 2, 3}** (via `SegmentImpl::fts_search`, `segment.cc:4585–4601`).
+
+Note the redundancy of the bug: *either* conflation alone would cause it. Had the empty candidate list been ANDed in, `CandidateDocIterator::next_doc` returns `NO_MORE_DOCS` immediately for an empty list (`src/db/index/column/fts_column/iterator/fts_candidate_iterator.cc:31–38`) → correctly ∅. Had `invert_filter_` not been cleared, its `is_filtered` excludes everything → correctly ∅.
+
+## Why the three controls behave correctly
+
+| Case | Path | Why it's right |
+|---|---|---|
+| **Scalar-only, zero-match** | `invert_scan` (`query_planner.cc:416–419`) → `InvertRecallNode` iterates the invert result *itself* (`src/db/sqlengine/planner/invert_recall_node.cc:24–46`, `:84–87`) | The empty set is carried by the result object/iterator, never by a DocFilter member that can be cleared; invalid iterator → zero batches → ∅. |
+| **`hello` + `status='published'`** | Same FTS path, but `match_count = 2 > threshold 0` → `get_bf_by_keys_and_update` returns `nullopt` (`doc_filter.cc:134–140`), `invert_filter_` stays intact | `empty()` is false → `params.filter = doc_filter_` → filter-aware walk (`fts_column_indexer.cc:229–230`) excludes doc 1 (`doc_filter.cc:73–79`) → {2, 3}. And **`one` + published**: postings for `one` contain only doc 1 (standard tokenizer + lowercase, `fts_types.h:52–58`), which the intact filter excludes → ∅. The bug is invisible here purely because 2 > 0 keeps the state alive. |
+| **No inverted indexes** | Walker marks the predicates forward (`query_node_walker.cc:196–199`) → `filter_cond` → `fts_scan` with a forward filter; `single_stage_search` is false since `only_invert_before_opt` is false (`query_planner.cc:374–375`, `:391–397`) → forward-bitmap plan (`query_planner.cc:541–552`), materialized in `compute_filter` (`doc_filter.cc:36–49`) | `get_bf_by_keys_and_update` early-returns (`invert_result_` null, `doc_filter.cc:116–118`), nothing is cleared; `empty()` is false because `forward_plan_` is set → `params.filter = doc_filter_` → per-doc predicate evaluation (`doc_filter.cc:73–107`) excludes all three docs → ∅. Forward state is never "consumed and cleared", so the conflation can't arise. |
+
+**Contrast with the vector path** (same helper!): `VectorRecallNode` calls `get_bf_by_keys_and_update` identically (`src/db/sqlengine/planner/vector_recall_node.cc:163–170`), but `bf_pks` is `vector<vector<uint64_t>>` (`src/db/index/column/vector_column/vector_column_params.h:104`). An *engaged but empty* inner list is distinguishable: the dispatcher skips every block indexer when `bf_pks` is present but the block list is empty (`src/db/index/column/vector_column/combined_vector_column_indexer.cc:303–325`) → correctly ∅. FTS lacks exactly this presence/emptiness distinction.
+
+## Minimal repair principle
+
+**Principle: "matches nothing" must remain a first-class value (an empty allow-set), never degrade to "no filter".** Concretely, minimal and choke-pointed:
+
+1. **Planner short-circuit** (smallest change): in `FtsRecallNode::prepare()` (`fts_recall_node.cc:126–129`), if `bf_keys` is engaged and `bf_keys->empty()`, return an empty `FtsIndexResults` immediately without calling `fts_search`. The `nullopt` path (filter pushdown) and non-empty path (candidate conjunction) are untouched, so ordinary queries — with or without scalar conditions — behave identically.
+2. **Restore the DocFilter invariant**: make `empty()` unable to report "no filter" after filter state was consumed — e.g., a `bool invert_consumed_{false}` set at `doc_filter.cc:127` and OR-ed into `empty()` (`doc_filter.cc:68–71`). This protects every current and future caller of `get_bf_by_keys_and_update`, including the vector and hybrid paths.
+3. **Structural fix (optional, makes the class of bug unrepresentable)**: change `FtsQueryParams::candidate_ids` to `std::optional<std::vector<uint64_t>>` (`fts_types.h:35`) and gate the conjunction on `has_value()` instead of `!empty()` (`fts_column_indexer.cc:209`). An engaged-empty optional ANDs in an empty `CandidateDocIterator`, which already yields `NO_MORE_DOCS` immediately (`fts_candidate_iterator.cc:31–38`) — ∅ candidates ⇒ ∅ results by construction.
+
+Fix 1 alone resolves the reported anomaly; 1+2 (or 3 alone plus 2) is the robust minimal set.
+
+## Regression checks
+
+Existing homes: `tests/db/sqlengine/fts_recall_test.cc`, `tests/db/fts_query_test.cc`, `tests/db/sqlengine/fts_multi_segment_test.cc`, `tests/db/sqlengine/invert_recall_test.cc`, `tests/db/index/column/fts_column/fts_column_indexer_test.cc`, `fts_candidate_iterator_test.cc`.
+
+1. **Exact repro**: FTS `hello` + `status='archived'` and + `views > 1000` → ∅ (ID-set comparison), on the 3-doc fixture.
+2. **Ratio parameterization**: run the suite with `fts_brute_force_by_keys_ratio ∈ {0.0, 0.05, 1.0}`. At 1.0 even `published` (2 ≤ 3×1.0) takes the keys path — assert non-empty keys still restrict correctly ({2,3}) and zero-match still yields ∅ on *both* sides of the threshold.
+3. **Threshold boundary**: fixtures where `match_count == floor(doc_count × ratio)` exactly (keys path) and one above (pushdown path); both must equal the brute-force truth set.
+4. **Positive controls locked in**: `hello` alone → {1,2,3}; `hello`+published → {2,3}; `one`+published → ∅; scalar-only zero-match → ∅; no-inverted-index variant → ∅ (guards the forward path against regressions from fix 2).
+5. **Delete interaction**: zero-match filter with deleted docs present (today `delete_filter_` alone keeps `empty()` false via `segment.cc:1613–1614` — verify unchanged); filter matching only deleted docs → ∅.
+6. **Multi-segment**: repro across ≥2 segments so per-segment `prepare()` and the reduce/merge path are both covered.
+7. **Vector & hybrid parity**: vector query and MultiQuery (vector+FTS) with a zero-match invert filter → ∅, confirming the `DocFilter::empty()` change doesn't perturb the vector path's existing correct semantics (`combined_vector_column_indexer.cc:319–325`).
+8. **Unit level**: (a) after `compute_filter()` + `get_bf_by_keys_and_update()` returns engaged-empty, assert `empty() == false` (post-fix invariant); (b) `FtsColumnIndexer::search` with engaged-empty optional candidates and null filter → empty result, and with absent candidates → full result.

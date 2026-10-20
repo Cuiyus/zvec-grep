@@ -1,0 +1,56 @@
+I have the complete chain. Everything below is **source-based inference** from the snapshot — I read the code but executed no tests.
+
+# Root cause: "zero matches" is silently converted into "no restriction"
+
+The anomaly is a sentinel collision in the FTS brute-force-by-keys shortcut. `DocFilter::get_bf_by_keys_and_update` turns a *zero-match* inverted-filter result into an **empty id list**, after having **destroyed the filter itself**; downstream, an empty `candidate_ids` vector means "no candidate restriction," so the FTS search runs unfiltered and returns all `hello` docs.
+
+## Execution trace (anomaly case: FTS `hello` + `status='archived'` or `views>1000`)
+
+1. **Analysis.** Because `status`/`views` have inverted indexes, the analyzer moves those predicates into the *invert condition* (`query_analyzer.cc:276–287`); nothing remains as a forward `filter_cond`. With an FTS condition present, the planner picks `fts_scan` (`query_planner.cc:413–415`).
+
+2. **Filter computation.** `FtsRecallNode::prepare` calls `doc_filter_->compute_filter()` (`fts_recall_node.cc:111`), which runs `InvertSearch::exec_invert_cond_tree` and stores `invert_result_` + `invert_filter_` (`doc_filter.cc:24–34`). For a zero-match predicate the result is a valid empty bitmap — `count()` returns 0 (`inverted_search_result.h:79–85`), no error. (The scalar-only control confirms this path yields an empty result, not a failure.)
+
+3. **The destructive shortcut.** `get_bf_by_keys_and_update(ratio)` (`doc_filter.cc:109–141`):
+   - Default `fts_brute_force_by_keys_ratio` is **0.05** (`config.cc:40`), so with 3 docs the threshold is `(uint64_t)(3 × 0.05) = 0`.
+   - `match_count = 0 ≤ 0` → it extracts ids (none), then **resets `invert_filter_` and `invert_result_`** (`doc_filter.cc:126–128`) and returns an *engaged* `std::optional` wrapping an **empty vector** (`doc_filter.cc:133`).
+
+4. **Filter disappears.** Back in `prepare`: `params.candidate_ids = {}` (`fts_recall_node.cc:126–129`), and `params.filter = doc_filter_->empty() ? nullptr : doc_filter_` (`fts_recall_node.cc:132`). `empty()` tests `delete_filter_ || invert_filter_ || forward_plan_ || forward_filter_expr_` (`doc_filter.cc:68–71`): `invert_filter_` was just reset, no forward plan/expr exists (step 1), and with no deletions `delete_filter_` is null → **filter = nullptr**. Even if a delete filter existed, `is_filtered` would only check delete/forward state (`doc_filter.cc:73–86`) — the invert condition is gone either way.
+
+5. **Empty list means "unrestricted."** In `FtsColumnIndexer::search`, candidate mode is entered only `if (!query_params.candidate_ids.empty())` (`fts_column_indexer.cc:209–217`); with no filter either (`fts_column_indexer.cc:220, 229–230`), the posting walk for `hello` runs over **all** docs → {1, 2, 3}. The contract in `fts_types.h:25–35` documents exactly this conflation: the candidate set restricts evaluation only "when non-empty."
+
+The three-valued state — *no candidate mode* (`nullopt`) vs. *restrict to these ids* (non-empty) vs. *nothing can match* (empty) — collapses to two values, and "nothing can match" lands in the "no restriction" bucket.
+
+## Why the three controls behave correctly
+
+- **`hello` + `status='published'` → {2, 3}.** `match_count = 2 > threshold = 0`, so the bf shortcut is *not* taken (`doc_filter.cc:134–140`); `invert_filter_` survives, `empty()` is false, and the filter is pushed into the scoring loop (`fts_recall_node.cc:132`; `fts_column_indexer.cc:229–230`), where `Filter::is_filtered = !contains(id)` (`inverted_search_result.h:34–45`) excludes doc 1. Note that with 3 docs and ratio 0.05, **only a zero-match filter can trigger the bug** — any filter matching ≥1 doc exceeds the 0 threshold.
+
+- **`one` + `status='published'` → ∅.** Same retained-filter path; the `one` posting list is {1}, doc 1 is filtered out → empty. Intersection semantics work whenever the filter survives.
+
+- **Scalar-only query → ∅.** Without an FTS/vector condition the planner chooses `invert_scan` (`query_planner.cc:416–418`). `InvertRecallNode` iterates the roaring bitmap of the invert result directly (`invert_recall_node.cc:31–38, 86–89`); an empty bitmap gives an immediately-invalid iterator → no batches → empty set. The bf-by-keys transformation is never involved.
+
+- **No inverted indexes (control collection) → ∅.** Without invert indexes the predicate can only become a forward `filter_cond` (`query_analyzer.cc:303–311`), parsed into an Arrow expression (`query_planner.cc:398–407`). For an FTS query `single_stage_search` is false (it requires invert-before-opt, `query_planner.cc:373–397`), so `build_doc_filter` creates a `forward_plan_` (`query_planner.cc:541–556`) and `compute_filter` materializes an all-false `forward_bitmap_` (`doc_filter.cc:36–49`). Crucially, `get_bf_by_keys_and_update` returns `nullopt` because `invert_result_` is null (`doc_filter.cc:116–118`) — **nothing is cleared** — so the filter is pushed down and every doc fails `get_forward_bit` (`doc_filter.cc:80–86`) → empty set.
+
+# Minimal repair principle
+
+**Preserve the three-way distinction: an empty match set must short-circuit to an empty result, never degrade to "no filter."** Two minimal options:
+
+1. **Smallest diff:** in `FtsRecallNode::prepare` (`fts_recall_node.cc:126–129`), if `bf_keys` is engaged **and empty**, return an empty `FtsIndexResults` immediately. Ordinary queries are untouched: no filter → `nullopt` → normal walk; selective non-empty filter → candidate-driven walk as today; non-selective filter → bitmap pushdown as today.
+2. **Contract-level (preferred):** make the sentinel explicit — change `FtsQueryParams::candidate_ids` to `std::optional<std::vector<uint64_t>>` (`fts_types.h:35`), and in `FtsColumnIndexer::search` return `{}` when it is engaged-but-empty (instead of the `!empty()` test at `fts_column_indexer.cc:209`). This protects any future caller of the same helper.
+
+Either way, `get_bf_by_keys_and_update`'s "clear the filter, hand back ids" behavior (`doc_filter.cc:126–128`) stays safe only because the empty case is intercepted *before* the cleared filter is consulted.
+
+**One adjacent risk to verify (inference, not executed):** the vector path uses the same helper (`vector_recall_node.cc:163–167`) and would emplace an *empty* `bf_pks` list, producing a non-null pointer to an empty key vector (`vector_column_indexer.cc:184–193`). Whether the core brute-force-by-keys loop returns empty for an empty key list — likely, since it iterates keys — I did not trace into the core engine; it should be covered by a test rather than assumed.
+
+# Regression checks
+
+Functional (e.g., extending `tests/db/sqlengine/fts_recall_test.cc`, which already has an `fts_search_with_filter` harness — see `fts_recall_test.cc:533–536`):
+
+1. **The anomaly itself:** FTS `hello` + `status='archived'` and + `views>1000` → ∅, with inverted indexes present.
+2. **Controls stay green:** scalar-only zero-match → ∅; `hello`+`published` → {2,3}; `one`+`published` → ∅; no-inverted-index collection → ∅.
+3. **Threshold boundary:** collections sized so `floor(doc_count × ratio) ≥ 1`; filters matching exactly *threshold* docs (bf path, non-empty ids), *threshold+1* (bitmap pushdown), and *0* (the bug) — all three must agree with brute-force ground truth.
+4. **Config extremes:** `ratio = 0.0` (every zero-match filter hits the shortcut) and `ratio = 1.0` (all filters become candidate lists, including empty).
+5. **Filter-shape coverage:** zero-match via equality, range, `IN`/`CONTAIN_ANY`, `IS NULL` (invert leaf ops at `invert_search.cc:125–153`); zero-match invert ANDed with a matching forward filter; zero-match under OR (verify analyzer routing semantics).
+6. **Interaction with deletes:** zero-match filter + deleted docs (`delete_filter_` non-null) must still return ∅ — guards the `empty()` logic at `doc_filter.cc:68–71`.
+7. **Multi-segment:** per-segment planning (`query_planner.cc:370–429`); zero-match in one segment, matches in another → union still correct.
+8. **Vector analog:** vector query + zero-match invert filter → ∅ (confirms the `bf_pks` empty-list behavior noted above).
+9. **topk boundary:** `topk=0` early-return (`fts_column_indexer.cc:181–183`) still behaves with candidate mode engaged.

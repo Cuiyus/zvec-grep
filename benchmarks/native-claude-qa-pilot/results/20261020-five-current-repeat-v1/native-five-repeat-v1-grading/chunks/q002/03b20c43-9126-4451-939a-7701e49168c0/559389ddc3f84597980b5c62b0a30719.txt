@@ -1,0 +1,61 @@
+All links are verified. Here is the complete analysis.
+
+---
+
+# Root cause
+
+**An empty inverted-index match set is silently converted into "no restriction at all"** when it is handed to the FTS recall stream. Two representations collapse the distinction between *"matches zero docs"* and *"no filter present"*:
+
+1. `DocFilter::get_bf_by_keys_and_update()` turns a zero-cardinality invert result into an **engaged-but-empty** candidate-ID list — and *destroys* the bitmap filter that would have excluded everything (`src/db/sqlengine/planner/doc_filter.cc:123-133`).
+2. `FtsColumnIndexer::search()` uses `!candidate_ids.empty()` as the sentinel for "candidate mode enabled" (`src/db/index/column/fts_column/fts_column_indexer.cc:209`, contract documented at `src/db/index/column/fts_column/fts_types.h:30-35`), so an empty candidate set restricts **nothing**.
+
+A third, latent defect: `InvertedSearchResult::make_filter()` returns `nullptr` for a null bitmap (`src/db/index/column/inverted_column/inverted_search_result.h:48-50`), and `DocFilter::is_filtered()` skips null filters (`doc_filter.cc:77-79`) — i.e., "empty set" again degrades to "no filter" even without the brute-force path.
+
+# Trace of the anomalous query (`hello` + `status='archived'` or `views>1000`)
+
+1. **Routing.** `status`/`views` have inverted indexes, so `SearchCondCheckWalker::add_invert_filter` classifies the condition as INVERT (`src/db/sqlengine/analyzer/query_node_walker.cc:685-703`, index check at `:216`), and `QueryAnalyzer::decide_filter_index_cond` moves it into `invert_cond` (`src/db/sqlengine/analyzer/query_analyzer.cc:276-287`). With an FTS clause present, the planner chooses `fts_scan` (`src/db/sqlengine/planner/query_planner.cc:413-415`), building a `DocFilter` that captures `invert_cond_` (`query_planner.cc:533-557`; `doc_filter.h:39`).
+
+2. **Zero-match evaluation.**
+   - `status='archived'`: the term is absent from RocksDB, so `get_bitmap_eq` returns success-wrapped `nullptr` (`src/db/index/column/inverted_column/inverted_column_indexer_search.cc:30-33`); `search()` stores it via `set_and_own_bitmap(nullptr)` (`:756-818`). Result: **null bitmap**, `count()==0` (`inverted_search_result.h:79-85`).
+   - `views>1000`: `get_bitmap_gt` creates a bitmap and merges nothing (`inverted_column_indexer_search.cc:343-368` → tail at `:704-716`). Result: **empty (non-null) bitmap**, `count()==0`.
+
+3. **`FtsRecallNode::prepare()`** (`src/db/sqlengine/planner/fts_recall_node.cc:110-141`):
+   - `compute_filter()` sets `invert_filter_ = invert_result_->make_filter()` (`doc_filter.cc:24-34`). For the null bitmap this is already `nullptr` (defect 3); for the empty bitmap it is a *correct* filter that would exclude every doc.
+   - `get_bf_by_keys_and_update(fts_brute_force_by_keys_ratio)` — default ratio **0.05** (`src/db/common/config.cc:40`), so with 3 docs the threshold is `(uint64_t)(3×0.05)=0`. Since `count()==0 ≤ 0`, the brute-force-by-keys branch **always** fires for a zero-match condition: it extracts an empty ID list and then executes `invert_filter_.reset(); invert_result_.reset();` (`doc_filter.cc:119-133`) — discarding the one object that encoded "nothing matches."
+   - Back in `prepare()`, the engaged optional passes the truthiness check and `params.candidate_ids` becomes an **empty vector** (`fts_recall_node.cc:126-129`).
+   - `params.filter = doc_filter_->empty() ? nullptr : doc_filter_` (`fts_recall_node.cc:132`): `empty()` is true because `delete_filter_` is null with no deletes (`SegmentImpl::get_filter()`, `src/db/index/segment/segment.cc:1613-1615`), `invert_filter_` was just reset, and no forward plan/expression exists for an invert-routed condition (`doc_filter.cc:68-71`).
+
+4. **FTS execution.** `SegmentImpl::fts_search` passes params through (`segment.cc:4585-4602`). In `FtsColumnIndexer::search`, `candidate_ids.empty()` skips the `CandidateDocIterator` conjunction (`fts_column_indexer.cc:206-217`) and `filter_ptr==nullptr` selects the unfiltered `next_doc()` loop (`:220`, `:229-250`). "hello" matches all three docs → **IDs {1,2,3}**.
+
+# Why each control behaves correctly
+
+- **`hello` + `status='published'`** → {2,3}: the invert bitmap has cardinality 2 > threshold 0, so the brute-force branch is *not* taken (`doc_filter.cc:123-124`); `invert_filter_` survives `compute_filter()` (non-null bitmap → real `Filter`, `inverted_search_result.h:48-50`), `DocFilter::empty()` is false, and the filter-aware `next_doc(filter_ptr)` loop excludes the draft doc (`fts_column_indexer.cc:226-250`; `is_filtered` = `!contains(id)`, `inverted_search_result.h:39-41`; `doc_filter.cc:77-79`).
+- **`one` + `status='published'`** → {}: same filter; "one" only matches the draft doc, which the filter excludes.
+- **No inverted indexes** → {}: the walker routes the condition via `add_forward_filter` (`query_node_walker.cc:694-698`) into `filter_cond` (`query_analyzer.cc:303-311`), which becomes an Arrow `forward_filter` expression (`query_planner.cc:398-407`) materialized as an all-false boolean bitmap in `compute_filter()` (`doc_filter.cc:36-49`) or evaluated per-doc (`doc_filter.cc:80-107, 143-165`). `DocFilter` is non-empty, so it is pushed down as `params.filter` and every doc is excluded. The forward path never passes through either "empty = unrestricted" sentinel — which is exactly why dropping the indexes *fixes* the query.
+- **Scalar-only query** → {}: `InvertRecallNode` iterates the invert result itself; a null bitmap yields an invalid iterator (`inverted_search_result.h:92-96, 125-127`) and an empty bitmap yields no values, so the generator ends immediately (`src/db/sqlengine/planner/invert_recall_node.cc:37-45`). The bug only appears when the invert result must be *converted into a restriction on another recall stream*, where the empty-set information is lost.
+
+# Minimal repair principle
+
+**Invariant: an evaluated scalar condition that matches zero documents must remain "match nothing" end-to-end; no layer may encode it with the same sentinel it uses for "no restriction."** Concretely, the smallest sufficient change:
+
+1. **Short-circuit on empty candidate sets** in `FtsRecallNode::prepare()` (`fts_recall_node.cc:126-129`): when `get_bf_by_keys_and_update` returns an *engaged* optional whose vector is empty, return an empty `FtsIndexResults` immediately without invoking `fts_search`. (Equivalently, make `FtsQueryParams::candidate_ids` a `std::optional<std::vector<uint64_t>>` so engaged-empty means zero candidates — but the short-circuit is smaller and avoids touching the indexer contract.)
+2. **Fix the latent null-bitmap leak**: `InvertedSearchResult::make_filter()` should return a `Filter` unconditionally (`inverted_search_result.h:48-50`); `contains()` already returns `false` for a null bitmap (`:70-76`), so the filter correctly excludes everything. This keeps semantics right even if the brute-force heuristic is bypassed or re-tuned.
+
+Preservation of ordinary queries: with no scalar condition, `invert_cond_` is null → `invert_result_` null → `get_bf_by_keys_and_update` returns `std::nullopt` (`doc_filter.cc:116-118`) → unchanged. With a selective non-empty match, candidate IDs are non-empty → unchanged. With a non-selective match, `invert_filter_` pushdown → unchanged. Delete-filter-only queries never enter the branch.
+
+**Adjacent surface to audit:** `VectorRecallNode::prepare()` uses the same `get_bf_by_keys_and_update` result and pushes an empty list into `query_params.bf_pks` (`vector_recall_node.cc:163-167`); whether the vector indexer treats engaged-empty `bf_pks` as "unrestricted" must be checked and fixed under the same invariant.
+
+# Regression checks
+
+*Validation status: everything above is source-based inference — I did not build the project or execute queries. The checks below are proposed, not run.*
+
+End-to-end (the existing harness `fts_search_with_filter` in `tests/db/sqlengine/fts_recall_test.cc:106-117` already wires FTS + WHERE with an inverted `tag` column):
+
+1. **The reported anomaly**: FTS term matching all docs + zero-match EQ condition (missing term) → expect {}; + zero-match range condition (`tag > max`) → expect {}. These currently fail per the trace above.
+2. **Controls must stay green**: matching filter ({2,3} analog), non-overlapping term+filter ({}), FTS without any filter (all docs), scalar-only zero-match query ({}), and the no-inverted-index collection variant ({} — already correct; guard against regressions from the fix).
+3. **Boundary operators**: `!=`/`NOT IN` on a missing value (must return *all* docs — `get_bitmap_ne` flips over the full ID range, `inverted_column_indexer_search.cc:131-168`); `IS NULL`/`IS NOT NULL` with zero matches; AND-tree where one branch is zero-match (→ {}) and OR-tree where one branch is zero-match (→ the other branch's hits) — exercising `InvertedSearchResult::AND/OR` null handling (`inverted_search_result.h:173-191`).
+4. **Ratio boundaries**: run cases 1–3 with `fts_brute_force_by_keys_ratio` = 0 and 1 (`config.cc:40, 74-76`) so both the brute-force-by-keys path and the bitmap-filter path are covered; at ratio 1 the candidate list equals all IDs and results must match the unfiltered case.
+5. **Delete interaction**: delete the only matching doc, then FTS + filter → {}; delete filter engaged plus zero-match invert filter → {} (covers `DocFilter::empty()` transitions, `doc_filter.cc:68-71`).
+6. **Multi-segment**: two segments where the condition matches zero docs in one segment and some in the other — leaked segment must contribute nothing.
+7. **Unit level**: `make_filter()` on null bitmap → `is_filtered(id)==true` for all ids; `get_bf_by_keys_and_update` with `count()==0` → whatever the new contract is (engaged-empty short-circuit); `FtsColumnIndexer::search` with engaged-empty candidate set (if the optional representation is adopted) → empty result.
+8. **Vector analog**: vector query + zero-match invert filter → {} (mirrors `FtsSearchWithFilter_*` tests at `fts_recall_test.cc:509-533`, which today only cover *matching* filters — the gap this bug slipped through).

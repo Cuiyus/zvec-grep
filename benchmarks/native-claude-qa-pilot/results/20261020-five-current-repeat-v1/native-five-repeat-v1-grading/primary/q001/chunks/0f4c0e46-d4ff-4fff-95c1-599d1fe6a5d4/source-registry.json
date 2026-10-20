@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "task_id": "q001",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-live-preflight-v1/prepared/tasks/zvec-q001/environment/source",
+  "source_commit": "ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d",
+  "verification": {
+    "files": 1232,
+    "inventory_sha256": "741d06d8fc216150933c5ed87f9a100e0d2120b2dc09a9109084365e92d307ba",
+    "exact_file_set_and_bytes_verified": true,
+    "curated_spans_verified": 16
+  },
+  "spans": {
+    "src/db/index/segment/segment.cc:484-501": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 484,
+      "end_line": 501,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "779ce7d762e28e05982de1e368780654d859a4c840f17bd44e69100810bc4e1f",
+      "text": "  auto writing_block = segment_meta_->writing_forward_block();\n  if (!writing_block.has_value() && !options_.read_only_) {\n    return Status::InternalError(\n        \"No writing block found when in writing mode.\");\n  }\n\n  if (writing_block.has_value()) {\n    // init doc_id_allocator and block_id_allocator\n    doc_id_allocator_ = writing_block.value().min_doc_id();\n    BlockID max_block_id{writing_block.value().id()};\n    for (auto &block : segment_meta_->persisted_blocks()) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_ = max_block_id + 1;\n\n    // recover writing block\n    s = recover();\n    CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/index/segment/segment.cc:4193-4215": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4193,
+      "end_line": 4215,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "95fee72e702aaf4cc9105864f8eee18472fef5f743d5569676cb34caceaad7b8",
+      "text": "Status SegmentImpl::recover() {\n  // recover mem block meta\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  doc_id_allocator_.store(mem_block.min_doc_id());\n\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  if (!std::filesystem::exists(wal_file_path)) {\n    LOG_INFO(\"WAL recovery skipped: no WAL file exists [%s]\",\n             wal_file_path.c_str());\n    return Status::OK();\n  }\n\n  WalFilePtr recover_wal_file;\n  WalOptions wal_option;\n  wal_option.create_new = false;\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n      0) {\n    LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::OK();\n  }\n  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n"
+    },
+    "src/db/index/segment/segment.cc:4234-4265": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4234,
+      "end_line": 4265,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "906ce9887c062fb4e15640236a434b362625d6ce9d8c52fd2e8b667a4e461d43",
+      "text": "  while (true) {\n    std::string buf = recover_wal_file->next();\n    if (buf.empty()) {\n      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n      break;\n    }\n    total_recovered_doc_count++;\n    auto doc = Doc::deserialize(reinterpret_cast<const uint8_t *>(buf.data()),\n                                buf.size());\n    if (doc == nullptr) {\n      LOG_ERROR(\"WAL recovery failed [%s]: doc deserialization error at %zu\",\n                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n      continue;\n    }\n\n    Status status;\n    switch (doc->get_operator()) {\n      case Operator::INSERT: {\n        internal_insert(*doc);\n        break;\n      }\n      case Operator::UPDATE: {\n        internal_update(*doc);\n        break;\n      }\n      case Operator::UPSERT: {\n        internal_upsert(*doc);\n        break;\n      }\n      case Operator::DELETE: {\n        internal_delete(*doc);\n        break;\n"
+    },
+    "src/db/index/segment/segment.cc:837-880": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 837,
+      "end_line": 880,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "f5272d0e86956896f24cb66f51b2c6be475e7b8035ef426e173feafff243df27",
+      "text": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  mem_block.max_doc_id_ = g_doc_id;\n  mem_block.doc_count_ = mem_block.doc_count_ + 1;\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n"
+    },
+    "src/db/index/segment/segment.cc:4285-4301": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4285,
+      "end_line": 4301,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "dfdc1347216f2c31eb96e6c22acf895d2574189b724af0e52f7426b464c356fc",
+      "text": "  const auto added_docs = recovered_doc_count[0] +  // INSERT\n                          recovered_doc_count[1] +  // UPSERT\n                          recovered_doc_count[2];   // UPDATE\n  mem_block.max_doc_id_ += added_docs;\n\n  LOG_INFO(\n      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n      \"(insert[%zu], upsert[%zu], update[%zu], delete[%zu])\",\n      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n      (size_t)recovered_doc_count[0],  // INSERT\n      (size_t)recovered_doc_count[1],  // UPSERT\n      (size_t)recovered_doc_count[2],  // UPDATE\n      (size_t)recovered_doc_count[3]   // DELETE\n  );\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/collection.cc:788-816": {
+      "path": "src/db/collection.cc",
+      "start_line": 788,
+      "end_line": 816,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "4d717fe3dfd3e5dbeec8ad0b838d3d979efef81a9bd99e984e5adacfc9513424",
+      "text": "  std::vector<Segment::Ptr> persist_segments;\n\n  {\n    // forbidden writing for a while\n    std::lock_guard write_lock(write_mtx_);\n\n    if (writing_segment_->doc_count() != 0) {\n      // flush and create new segment\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n\n    persist_segments =\n        get_all_persist_segments();  // will not return writing segment\n    // after leave this scope, writing action is allowed\n  }\n\n  if (persist_segments.size() == 0) {\n    // no need to optimize\n    return Status::OK();\n  }\n\n  // build segment compact task\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n"
+    },
+    "src/db/collection.cc:1517-1551": {
+      "path": "src/db/collection.cc",
+      "start_line": 1517,
+      "end_line": 1551,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "d04765f4431e25f55650974e39d788a03d8e25d97689c82a0784fe9a38b45c50",
+      "text": "Status CollectionImpl::switch_to_new_segment_for_writing(\n    const CollectionSchema::Ptr &schema) {\n  auto s = writing_segment_->dump();\n  CHECK_RETURN_STATUS(s);\n\n  s = segment_manager_->add_segment(writing_segment_);\n  CHECK_RETURN_STATUS(s);\n\n  // when create new segment, segment meta should create a first new block\n  // meta\n  auto new_segment = Segment::CreateAndOpen(\n      path_, schema == nullptr ? *schema_ : *schema, allocate_segment_id(),\n      writing_segment_->meta()->max_doc_id() + 1, id_map_, delete_store_,\n      version_manager_,\n      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_});\n  if (!new_segment) {\n    return new_segment.error();\n  }\n\n  Version version = version_manager_->get_current_version();\n  auto writing_segment_meta = writing_segment_->meta();\n  writing_segment_meta->remove_writing_forward_block();\n  s = version.add_persisted_segment_meta(writing_segment_meta);\n  CHECK_RETURN_STATUS(s);\n\n  writing_segment_ = new_segment.value();\n  version.reset_writing_segment_meta(writing_segment_->meta());\n  version.set_next_segment_id(segment_id_allocator_.load());\n\n  s = version_manager_->apply(version);\n  CHECK_RETURN_STATUS(s);\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  return Status::OK();\n"
+    },
+    "src/db/index/segment/segment.cc:2197-2222": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2197,
+      "end_line": 2222,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8cf9a3abf15b43787c548efbac672fa1b102dd11a74458c3dcc5c06bb7fff5df",
+      "text": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:2224-2255": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2224,
+      "end_line": 2255,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "326c887bfd18c8281c263d6b93547342ef0995ee241d8d1dabbd7093cf051c70",
+      "text": "  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n"
+    },
+    "src/db/index/segment/segment.cc:2288-2302": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2302,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "3b769ee93f26622dc1a00465cf202cce6a6463f72bd93b8119a84377727308ce",
+      "text": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/collection.cc:403-439": {
+      "path": "src/db/collection.cc",
+      "start_line": 403,
+      "end_line": 439,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "36c5fb13c90a28123635d0ea28f244995139c6ac601aa8009a9db3451e2d8923",
+      "text": "Result<CollectionStats> CollectionImpl::Stats() const {\n  std::lock_guard lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n\n  auto segments = get_all_segments();\n\n  CollectionStats stats;\n  auto vector_fields = schema_->vector_fields();\n  if (segments.empty()) {\n    stats.doc_count = 0;\n    for (auto &field : vector_fields) {\n      stats.index_completeness[field->name()] =\n          1;  // if no doc, completeness is 1\n    }\n    return stats;\n  }\n\n  for (auto &segment : segments) {\n    stats.doc_count += segment->doc_count(delete_store_->make_filter());\n  }\n\n  for (auto &field : vector_fields) {\n    if (stats.doc_count == 0) {\n      stats.index_completeness[field->name()] = 1;\n      continue;\n    }\n\n    uint32_t indexed_doc_count{0};\n    for (auto &segment : segments) {\n      if (segment->meta()->vector_indexed(field->name())) {\n        indexed_doc_count += segment->doc_count(delete_store_->make_filter());\n      }\n    }\n    stats.index_completeness[field->name()] =\n        indexed_doc_count * 1.0 / stats.doc_count;\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:589-600": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 589,
+      "end_line": 600,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "d5121693594c78a551be61a936a6b46c5ab7b3c46acc6ad0f96972aa2e33e943",
+      "text": "uint64_t SegmentImpl::doc_count(const IndexFilter::Ptr filter) {\n  uint64_t doc_count = doc_ids_.size();\n  if (filter) {\n    for (const auto &doc_id : doc_ids_) {\n      if (filter->is_filtered(doc_id)) {\n        doc_count--;\n      }\n    }\n  }\n\n  return doc_count;\n}\n"
+    },
+    "src/db/index/segment/segment.cc:903-917": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 903,
+      "end_line": 917,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e5a814d864bffcb8530485f5f40accbab36adc93f2d00916ecab31d010aec78c",
+      "text": "Status SegmentImpl::Insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append wal\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n  return internal_insert(doc);\n"
+    },
+    "src/db/index/segment/segment.cc:4303-4338": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4303,
+      "end_line": 4338,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b195933074a1bc80d0e40fda99b8c57500bc0264312cab7270596e1bcd40278a",
+      "text": "Status SegmentImpl::open_wal_file() {\n  auto mem_block = segment_meta_->writing_forward_block().value();\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  WalOptions wal_option;\n  if (std::filesystem::exists(wal_file_path)) {\n    wal_option.create_new = false;\n  } else {\n    wal_option.create_new = true;\n  }\n\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n  }\n\n  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n  return Status::OK();\n}\n\nStatus SegmentImpl::append_wal(const Doc &doc) {\n  std::vector<uint8_t> buf = doc.serialize();\n\n  if (!wal_file_) {\n    auto s = open_wal_file();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n  if (ret != 0) {\n    LOG_ERROR(\"WAL append failed: segment[%d], pk[%s], op[%d], ret[%d]\", id(),\n              doc.pk().c_str(), static_cast<int>(doc.get_operator()), ret);\n    return Status::InternalError(\"Failed to append wal\");\n  }\n\n"
+    },
+    "src/db/index/segment/segment.cc:4342-4384": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4342,
+      "end_line": 4384,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b34740cd9252ffb6cbb860df65394aa6fcc67f33ab2d20ad529b0fa98e2e1c72",
+      "text": "Status SegmentImpl::finish_memory_components() {\n  auto block = segment_meta_->writing_forward_block().value();\n\n  // close for loading persist block\n  auto s = memory_store_->close();\n  CHECK_RETURN_STATUS(s);\n  memory_store_.reset();\n\n  // load forward store\n  auto persist_forward_store_path = FileHelper::MakeForwardBlockPath(\n      path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n  BaseForwardStore::Ptr persist_store;\n  if (options_.enable_mmap_) {\n    persist_store =\n        std::make_shared<MmapForwardStore>(persist_forward_store_path);\n  } else {\n    persist_store =\n        std::make_shared<BufferPoolForwardStore>(persist_forward_store_path);\n  }\n  s = persist_store->Open();\n  CHECK_RETURN_STATUS(s);\n  persist_stores_.push_back(persist_store);\n\n  BlockMeta b{block.id_,         block.type_,      block.min_doc_id_,\n              block.max_doc_id_, block.doc_count_, block.columns_};\n  segment_meta_->add_persisted_block(b);\n\n  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n"
+    },
+    "tests/db/crash_recovery/write_recovery_test.cc:182-218": {
+      "path": "tests/db/crash_recovery/write_recovery_test.cc",
+      "start_line": 182,
+      "end_line": 218,
+      "file_sha256": "af780b4a7fd15fab9a18ff25f15466dfd85da300e22ea155a3c19890478f6314",
+      "span_sha256": "fa2490e2f9b2b61b0c300af7d333d2e5ab1c6deb728a9ed22c278358ac912080",
+      "text": "TEST_F(CrashRecoveryTest, CrashRecoveryDuringInsertion) {\n  {\n    auto schema = CreateTestSchema(collection_name_);\n    auto result = Collection::CreateAndOpen(dir_path_, *schema, options_);\n    ASSERT_TRUE(result.has_value()) << result.error().message();\n    auto collection = result.value();\n    collection.reset();\n  }\n\n  RunGeneratorAndCrash(\"0\", \"10000\", \"insert\", \"0\", 3);\n\n  auto result = Collection::Open(dir_path_, options_);\n  ASSERT_TRUE(result.has_value()) << \"Failed to reopen collection after crash. \"\n                                     \"Recovery mechanism may be broken.\";\n  auto collection = result.value();\n  uint64_t doc_count{collection->Stats().value().doc_count};\n  ASSERT_GT(doc_count, 800)\n      << \"Document count is too low after 3s of insertion and recovery\";\n\n  for (uint64_t doc_id = 0; doc_id < doc_count; doc_id++) {\n    const auto expected_doc = CreateTestDoc(doc_id, 0);\n    std::vector<std::string> pks{};\n    pks.emplace_back(expected_doc.pk());\n    if (auto res = collection->Fetch(pks); res) {\n      auto map = res.value();\n      if (map.find(expected_doc.pk()) == map.end()) {\n        FAIL() << \"Returned map does not contain doc[\" << expected_doc.pk()\n               << \"]\";\n      }\n      const auto actual_doc = map.at(expected_doc.pk());\n      ASSERT_EQ(*actual_doc, expected_doc)\n          << \"Data mismatch for doc[\" << expected_doc.pk() << \"]\";\n    } else {\n      FAIL() << \"Failed to fetch doc[\" << expected_doc.pk() << \"]\";\n    }\n  }\n}\n"
+    },
+    "src/db/index/segment/segment.cc:837-881": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 837,
+      "end_line": 881,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "d6179f040452d268c7868b01d18c985433e148ecb392fad6d24de05edeca98ae",
+      "text": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  mem_block.max_doc_id_ = g_doc_id;\n  mem_block.doc_count_ = mem_block.doc_count_ + 1;\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:4193-4301": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4193,
+      "end_line": 4301,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "3e7bd1d6db1a39a5d5c7f369136a7036e34db998a45c924090853c9059cbb85d",
+      "text": "Status SegmentImpl::recover() {\n  // recover mem block meta\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  doc_id_allocator_.store(mem_block.min_doc_id());\n\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  if (!std::filesystem::exists(wal_file_path)) {\n    LOG_INFO(\"WAL recovery skipped: no WAL file exists [%s]\",\n             wal_file_path.c_str());\n    return Status::OK();\n  }\n\n  WalFilePtr recover_wal_file;\n  WalOptions wal_option;\n  wal_option.create_new = false;\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &recover_wal_file) !=\n      0) {\n    LOG_ERROR(\"WAL recovery failed: unable to open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::OK();\n  }\n  AILEGO_DEFER([&]() { recover_wal_file->close(); });\n\n  std::array<uint64_t, static_cast<size_t>(Operator::DELETE) + 1>\n      recovered_doc_count{};\n  uint64_t total_recovered_doc_count{0};\n\n  int ret = recover_wal_file->prepare_for_read();\n  if (ret != 0) {\n    LOG_ERROR(\n        \"WAL recovery failed: unable to prepare WAL file [%s] for reading\",\n        wal_file_path.c_str());\n    return Status::InternalError(\"Failed to prepare wal file: \", wal_file_path,\n                                 \" for read\");\n  }\n\n  LOG_INFO(\"WAL recovery started [%s]\", wal_file_path.c_str());\n\n  std::lock_guard<std::mutex> lock(seg_mtx_);\n\n  while (true) {\n    std::string buf = recover_wal_file->next();\n    if (buf.empty()) {\n      LOG_INFO(\"WAL recovery completed [%s]\", wal_file_path.c_str());\n      break;\n    }\n    total_recovered_doc_count++;\n    auto doc = Doc::deserialize(reinterpret_cast<const uint8_t *>(buf.data()),\n                                buf.size());\n    if (doc == nullptr) {\n      LOG_ERROR(\"WAL recovery failed [%s]: doc deserialization error at %zu\",\n                wal_file_path.c_str(), (size_t)total_recovered_doc_count);\n      continue;\n    }\n\n    Status status;\n    switch (doc->get_operator()) {\n      case Operator::INSERT: {\n        internal_insert(*doc);\n        break;\n      }\n      case Operator::UPDATE: {\n        internal_update(*doc);\n        break;\n      }\n      case Operator::UPSERT: {\n        internal_upsert(*doc);\n        break;\n      }\n      case Operator::DELETE: {\n        internal_delete(*doc);\n        break;\n      }\n      default:\n        LOG_ERROR(\"WAL recovery failed [%s]: unknown operator type %d at %zu \",\n                  wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n                  (size_t)total_recovered_doc_count);\n        break;\n    }\n\n    if (!status.ok()) {\n      LOG_ERROR(\n          \"WAL recovery failed [%s]: operation %d failed at %zu, reason: %s\",\n          wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n          (size_t)total_recovered_doc_count, status.message().c_str());\n      continue;\n    }\n\n    recovered_doc_count[static_cast<size_t>(doc->get_operator())]++;\n  }\n\n  const auto added_docs = recovered_doc_count[0] +  // INSERT\n                          recovered_doc_count[1] +  // UPSERT\n                          recovered_doc_count[2];   // UPDATE\n  mem_block.max_doc_id_ += added_docs;\n\n  LOG_INFO(\n      \"WAL recovery completed [%s]: segment[%d], total_recovered[%zu] \"\n      \"(insert[%zu], upsert[%zu], update[%zu], delete[%zu])\",\n      wal_file_path.c_str(), id(), (size_t)total_recovered_doc_count,\n      (size_t)recovered_doc_count[0],  // INSERT\n      (size_t)recovered_doc_count[1],  // UPSERT\n      (size_t)recovered_doc_count[2],  // UPDATE\n      (size_t)recovered_doc_count[3]   // DELETE\n  );\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:853-853": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 853,
+      "end_line": 853,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e504981c907406b3bc0df79ba55c0875b87e9aac88da1b95f0f253aee561b3f6",
+      "text": "  auto s = id_map_->upsert(doc.pk(), g_doc_id);\n"
+    },
+    "src/db/index/segment/segment.cc:857-857": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 857,
+      "end_line": 857,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "4f5cd1cb9dede6955b0aa83c64278a77be78faca024a1609653da210cf99181e",
+      "text": "  s = memory_store_->insert(doc);\n"
+    },
+    "src/db/index/segment/segment.cc:878-878": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 878,
+      "end_line": 878,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8de8130639fae6b05ed19eb838b1b747ea67c9cbe39ad15a5f7bab6bd4ce2bc1",
+      "text": "  doc_ids_.push_back(g_doc_id);\n"
+    },
+    "src/db/index/segment/segment.cc:2197-2255": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2197,
+      "end_line": 2255,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "223907b6942de6621e103407c9545c43dc4d22e0a6a2cb8118d8ef36c606b22b",
+      "text": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n\nStatus SegmentImpl::flush() {\n  CHECK_SEGMENT_READONLY_RETURN_STATUS;\n\n  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n\n  if (wal_file_) {\n    if (wal_file_->flush() != 0) {\n      LOG_ERROR(\"WAL flush failed: segment[%d]\", id());\n      return Status::InternalError(\"Failed to flush wal\");\n    }\n  }\n\n  Status s;\n\n  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush scalar indexer\n  if (invert_indexers_) {\n    s = invert_indexers_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush FTS indexers\n  if (has_fts_) {\n    s = flush_fts_indexers();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // flush vector indexer\n  for (const auto &indexer : memory_vector_indexers_) {\n    if (indexer.second) {\n      s = indexer.second->Flush();\n      CHECK_RETURN_STATUS(s);\n    }\n"
+    },
+    "src/db/index/segment/segment.cc:2220-2222": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2220,
+      "end_line": 2222,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "e8028001e77c067c461c3f294b1b4487c951a026b34b62c2621f0551f7137b64",
+      "text": "  if (wal_file_ == nullptr || !wal_file_->has_record()) {\n    return Status::OK();\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:2233-2236": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2233,
+      "end_line": 2236,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "b840b925145dbdee3e4f8f2921ad36fddfad7ea1c9568743720d1da6645c7e07",
+      "text": "  if (memory_store_) {\n    s = memory_store_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:2288-2298": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2298,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "fbe71a698a3c9a54f1c417b7aa3437837dbd3a98e07598733003d00499b0a350",
+      "text": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:4414-4426": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4414,
+      "end_line": 4426,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "07e973bf93a61db7c1c6bf5070d760d9694efa374c52fd1bb4155b01fe33877f",
+      "text": "Status SegmentImpl::update_version(uint32_t delete_snapshot_path_suffix) {\n  if (version_manager_) {\n    if (delete_snapshot_path_suffix != UINT32_MAX) {\n      version_manager_->set_delete_snapshot_path_suffix(\n          delete_snapshot_path_suffix);\n    }\n    auto s = version_manager_->reset_writing_segment_meta(segment_meta_);\n    CHECK_RETURN_STATUS(s);\n    s = version_manager_->flush();\n    CHECK_RETURN_STATUS(s);\n  }\n  return Status::OK();\n}\n"
+    },
+    "src/db/collection.cc:794-800": {
+      "path": "src/db/collection.cc",
+      "start_line": 794,
+      "end_line": 800,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "c5e72f43d97b399efe92d1b44383cdbae41d6270096010e91b9d89c4f0ed2582",
+      "text": "    if (writing_segment_->doc_count() != 0) {\n      // flush and create new segment\n      auto s = switch_to_new_segment_for_writing();\n      if (!s.ok()) {\n        return s;\n      }\n    }\n"
+    },
+    "src/db/collection.cc:1517-1552": {
+      "path": "src/db/collection.cc",
+      "start_line": 1517,
+      "end_line": 1552,
+      "file_sha256": "fa78d9a6e296ab91d8b25b6899ad8cd73f804b3dc8184c3cb66f31b4b40f86cd",
+      "span_sha256": "e8788091780a7a9519c98b6dbc6d603525cbfafdadef786d8f87b85c13d6aac3",
+      "text": "Status CollectionImpl::switch_to_new_segment_for_writing(\n    const CollectionSchema::Ptr &schema) {\n  auto s = writing_segment_->dump();\n  CHECK_RETURN_STATUS(s);\n\n  s = segment_manager_->add_segment(writing_segment_);\n  CHECK_RETURN_STATUS(s);\n\n  // when create new segment, segment meta should create a first new block\n  // meta\n  auto new_segment = Segment::CreateAndOpen(\n      path_, schema == nullptr ? *schema_ : *schema, allocate_segment_id(),\n      writing_segment_->meta()->max_doc_id() + 1, id_map_, delete_store_,\n      version_manager_,\n      SegmentOptions{false, options_.enable_mmap_, options_.max_buffer_size_});\n  if (!new_segment) {\n    return new_segment.error();\n  }\n\n  Version version = version_manager_->get_current_version();\n  auto writing_segment_meta = writing_segment_->meta();\n  writing_segment_meta->remove_writing_forward_block();\n  s = version.add_persisted_segment_meta(writing_segment_meta);\n  CHECK_RETURN_STATUS(s);\n\n  writing_segment_ = new_segment.value();\n  version.reset_writing_segment_meta(writing_segment_->meta());\n  version.set_next_segment_id(segment_id_allocator_.load());\n\n  s = version_manager_->apply(version);\n  CHECK_RETURN_STATUS(s);\n  s = version_manager_->flush();\n  CHECK_RETURN_STATUS(s);\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:2197-2215": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2197,
+      "end_line": 2215,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "a4e7172d6656b9cb60a11754229e706bfabd78b2a68cfb4c2566a8961b19f0e6",
+      "text": "Status SegmentImpl::dump() {\n  if (sealed_) {\n    return Status::NotSupported(\"Segment has been dumped.\");\n  }\n  auto s = flush();\n  CHECK_RETURN_STATUS(s);\n\n  if (invert_indexers_) {\n    s = invert_indexers_->seal();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  s = dump_fts_indexers();\n  CHECK_RETURN_STATUS(s);\n\n  sealed_ = true;\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:4303-4322": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4303,
+      "end_line": 4322,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "d4438b427b83cdf8650d46b4997d638267b2038c255f6c6cd85fee31d1b9049e",
+      "text": "Status SegmentImpl::open_wal_file() {\n  auto mem_block = segment_meta_->writing_forward_block().value();\n  std::string wal_file_path =\n      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);\n  WalOptions wal_option;\n  if (std::filesystem::exists(wal_file_path)) {\n    wal_option.create_new = false;\n  } else {\n    wal_option.create_new = true;\n  }\n\n  if (WalFile::CreateAndOpen(wal_file_path, wal_option, &wal_file_) != 0) {\n    LOG_ERROR(\"WAL open failed: unable to create/open WAL file [%s]\",\n              wal_file_path.c_str());\n    return Status::InternalError(\"Failed to open wal file: \", wal_file_path);\n  }\n\n  LOG_INFO(\"WAL opened [%s]: segment[%d]\", wal_file_path.c_str(), id());\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:4324-4340": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4324,
+      "end_line": 4340,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "0419321ec6ed6d92eb2c06d8334c06b045eeb646b4b141431a2d5d1797c43110",
+      "text": "Status SegmentImpl::append_wal(const Doc &doc) {\n  std::vector<uint8_t> buf = doc.serialize();\n\n  if (!wal_file_) {\n    auto s = open_wal_file();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  auto ret = wal_file_->append(std::string(buf.begin(), buf.end()));\n  if (ret != 0) {\n    LOG_ERROR(\"WAL append failed: segment[%d], pk[%s], op[%d], ret[%d]\", id(),\n              doc.pk().c_str(), static_cast<int>(doc.get_operator()), ret);\n    return Status::InternalError(\"Failed to append wal\");\n  }\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/segment/segment.cc:2288-2315": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2288,
+      "end_line": 2315,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8d8154dd3d2a34ee90c12f21df29fb0ba529f0ca302ac27b4aa19f32f8a99744",
+      "text": "  if (memory_store_) {\n    // update segment meta with memory components\n    s = finish_memory_components();\n    CHECK_RETURN_STATUS(s);\n\n    // set a new mem block\n    auto block_id = allocate_block_id();\n    segment_meta_->set_writing_forward_block({block_id, BlockType::SCALAR,\n                                              block.max_doc_id_ + 1, 0, 0,\n                                              block.columns_});\n  }\n\n  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n\n  // clear wal file\n  if (wal_file_) {\n    auto ret = wal_file_->remove();\n    if (ret != 0) {\n      LOG_ERROR(\n          \"WAL cleanup failed: unable to remove WAL file from segment[%d]\",\n          id());\n      return Status::InternalError(\"Failed to remove WAL file\");\n    }\n    wal_file_.reset();\n    LOG_INFO(\"WAL cleaned up: segment[%d]\", id());\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:4273-4283": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4273,
+      "end_line": 4283,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "1cfa1901101145a048f82d4492632f90cf67facbd59646254c4ac57e0ded8027",
+      "text": "\n    if (!status.ok()) {\n      LOG_ERROR(\n          \"WAL recovery failed [%s]: operation %d failed at %zu, reason: %s\",\n          wal_file_path.c_str(), static_cast<int>(doc->get_operator()),\n          (size_t)total_recovered_doc_count, status.message().c_str());\n      continue;\n    }\n\n    recovered_doc_count[static_cast<size_t>(doc->get_operator())]++;\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1642-1668": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1642,
+      "end_line": 1668,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "6a41a419b1afe4c404740940b28ae366e4753b98513aef1768a6d7f62b562b51",
+      "text": "Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(\n    const std::string &index_file_path, const std::string &column,\n    const FieldSchema &field, int concurrency) {\n  VectorColumnIndexer::Ptr vector_indexer =\n      std::make_shared<VectorColumnIndexer>(index_file_path, field);\n\n  vector_column_params::ReadOptions options{options_.enable_mmap_, true};\n\n  auto s = vector_indexer->Open(options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  std::vector<VectorColumnIndexer::Ptr> to_merge_indexers =\n      vector_indexers_[column];\n  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        GlobalConfig::Instance().optimize_thread_count();\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n  s = vector_indexer->Merge(to_merge_indexers, filter_, merge_options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  s = vector_indexer->Flush();\n  CHECK_RETURN_STATUS_EXPECTED(s);\n\n  return vector_indexer;\n}\n"
+    },
+    "src/db/index/segment/segment.cc:1685-1690": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1685,
+      "end_line": 1690,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "8fedb3034477694c2dd481bd236eb294693e741602101b939f8b06ac7cdb53fc",
+      "text": "  if (segment_meta_->vector_indexed(column) &&\n      *field->index_params() == *index_params) {\n    // if segment is already indexed and index params are same, skip create\n    *segment_meta = new_segment_meta;\n    return Status::OK();\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:2484-2497": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2484,
+      "end_line": 2497,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "a487075a44aabd309d3b4b1b6e5ae1c5289e07bf8bfbc2604a2e98fbea0e4016",
+      "text": "      if (segment_meta_->has_writing_forward_block()) {\n        int mem_offset =\n            block_offsets.empty()\n                ? 0\n                : block_offsets.back() + block_metas.back().doc_count_;\n        const auto &mem_block = segment_meta_->writing_forward_block().value();\n\n        if (mem_offset <= segment_doc_id &&\n            segment_doc_id <\n                mem_offset + static_cast<int>(mem_block.doc_count_)) {\n          block_row = segment_doc_id - mem_offset;\n          block_request_map[-1][col].emplace_back(output_row, block_row);\n          continue;\n        }\n"
+    },
+    "src/db/index/segment/segment.cc:2825-2841": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2825,
+      "end_line": 2841,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "75888138b3ad4c2d2c58022f66c0f3b036362a65e835712c669d74f12791afe8",
+      "text": "  if (memory_store_ && memory_store_->num_rows() > 0) {\n    std::vector<std::string> memory_scan_columns;\n    for (const auto &col : columns) {\n      if (col != LOCAL_ROW_ID) {\n        memory_scan_columns.push_back(col);\n      }\n    }\n    if (memory_scan_columns.empty()) {\n      memory_scan_columns.push_back(GLOBAL_DOC_ID);\n    }\n    auto reader = memory_store_->scan(memory_scan_columns);\n    if (reader) {\n      auto &mem_block = segment_meta_->writing_forward_block().value();\n      auto key = std::make_pair(mem_block.min_doc_id(), mem_block.max_doc_id());\n      block_groups[key].push_back(std::move(reader));\n    }\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:2300-2302": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 2300,
+      "end_line": 2302,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "c776d00fe1259c246dba2abcae68f782605d2b6182523534cc86f732f7c8c085",
+      "text": "  // update version and flush\n  s = update_version(delete_snapshot_path_suffix);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/index/segment/segment.cc:490-501": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 490,
+      "end_line": 501,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "88e5483670e94586d39294fe90dfd42eb3761057b7e0488fcfc338b755f07b75",
+      "text": "  if (writing_block.has_value()) {\n    // init doc_id_allocator and block_id_allocator\n    doc_id_allocator_ = writing_block.value().min_doc_id();\n    BlockID max_block_id{writing_block.value().id()};\n    for (auto &block : segment_meta_->persisted_blocks()) {\n      max_block_id = std::max(max_block_id, block.id());\n    }\n    block_id_allocator_ = max_block_id + 1;\n\n    // recover writing block\n    s = recover();\n    CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/index/segment/segment.cc:4342-4412": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4342,
+      "end_line": 4412,
+      "file_sha256": "004fa085d5edb0b6d3c3d4ddd623803f61cd51d527ef93f9a60576270a79c296",
+      "span_sha256": "5c7acfeca0322d599f1dcb722a9299dbc0b0e495ba4c1aec4778bc989b3b3690",
+      "text": "Status SegmentImpl::finish_memory_components() {\n  auto block = segment_meta_->writing_forward_block().value();\n\n  // close for loading persist block\n  auto s = memory_store_->close();\n  CHECK_RETURN_STATUS(s);\n  memory_store_.reset();\n\n  // load forward store\n  auto persist_forward_store_path = FileHelper::MakeForwardBlockPath(\n      path_, segment_meta_->id(), block.id_, !options_.enable_mmap_);\n\n  BaseForwardStore::Ptr persist_store;\n  if (options_.enable_mmap_) {\n    persist_store =\n        std::make_shared<MmapForwardStore>(persist_forward_store_path);\n  } else {\n    persist_store =\n        std::make_shared<BufferPoolForwardStore>(persist_forward_store_path);\n  }\n  s = persist_store->Open();\n  CHECK_RETURN_STATUS(s);\n  persist_stores_.push_back(persist_store);\n\n  BlockMeta b{block.id_,         block.type_,      block.min_doc_id_,\n              block.max_doc_id_, block.doc_count_, block.columns_};\n  segment_meta_->add_persisted_block(b);\n\n  // remove indexer from memory to persist\n  for (auto &[column_name, indexer] : memory_vector_indexers_) {\n    auto block_id = memory_vector_block_ids_[column_name];\n    BlockMeta vb =\n        BlockMeta{block_id,          BlockType::VECTOR_INDEX, block.min_doc_id_,\n                  block.max_doc_id_, block.doc_count_,        {column_name}};\n    auto it = vector_indexers_.find(column_name);\n    if (it == vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers{indexer};\n      vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(vb);\n  }\n\n  // remove quant indexer from memory to persist\n  for (auto &[column_name, indexer] : quant_memory_vector_indexers_) {\n    auto block_id = quant_memory_vector_block_ids_[column_name];\n    BlockMeta block_meta(block_id, BlockType::VECTOR_INDEX_QUANTIZE,\n                         block.min_doc_id_, block.max_doc_id_, block.doc_count_,\n                         {column_name});\n\n    auto it = quant_vector_indexers_.find(column_name);\n    if (it == quant_vector_indexers_.end()) {\n      std::vector<VectorColumnIndexer::Ptr> vector_indexers;\n      vector_indexers.push_back(indexer);\n      quant_vector_indexers_.emplace(column_name, std::move(vector_indexers));\n    } else {\n      it->second.push_back(indexer);\n    }\n    segment_meta_->add_persisted_block(block_meta);\n  }\n\n  // clear memory vector indexers\n  memory_vector_indexers_.clear();\n  quant_memory_vector_indexers_.clear();\n  memory_vector_block_ids_.clear();\n  quant_memory_vector_block_ids_.clear();\n\n  fresh_persist_block_offset();\n  return Status::OK();\n}\n"
+    }
+  }
+}

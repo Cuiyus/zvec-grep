@@ -1,0 +1,56 @@
+All the evidence is in hand. Here is the analysis, grounded in the checkout.
+
+## Setup: what `zvec.init(optimize_threads=4)` establishes
+
+`python/zvec/zvec.py:162-163,173` forwards `optimize_threads` into `Initialize(config_dict)`; `src/binding/python/model/common/python_config.cc:154-157` stores it as `data.optimize_thread_count = 4` and `:193` calls `GlobalConfig::Instance().initialize(data)`, a one-shot atomic-flagged store (`src/db/common/config.cc:119-129`). On first use, `GlobalResource::initialize` (`src/db/common/global_resource.cc:21-33`, guarded by `std::call_once`) creates the global `optimize_thread_pool_` as `ailego::ThreadPool(4, binding)`. `ThreadPool` clamps the requested size to `[1, hardware_concurrency]` (`src/include/zvec/ailego/parallel/thread_pool.h:139-150`), so with ≥4 cores the global pool has exactly **4 workers** (`count()` at `thread_pool.h:167-169`).
+
+## 1. Pool selection for A vs. B
+
+`OptimizeOption(concurrency)` binds to `OptimizeOptions::concurrency_` (`src/binding/python/model/param/python_param.cc:2179-2210`; `src/include/zvec/db/options.h:60-62`), and `Collection.Optimize` calls `CollectionImpl::optimize` (`src/binding/python/model/python_collection.cc:240-247`; `src/db/collection.cc:952`), which threads `options.concurrency_` into the compact/index tasks (`src/db/collection.cc:988-990, 1128-1210`; tasks carry `concurrency_`, `src/db/index/segment/segment_helper.h:54-95`).
+
+The selection happens identically in both db-layer merge entry points — `SegmentHelper::MergeWithOptionalReuse` (`src/db/index/segment/segment_helper.cc:799-811`) and `SegmentImpl::merge_vector_indexer` (`src/db/index/segment/segment.cc:1549-1567`):
+
+- **A (`concurrency=0`)**: `merge_options.pool = GlobalResource::Instance().optimize_thread_pool()` and `write_concurrency = pool->count()` → the **shared global pool with 4 workers**.
+- **B (`concurrency=2`)**: `pool` stays `nullptr`; `write_concurrency = 2`.
+
+The engine then resolves this in `Index::merge` (`src/core/interface/index.cc:1416-1446`):
+
+- **A**: `options.pool != nullptr` → `reducer->set_thread_pool(options.pool)` (the global pool); `effective_write_concurrency = min(4, pool->count()) = 4` (lines 1436-1439).
+- **B**: `options.pool == nullptr` → a **fresh local `ailego::ThreadPool(2, false)`** owned by a `unique_ptr` declared to outlive `reduce()` (lines 1433-1434, 1440-1445), with effective concurrency 2. It is destroyed when `Index::merge` returns.
+
+In both cases the effective value becomes `PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS` (index.cc:1448-1452), consumed by the reducer's add-stage fan-out (`src/core/mixed_reducer/mixed_streamer_reducer.cc:83-87, 235, 255-268`).
+
+**B does not change the global pool.** The global pool is created once under `std::call_once` (global_resource.cc:22-29) and is never resized; the reducer only borrows a raw pointer via `set_thread_pool` (`src/include/zvec/core/framework/index_reducer.h:173-175, 183`); and `GlobalConfig::initialize` is itself one-shot (config.cc:120-124). B's 2-worker pool is a per-merge temporary.
+
+## 2. Handoff to the converter and target builder
+
+`reduce()` → `reduce_with_builder()` → `index_build()` (`mixed_streamer_reducer.cc:206-224, 672-740, 742-777`). For DiskANN, the builder is the reducer's target (`src/core/interface/indexes/diskann_index.cc:361-370`; `index.cc:1506-1511`; `mixed_streamer_reducer.cc:114-127`).
+
+In `index_build` (mixed_streamer_reducer.cc:742-768):
+
+- Line 743-744: the selected pool (global for A, local 2-worker for B) is wrapped in `BorrowedSingleQueueIndexThreads(*thread_pool_)` — an adapter that holds a **reference** to the existing `ailego::ThreadPool` and creates no threads of its own (`src/include/zvec/core/framework/index_threads.h:174-225`, esp. 177-178, 184-186, 224).
+- Lines 745-747: the optional conversion-training call `IndexConverter::TrainAndTransform(target_builder_converter_, target_holder, threads)`; its implementation moves the pool into `converter->train(holder, threads)` (`src/core/framework/index_converter.cc:27-37`; declaration at `src/include/zvec/core/framework/index_converter.h:237-239`). Note `transform()` does **not** receive threads (index_converter.cc:34-35).
+- Lines 760, 768: `target_builder_->train(threads, target_holder)` and `target_builder_->build(std::move(threads), target_holder)` — the same borrowed wrapper for both stages.
+
+**Passing vs. consuming**: `train`/`build` with `IndexThreads::Pointer` are virtuals whose base forms are NotImplemented or forward `nullptr` (`src/include/zvec/core/framework/index_runner.h:687-722`). The reducer provably hands the selected pool to these calls, but whether a given implementation dispatches work onto it is per-implementation (e.g., `HnswSparseBuilder::train` ignores the parameter, `src/core/algorithm/hnsw_sparse/hnsw_sparse_builder.cc:181-182`). For DiskANN, consumption is demonstrable (below).
+
+## 3. DiskANN PQ training: the outer pool is *not* reused
+
+`DiskAnnBuilder::train` (diskann_builder.cc:633-681) receives the non-null borrowed wrapper, so its self-pool fallback (lines 657-663) is skipped, and calls `train_quantized_data(threads)` (line 665). There (`src/core/algorithm/diskann/diskann_builder.cc:378-427`):
+
+- Lines 391-394 — with the in-source comment *"The quantizer creates its own pool, so bound it by the caller's pool"* — compute `pq_thread_count = max(1, min(build_thread_count_, threads->count()))` and pass it as the `"thread_count"` **init parameter**, then call the holder-only `quantizer_->train(...)` (line 406). The caller's pool object itself is never handed to the quantizer.
+- `build_thread_count_` is the builder's own setting: `PARAM_DISKANN_BUILDER_THREAD_COUNT`, defaulting to `hardware_concurrency` when 0 (diskann_builder.cc:51-55).
+- `PqInt8Quantizer` stores that parameter (`src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:142`) and in `train_all_chunks` creates a **brand-new** `SingleQueueIndexThreads(thread_count_, false)` (lines 319-324), which owns its own `ailego::ThreadPool` (index_threads.h:113-116, 166). It submits `pool_count` tasks striping the `num_chunk_` PQ chunks round-robin (lines 328-343) and waits (line 356); per-chunk KMeans is itself single-threaded (comment at pq_int8_quantizer.cc:199).
+
+So the PQ-training chunk-dispatch pool is a transient additional pool whose worker count = `max(1, min(builder's build_thread_count_, caller pool count))`: **≤ 4 under A, ≤ 2 under B** (exactly 4 vs 2 if the builder uses the default ≥ 4). By contrast, DiskANN's other stages *do* reuse the borrowed caller pool: `build_internal` (diskann_builder.cc:304-315, `threads->make_group()` + `threads->count()` tasks), `prune_internal` (341-352), and `generate_quantized_data` (451-452, 473-479), all driven from `build(threads, holder)` (697-790, calls at 762/768/777).
+
+## 4. What these settings establish — and what they don't
+
+**Established (worker-pool capacity):**
+- A runs the merge on the persistent, process-wide global optimize pool with exactly 4 workers; add-stage fan-out is 4; DiskANN graph/prune/encode stages dispatch onto those same 4 workers; the PQ-training pool is capped at 4.
+- B runs the merge on a per-invocation local pool with exactly 2 workers, destroyed when `Index::merge` returns; everything downstream is capped at 2 (fan-out 2, PQ pool ≤ 2).
+- B leaves the configured global pool (and the one-shot `GlobalConfig`) untouched.
+
+**Not established:**
+- **Total process thread count.** The same `GlobalResource` also holds a query pool sized by `query_thread_count` (global_resource.cc:24-26; default = CPU limit, config.cc:37-42), and the process additionally has the Python interpreter/calling thread plus implementation-internal pools: the quantizer's own pool (pq_int8_quantizer.cc:322-323), builder fallback pools when `threads == nullptr` (diskann_builder.cc:657-663, 714-720), single-threaded per-chunk KMeans pools, and DiskANN I/O-backend resources. None of these are bounded by `optimize_threads`/`concurrency`.
+- **Actual CPU utilization.** Pool size caps how many tasks from that pool can run concurrently; it doesn't guarantee parallelism. Task granularity and striping can leave workers without work (e.g., PQ chunks are striped over `pool_count` workers — if `num_chunk_` < pool count, extra workers get nothing, pq_int8_quantizer.cc:332-341), stages synchronize at barriers and wait loops (diskann_builder.cc:317-336; pq_int8_quantizer.cc:356), `min()` clamps can shrink effective concurrency below the pool size (index.cc:1438-1439), and virtual-dispatch means an implementation may ignore the pool it was handed. Utilization is therefore workload- and implementation-dependent, not fixed by these settings.

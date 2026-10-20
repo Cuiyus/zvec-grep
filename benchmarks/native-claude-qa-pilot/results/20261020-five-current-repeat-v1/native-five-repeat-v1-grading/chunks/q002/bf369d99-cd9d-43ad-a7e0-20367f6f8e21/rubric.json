@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "task_id": "q002",
+  "source_commit": "e906168cc19378358d8fa1c1559f48e4b920aa37",
+  "maximum_score": 10,
+  "verification_status": "Source-inspected and independently statically reviewed; file/span hashes checked. Exact frozen revision not natively reproduced. Pending formal task-set freeze; no solver run authorized by this package.",
+  "reference_answer": "Indexed conditions become an inverted result. get_bf_by_keys_and_update sees count zero, extracts no IDs, resets the indexed filter/result, and returns an engaged optional. FtsRecallNode moves that value into ordinary vector candidate_ids. Its empty value is also the unrestricted default. FTS only intersects nonempty candidates, and the remaining filter no longer contains this indexed predicate, allowing ordinary FTS hits. Scalar-only query instead iterates the empty scalar result; a field without inverted index is evaluated by a remaining forward filter. A nonempty restriction still admits only qualifying documents, so a disjoint text hit set is empty. Preserve no-restriction vs explicit-empty vs nonempty restriction at the handoff and consumer, or short-circuit a computed zero result safely. Test zero-result FTS plus ordinary unrestricted, overlap, disjoint and forward/scalar controls.",
+  "criteria": [
+    {
+      "id": "C1",
+      "points": 2,
+      "critical": true,
+      "claim": "Indexed zero-match handoff",
+      "full_credit": "Explains that a computed inverted result with count zero qualifies for the candidate-ID path, returns a present-but-empty optional, and clears the indexed filter/result when handing off those IDs. Zero matches is a real restrictive outcome, not absence of a scalar condition.",
+      "partial_credit": "1 point: Correctly identifies zero-result handling and candidate handoff but omits either optional presence or consumption/reset of the indexed constraint.",
+      "evidence_sets": [
+        [
+          "E01",
+          "E03",
+          "E05",
+          "E06",
+          "E07"
+        ]
+      ]
+    },
+    {
+      "id": "C2",
+      "points": 2,
+      "critical": true,
+      "claim": "FTS consumer loses the restrictive empty state",
+      "full_credit": "Connects ordinary vector candidate representation and the nonempty-only intersection guard: absent and explicit empty candidates collapse; no candidate intersection runs, and the remaining filter no longer carries the indexed predicate, so matching text hits can be emitted.",
+      "partial_credit": "1 point: Identifies either empty-candidate bypass or loss of the indexed predicate, but does not connect the two to FTS traversal.",
+      "evidence_sets": [
+        [
+          "E06",
+          "E07",
+          "E08",
+          "E09",
+          "E13"
+        ]
+      ]
+    },
+    {
+      "id": "C3",
+      "points": 2,
+      "critical": false,
+      "claim": "Explains the controls",
+      "full_credit": "1 point for scalar-only using an empty inverted iterator as its source; 1 point for the unindexed forward filter retaining/evaluating the predicate and for nonempty indexed/forward constraints retaining correct positive or disjoint results. Does not assume every positive-match predicate uses candidate IDs, since optimizer/threshold may choose another path.",
+      "partial_credit": "1 point: Correctly explains one of the two control groups above.",
+      "evidence_sets": [
+        [
+          "E01",
+          "E02",
+          "E05",
+          "E09",
+          "E10",
+          "E11",
+          "E13",
+          "E16",
+          "E17"
+        ]
+      ]
+    },
+    {
+      "id": "C4",
+      "points": 2,
+      "critical": true,
+      "claim": "Repair preserves query semantics",
+      "full_credit": "Proposes a source-grounded repair preserving unrestricted, explicitly empty and nonempty-restricted search end to end, e.g. optional candidate state with reject-all on present-empty or a safe zero-result short-circuit before constraint loss. Preserves remaining delete/forward constraints and ordinary unfiltered queries.",
+      "partial_credit": "1 point: Suggests special handling of zero results without explaining preservation of the ordinary unrestricted path or the consumed-filter handoff. A pointer-only bitmap change without addressing subsequent reset is insufficient for full credit.",
+      "evidence_sets": [
+        [
+          "E05",
+          "E06",
+          "E07",
+          "E08",
+          "E09"
+        ]
+      ]
+    },
+    {
+      "id": "C5",
+      "points": 2,
+      "critical": false,
+      "claim": "Regression and boundary checks",
+      "full_credit": "1 point for an end-to-end zero-match indexed-scalar + matching-FTS regression with expected empty IDs and a scalar-only or unindexed control; 1 point for a boundary matrix covering no scalar restriction, nonempty overlap and nonempty disjoint cases, while keeping valid results/topk/remaining filter behavior. No need to copy the upstream test name or write executable code.",
+      "partial_credit": "1 point: Covers one of the two test groups above with explicit expected behavior.",
+      "evidence_sets": [
+        [
+          "E09",
+          "E10",
+          "E13"
+        ]
+      ]
+    }
+  ],
+  "success_rule": {
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C1",
+      "C2",
+      "C4"
+    ],
+    "critical_contradictions_allowed": 0,
+    "supporting_citations_required_for_core_claims": true
+  },
+  "critical_contradictions": [
+    "Claims that a null bitmap is necessary for this defect and that a non-null zero-cardinality bitmap avoids the consumed-filter/candidate handoff failure.",
+    "Claims the indexed scalar condition remains effective after its filter/result are reset while the FTS candidate restriction is skipped.",
+    "Claims that changing only make_filter() to return a non-null reject-all filter repairs the scenario despite the later consumption/reset.",
+    "Proposes treating every empty candidate vector as reject-all in the pre-fix API without preserving the ordinary unrestricted search path.",
+    "Attributes the FTS result leak to an established vector-only defect based solely on a similar remaining-filter assignment, without evidence for the different vector candidate consumer.",
+    "Claims all positive/disjoint controls must use candidate-ID extraction, contradicting the retained-bitmap/forward alternatives in the frozen source."
+  ],
+  "citation_policy": {
+    "must_resolve_in_frozen_source": true,
+    "require_claim_support_not_just_overlap": true,
+    "alternative_valid_spans_allowed": true,
+    "whole_file_hit_is_sufficient": false,
+    "evidence_sets": "All spans in one listed set establish the claim; equivalent sufficient source spans are accepted. The list supplies reference support and does not require literal citation of every listed span.",
+    "score_without_evidence": "Report factual points separately if useful, but source-grounded success requires verified evidence for core C1, C2 and C4 claims.",
+    "retrieval_only_metrics": "Evidence coverage is diagnostic and never substituted for e2e QA correctness.",
+    "fix_only_evidence": "Post-fix corroboration is held separately in provenance/q002/fix-only-evidence.json and never required from the solver or resolved against pre-fix source."
+  },
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "path": "src/db/sqlengine/analyzer/query_node_walker.cc",
+      "start_line": 213,
+      "end_line": 298,
+      "claim_supported": "An indexed supported scalar predicate is routed to inverted filtering; unindexed scalar expressions become forward filters.",
+      "file_sha256": "54ff97d8e84734e15691bc92c0b837fa1f03bd8d7d7cb3b78502b079988447a4",
+      "span_sha256": "8de7d9029ac9ea30ebb73d6a339d7166d9e97d42bb4c5f34684b1fac49da619d",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/analyzer/query_node_walker.cc#L213-L298"
+    },
+    {
+      "id": "E02",
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 365,
+      "end_line": 422,
+      "claim_supported": "Optimizer may move a nonselective indexed condition to forward filtering; query-type dispatch chooses FTS before scalar-only scan.",
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "e3019fb189ba769cb811e311acbf68880bbaa2caa2a6dbea9f30ed1368c403d9",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/query_planner.cc#L365-L422"
+    },
+    {
+      "id": "E03",
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 533,
+      "end_line": 556,
+      "claim_supported": "Builds a DocFilter from indexed/forward conditions.",
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "f599e53be007ad3135815cc95477fad1e5a39325df372dbf436a80c480121177",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/query_planner.cc#L533-L556"
+    },
+    {
+      "id": "E04",
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 642,
+      "end_line": 660,
+      "claim_supported": "FTS scan constructs the DocFilter and FtsRecallNode.",
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "884d524f0a21ff2e94e1c32af2f093f97b3d175d1ce95a758e992bed3adcb1ed",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/query_planner.cc#L642-L660"
+    },
+    {
+      "id": "E05",
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 24,
+      "end_line": 85,
+      "claim_supported": "Computes the inverted result and remaining forward filter; empty() and is_filtered() describe remaining constraints.",
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "7629e5bd7a1629eceed2495ed2287d5956371e68b9d270d8f5c686ac95ad7286",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/doc_filter.cc#L24-L85"
+    },
+    {
+      "id": "E06",
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 109,
+      "end_line": 140,
+      "claim_supported": "The zero count satisfies the candidate threshold, returning a present-empty optional after resetting invert_filter_ and invert_result_.",
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "8ce71a670b127abf9bf65f4cbeeefdd60c2f05917fbb6a65befb255a03d7e746",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/doc_filter.cc#L109-L140"
+    },
+    {
+      "id": "E07",
+      "path": "src/db/sqlengine/planner/fts_recall_node.cc",
+      "start_line": 110,
+      "end_line": 140,
+      "claim_supported": "Moves optional candidate values into FTS params and passes remaining filters after consumption.",
+      "file_sha256": "d3d995affdcbb66cd2507e5960be6b4e5cd526271eb61bf994e79badc7e4d2c8",
+      "span_sha256": "7b04fd94ff4269e863ccac8cb7e1e01f606209cb93840bd3a7f7b41e02e4b97d",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/fts_recall_node.cc#L110-L140"
+    },
+    {
+      "id": "E08",
+      "path": "src/db/index/column/fts_column/fts_types.h",
+      "start_line": 24,
+      "end_line": 35,
+      "claim_supported": "Ordinary vector represents both unrestricted search and an explicitly empty candidate set.",
+      "file_sha256": "615a3a94b7fe09b12cebe93e78aa156956035502bdf87d5f2c06a4a37a72f8b1",
+      "span_sha256": "eefed39202d25efab045e23db2abaed0bf43598da06b54015fbf9576998131fe",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/index/column/fts_column/fts_types.h#L24-L35"
+    },
+    {
+      "id": "E09",
+      "path": "src/db/index/column/fts_column/fts_column_indexer.cc",
+      "start_line": 194,
+      "end_line": 259,
+      "claim_supported": "Only nonempty candidate vectors are intersected; normal FTS posting traversal proceeds otherwise, subject only to remaining filters.",
+      "file_sha256": "541e355b877eb90681edcc58feff365c20d9e1c26414a06b83f3a3c63ba5c982",
+      "span_sha256": "ca0359539b52293f5b9cb0858a5f37718871b5fa0dfc612d37c600c4216c0f62",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/index/column/fts_column/fts_column_indexer.cc#L194-L259"
+    },
+    {
+      "id": "E10",
+      "path": "src/db/sqlengine/planner/invert_recall_node.cc",
+      "start_line": 30,
+      "end_line": 85,
+      "claim_supported": "Scalar-only query directly traverses the inverted result; invalid iterator produces no batch.",
+      "file_sha256": "6c586eb56007fbbf7d0f26baf865c5aae59e0d7b7030b9cf47106d987b69bb17",
+      "span_sha256": "2b564ff18ebdf0f36fe4b0c071aa62b109a49166bc4e500afa329030ea20756f",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/invert_recall_node.cc#L30-L85"
+    },
+    {
+      "id": "E11",
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 48,
+      "end_line": 155,
+      "claim_supported": "Null and non-null cardinality-zero results both count/extract zero IDs and yield no scalar-only rows.",
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "297d13165937b31ee5861a311bb1c5967208c0ad43fceb9efadc92a6cc4c6cc7",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/index/column/inverted_column/inverted_search_result.h#L48-L155"
+    },
+    {
+      "id": "E12",
+      "path": "src/db/index/column/inverted_column/inverted_search_result.h",
+      "start_line": 173,
+      "end_line": 178,
+      "claim_supported": "AND only destroys the bitmap in this branch when either bitmap pointer is null, not merely for zero cardinality.",
+      "file_sha256": "a92f219dd3e970cd2d019660b58c5e700ceb4e8acb6d9a066c38caba60fca1be",
+      "span_sha256": "8053387db21a4f9e464b57f8d8995cdb095ebc5633e4077b97be3aea7a7059ee",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/index/column/inverted_column/inverted_search_result.h#L173-L178"
+    },
+    {
+      "id": "E13",
+      "path": "tests/db/index/column/fts_column/fts_column_indexer_test.cc",
+      "start_line": 1765,
+      "end_line": 1805,
+      "claim_supported": "Pre-fix tests document nonempty restriction and empty-vector fallback, exposing an existing layer contract mismatch.",
+      "file_sha256": "dc8daef7300f9f160033f0780f033a1a3c0a353f8409ca646b526b22c5f4cd97",
+      "span_sha256": "9074b48ec2b4c72f824291b995a5479f335c53f87e6faa8c01c540dc6ec26828",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/tests/db/index/column/fts_column/fts_column_indexer_test.cc#L1765-L1805"
+    },
+    {
+      "id": "E14",
+      "path": "src/db/sqlengine/planner/vector_recall_node.cc",
+      "start_line": 158,
+      "end_line": 169,
+      "claim_supported": "Scope check only: vector path keeps an outer bf_pks entry for an explicit empty inner list.",
+      "file_sha256": "ac32505fd2c3918cef8e98003420f002605ce3cecfc8203d72ef7530b9aee5d3",
+      "span_sha256": "d6d1e3fdccbeeeb24c867d8a2119289cdc82643de374d80867d87fc69828e8fd",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/vector_recall_node.cc#L158-L169"
+    },
+    {
+      "id": "E15",
+      "path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+      "start_line": 299,
+      "end_line": 325,
+      "claim_supported": "Scope check only: explicit empty per-block vector candidates skip each block; the same FTS rootcause must not be assumed for vector-only search.",
+      "file_sha256": "4f22a3ff3997308975ab334ad0b008c2e52d78722e582d9a8bb8c2e4def9a9e8",
+      "span_sha256": "f14312c9f97c538864d2de971940c10d909e8b35df8ee78af85a9706e7caab6b",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/index/column/vector_column/combined_vector_column_indexer.cc#L299-L325"
+    },
+    {
+      "id": "E16",
+      "path": "src/db/common/config.cc",
+      "start_line": 38,
+      "end_line": 40,
+      "claim_supported": "Default FTS candidate ratio is 0.05; in the stated three-row segment the threshold floor(3*0.05) is zero.",
+      "file_sha256": "59142d5c2c7963f9557d7ffb627c5fc64b9dbd8181430265fe76a800ea2c69aa",
+      "span_sha256": "2d7800a54a94f7fbb14b38ab775460bef1beae4d094b10e92f096bcc131bb987",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/common/config.cc#L38-L40"
+    },
+    {
+      "id": "E17",
+      "path": "src/db/sqlengine/planner/optimizer.cc",
+      "start_line": 31,
+      "end_line": 45,
+      "claim_supported": "Equality predicates are exempt from ratio-based forwarding; the positive status equality control can retain its indexed bitmap.",
+      "file_sha256": "ed5b5f17b553ce256f131b4dc95206935db1ad417ba9366fa89a26261582bb5a",
+      "span_sha256": "5fdd01938cad9c53e8b2cc436c1e6b0b352dcb72640b94e7d46b699220b609aa",
+      "url": "https://github.com/alibaba/zvec/blob/e906168cc19378358d8fa1c1559f48e4b920aa37/src/db/sqlengine/planner/optimizer.cc#L31-L45"
+    }
+  ],
+  "judge_output_fields": [
+    "task_id",
+    "blinded_answer_id",
+    "criterion_scores",
+    "supporting_answer_quotes",
+    "verified_citations",
+    "unsupported_claims",
+    "critical_contradictions",
+    "total_points",
+    "source_grounded_success",
+    "reviewer_notes"
+  ],
+  "scoring_rules": [
+    "Score supported factual claims and causal reasoning, never wording, verbosity, tool choice or exact upstream patch syntax.",
+    "Allow equivalent valid code citations/ranges and alternative correct explanations; these evidence IDs are reference support, not mandatory literal wording.",
+    "A proposed regression design is sufficient. Do not require installation, execution or code changes. Unsupported claims of executed tests are not evidence.",
+    "Each criterion is worth 0, 1 or 2 points. Grade against the frozen pre-fix source, not the reporter rootcause narrative."
+  ],
+  "reviewed_corrections": [
+    "A null bitmap is not required: a non-null bitmap of cardinality zero also yields an empty candidate vector and loses the indexed filter after reset.",
+    "DocFilter::empty() need not be true universally. Remaining delete or forward filters can exist, while the indexed scalar restriction has still been lost.",
+    "Changing make_filter() to produce a non-null reject-all filter alone is not sufficient if get_bf_by_keys_and_update() later consumes/resets it.",
+    "Do not generalize to vector-only queries from the similar remaining-filter assignment. Its explicit empty inner candidate list follows a different downstream path.",
+    "Nonempty filter controls can use candidates, a retained bitmap, or forward evaluation depending on selectivity; all preserve a meaningful restriction."
+  ],
+  "normalization_provenance": "provenance/q002/normalization.json"
+}

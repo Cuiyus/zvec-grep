@@ -1,0 +1,784 @@
+{
+  "schema_version": 1,
+  "task_id": "q003",
+  "source_commit": "68078e55e7ae9d705b8829b5d416e022060bebf7",
+  "maximum_score": 10,
+  "verification_status": "Static normalization of the R2 candidate: frozen files and pre-fix evidence spans verified. No engine, solver, CI, or upstream regression test execution. Original independent review covered V1; its author-addressed R2 status remains preserved and does not by itself establish independent re-review or dataset admission.",
+  "reference_answer": "Deleting a document marks its global ID deleted and removes the external-ID mapping, but does not erase the physical forward row/doc_ids entry. Physical=28 and live=25; stats applies the deletion filter. Upsert behavior is optional for this delete-only task. Vector storage already exists before optimize: non-quantized inserts create default FLAT memory vector indexers; flush transfers them to persisted vector_indexers. A new HNSW-schema segment lacks the requested-index built flag (only an initially FLAT schema is pre-marked). The first nonempty optimize materializes the requested HNSW index. With physical=28/live=25 the strict live < physical * (1 - 0.3f) purge test is false, so the sealed single-segment group gets CreateVectorIndexTask and no coordinated forward-row purge. The in-place index-build helper passes the segment deletion filter into Merge. The filter resolves original row positions to deleted global IDs. Merge enables PK rewrite and the reducer skips filtered vectors while assigning surviving vectors consecutive IDs. Forward rows/doc_ids and new block metadata retain physical positions/counts, so compact vector keys no longer denote the same forward rows. Search keys are interpreted as segment row indices when fetching forward IDs/fields; point vector fetch uses the original physical row/block offset. This explains wrong associations and high-row vector-fetch failure while scalar-only access and live counts can agree. Flushed replacement index/metadata and reload explain why reopening is not a repair. Do not reduce the fault to harmless ANN recall or missing scalar rows. Empty optimize has no persisted content to process. Clean nonempty first materialization has no tombstones, so it preserves key alignment and records the target index as built. The later delete-only same-segment/same-parameter create_vector_index returns early on the indexed flag. This explains the exact controls, not universal directory immunity. Above the deletion threshold, true CompactTask passes the delete filter through scalar reduction, constructs a bitmap of omitted original row positions, and uses the matching row filter for vector reduction. Both spaces are compacted together. Therefore skipping tombstoned vectors is appropriate there, unlike a vector-only rebuild over unchanged forward rows. A vector-only rebuild must retain tombstoned vector slots when forward rows are unchanged; or both sides would need coordinated remapping. Passing no deletion filter on the former path is the targeted correction, while deletion filtering at query time and coordinated full compaction remain necessary. The essential oracle supplies independent known normalized directions, such as unit basis vectors, and checks the expected live ID and vector payload after the below-threshold delete/optimize sequence. It must detect wrong association rather than only counts; an affected-index fetch or same-ID query is not an independent vector oracle. Wider variant coverage is useful but optional for this single point.",
+  "criteria": [
+    {
+      "id": "C1",
+      "points": 1,
+      "critical": false,
+      "claim": "Deleting a document marks its global ID deleted and removes the external-ID mapping, but does not erase the physical forward row/doc_ids entry. Physical=28 and live=25; stats applies the deletion filter. Upsert behavior is optional for this delete-only task.",
+      "full_credit": "Explain tombstones/retained physical rows and how filtered live counting yields 25 from 28 in this delete sequence.",
+      "evidence_sets": [
+        [
+          "E01",
+          "E02",
+          "E03"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "physical_vs_live",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "physical_vs_live.1",
+          "points": 1,
+          "required": "Explain tombstones/retained physical rows and how filtered live counting yields 25 from 28 in this delete sequence."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "The upsert tombstone-and-append route; omission cannot reduce credit."
+      ]
+    },
+    {
+      "id": "C2",
+      "points": 2,
+      "critical": true,
+      "claim": "Vector storage already exists before optimize: non-quantized inserts create default FLAT memory vector indexers; flush transfers them to persisted vector_indexers. A new HNSW-schema segment lacks the requested-index built flag (only an initially FLAT schema is pre-marked). The first nonempty optimize materializes the requested HNSW index. With physical=28/live=25 the strict live < physical * (1 - 0.3f) purge test is false, so the sealed single-segment group gets CreateVectorIndexTask and no coordinated forward-row purge.",
+      "full_credit": "Explain the physical-versus-live denominator and strict purge condition; 3/28 deletion fraction selects the non-purging branch, while a sufficiently larger fraction selects coordinated compaction. Do not require ideal-decimal equality behavior at exactly 30%. Trace sealing the nonempty segment to the single-segment CreateVectorIndexTask/create_vector_index path without forward-row purge. Distinguish existing default FLAT storage (memory then persisted) from first materialization of the requested HNSW index with its initially unset indexed flag.",
+      "evidence_sets": [
+        [
+          "E04",
+          "E05",
+          "E06",
+          "E08",
+          "E21",
+          "E22",
+          "E23",
+          "E24",
+          "E25"
+        ]
+      ],
+      "partial_credit": "Exactly one of the two stated point units is fully supported; identify which one.",
+      "original_criterion_id": "maintenance_branch",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "maintenance_branch.1",
+          "points": 1,
+          "required": "Explain the physical-versus-live denominator and strict purge condition; 3/28 deletion fraction selects the non-purging branch, while a sufficiently larger fraction selects coordinated compaction. Do not require ideal-decimal equality behavior at exactly 30%."
+        },
+        {
+          "id": "maintenance_branch.2",
+          "points": 1,
+          "required": "Trace sealing the nonempty segment to the single-segment CreateVectorIndexTask/create_vector_index path without forward-row purge. Distinguish existing default FLAT storage (memory then persisted) from first materialization of the requested HNSW index with its initially unset indexed flag."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is fully supported.",
+        "1": "Exactly one of the two stated point units is fully supported; identify which one.",
+        "2": "Both point units are fully supported without contradicting each other."
+      }
+    },
+    {
+      "id": "C3",
+      "points": 2,
+      "critical": true,
+      "claim": "The in-place index-build helper passes the segment deletion filter into Merge. The filter resolves original row positions to deleted global IDs. Merge enables PK rewrite and the reducer skips filtered vectors while assigning surviving vectors consecutive IDs. Forward rows/doc_ids and new block metadata retain physical positions/counts, so compact vector keys no longer denote the same forward rows.",
+      "full_credit": "Identify deletion filtering in vector Merge and the reducer skipping tombstones while assigning consecutive keys only to surviving vectors. Explain that forward/doc_ids positions and vector block metadata still describe the physical row space, and explicitly connect the dense survivor keys to the resulting coordinate mismatch.",
+      "evidence_sets": [
+        [
+          "E07",
+          "E08",
+          "E09",
+          "E10",
+          "E11"
+        ]
+      ],
+      "partial_credit": "Exactly one of the two stated point units is fully supported; identify which one.",
+      "original_criterion_id": "broken_mapping",
+      "allowed_scores": [
+        0,
+        1,
+        2
+      ],
+      "point_units": [
+        {
+          "id": "broken_mapping.1",
+          "points": 1,
+          "required": "Identify deletion filtering in vector Merge and the reducer skipping tombstones while assigning consecutive keys only to surviving vectors."
+        },
+        {
+          "id": "broken_mapping.2",
+          "points": 1,
+          "required": "Explain that forward/doc_ids positions and vector block metadata still describe the physical row space, and explicitly connect the dense survivor keys to the resulting coordinate mismatch."
+        }
+      ],
+      "anchors": {
+        "0": "Neither point unit is fully supported.",
+        "1": "Exactly one of the two stated point units is fully supported; identify which one.",
+        "2": "Both point units are fully supported without contradicting each other."
+      }
+    },
+    {
+      "id": "C4",
+      "points": 1,
+      "critical": false,
+      "claim": "Search keys are interpreted as segment row indices when fetching forward IDs/fields; point vector fetch uses the original physical row/block offset. This explains wrong associations and high-row vector-fetch failure while scalar-only access and live counts can agree. Flushed replacement index/metadata and reload explain why reopening is not a repair. Do not reduce the fault to harmless ANN recall or missing scalar rows.",
+      "full_credit": "Explain why vector keys/physical offsets fetch the wrong association or run past the vector tail while live counts and scalar scans use retained forward rows with deletion filtering, and why flushing/committing the rebuilt index makes read-only reopen no repair. It is sufficient to name the access paths; detailed conversion internals are unnecessary.",
+      "evidence_sets": [
+        [
+          "E14",
+          "E15",
+          "E12",
+          "E13",
+          "E02",
+          "E20",
+          "E28",
+          "E29"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "symptoms_and_persistence",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "symptoms_and_persistence.1",
+          "points": 1,
+          "required": "Explain why vector keys/physical offsets fetch the wrong association or run past the vector tail while live counts and scalar scans use retained forward rows with deletion filtering, and why flushing/committing the rebuilt index makes read-only reopen no repair. It is sufficient to name the access paths; detailed conversion internals are unnecessary."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "C5",
+      "points": 1,
+      "critical": false,
+      "claim": "Empty optimize has no persisted content to process. Clean nonempty first materialization has no tombstones, so it preserves key alignment and records the target index as built. The later delete-only same-segment/same-parameter create_vector_index returns early on the indexed flag. This explains the exact controls, not universal directory immunity.",
+      "full_credit": "Explain both controls: empty optimize does no useful build, whereas a clean nonempty requested-index build stays aligned and sets the indexed flag, allowing the later same-parameter delete-only control to skip rebuilding.",
+      "evidence_sets": [
+        [
+          "E04",
+          "E23",
+          "E24",
+          "E21",
+          "E26",
+          "E27",
+          "E01"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "bounded_controls",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "bounded_controls.1",
+          "points": 1,
+          "required": "Explain both controls: empty optimize does no useful build, whereas a clean nonempty requested-index build stays aligned and sets the indexed flag, allowing the later same-parameter delete-only control to skip rebuilding."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "Non-purging multi-segment compaction; not needed for full control credit because the prompt adds no documents after the clean first build."
+      ]
+    },
+    {
+      "id": "C6",
+      "points": 1,
+      "critical": false,
+      "claim": "Above the deletion threshold, true CompactTask passes the delete filter through scalar reduction, constructs a bitmap of omitted original row positions, and uses the matching row filter for vector reduction. Both spaces are compacted together. Therefore skipping tombstoned vectors is appropriate there, unlike a vector-only rebuild over unchanged forward rows.",
+      "full_credit": "Explain that the above-threshold path filters forward rows and records omitted original positions in a bitmap used to filter vectors, preserving correspondence by compacting both spaces together. Merely naming CompactTask is insufficient; it can also be called with no purge filter.",
+      "evidence_sets": [
+        [
+          "E05",
+          "E17",
+          "E18",
+          "E19"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "high_delete_path",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "high_delete_path.1",
+          "points": 1,
+          "required": "Explain that the above-threshold path filters forward rows and records omitted original positions in a bitmap used to filter vectors, preserving correspondence by compacting both spaces together. Merely naming CompactTask is insufficient; it can also be called with no purge filter."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "C7",
+      "points": 1,
+      "critical": false,
+      "claim": "A vector-only rebuild must retain tombstoned vector slots when forward rows are unchanged; or both sides would need coordinated remapping. Passing no deletion filter on the former path is the targeted correction, while deletion filtering at query time and coordinated full compaction remain necessary.",
+      "full_credit": "State and preserve the same row-key correspondence on both sides: retain tombstoned vector slots for unchanged forward rows, or provide an equivalent coordinated remapping. Keep logical deletion filtering in reads. Literal nullptr spelling is not required.",
+      "evidence_sets": [
+        [
+          "E08",
+          "E16",
+          "E17"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "repair_invariant",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "repair_invariant.1",
+          "points": 1,
+          "required": "State and preserve the same row-key correspondence on both sides: retain tombstoned vector slots for unchanged forward rows, or provide an equivalent coordinated remapping. Keep logical deletion filtering in reads. Literal nullptr spelling is not required."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      }
+    },
+    {
+      "id": "C8",
+      "points": 1,
+      "critical": false,
+      "claim": "The essential oracle supplies independent known normalized directions, such as unit basis vectors, and checks the expected live ID and vector payload after the below-threshold delete/optimize sequence. It must detect wrong association rather than only counts; an affected-index fetch or same-ID query is not an independent vector oracle. Wider variant coverage is useful but optional for this single point.",
+      "full_credit": "Propose an independently retained known-direction vector oracle and assert correct live ID plus payload after the triggering delete/optimize sequence, explicitly catching associations that count-only checks miss.",
+      "evidence_sets": [
+        [
+          "E15",
+          "E13"
+        ]
+      ],
+      "partial_credit": "No partial point; award the single defined point unit only when all its essential elements are supported.",
+      "original_criterion_id": "regression_design",
+      "allowed_scores": [
+        0,
+        1
+      ],
+      "point_units": [
+        {
+          "id": "regression_design.1",
+          "points": 1,
+          "required": "Propose an independently retained known-direction vector oracle and assert correct live ID plus payload after the triggering delete/optimize sequence, explicitly catching associations that count-only checks miss."
+        }
+      ],
+      "anchors": {
+        "0": "The stated point unit is absent, materially wrong, or incomplete.",
+        "1": "All essential elements of the stated point unit are supported; optional extensions below are not required."
+      },
+      "optional_extensions": [
+        "Read-only reopen, empty/clean controls, high-delete comparison, upsert, quantization or explicit create_index matrix; none is required for this point once the essential independent oracle is sound.",
+        "Distinct raw vectors alone are not necessarily distinct COSINE directions; normalized basis directions avoid that ambiguity. No universal ANN recall guarantee is inferred."
+      ]
+    }
+  ],
+  "success_rule": {
+    "minimum_points": 8,
+    "required_full_credit": [
+      "C2",
+      "C3"
+    ],
+    "critical_contradictions_allowed": 0,
+    "supporting_citations_required_for_core_claims": true,
+    "final_answer_required": true,
+    "required_full_credit_points": {
+      "C2": 2,
+      "C3": 2
+    },
+    "core_citation_gate": {
+      "criteria": [
+        "C2",
+        "C3"
+      ],
+      "rule": "For each core criterion, the answer must give existing pre-fix file paths and line numbers whose cited content jointly supports both awarded point units. Judge the actual frozen source, not literal equality with curated ranges. A post-fix-only, fabricated, wrong-revision, or materially unrelated citation cannot satisfy this gate. Missing core citations fail the answer even if its prose is correct.",
+      "required_record": "For each core unit record the answer citation, verified pre-fix location, and a short explanation of how it supports the unit."
+    },
+    "rule": "source_grounded_success = nonempty final answer AND total_points >= 8 AND C2 == 2 AND C3 == 2 AND all core citation gates pass AND no substantiated disqualifying overclaim or critical contradiction. Any such disqualification forces failure independently of points."
+  },
+  "critical_contradictions": [
+    "C1: The single-segment vector-only path compacts forward rows in coordination with the filtered vectors, while identifying that same path as the cause.",
+    "C2: There is no vector/forward association error; the scenario is solely ordinary approximate-search recall loss.",
+    "C3: Read-only reopening repairs the persisted vector-key mapping.",
+    "C4: Disabling tombstone filtering during queries is the repair.",
+    "C5: No vector storage or vector indexer exists before the first optimize, or an existing default FLAT indexer means the requested HNSW index is already marked built.",
+    "D1: Treat the original tail-only description as complete and explicitly deny wrong-vector associations.",
+    "D2: Every overwrite/delete followed by optimize is affected regardless of the maintenance path.",
+    "D3: Repairing only absent tail rows with vectors fetched from the affected index fully repairs all wrong associations.",
+    "D4: Assert a local runtime reproduction or passing upstream test execution without supporting execution evidence."
+  ],
+  "citation_policy": {
+    "must_resolve_in_frozen_source": true,
+    "require_claim_support_not_just_overlap": true,
+    "alternative_valid_spans_allowed": true,
+    "whole_file_hit_is_sufficient": false,
+    "evidence_sets": "All spans in one listed set establish the claim; equivalent supporting source spans accepted by blinded human audit.",
+    "score_without_evidence": "Report factual score separately if useful, but source-grounded success requires verified pre-fix evidence for both point units in C2 and C3.",
+    "retrieval_only_metrics": "Optional span/evidence coverage is diagnostic and never substituted for e2e QA correctness.",
+    "post_fix_evidence": "Fix and regression-test references are evaluator-only corroboration in evaluator/provenance/q003/post-fix-corroboration.json and cannot satisfy solver citation gates."
+  },
+  "evidence_spans": [
+    {
+      "id": "E01",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 868,
+      "end_line": 935,
+      "claim_supported": "Delete records a tombstone and removes the external-ID mapping while retaining physical forward rows; ordinary insertion initializes memory components.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "02a3046daba8476092063043d1bcee33e9ad8cb7a081ab11efcca5cc11a207a5",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L868-L935",
+      "original_reference_id": "writes"
+    },
+    {
+      "id": "E02",
+      "path": "src/db/collection.cc",
+      "start_line": 529,
+      "end_line": 544,
+      "claim_supported": "Collection statistics aggregate deletion-filtered segment counts.",
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "2d5b938ca12a37a9919d8f6c25d39583b8a385937a1bd5009120d8dc56281966",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/collection.cc#L529-L544",
+      "original_reference_id": "live_count"
+    },
+    {
+      "id": "E03",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 616,
+      "end_line": 626,
+      "claim_supported": "Segment counts distinguish physical doc_ids_ entries from live non-deleted entries.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "1bb16bb8275b06eb963f477d970c65458ee9c0409556eef19f0388474f76f26e",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L616-L626",
+      "original_reference_id": "segment_count"
+    },
+    {
+      "id": "E04",
+      "path": "src/db/collection.cc",
+      "start_line": 910,
+      "end_line": 952,
+      "claim_supported": "Optimize switches a nonempty writing segment before maintenance planning; an empty collection has no persisted content to process.",
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "b9bb920fd2055fbc96404180c683ca92b6f7b842e4ffe84205ce39977309ae33",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/collection.cc#L910-L952",
+      "original_reference_id": "optimize_entry"
+    },
+    {
+      "id": "E05",
+      "path": "src/db/collection.cc",
+      "start_line": 1086,
+      "end_line": 1173,
+      "claim_supported": "Strict live-versus-physical purge selection and single-segment CreateVectorIndexTask distinguish vector-only rebuilding from coordinated compaction.",
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "f3165071a4addf46c9dee759ec4120e50a682fe84df2beb04ec3fb2ba6c2e1b0",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/collection.cc#L1086-L1173",
+      "original_reference_id": "task_policy"
+    },
+    {
+      "id": "E06",
+      "path": "src/db/common/constants.h",
+      "start_line": 35,
+      "end_line": 45,
+      "claim_supported": "The configured compaction deletion ratio is 0.3f.",
+      "file_sha256": "bf3fc2f3614c88e3241b887314011d3370fc0b0dd5df13b8c27e6317a8df0972",
+      "span_sha256": "c765593242ebdce79a06f0ebd78d5407d3365bc3fa24db9ecbd50d8be92c6c02",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/common/constants.h#L35-L45",
+      "original_reference_id": "threshold"
+    },
+    {
+      "id": "E07",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 464,
+      "end_line": 475,
+      "claim_supported": "The vector merge deletion filter maps original row positions to global document IDs.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "2b5f976f9ac7e64f63617ed650fbe4396864f9c49acb411f46871f74228c59b5",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L464-L475",
+      "original_reference_id": "delete_filter"
+    },
+    {
+      "id": "E08",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1466,
+      "end_line": 1578,
+      "claim_supported": "The vector-only build passes the deletion filter to Merge while retaining physical block positions/counts and updating the index metadata.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "3d7116702f5528d0951ce88fff42e7328cc80d1e26c0dc5bf6ea6cbb9ee2cb7b",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L1466-L1578",
+      "original_reference_id": "create_vector_path"
+    },
+    {
+      "id": "E09",
+      "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+      "start_line": 103,
+      "end_line": 132,
+      "claim_supported": "VectorColumnIndexer::Merge forwards the row filter into the core index merge.",
+      "file_sha256": "4ac1bc0ff808647562e06b5252296b4b3e3be602b6debee8b26a296368003d48",
+      "span_sha256": "405d8a73a889cbc45feaed5e8902f9b229ecb43ab22df08ac9530347b4e0e631",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/column/vector_column/vector_column_indexer.cc#L103-L132",
+      "original_reference_id": "merge_bridge"
+    },
+    {
+      "id": "E10",
+      "path": "src/core/interface/index.cc",
+      "start_line": 1016,
+      "end_line": 1076,
+      "claim_supported": "The core merge configures the reducer to rewrite primary keys.",
+      "file_sha256": "5d850cfddbbbeeed943925349bb9073a3a9caf27c04b0ee5c40fc013bed3687b",
+      "span_sha256": "153f2f3c776921205fa65c060ef50d9f9a67d8e05de4a2984a466e072cc1ba2a",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/core/interface/index.cc#L1016-L1076",
+      "original_reference_id": "pk_rewrite"
+    },
+    {
+      "id": "E11",
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 255,
+      "end_line": 325,
+      "claim_supported": "The reducer skips filtered vectors and assigns consecutive output keys to the surviving vectors.",
+      "file_sha256": "cd95c46f5bffd64d2de508f787e7185509c565e7ac0522ba9b499c48c1ccce49",
+      "span_sha256": "91e0749ccc20a2a57645191065584c733177f7f903730472bccfc912ad00c1ac",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/core/mixed_reducer/mixed_streamer_reducer.cc#L255-L325",
+      "original_reference_id": "dense_renumber"
+    },
+    {
+      "id": "E12",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1028,
+      "end_line": 1127,
+      "claim_supported": "Scalar document fetch resolves retained physical row positions and checks logical deletion.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "6797769c3a4c4e2ba4f58149e2983cfb641da1a46c5f6d0bee8056fc022d5c9b",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L1028-L1127",
+      "original_reference_id": "scalar_fetch"
+    },
+    {
+      "id": "E13",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1268,
+      "end_line": 1308,
+      "claim_supported": "Point vector fetch resolves vector blocks using original physical row positions and block offsets.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "382f536061eeb2a11a88040784d9701d4acd02367d4ac03c0c6a8cec51e1738f",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L1268-L1308",
+      "original_reference_id": "vector_fetch"
+    },
+    {
+      "id": "E14",
+      "path": "src/db/index/column/vector_column/combined_vector_column_indexer.cc",
+      "start_line": 54,
+      "end_line": 75,
+      "claim_supported": "Combined vector search returns keys in the segment row coordinate space.",
+      "file_sha256": "d5a5b9e32530945d7cc37bdcc1916ec49d8cb54cd4dbf04aecaf0f5455c0a267",
+      "span_sha256": "d9a972edf32804b2921821a36922522882a81b252f4c92dc601e909cbb8c9754",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/column/vector_column/combined_vector_column_indexer.cc#L54-L75",
+      "original_reference_id": "search_keys"
+    },
+    {
+      "id": "E15",
+      "path": "src/db/sqlengine/planner/vector_recall_node.cc",
+      "start_line": 216,
+      "end_line": 237,
+      "claim_supported": "Vector recall uses returned row keys to retrieve forward IDs and fields.",
+      "file_sha256": "ac32505fd2c3918cef8e98003420f002605ce3cecfc8203d72ef7530b9aee5d3",
+      "span_sha256": "417f85420d495d7ab2f792603f75f3d531d499fbec1708f2a84ec0749c1d98c1",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/sqlengine/planner/vector_recall_node.cc#L216-L237",
+      "original_reference_id": "search_forward_join"
+    },
+    {
+      "id": "E16",
+      "path": "src/db/sqlengine/planner/doc_filter.cc",
+      "start_line": 68,
+      "end_line": 85,
+      "claim_supported": "Read filtering preserves logical deletion independently of vector-index rebuilding.",
+      "file_sha256": "4e7697d5f338d162155d1bb57f72d4c8f984bafdf558a1668360d8983e4f1346",
+      "span_sha256": "798960ee6e5ec418f9e1e0a712442682980967424babe63d533b763370b011be",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/sqlengine/planner/doc_filter.cc#L68-L85",
+      "original_reference_id": "query_delete_filter"
+    },
+    {
+      "id": "E17",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 100,
+      "end_line": 171,
+      "claim_supported": "Coordinated compaction filters scalar data and applies corresponding filtering while building vectors.",
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "3d655de412e9bbf40faf5cdc2b6dd3a93f0b4d2722b0d455bab453d0676afe22",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment_helper.cc#L100-L171",
+      "original_reference_id": "compact_scalar_vector"
+    },
+    {
+      "id": "E18",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 232,
+      "end_line": 280,
+      "claim_supported": "Full scalar compaction rewrites forward rows and their document-ID mapping together.",
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "93862ae6c3cfaeba33b0ae6117bbddeb8835b976bc1e920f1ea9bb0642ecfd20",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment_helper.cc#L232-L280",
+      "original_reference_id": "compact_forward_rewrite"
+    },
+    {
+      "id": "E19",
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 934,
+      "end_line": 995,
+      "claim_supported": "Full compaction records filtered original positions in a bitmap shared with vector filtering.",
+      "file_sha256": "5c98a0933175e31bc79e4ff5e9f53218ebfb3697b49de4584ecf41bdfcc9c522",
+      "span_sha256": "fdccde00925901b952966a88fdb963117fa34f6f6e83831c8ccb2640c6c95c8e",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment_helper.cc#L934-L995",
+      "original_reference_id": "compact_filter_bitmap"
+    },
+    {
+      "id": "E20",
+      "path": "src/db/collection.cc",
+      "start_line": 1009,
+      "end_line": 1070,
+      "claim_supported": "Compaction results are committed through persisted metadata and loaded into the collection.",
+      "file_sha256": "5ef463e80b8e45bc8423621f47df60c140316a78faf7d557c48a8a2be8f0f3b8",
+      "span_sha256": "ad5ed749b1b72e98be39e01a0ba9788f5a8fbe4e61b20abe0f4b9006ffdd552f",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/collection.cc#L1009-L1070",
+      "original_reference_id": "persist_reload"
+    },
+    {
+      "id": "E21",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 536,
+      "end_line": 556,
+      "claim_supported": "Creation pre-marks requested vector indexes only for an initially FLAT schema, not the HNSW schema in this task.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "21cfaecde1e3c8f9cc032cf39c1865cde5ce5ebc9b171c3bd62f0e2e84c7f7c2",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L536-L556",
+      "original_reference_id": "initial_indexed_flag"
+    },
+    {
+      "id": "E22",
+      "path": "src/db/index/common/meta.h",
+      "start_line": 341,
+      "end_line": 355,
+      "claim_supported": "Segment metadata tracks whether a requested vector field index has been built.",
+      "file_sha256": "95b922926cba785f864caa2f9ff772a57ac230e15519ed23bac1b5b31fbee2a9",
+      "span_sha256": "7639c73b13a90cb46e1da9424270f35d710db85b14882dc6ea34b9c0144a00e1",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/common/meta.h#L341-L355",
+      "original_reference_id": "indexed_flag_definition"
+    },
+    {
+      "id": "E23",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4117,
+      "end_line": 4138,
+      "claim_supported": "Non-quantized insertion initializes a memory vector indexer with default index parameters.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "37faf3600f1059178b8dcb9403916126a26c086a4d3124063fd86117417c6477",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L4117-L4138",
+      "original_reference_id": "initial_flat_storage"
+    },
+    {
+      "id": "E24",
+      "path": "src/include/zvec/db/index_params.h",
+      "start_line": 570,
+      "end_line": 578,
+      "claim_supported": "The default non-quantized vector index parameters select FLAT storage.",
+      "file_sha256": "78db0e38fcfe1c209f4cb825dbfbac5dd8004c3027280ea43d04ad81baf5d9fd",
+      "span_sha256": "ba0419f68b07195d193bade95728f4310ef369bee87453dd759ecad0bdc3dadd",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/include/zvec/db/index_params.h#L570-L578",
+      "original_reference_id": "default_flat_params"
+    },
+    {
+      "id": "E25",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 4382,
+      "end_line": 4396,
+      "claim_supported": "Flush transfers memory vector indexers into persisted vector blocks with physical counts.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "5d0990a7e309c912ea8c9249f52bfd7cb84670f6399a1ee02637cebc221c6954",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L4382-L4396",
+      "original_reference_id": "flush_vector_transfer"
+    },
+    {
+      "id": "E26",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1470,
+      "end_line": 1486,
+      "claim_supported": "Successful requested-index building records the indexed vector field in segment metadata.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "7736c96c037024fbbb0071fba6686bfabeb92718ffe83572548036b573ed7e1b",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L1470-L1486",
+      "original_reference_id": "record_indexed_flag"
+    },
+    {
+      "id": "E27",
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1525,
+      "end_line": 1540,
+      "claim_supported": "A later same-parameter create_vector_index returns early when the requested index is already marked built.",
+      "file_sha256": "d7ad713381ade9b0d7eda4738d68818d32e428e11aec0c475421b20a644e87dd",
+      "span_sha256": "8e58980d421b4d91b221074c8c5c2a5ccd9f5f425dea48bd1ea319c417c95e14",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/index/segment/segment.cc#L1525-L1540",
+      "original_reference_id": "same_index_skip"
+    },
+    {
+      "id": "E28",
+      "path": "src/db/sqlengine/planner/query_planner.cc",
+      "start_line": 467,
+      "end_line": 493,
+      "claim_supported": "Scalar forward scans apply the segment deletion predicate to physical row IDs.",
+      "file_sha256": "a70a648be39e042f3159f54014d1d4e2e1ec0c6a009e8b6753ef808aeecc2708",
+      "span_sha256": "9c3f72c004e87b875feda7e917d65a2635e420adb71934c0e795808c35d0acee",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/sqlengine/planner/query_planner.cc#L467-L493",
+      "original_reference_id": "scalar_forward_scan"
+    },
+    {
+      "id": "E29",
+      "path": "src/db/sqlengine/planner/ops/check_not_filtered_op.cc",
+      "start_line": 21,
+      "end_line": 41,
+      "claim_supported": "The scalar predicate maps local rows to global IDs and tests the deletion filter.",
+      "file_sha256": "c3f007817c4ca97fe4d28e90829a43c901a81824e8b1ea7183d4cd54051088a7",
+      "span_sha256": "d8ac2e2f044665796cd384002fd17357ab0bee85027849065cbcb4bbfb8793f6",
+      "url": "https://github.com/alibaba/zvec/blob/68078e55e7ae9d705b8829b5d416e022060bebf7/src/db/sqlengine/planner/ops/check_not_filtered_op.cc#L21-L41",
+      "original_reference_id": "scalar_delete_predicate"
+    }
+  ],
+  "grading_policy": "Award only the integer point units explicitly defined below (no half-points). Each unit requires a correct causal statement, not merely a restatement of the prompt. Equivalent terminology and equivalent invariant-preserving repairs are accepted. Grade only the submitted final answer. Post-fix evidence is evaluator-only corroboration; solver receives only the frozen pre-fix source and source-neutral prompt.",
+  "disqualification_policy": {
+    "application": "Apply only to an explicit material assertion or recommendation in the final answer that contradicts the frozen evidence; an omission is scored by anchors and mandatory gates, not automatically treated as a contradiction. A claim clearly quoted and rejected by the answer is not an endorsement.",
+    "evidence_required": [
+      "short exact quotation from the answer",
+      "the violated disqualifier/contradiction ID",
+      "pre-fix source path and line range demonstrating the conflict, or the named evidence record for an unsupported execution claim",
+      "a short rationale"
+    ],
+    "uncertainty": "Do not manufacture an answer quotation or infer a disqualification solely from ambiguous wording; record the ambiguity and use ordinary point/citation rules. An unresolved factual dispute must be adjudicated before declaring pass.",
+    "records": [
+      {
+        "id": "C1",
+        "claim": "The single-segment vector-only path compacts forward rows in coordination with the filtered vectors, while identifying that same path as the cause.",
+        "evidence_ids": [
+          "E05",
+          "E08",
+          "E11"
+        ]
+      },
+      {
+        "id": "C2",
+        "claim": "There is no vector/forward association error; the scenario is solely ordinary approximate-search recall loss.",
+        "evidence_ids": [
+          "E08",
+          "E11",
+          "E15"
+        ]
+      },
+      {
+        "id": "C3",
+        "claim": "Read-only reopening repairs the persisted vector-key mapping.",
+        "evidence_ids": [
+          "E08",
+          "E20"
+        ]
+      },
+      {
+        "id": "C4",
+        "claim": "Disabling tombstone filtering during queries is the repair.",
+        "evidence_ids": [
+          "E16",
+          "E28",
+          "E29"
+        ]
+      },
+      {
+        "id": "C5",
+        "claim": "No vector storage or vector indexer exists before the first optimize, or an existing default FLAT indexer means the requested HNSW index is already marked built.",
+        "evidence_ids": [
+          "E21",
+          "E22",
+          "E23",
+          "E24",
+          "E25",
+          "E27"
+        ]
+      },
+      {
+        "id": "D1",
+        "claim": "Treat the original tail-only description as complete and explicitly deny wrong-vector associations.",
+        "evidence_ids": [
+          "E11",
+          "E15"
+        ]
+      },
+      {
+        "id": "D2",
+        "claim": "Every overwrite/delete followed by optimize is affected regardless of the maintenance path.",
+        "evidence_ids": [
+          "E05",
+          "E27",
+          "E17"
+        ]
+      },
+      {
+        "id": "D3",
+        "claim": "Repairing only absent tail rows with vectors fetched from the affected index fully repairs all wrong associations.",
+        "evidence_ids": [
+          "E11",
+          "E13",
+          "E15"
+        ]
+      },
+      {
+        "id": "D4",
+        "claim": "Assert a local runtime reproduction or passing upstream test execution without supporting execution evidence.",
+        "evidence_records": [
+          "evaluator/provenance/q003/original/source-checks.json",
+          "evaluator/provenance/q003/original/independent-review.json:independence_and_limits"
+        ]
+      }
+    ]
+  },
+  "not_required_or_not_proven": [
+    "Windows-specific cause",
+    "all index types or all versions have identical behavior",
+    "segfault mechanism or dimension/volume thresholds",
+    "exactly K missing IDs under every segment topology",
+    "global durable directory immunity after one optimize",
+    "ANN top-k or recall guarantees across arbitrary data"
+  ],
+  "judge_output_fields": [
+    "task_id",
+    "blinded_answer_id",
+    "criterion_scores",
+    "supporting_answer_quotes",
+    "verified_citations",
+    "unsupported_claims",
+    "critical_contradictions",
+    "total_points",
+    "source_grounded_success",
+    "reviewer_notes",
+    "final_answer_present",
+    "satisfied_point_unit_ids",
+    "core_citation_gate_results",
+    "disqualifications",
+    "failed_gates"
+  ],
+  "normalization_provenance": "evaluator/provenance/q003/normalization-note.json"
+}

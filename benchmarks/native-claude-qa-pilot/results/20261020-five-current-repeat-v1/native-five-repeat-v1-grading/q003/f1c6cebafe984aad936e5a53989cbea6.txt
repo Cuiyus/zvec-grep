@@ -1,0 +1,79 @@
+I have the complete picture. Here is the source-level analysis, all citations from this checkout (`/workspace`).
+
+## 1. Which optimize path the reported sequence takes
+
+After `insert 28 → delete 3 → flush`, there is exactly one persisted segment (28 physical rows; deletes are logical — see §2). In `CollectionImpl::optimize` (`src/db/collection.cc:910`), phase 1 snapshots persisted segments (`collection.cc:936-937`) and phase 2 calls `build_compact_task` (`collection.cc:946-948`).
+
+In `build_compact_task` (`collection.cc:1086-1174`):
+
+- Delete ratio = 3/28 ≈ 0.107, below `COMPACT_DELETE_RATIO_THRESHOLD = 0.3f` (`src/db/common/constants.h:41`), so `rebuild = false` (`collection.cc:1096-1104`).
+- With a single segment, the loop never fires; the tail block at `collection.cc:1160-1171` hits `current_group.size() == 1 && !rebuild` and creates a **`CreateVectorIndexTask`** — not a `CompactTask`. Note this tail block, unlike the in-loop variant (`collection.cc:1131-1135`), does not consult `all_vector_index_ready()`.
+
+`ExecuteCreateVectorIndexTask` (`src/db/index/segment/segment_helper.cc:1121-1133`) → `SegmentImpl::create_all_vector_index` (`src/db/index/segment/segment.cc:1466-1489`) → `create_vector_index` (`segment.cc:1519`). Since the freshly sealed HNSW segment was never marked vector-indexed (only `FLAT` fields are pre-marked at `segment.cc:551-556`), the skip at `segment.cc:1534-1539` does not trigger, and it builds the first persisted HNSW file via `merge_vector_indexer` (`segment.cc:1560-1561`).
+
+## 2. Root cause: the merge physically drops deleted rows but renumbers keys, while the scalar side keeps all 28 rows
+
+Deletes are purely logical: `SegmentImpl::Delete` → `internal_delete` only does `delete_store_->mark_deleted(g_doc_id)` and `id_map_->remove(pk)` (`segment.cc:933-937`, `1011-1025`). The forward store keeps 28 rows, `doc_ids_` (loaded from the forward block's `GLOBAL_DOC_ID` column, `segment.cc:3875-3914`) keeps 28 entries, and the dumped pre-index vector blocks keep 28 vectors keyed 0–27.
+
+Now the defect chain:
+
+1. `merge_vector_indexer` merges the segment's source vector indexers **with `filter_`** — `vector_indexer->Merge(to_merge_indexers, filter_, merge_options)` (`segment.cc:1511`). `filter_` is `SegmentIndexFilter(delete_store_, self)` (`segment.cc:482-483`), whose `is_filtered(local_row_id)` resolves `get_global_doc_id(row)` = `doc_ids_[row]` and checks the delete store (`segment.cc:464-476`, `4444-4451`).
+2. `VectorColumnIndexer::Merge` converts it to an engine filter and calls `index->merge(...)` (`src/db/index/column/vector_column/vector_column_indexer.cc:103-134`).
+3. `Index::merge` uses `MixedStreamerReducer` with **PK rewrite enabled** (`src/core/interface/index.cc:1048-1050`) and `reducer->reduce(filter)` (`index.cc:1071`).
+4. In `MixedStreamerReducer::read_vec`, filtered keys are skipped and each **surviving** vector is re-inserted under a fresh dense key `(*next_id)++` (`src/core/mixed_reducer/mixed_streamer_reducer.cc:288-292` and `:318`; `next_id` starts at the target's current count, `:151-161`).
+
+So the new HNSW file contains **25 vectors keyed 0–24**, where key *k* holds the vector of original row *k+3* (rows 0–2 were dropped). Meanwhile:
+
+- the forward store, `doc_ids_`, `id_map_`, and delete store are untouched (28 rows);
+- the new `BlockMeta` even *claims* `doc_count = doc_ids_.size()` = 28, `min/max_doc_id` from `doc_ids_.front()/back()` (`segment.cc:1568-1576`) — meta and file disagree;
+- `reload_vector_index` swaps this indexer in live (`segment.cc:1752-1810`, invoked from `collection.cc:1063-1070`), and phase 3 persists the new meta (`collection.cc:1028-1032`).
+
+**The read side assumes key == row position.** `CombinedVectorColumnIndexer` lays blocks out by `BlockMeta.doc_count` offsets and translates block-local keys via `block_offset + doc.key()` (`src/db/index/column/vector_column/combined_vector_column_indexer.cc:279-286`, `:56-66`); `VectorRecallNode` then uses result `doc_id()`s as row indices into `segment_->fetch(...)` (`src/db/sqlengine/planner/vector_recall_node.cc:225-231`), and delete filtering uses `segment_->get_filter()` keyed by the same row positions (`src/db/sqlengine/planner/doc_filter.h:37`; `segment.cc:1462-1464`).
+
+## 3. Why counts/scalars agree while vector results are wrong
+
+The scalar world is *internally consistent*: enumeration and `doc_count(filter)` (`segment.cc:617-625`) walk the forward store / `doc_ids_` and exclude rows whose `GLOBAL_DOC_ID` is in the delete store → 25 live docs, correct IDs, correct scalar payloads. Nothing there touches the vector index.
+
+The vector path is shifted by the number of preceding deletions (3 here):
+
+- Query with doc-0009's reference vector → exact match is the node holding it, at key 6 → row 6 → forward row 6 is **doc-0006** → a *wrong live ID* is returned. Generally, querying doc-*j* (j ≥ 6) returns doc-*(j−3)*.
+- Querying doc-0003/0004/0005 → keys 0/1/2 → rows 0–2 → `doc_ids_[0..2]` are the deleted g_doc_ids → dropped by the query-time delete filter → those live docs *vanish* from search.
+- Keys only span 0–24, so rows 25–27 (**doc-0025…doc-0027**) can never be produced → *live tail documents omitted*.
+- Vector fetch: `CombinedVectorColumnIndexer::Fetch(segment_doc_id)` accepts 25–27 because the block meta claims doc_count 28 (`combined_vector_column_indexer.cc:427-441`), then `VectorColumnIndexer::Fetch` → `index->fetch(doc_id,...)` fails on the 25-entry file (`vector_column_indexer.cc:150-161`) → *vector payload fetch fails while scalar fetch succeeds* (scalar fetch reads the 28-row forward store).
+- Reopening read-only changes nothing: the corrupt 25-entry HNSW file, the 28-count `BlockMeta`, and the `vector_indexed` mark (`segment.cc:1540`) are all persisted; `Open`/`load_vector_index_blocks` (`segment.cc:478-533`, `:3979`) reload them verbatim.
+
+## 4. The two controls
+
+- **Optimizing the empty collection first**: `optimize()` phase 1 finds no records in the writing segment and `persist_segments.size() == 0`, returning `Status::OK()` immediately (`collection.cc:929-942`). It builds nothing, so the later post-delete optimize still takes the identical buggy `CreateVectorIndexTask` path.
+- **Optimizing the initial non-empty data before deleting**: that first optimize also takes `CreateVectorIndexTask`, but `delete_store_` is empty, so `filter_` rejects nothing; the reducer emits keys 0–27 matching rows 0–27 — the invariant holds — and the meta marks the field `vector_indexed` with matching params. Deletes are then logical only. The second optimize builds the same task, but `create_vector_index` now hits the skip at `segment.cc:1534-1539` (`vector_indexed(column) && *field->index_params() == *index_params`), returns empty indexer maps, and `reload_vector_index` leaves the existing (correct, 28-key) indexers in place (`segment.cc:1768-1777`, `iter == end`). So the aligned index survives and query-time filtering handles the deletes. This is order-dependent avoidance, not a fix — the latent defect (`filter_` at `segment.cc:1511`) still fires whenever an index is *first* built (or rebuilt with changed params) while deletes exist and the ratio stays under 0.3.
+
+## 5. The high-delete-ratio path is different — and correct
+
+At ≥ 30% deleted, `rebuild = true` (`collection.cc:1100-1104`) and the tail/group logic emits a **`CompactTask` carrying the delete filter** (`collection.cc:1119-1127`, `:1166-1168`). `ExecuteCompactTask` (`segment_helper.cc:100-175`) compacts *both sides together*:
+
+- `ReduceScalar` scans inputs in order, physically drops filtered rows from the new forward store, and records each deleted row's **original scan position** in `delete_row_id_bitmap` (`segment_helper.cc:177-322`; `FilterRecordBatch` adds `i + row_id_offset` at `:956-971`, bitmap add at `:969`). Output `doc_count`/`min`/`max_doc_id` reflect survivors only (`:295-303`).
+- `ReduceVectorIndex` wraps that bitmap as a `RowIdFilter` (`segment_helper.cc:143-153`, class at `:84-98`) and merges. `CanReuseFirstIndexer` explicitly refuses file reuse when a filter is present (`segment_helper.cc:767-772`), so a full re-merge runs — the same dense `(*next_id)++` renumbering (`mixed_streamer_reducer.cc:288-318`) — but because the scalar and vector sides iterate the same input segments in the same order and drop the same positions, **new key *k* == new forward row *k***. The new segment's `doc_ids_` is rebuilt from the survivors' `GLOBAL_DOC_ID`s, so `get_global_doc_id(k)` is again correct.
+
+(The multi-segment, low-ratio compact passes `filter = nullptr` — `collection.cc:1137-1140` — keeping deleted rows physically on both sides, which is also consistent. The single-segment `CreateVectorIndexTask` is the only path that compacts the vector side alone.)
+
+## 6. Mapping invariant a fix must preserve
+
+For every persisted segment and vector column, at every row position *r* ∈ [0, `doc_ids_.size()`):
+
+> the concatenated vector-index key space (blocks ordered as in `CombinedVectorColumnIndexer`, offsets = Σ preceding `BlockMeta.doc_count`, `combined_vector_column_indexer.cc:279-286`) must contain exactly one entry at key *r*, holding the vector of the document whose `g_doc_id` is `doc_ids_[r]` — and each vector block's `BlockMeta.doc_count` must equal the number of keys actually present in that block's file.
+
+Logically deleted rows must either remain present in *both* key spaces (filtered at query time via delete store), or be removed from *both* together with identical dense renumbering (the rebuild path). Any maintenance operation must keep `key → row → doc_ids_[row] → pk` a single consistent chain, or fail. Concretely, the minimal fix direction is to stop passing `filter_` at `segment.cc:1511` for in-place index creation (deletes are already honored at query time), or route any optimize with a non-empty delete store through the filtered `CompactTask` rebuild.
+
+## 7. Regression check that detects wrong associations, not just counts
+
+Count-only assertions pass on the corrupt state (25 == 25), so the test must bind *identity to vector content* — the unit-basis + COSINE setup makes matches exact and unambiguous:
+
+1. Run the failing sequence verbatim (insert doc-0000…doc-0027 with basis vectors e₀…e₂₇ held outside; delete doc-0000/1/2; flush; `optimize()`).
+2. **Per-live-ID vector round trip**: for each live ID *p*, `fetch(p, include_vector=true)` must succeed and return exactly the saved eₚ (element-wise equality). This alone catches the tail-fetch failure (rows 25–27) and any payload corruption.
+3. **Search identity assertion**: for each live ID *p*, search with saved eₚ, topk=1; assert the returned pk == *p* (and distance ≈ 0). On the bug, p ≥ 6 returns doc-(p−3) and p ∈ {3,4,5} returns nothing — both fail here while counts stay at 25.
+4. **Exhaustiveness**: one search per live ID collecting top-1 pks must yield exactly the 25 live IDs (catches "tail docs unreachable").
+5. **Durability**: close, reopen read-only, repeat steps 2–4 (the corrupt index is persisted, so this must be part of the check).
+6. Optional structural invariant check: for each persisted segment, Σ vector-block `BlockMeta.doc_count` == segment `doc_count` (28 pre-compaction semantics), and indexer entry count == claimed block doc_count — catches the meta/file mismatch at `segment.cc:1573-1575` directly.
+7. Run the same suite under the > 30% delete ratio (e.g., delete 9 of 28) to pin the rebuild path (`ReduceScalar` + `RowIdFilter` merge) against regressions, and under the "optimize-before-delete" control so a future fix isn't credited by ordering luck.
+
+All conclusions above are drawn from the paths in this checkout; the defect is confined to the low-delete-ratio, single-segment `CreateVectorIndexTask` path (`collection.cc:1160-1171` → `segment_helper.cc:1121-1133` → `segment.cc:1491-1576` → `index.cc:1016-1077` → `mixed_streamer_reducer.cc:283-325`).

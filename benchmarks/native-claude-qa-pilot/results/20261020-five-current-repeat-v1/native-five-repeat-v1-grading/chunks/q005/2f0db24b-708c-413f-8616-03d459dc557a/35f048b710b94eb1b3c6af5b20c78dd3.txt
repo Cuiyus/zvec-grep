@@ -1,0 +1,59 @@
+All the evidence is in place. Here is the analysis, grounded in the supplied zvec source.
+
+# Shared validation core
+
+All three identifier kinds funnel into one native header/impl:
+
+- **Limits (bytes, UTF-8):** `kMaxDocumentIdBytes = 1024`, `kMaxCollectionNameBytes = 256`, `kMaxFieldNameBytes = 64` — `src/db/index/common/identifier_validation.h:23-25`
+- **`validate_utf8_name`** (`src/db/index/common/identifier_validation.cc:50-79`): rejects empty, rejects `value.size() > max_bytes` (byte length of the encoded string), rejects invalid UTF-8, and rejects a fixed forbidden-codepoint set: NUL, `\n`, `\r`, `\t`, C0 controls ≤ 0x1F, 0x7F–0x9F, U+2028, U+2029 (`forbidden_codepoint_reason`, lines 28-48). Everything else — spaces, CJK, `/`, emoji — is allowed.
+- **Doc IDs and collection names use that lenient rule** (`validate_document_id` :91-93, `validate_collection_name` :95-98). **Field names use a stricter byte-wise rule** (`validate_field_name` :100-130): only `A-Z a-z 0-9 _ -`; any byte ≥ 0x80 → "contains a non-ASCII character"; reserved internal names also rejected (:81-86, :125-128).
+- Call sites: `Doc::validate_and_sanitize` → `validate_document_id` (`src/db/index/common/doc.cc:728-736`); `FieldSchema::validate` → `validate_field_name` (`schema.cc:84-87`); `CollectionSchema::validate` → `validate_collection_name` plus per-field `field->validate()` (`schema.cc:406-447`), invoked on create via `CollectionImpl::create()` → `schema_->validate()` (`src/db/collection.cc:2529-2531`).
+- The Python layer adds only type + UTF-8-encodability checks (surrogates → `TypeError`), never charset checks: `python/zvec/model/_validation.py`, `collection_schema.py:68-85`, `field_schema.py:109-128`, `convert.py:28-32`.
+
+# Probe 1 — collection name `商品 2026/😀` vs. field name `标题`
+
+**Not both.** The two identifiers are held to different rules:
+
+- **Collection name `商品 2026/😀`: ACCEPTED.** 16 UTF-8 bytes (3+3+1+4+1+4) ≤ 256; valid UTF-8; none of its code points (CJK, space, digits, `/`, U+1F600) is in the forbidden set (`identifier_validation.cc:28-48, 50-79, 95-98`).
+- **Scalar field name `标题`: REJECTED.** `validate_field_name` walks raw bytes and accepts only ASCII letters/digits/`_`/`-`; every byte of `标题` is ≥ 0x80 → `InvalidArgument` "contains a non-ASCII character" (`identifier_validation.cc:100-124`). It fails the charset rule, not the 64-byte length rule.
+
+# Probe 2 — document IDs
+
+- **`客户 42/😀`: PERMITTED.** 14 UTF-8 bytes (3+3+1+1+1+1+4) ≤ 1024; space, `/`, and the emoji are not forbidden code points (`identifier_validation.cc:91-93` → :50-79).
+- **`"汉" * 341`: PERMITTED.** 341 × 3 = **1023 bytes** ≤ 1024.
+- **`"汉" * 342`: REJECTED.** 342 × 3 = **1026 bytes** > 1024 → `InvalidArgument` "…exceeds 1024 bytes (got 1026)" (`identifier_validation.cc:55-59`).
+- **Unit and limit:** the check is `value.size() > max_bytes` on the `std::string_view` of the **UTF-8 encoded bytes** that pybind produced from the Python `str` — i.e., **bytes, not characters/code points** — with `kMaxDocumentIdBytes = 1024` and strict `>` comparison (exactly 1024 bytes would pass). This is why the 341/342 boundary lands where it does: a 3-byte character straddles the 1024-byte limit at 342 chars.
+
+# Probe 3 — batch with `客户 42/😀`, `bad<TAB>id`, `fresh-after`
+
+**Python raises an exception (`ValueError`); none of the three documents is inserted.**
+
+Trace:
+
+1. Python `collection.insert` converts all docs first (`python/zvec/model/collection.py:337-355`, `convert.py:21-51`). A TAB is encodable UTF-8, so `set_pk("bad\tid")` passes the binding (`src/binding/python/model/python_doc.cc:54`) with no `TypeError` — Python-side conversion never inspects identifier content.
+2. Binding `Insert` releases the GIL, calls native `self.insert(docs)` returning `Result<WriteResults>` = `tl::expected<std::vector<Status>, Status>`, then `unwrap_expected` (`src/binding/python/model/python_collection.cc:286-294, 69-86`).
+3. Native `CollectionImpl::insert` → `write_impl(docs, WriteMode::INSERT)` (`src/db/collection.cc:1592-1594, 1650`). **Before acquiring the write lock and before any write**, it runs a pre-validation loop over *every* doc: `doc.validate_and_sanitize(...)`; on failure `CHECK_RETURN_STATUS_EXPECTED` returns `tl::make_unexpected(status)` — the whole batch's error channel (`collection.cc:1659-1662`; `src/db/common/typedef.h:180-183`).
+4. `validate_and_sanitize` → `validate_document_id(pk_)` (`doc.cc:734-736`) → `forbidden_codepoint_reason('\t')` = "contains a tab" → `Status::InvalidArgument` (`identifier_validation.cc:35-37`).
+5. Back in the binding, `unwrap_expected` sees the error; `throw_if_error` maps `INVALID_ARGUMENT` → `py::value_error` (`python_collection.cc:49-56`).
+
+So `d2`'s tab aborts the batch during pre-write validation; the write loop (`collection.cc:1675-1698`) is never entered, and `d1` (`客户 42/😀`, itself perfectly valid) and `d3` are **not** inserted.
+
+# Probe 4 — batch with `fresh-before`, `seed-id` (existing), `fresh-after`
+
+**No exception. Python returns a `list[Status]` of length 3: `[OK, ALREADY_EXISTS, OK]`. The first and last documents are inserted; the existing `seed-id` document is NOT overwritten (payload stays `old`).**
+
+Trace:
+
+1. All three IDs pass the same pre-validation loop (`collection.cc:1659-1662`) — existence is *not* checked there.
+2. The per-doc write loop calls `handle_insert` → `writing_segment_->insert(doc)` (`collection.cc:1675-1698, 1646-1648`), pushing each doc's `Status` into `results` (:1697) and finally returning the vector as a **value** (:1700).
+3. `SegmentImpl::insert` checks the collection-shared `id_map_` (shared across segments — passed at segment creation, e.g. `collection.cc:1764-1767`) and returns `Status::AlreadyExists("insert failed: doc_id[seed-id] already exists in collection")` **before** appending WAL or mutating anything (`src/db/index/segment/segment.cc:990-1003`). Overwriting is exclusively the UPSERT path's behavior: `internal_upsert` marks the old row deleted, then re-inserts (`segment.cc:975-982`); INSERT never touches the existing row.
+4. Since `write_impl` returned a value (not `unexpected`), `unwrap_expected` passes it through; pybind (`pybind11/stl.h`, `python_collection.cc:17`) converts `std::vector<Status>` (`src/include/zvec/db/doc.h:366`) to a Python list of bound `Status` objects (`python_type.cc:189+`), and `insert` returns it verbatim (`collection.py:351-355`).
+
+# Why the two batches have different failure scopes
+
+The boundary has **two distinct error channels**:
+
+- **Batch-level channel (`tl::expected`'s error arm → Python exception).** Used for conditions checked *about the batch as a whole before/around writing*: invalid identifiers (`collection.cc:1659-1662`), batch size > `kMaxWriteBatchSize = 1024` (:1669-1673; `src/db/common/constants.h:56`), read-only/closed/destroyed state (:1652-1657). The binding turns this into an exception (`python_collection.cc:49-86`).
+- **Per-document channel (`WriteResults` value → Python `list[Status]`).** Used for outcomes discovered *while executing each write*: duplicate-on-insert (`segment.cc:992-995`), not-found-on-update (`collection.cc:1636-1641`, `segment.cc:1007-1010`). These never throw; the loop continues past a failed doc.
+
+**Validation guarantee vs. transactional atomicity.** The all-or-nothing outcome in probe 3 is *not* a transaction. It is purely an ordering guarantee: every doc is validated before the write lock is taken and before the first `handle_insert` runs, so an identifier error provably means zero writes. The write loop itself is **not atomic**: duplicate failures coexist with successes by design (probe 4), and a batch-level error *inside* the loop (e.g., a failed segment switch, `collection.cc:1676-1678`, excluded by the probe's assumptions) would return an exception after earlier docs were already durably written — there is no rollback of previously pushed per-doc results. A migrating client should therefore treat a raised `ValueError` from `insert` as "nothing was written," but must inspect the returned `list[Status]` element-wise for partial-success outcomes like `ALREADY_EXISTS`.

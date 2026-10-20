@@ -1,0 +1,60 @@
+All the evidence is gathered. Here's the full analysis, grounded in the supplied source.
+
+# Where identifier validation lives
+
+The single native authority is `src/db/index/common/identifier_validation.cc`:
+
+- **Forbidden codepoints** (lines 28–48): NUL, `\n`/`\r`, **`\t` (tab, lines 35–37)**, other C0/C1 controls (`≤0x1F`, `0x7F–0x9F`), U+2028, U+2029. Nothing else — spaces, `/`, CJK, emoji are all fine.
+- **`validate_utf8_name`** (lines 50–79): rejects empty, rejects `value.size() > max_bytes` — the unit is **UTF-8 bytes** (`std::string_view::size()`, line 55), not characters — then walks codepoints with utf8proc rejecting invalid UTF-8 and forbidden codepoints.
+- **`validate_document_id`** (91–93) → `kMaxDocumentIdBytes = 1024`; **`validate_collection_name`** (95–98) → `kMaxCollectionNameBytes = 256` (constants at `identifier_validation.h:23–25`).
+- **`validate_field_name`** (100–130) is stricter and different in kind: a byte-wise charset allowing only `A–Z a–z 0–9 _ -`; any byte `≥0x80` fails as "contains a non-ASCII character" (lines 110–124).
+
+Wiring: `FieldSchema::validate()` calls `validate_field_name` (`src/db/index/common/schema.cc:84–87`); `CollectionSchema::validate()` calls `validate_collection_name` then each field's `validate()` (`schema.cc:405–446`); schema validation runs at collection create (`src/db/collection.cc:2529–2531`). Doc IDs are validated by `Doc::validate_and_sanitize` → `validate_document_id` (`src/db/index/common/doc.cc:728–736`).
+
+# Probe 1 — collection name `商品 2026/😀`, field name `标题`
+
+**No — not both.** The collection name is accepted; the field name is rejected.
+
+- `商品 2026/😀` = 17 UTF-8 bytes (3+3+1+4+1+1+4) ≤ 256, non-empty, valid UTF-8, and contains no forbidden codepoint (space, digits, `/`, CJK, and U+1F600 are all permitted by lines 28–48). `validate_collection_name` imposes **no charset restriction** — only size, UTF-8 validity, and the control-character blocklist. (Consistent with the round-trip test using `"集合 / 2026 🔎"`, `python/tests/test_name_validation.py:33–46`; per the probe's framing, path handling in `create_and_open` is irrelevant — the name never needs to be a path component.)
+- `标题` is only 6 bytes ≤ 64, but `validate_field_name`'s charset loop (`identifier_validation.cc:110–124`) rejects every byte ≥ 0x80: `InvalidArgument("Invalid schema: field[标题] contains a non-ASCII character; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)")`.
+
+# Probe 2 — document IDs
+
+- **`客户 42/😀`: permitted.** 14 UTF-8 bytes ≤ 1024; space, `/`, CJK, emoji are not forbidden codepoints for IDs (`validate_document_id` → `validate_utf8_name`, `identifier_validation.cc:91–93, 28–79`). The round-trip test likewise inserts `"订单-2026-🙂"` (`test_name_validation.py:49–72`).
+- **`"汉" * 341` = 1023 bytes: permitted** (limit check is strict `>`, line 55, so exactly 1024 bytes is also permitted — the test's `"界"*341 + "a"` = 1024 bytes round-trips).
+- **`"汉" * 342` = 1026 bytes: rejected** — `"Invalid doc: id[...] exceeds 1024 bytes (got 1026)"` (lines 55–59).
+- **Size unit and limit:** UTF-8 **bytes** of the encoded string (`kMaxDocumentIdBytes = 1024`, `identifier_validation.h:23`), not Unicode codepoints. 341 CJK chars fit (1023 B); 342 do not (1026 B).
+
+# Probe 3 — batch `[客户 42/😀, bad<TAB>id, fresh-after]`
+
+**Python raises `ValueError`; no per-document statuses are returned, and none of the three documents is inserted** — including the two valid ones.
+
+Trace:
+
+1. Python `Collection.insert` converts every doc first (`python/zvec/model/collection.py:337–354` → `convert_to_cpp_doc`, `python/zvec/model/convert.py:21–51`). The TAB ID survives conversion: `set_pk` is an unvalidated setter (`src/binding/python/model/python_doc.cc:54`), and TAB is encodable UTF-8, so no `TypeError`/`UnicodeEncodeError` path fires (`_validation.py:17–25`).
+2. The binding `Insert` calls native `self.insert(docs)` and `unwrap_expected`s the batch-level `Result<WriteResults>` (`src/binding/python/model/python_collection.cc:286–294`).
+3. Native `CollectionImpl::write_impl` (`src/db/collection.cc:1650–1697`) runs a **pre-validation pass over the whole batch before acquiring the write lock and before any write loop**: lines 1659–1662 call `doc.validate_and_sanitize(...)` per doc with `CHECK_RETURN_STATUS_EXPECTED`, which on failure immediately returns `tl::make_unexpected(status)` for the entire batch (`src/db/common/typedef.h:180–183`). Doc 2's TAB hits `forbidden_codepoint_reason` (`identifier_validation.cc:35–37`) → batch-level `InvalidArgument`.
+4. Back in the binding, `throw_if_error` maps `INVALID_ARGUMENT` → `py::value_error` (`python_collection.cc:49–56`), surfacing as `ValueError("Invalid doc: id[...] contains a tab")`.
+
+Because the failure occurs strictly before the per-doc write loop (lines 1676–1694), no WAL append, id-map mutation, or segment write ever happens for **any** doc — the rejection is all-or-nothing by construction. This is exactly the contract asserted by `test_invalid_id_rejects_batch_before_writing` (`test_name_validation.py:87–111`: `ValueError`, and the valid companion doc is absent afterward).
+
+# Probe 4 — batch `[fresh-before, seed-id (duplicate), fresh-after]` via `insert`
+
+**No exception. Python returns a list of three `Status` objects** (`collection.py:337–354`; `Status` is bound with `.ok()` at `src/binding/python/typing/python_type.cc:189–214`):
+
+- `results[0]` OK → `fresh-before` **inserted**.
+- `results[1]` not OK → `AlreadyExists("insert failed: doc_id[seed-id] already exists in collection")`. The duplicate is caught in `SegmentImpl::insert` at `src/db/index/segment/segment.cc:990–996` — **before** `append_wal` and `internal_insert`, so nothing about the existing doc is touched.
+- `results[2]` OK → `fresh-after` **inserted**.
+- **The existing document is NOT overwritten**: payload stays `old`. INSERT mode never deletes/replaces an existing version; contrast `internal_upsert`, which explicitly `mark_deleted`s the old doc before re-inserting (`segment.cc:974–982`). Overwrite-on-duplicate only happens via `upsert` (`collection.cc:1601–1603`, `handle_upsert` at 1634–1636).
+
+Note the status-code nuance: `throw_if_error` would map a *batch-level* `ALREADY_EXISTS` to `RuntimeError` (`python_collection.cc:57–64`), but a per-doc duplicate never becomes the batch error — the batch `Result` is OK and the failure travels inside the `WriteResults` vector (`using WriteResults = std::vector<Status>`, `src/include/zvec/db/doc.h:366`).
+
+# Why the two batches have different failure scopes
+
+The boundary has **two distinct failure planes**:
+
+1. **Batch-level precondition plane** (probe 3): identifier/schema validity and batch size are checked in `write_impl` *before* the write lock and before any doc is written (`collection.cc:1659–1674`; batch-size check 1667–1673). Any failure returns one error `Status` for the whole call, which the binding converts to a Python exception (`python_collection.cc:49–66, 286–294`). All-or-nothing here is a **validation guarantee**: nothing was ever written, so there is nothing to roll back.
+
+2. **Per-document execution plane** (probe 4): once past validation, the write loop processes docs one at a time; each doc's `Status` is pushed into `results` and **the loop continues regardless of individual failures** (`collection.cc:1676–1694`). A duplicate is a runtime, per-doc condition detected inside `SegmentImpl::insert` (`segment.cc:990–1005`). Docs before the failure are already durably written (WAL appended, id-map updated) and are **not** undone; docs after it still proceed.
+
+So there is **no transaction atomicity across a batch's write phase** — the code provides no rollback of earlier per-doc successes when a later doc fails at execution time (`write_impl` has no compensating loop; the only rollback in the file is for version/segment metadata during schema switches, e.g. `collection.cc:1731–1736`). The atomic-looking behavior in probe 3 is purely an artifact of validation running before any mutation. A migrating client should therefore expect: invalid identifiers ⇒ exception, guaranteed zero writes; duplicates under `insert` ⇒ normal return with per-doc statuses, partial success, and the pre-existing document preserved unchanged.

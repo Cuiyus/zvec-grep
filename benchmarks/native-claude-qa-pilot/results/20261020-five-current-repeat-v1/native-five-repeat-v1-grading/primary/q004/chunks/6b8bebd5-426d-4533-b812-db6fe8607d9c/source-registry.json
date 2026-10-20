@@ -1,0 +1,398 @@
+{
+  "schema_version": 1,
+  "task_id": "q004",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-five-repeat-v1-preparation/prepared/architecture/q004/tasks/zvec-q004/environment/source",
+  "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+  "verification": {
+    "files": 1596,
+    "inventory_sha256": "129579aae937735ed79c444bd6f83a05e42058a679e0077ff39599c9ce5d4eef",
+    "exact_file_set_and_bytes_verified": true,
+    "curated_spans_verified": 21
+  },
+  "spans": {
+    "src/binding/python/model/common/python_config.cc:153-158": {
+      "path": "src/binding/python/model/common/python_config.cc",
+      "start_line": 153,
+      "end_line": 158,
+      "file_sha256": "89c975b2d3e17fd8b06cb4ea37ba93d5fe2cf5d8f10c7b6db5216e9475172116",
+      "span_sha256": "b3f04c24beec426044686dc96fbfbceeddca683ba444b55fe9cf2752db46a972",
+      "text": "    // set optimize thread count\n    if (has_key(config_dict, \"optimize_threads\")) {\n      auto o = get_if<int32_t>(config_dict, \"optimize_threads\").value();\n      if (o <= 0) throw py::value_error(\"optimize_threads must be positive\");\n      data.optimize_thread_count = static_cast<uint32_t>(o);\n    }\n"
+    },
+    "src/db/common/global_resource.cc:21-32": {
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 21,
+      "end_line": 32,
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "a527bfc17117a13a6633aa0f73e60a26fa7d02ca863d1f50b5a54f8b0d02d688",
+      "text": "void GlobalResource::initialize() {\n  static std::once_flag flag;\n  std::call_once(flag, [this]() {\n    this->query_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().query_thread_count(),\n        GlobalConfig::Instance().query_thread_binding()));\n    this->optimize_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().optimize_thread_count(),\n        GlobalConfig::Instance().optimize_thread_binding()));\n    zvec::ailego::MemoryLimitPool::get_instance().init(\n        GlobalConfig::Instance().memory_limit_bytes());\n  });\n"
+    },
+    "src/db/collection.cc:986-992": {
+      "path": "src/db/collection.cc",
+      "start_line": 986,
+      "end_line": 992,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "c587f8e9d2f278d1b0a1147b18cdbe3df113c1bd44bcb88a3bb79cfd320999b5",
+      "text": "  // Phase 2: lock-free optimize. Readers and writers proceed freely.\n  auto delete_store_clone = delete_store_->clone();\n  auto tasks =\n      build_compact_task(schema_, persist_segments, options.concurrency_,\n                         delete_store_clone->make_filter());\n  auto s = execute_compact_task(tasks);\n  CHECK_RETURN_STATUS(s);\n"
+    },
+    "src/db/collection.cc:1198-1207": {
+      "path": "src/db/collection.cc",
+      "start_line": 1198,
+      "end_line": 1207,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "afc8c00262de04b7ada851cc830ca155094965e0e770eeef1cc1202d9ed164f2",
+      "text": "  if (current_group.size() > 0) {\n    SegmentTask::Ptr task;\n    if (current_group.size() == 1 && !purge_deleted_docs) {\n      task = SegmentTask::CreateCreateVectorIndexTask(\n          CreateVectorIndexTask{current_group[0], \"\", nullptr, concurrency});\n    } else {\n      task = SegmentTask::CreateCompactTask(CompactTask{\n          path_, schema, current_group, allocate_segment_id_for_tmp_segment(),\n          purge_deleted_docs ? filter : nullptr, !options_.enable_mmap_,\n          concurrency});\n"
+    },
+    "src/db/index/segment/segment.cc:1549-1569": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1549,
+      "end_line": 1569,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "5ba382f6158673020a69c446902522c994085c1258d3c73dd9d2d49c9808b931",
+      "text": "Result<VectorColumnIndexer::Ptr> SegmentImpl::merge_vector_indexer(\n    const std::string &index_file_path, const FieldSchema &field,\n    const std::vector<VectorColumnIndexer::Ptr> &source_indexers,\n    int concurrency) {\n  VectorColumnIndexer::Ptr vector_indexer =\n      std::make_shared<VectorColumnIndexer>(index_file_path, field);\n\n  vector_column_params::ReadOptions options{options_.enable_mmap_, true};\n\n  auto s = vector_indexer->open(options);\n  CHECK_RETURN_STATUS_EXPECTED(s);\n  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n  // Keep tombstoned vectors: forward rows are unchanged.\n  s = vector_indexer->merge(source_indexers, nullptr, merge_options);\n"
+    },
+    "src/db/index/segment/segment_helper.cc:799-811": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 799,
+      "end_line": 811,
+      "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+      "span_sha256": "b8e30bca91e7268b72712f54a42270aa24e0877694ed1ecb009285193aa27b3f",
+      "text": "Status SegmentHelper::MergeWithOptionalReuse(\n    const std::string &output_index_path, const FieldSchema &index_field,\n    std::vector<VectorColumnIndexer::Ptr> source_indexers,\n    const IndexFilter::Ptr &filter, int concurrency,\n    VectorColumnIndexer::Ptr *merged_indexer) {\n  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n"
+    },
+    "src/db/index/column/vector_column/vector_column_params.h:72-75": {
+      "path": "src/db/index/column/vector_column/vector_column_params.h",
+      "start_line": 72,
+      "end_line": 75,
+      "file_sha256": "2e703cc633f80707b11a0d119ae469265332d33ca1e13ba1a81df26105c4dd68",
+      "span_sha256": "ff31bda9c3e0ce972122c263398650be8c2437b33558105bccc1e99dc891239c",
+      "text": "struct MergeOptions {\n  uint32_t write_concurrency{1};\n  ailego::ThreadPool *pool{nullptr};\n};\n"
+    },
+    "src/db/index/column/vector_column/vector_column_indexer.cc:123-132": {
+      "path": "src/db/index/column/vector_column/vector_column_indexer.cc",
+      "start_line": 123,
+      "end_line": 132,
+      "file_sha256": "f69ece7d53509eebff6b844ae3a5ba1e9e18e606e6711b9a876e03047a86e5e8",
+      "span_sha256": "6162cdba427d0265d3d73914afcf26b4262708265ccf53401d4ed26e9229c42b",
+      "text": "  auto engine_filter =\n      ProximaEngineHelper::convert_to_engine_filter(filter.get());\n  if (engine_filter == nullptr) {\n    return Status::InvalidArgument(\"Failed to convert filter\");\n  }\n  if (0 !=\n      index->merge(engine_indexers, *engine_filter,\n                   {merge_options.write_concurrency, merge_options.pool})) {\n    return Status::InternalError(\"Failed to merge index\");\n  }\n"
+    },
+    "src/core/interface/index.cc:1429-1452": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1429,
+      "end_line": 1452,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "deaefd25d6a2ac5122722e75649168e253dc73c7e46a25223f3e34bbc9856f51",
+      "text": "  if (options.write_concurrency == 0) {\n    LOG_ERROR(\"Write concurrency must be greater than 0\");\n    return core::IndexError_InvalidArgument;\n  }\n  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n\n  ailego::Params reducer_params;\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,\n                     true);\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,\n                     effective_write_concurrency);\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:742-768": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 742,
+      "end_line": 768,
+      "file_sha256": "1b614674c5b206658a5fd6ebe00c2640bffdfe792ccec5dcc49f6d4a394e1e04",
+      "span_sha256": "14a86c81e15082a2d40ab33c8e5f5b3c4dcb616dfca49379c1fdc5bf785d3339",
+      "text": "int MixedStreamerReducer::index_build(IndexHolder::Pointer target_holder) {\n  auto threads =\n      std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_);\n  if (target_builder_converter_) {\n    int ret = core::IndexConverter::TrainAndTransform(target_builder_converter_,\n                                                      target_holder, threads);\n    if (ret != 0) {\n      LOG_ERROR(\"Failed to convert target holder, ret=%d\", ret);\n      return merged_holder_ && merged_holder_->status() != 0\n                 ? merged_holder_->status()\n                 : ret;\n    }\n    target_holder = target_builder_converter_->result();\n    if (!target_holder) {\n      LOG_ERROR(\"Target builder converter returned a null holder\");\n      return core::IndexError_Runtime;\n    }\n  }\n  int ret = target_builder_->train(threads, target_holder);\n  if (merged_holder_ && merged_holder_->status() != 0) {\n    return merged_holder_->status();\n  }\n  if (ret != 0) {\n    LOG_ERROR(\"Failed to train target builder, ret=%d\", ret);\n    return ret;\n  }\n  ret = target_builder_->build(std::move(threads), target_holder);\n"
+    },
+    "src/include/zvec/core/framework/index_threads.h:169-205": {
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 169,
+      "end_line": 205,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "99be2b80a558efa605250aec1ed3d4fb7f50f7eaf10bb3b51dd1297ef4e9a450",
+      "text": "/*! Borrowed Single Queue Index Threads\n *\n *  Adapts an existing thread pool to IndexThreads. The caller must keep the\n *  pool alive for the lifetime of this object.\n */\nclass BorrowedSingleQueueIndexThreads : public IndexThreads {\n public:\n  //! Constructor\n  explicit BorrowedSingleQueueIndexThreads(ailego::ThreadPool &pool)\n      : pool_(pool) {}\n\n  //! Destructor\n  ~BorrowedSingleQueueIndexThreads() override = default;\n\n  //! Retrieve thread count in pool\n  size_t count() const override {\n    return pool_.count();\n  }\n\n  //! Stop all threads\n  void stop() override {\n    pool_.stop();\n  }\n\n  //! Submit a task to be executed asynchronous\n  void submit(ailego::ClosureHandler &&task) override {\n    while (pool_.pending_count() >= kMaxQueueSize) {\n      std::this_thread::sleep_for(std::chrono::milliseconds(1));\n    }\n    pool_.enqueue_and_wake(std::move(task));\n  }\n\n  //! Make a task group\n  TaskGroup::Pointer make_group() override {\n    return std::make_shared<SingleQueueIndexThreads::SingleQueueTaskGroup>(\n        pool_.make_group());\n  }\n"
+    },
+    "src/core/framework/index_converter.cc:27-35": {
+      "path": "src/core/framework/index_converter.cc",
+      "start_line": 27,
+      "end_line": 35,
+      "file_sha256": "130554868620aa1aa68e9ba4c4e1de320be04854bcdd746541b96d251e4b8ccb",
+      "span_sha256": "fdbafed6ead6b9d1ef08f15adee9c195dade0ce5a9a669303a4aa35a951b012b",
+      "text": "int IndexConverter::TrainAndTransform(const IndexConverter::Pointer &converter,\n                                      IndexHolder::Pointer holder,\n                                      IndexThreads::Pointer threads) {\n  auto two_pass_holder = IndexHelper::MakeTwoPassHolder(std::move(holder));\n  int ret = converter->train(two_pass_holder, std::move(threads));\n  if (ret == 0) {\n    ret = converter->transform(std::move(two_pass_holder));\n  }\n  return ret;\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:389-406": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 389,
+      "end_line": 406,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "74e7cd736883b452553d0f7569c381acdf743d29e01a2656915257f8cd4d7e4d",
+      "text": "  ailego::Params qp;\n  qp.set(\"num_chunk\", pq_chunk_num_);\n  // The quantizer creates its own pool, so bound it by the caller's pool.\n  const auto pq_thread_count = static_cast<uint32_t>(std::max<size_t>(\n      1, std::min<size_t>(build_thread_count_, threads->count())));\n  qp.set(\"thread_count\", pq_thread_count);\n  qp.set(\"use_zero_mean\", false);\n  int ret = quantizer_->init(build_meta_, qp);\n  if (ret != 0) {\n    LOG_ERROR(\"PqInt8Quantizer init failed, ret=%d\", ret);\n    return ret;\n  }\n\n  // Keep the legacy prefix and sample order without materializing a second\n  // training holder. The quantizer copies only its selected training rows.\n  IndexHolder::Pointer training_holder = std::make_shared<PrefixIndexHolder>(\n      holder_, max_train_sample_count_, build_meta_);\n  ret = quantizer_->train(std::move(training_holder));\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:657-668": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 657,
+      "end_line": 668,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "f1623f10afc607a4b5e4a5ee1b9168399a8e797e6c0c8bba6ecfe66bf1529b72",
+      "text": "  if (!threads) {\n    threads =\n        std::make_shared<SingleQueueIndexThreads>(build_thread_count_, false);\n    if (!threads) {\n      return IndexError_NoMemory;\n    }\n  }\n\n  ret = train_quantized_data(threads);\n  if (ailego_unlikely(ret != 0)) {\n    return ret;\n  }\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:141-145": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 141,
+      "end_line": 145,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "cbc9964c52a734afce550c0ccb4b32f7ef9db473dcc13857501d5616823e6c6a",
+      "text": "  // Read optional training params (aligned with multi_chunk_cluster)\n  params.get(\"thread_count\", &thread_count_);\n  params.get(\"markov_chain_length\", &markov_chain_length_);\n  params.get(\"epsilon\", &epsilon_);\n  params.get(\"use_zero_mean\", &use_zero_mean_);\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-340": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 319,
+      "end_line": 340,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "318ac1eb3821d25c3860d43e6e57b12c7156d379e1ba7d2ce2ac4f58d1fed8f5",
+      "text": "void PqInt8Quantizer::train_all_chunks(const void *data, size_t num,\n                                       size_t stride, uint32_t max_iters) {\n  // Create thread pool.\n  auto threads =\n      std::make_shared<SingleQueueIndexThreads>(thread_count_, false);\n  auto task_group = threads->make_group();\n\n  // Distribute chunks across threads, dispatched by data type.\n  std::atomic<size_t> finished{0};\n  size_t pool_count = threads->count();\n\n  auto submit_training = [&](const auto *typed_data) {\n    using T = std::remove_const_t<std::remove_pointer_t<decltype(typed_data)>>;\n    for (size_t i = 0; i < pool_count; ++i) {\n      task_group->submit(\n          ailego::Closure::New([this, typed_data, num, stride, i, pool_count,\n                                max_iters, &finished]() {\n            for (uint32_t m = static_cast<uint32_t>(i); m < num_chunk_;\n                 m += static_cast<uint32_t>(pool_count)) {\n              train_chunk<T>(typed_data, num, stride, m, max_iters);\n              finished++;\n            }\n"
+    },
+    "src/include/zvec/core/framework/index_threads.h:112-131": {
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 112,
+      "end_line": 131,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "d48d68dd87225d93ce7cdc2cee4c58074cab798f2023bca4684b8a1d2c4a9673",
+      "text": "  //! Constructor\n  SingleQueueIndexThreads(uint32_t size, bool binding)\n      : pool_(\n            size > 0 ? size : std::max(std::thread::hardware_concurrency(), 1u),\n            binding) {}\n\n  //! Constructor\n  explicit SingleQueueIndexThreads(bool binding)\n      : SingleQueueIndexThreads(0, binding) {}\n\n  //! Constructor\n  SingleQueueIndexThreads() : SingleQueueIndexThreads{false} {}\n\n  //! Destructor\n  ~SingleQueueIndexThreads() override = default;\n\n  //! Retrieve thread count in pool\n  size_t count() const override {\n    return pool_.count();\n  }\n"
+    },
+    "tests/core/mixed_reducer/merged_provider_index_holder_test.cc:779-827": {
+      "path": "tests/core/mixed_reducer/merged_provider_index_holder_test.cc",
+      "start_line": 779,
+      "end_line": 827,
+      "file_sha256": "0bb8f8d69f1daa8ea3292c8670547b2a3d2f22428f63616829b425801a820a1d",
+      "span_sha256": "84d91866b3aa1ec4bc7a29891188b362e0f0e460d6e5a47440e97bf0d62862eb",
+      "text": "TEST(MergedProviderIndexHolderTest,\n     IvfBuilderUsesProviderBackedInputAndReducerThreadPool) {\n  auto source = MakeStreamer({{0, 0.0F}, {1, 1.0F}});\n  ailego::ThreadPool pool(2, false);\n  auto builder = std::make_shared<RetainingTestBuilder>(\"IVFBuilder\", &pool);\n  MixedStreamerReducer reducer;\n  ailego::Params params;\n  params.set(PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS, 1);\n  ASSERT_EQ(0, reducer.init(params));\n  reducer.set_thread_pool(&pool);\n  ASSERT_EQ(0, reducer.set_target_streamer_wiht_info(\n                   builder, source, nullptr, nullptr,\n                   IndexQueryMeta(IndexMeta::DataType::DT_FP32, kDimension)));\n  ASSERT_EQ(0, reducer.feed_streamer_with_reformer(source, nullptr));\n  ASSERT_EQ(0, reducer.reduce({}));\n  EXPECT_EQ(pool.count(), builder->train_thread_count);\n  EXPECT_EQ(pool.count(), builder->build_thread_count);\n  EXPECT_TRUE(builder->train_used_expected_pool);\n  EXPECT_TRUE(builder->build_used_expected_pool);\n  ASSERT_NE(nullptr, builder->holder);\n  auto *merged =\n      dynamic_cast<MergedProviderIndexHolder *>(builder->holder.get());\n  ASSERT_NE(nullptr, merged);\n  EXPECT_EQ((std::vector<std::pair<uint64_t, float>>{{0, 0.0F}, {1, 1.0F}}),\n            ReadAll(merged));\n}\n\nTEST(MergedProviderIndexHolderTest, ConverterUsesReducerThreadPool) {\n  auto source = MakeStreamer({{0, 0.0F}, {1, 1.0F}});\n  ailego::ThreadPool pool(2, false);\n  auto converter =\n      std::make_shared<ThreadRecordingConverter>(source->meta(), &pool);\n  auto builder = std::make_shared<RetainingTestBuilder>(\"IVFBuilder\", &pool);\n  MixedStreamerReducer reducer;\n  ailego::Params params;\n  params.set(PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS, 1);\n  ASSERT_EQ(0, reducer.init(params));\n  reducer.set_thread_pool(&pool);\n  ASSERT_EQ(0, reducer.set_target_streamer_wiht_info(\n                   builder, source, converter, nullptr,\n                   IndexQueryMeta(IndexMeta::DataType::DT_FP32, kDimension)));\n  ASSERT_EQ(0, reducer.feed_streamer_with_reformer(source, nullptr));\n  ASSERT_EQ(0, reducer.reduce({}));\n  EXPECT_EQ(pool.count(), converter->train_thread_count);\n  EXPECT_TRUE(converter->used_expected_pool);\n  EXPECT_FALSE(converter->legacy_train_called);\n  EXPECT_TRUE(builder->train_used_expected_pool);\n  EXPECT_TRUE(builder->build_used_expected_pool);\n}\n"
+    },
+    "src/ailego/parallel/thread_pool.cc:85-100": {
+      "path": "src/ailego/parallel/thread_pool.cc",
+      "start_line": 85,
+      "end_line": 100,
+      "file_sha256": "d8d0d7640c3a2a6eefb4d4a6f404e214c4de2ea43afb91879297d2a35b2c928e",
+      "span_sha256": "e1ad2cbec734bb77bf8484db09061a041d0312588bd1f3f7834c94f179fa865a",
+      "text": "uint32_t SafeWorkerCount() noexcept {\n  return std::max(std::thread::hardware_concurrency(), 1u);\n}\n\n}  // namespace\n\nThreadPool::ThreadPool() : ThreadPool(SafeWorkerCount(), false) {}\n\nThreadPool::ThreadPool(uint32_t size, bool binding) {\n  const uint32_t max_size = SafeWorkerCount();\n  const uint32_t safe_size = std::min(std::max(size, 1u), max_size);\n  if (safe_size != size) {\n    LOG_WARN(\n        \"ThreadPool worker count[%u] is outside supported range[1, %u], \"\n        \"clamped to %u\",\n        size, max_size, safe_size);\n"
+    },
+    "src/include/zvec/core/framework/index_converter.h:179-188": {
+      "path": "src/include/zvec/core/framework/index_converter.h",
+      "start_line": 179,
+      "end_line": 188,
+      "file_sha256": "e5769fc54595169e1b2bbac8e6a7f26b0bf16d292c31f5faf219fdf75fd9d3cd",
+      "span_sha256": "280468021cb974bb11ce2ee390c9606c92d861270342a302843856ac6c09b578",
+      "text": "  //! Train the data\n  virtual int train(IndexHolder::Pointer) {\n    return IndexError_NotImplemented;\n  }\n\n  //! Train the data with caller-provided thread resources when supported\n  virtual int train(IndexHolder::Pointer holder,\n                    IndexThreads::Pointer threads) {\n    (void)threads;\n    return train(std::move(holder));\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:179-209": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 179,
+      "end_line": 209,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "ef59e9e7d1352774e05501ef6945a3d07d058322d0fac877864b79007e4c68aa",
+      "text": "void PqInt8Quantizer::train_chunk(const T *data, size_t num, size_t stride,\n                                  size_t sub_idx, uint32_t max_iters) {\n  const size_t k = kNumCentroids;\n  const size_t d = chunk_dim(sub_idx);\n  const size_t offset = chunk_offsets_[sub_idx];\n  uint8_t *centroids_m = centroids_.data() + offset * k * sizeof(T);\n\n  // Non-spherical L2 KMeans: the PQ codebook must minimize L2 reconstruction\n  // error, so centroids are the true (magnitude-preserving) means.\n  ailego::NumericalKmeans<T, SingleQueueIndexThreads> algorithm(k, d);\n\n  // Append sub-vectors (NumericalKmeans handles transpose internally)\n  for (size_t i = 0; i < num; ++i) {\n    const T *sub_vec =\n        reinterpret_cast<const T *>(reinterpret_cast<const uint8_t *>(data) +\n                                    i * stride) +\n        offset;\n    algorithm.append(sub_vec, d);\n  }\n\n  // Single-threaded pool -- parallelism is at the chunk level.\n  auto local_threads = std::make_shared<SingleQueueIndexThreads>(1, false);\n\n  // KMC2 centroid initialization.\n  ailego::Kmc2CentroidsGenerator<\n      ailego::NumericalKmeans<T, SingleQueueIndexThreads>,\n      SingleQueueIndexThreads>\n      gen;\n  gen.set_chain_length(markov_chain_length_);\n  gen.set_assumption_free(false);\n  algorithm.init_centroids(*local_threads, gen);\n"
+    },
+    "src/db/index/segment/segment_helper.cc:804-811": {
+      "path": "src/db/index/segment/segment_helper.cc",
+      "start_line": 804,
+      "end_line": 811,
+      "file_sha256": "9d0fd0c5f73c4f6efafe2d2fe2feb923d34e214ea156ee9e5379647e755378f9",
+      "span_sha256": "db799b5c45b3d6b236a6a9ec19bdb2c988240956f62a070b43c60c22d03caa9d",
+      "text": "  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n"
+    },
+    "src/db/common/global_resource.cc:21-33": {
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 21,
+      "end_line": 33,
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "f44aa1a3d75f9f11b3bf862437f059a414428d9a42ae55a92d51291a8149d6dd",
+      "text": "void GlobalResource::initialize() {\n  static std::once_flag flag;\n  std::call_once(flag, [this]() {\n    this->query_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().query_thread_count(),\n        GlobalConfig::Instance().query_thread_binding()));\n    this->optimize_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().optimize_thread_count(),\n        GlobalConfig::Instance().optimize_thread_binding()));\n    zvec::ailego::MemoryLimitPool::get_instance().init(\n        GlobalConfig::Instance().memory_limit_bytes());\n  });\n}\n"
+    },
+    "src/include/zvec/ailego/parallel/thread_pool.h:137-150": {
+      "path": "src/include/zvec/ailego/parallel/thread_pool.h",
+      "start_line": 137,
+      "end_line": 150,
+      "file_sha256": "ec4eea45818b726795af9f0f679e969126977e1095c742c074b6bcf73f56be94",
+      "span_sha256": "41b5510d5fbdf115fb5a21ed5403819021806d538cdd357c0bbb3d83659e5012",
+      "text": "  /**\n   * Create a thread pool.\n   *\n   * The requested worker count is clamped to\n   * [1, std::thread::hardware_concurrency()] (with a hardware fallback of 1).\n   * This guarantees that the pool can always execute queued work while\n   * preventing excessive worker creation when callers provide an invalid or\n   * unreasonably large size. Requests to oversubscribe the available hardware\n   * are therefore reduced.\n   *\n   * @param size Requested worker count.\n   * @param binding Whether to bind workers to allowed CPU cores.\n   */\n  explicit ThreadPool(uint32_t size, bool binding);\n"
+    },
+    "src/core/interface/index.cc:1440-1446": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1440,
+      "end_line": 1446,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "8a482bf73146af42d02e73a06e4ddd2611a337f9933499fefc375b444e48664a",
+      "text": "  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n"
+    },
+    "src/core/interface/index.cc:1433-1446": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1433,
+      "end_line": 1446,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "3bdbcd758573ce1c28b87139808384ad55097324110e677d0b1890a4be5bd55d",
+      "text": "  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n"
+    },
+    "src/core/interface/index.cc:1416-1456": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1416,
+      "end_line": 1456,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "15af576b9daa7cf315c78f062e2931d8787303bab6d3c6ecf4cdeded9d5f6b86",
+      "text": "int Index::merge(const std::vector<Index::Pointer> &indexes,\n                 const IndexFilter &filter, const MergeOptions &options) {\n  if (indexes.empty()) {\n    return core::IndexError_Success;\n  }\n  // ivf need builder\n  auto reducer =\n      core::IndexFactory::CreateStreamerReducer(\"MixedStreamerReducer\");\n  if (reducer == nullptr) {\n    LOG_ERROR(\"Failed to create reducer\");\n    return core::IndexError_Runtime;\n  }\n\n  if (options.write_concurrency == 0) {\n    LOG_ERROR(\"Write concurrency must be greater than 0\");\n    return core::IndexError_InvalidArgument;\n  }\n  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n\n  ailego::Params reducer_params;\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE,\n                     true);\n  reducer_params.set(core::PARAM_MIXED_STREAMER_REDUCER_NUM_OF_ADD_THREADS,\n                     effective_write_concurrency);\n  if (reducer->init(reducer_params) != 0) {\n    LOG_ERROR(\"Failed to init reducer\");\n    return core::IndexError_Runtime;\n  }\n"
+    },
+    "src/core/mixed_reducer/mixed_streamer_reducer.cc:742-777": {
+      "path": "src/core/mixed_reducer/mixed_streamer_reducer.cc",
+      "start_line": 742,
+      "end_line": 777,
+      "file_sha256": "1b614674c5b206658a5fd6ebe00c2640bffdfe792ccec5dcc49f6d4a394e1e04",
+      "span_sha256": "da0d784fa586cf23f459fd0d3fe01ae452cdd48a8c79250aabfe4dfec3a493dd",
+      "text": "int MixedStreamerReducer::index_build(IndexHolder::Pointer target_holder) {\n  auto threads =\n      std::make_shared<BorrowedSingleQueueIndexThreads>(*thread_pool_);\n  if (target_builder_converter_) {\n    int ret = core::IndexConverter::TrainAndTransform(target_builder_converter_,\n                                                      target_holder, threads);\n    if (ret != 0) {\n      LOG_ERROR(\"Failed to convert target holder, ret=%d\", ret);\n      return merged_holder_ && merged_holder_->status() != 0\n                 ? merged_holder_->status()\n                 : ret;\n    }\n    target_holder = target_builder_converter_->result();\n    if (!target_holder) {\n      LOG_ERROR(\"Target builder converter returned a null holder\");\n      return core::IndexError_Runtime;\n    }\n  }\n  int ret = target_builder_->train(threads, target_holder);\n  if (merged_holder_ && merged_holder_->status() != 0) {\n    return merged_holder_->status();\n  }\n  if (ret != 0) {\n    LOG_ERROR(\"Failed to train target builder, ret=%d\", ret);\n    return ret;\n  }\n  ret = target_builder_->build(std::move(threads), target_holder);\n  if (merged_holder_ && merged_holder_->status() != 0) {\n    return merged_holder_->status();\n  }\n  if (ret != 0) {\n    LOG_ERROR(\"Failed to build target index, ret=%d\", ret);\n    return ret;\n  }\n  return 0;\n}\n"
+    },
+    "src/include/zvec/core/framework/index_threads.h:169-225": {
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 169,
+      "end_line": 225,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "37c44b96b7a4033baedd90a26df607f887298a0b1525a750629ddb7607da61c0",
+      "text": "/*! Borrowed Single Queue Index Threads\n *\n *  Adapts an existing thread pool to IndexThreads. The caller must keep the\n *  pool alive for the lifetime of this object.\n */\nclass BorrowedSingleQueueIndexThreads : public IndexThreads {\n public:\n  //! Constructor\n  explicit BorrowedSingleQueueIndexThreads(ailego::ThreadPool &pool)\n      : pool_(pool) {}\n\n  //! Destructor\n  ~BorrowedSingleQueueIndexThreads() override = default;\n\n  //! Retrieve thread count in pool\n  size_t count() const override {\n    return pool_.count();\n  }\n\n  //! Stop all threads\n  void stop() override {\n    pool_.stop();\n  }\n\n  //! Submit a task to be executed asynchronous\n  void submit(ailego::ClosureHandler &&task) override {\n    while (pool_.pending_count() >= kMaxQueueSize) {\n      std::this_thread::sleep_for(std::chrono::milliseconds(1));\n    }\n    pool_.enqueue_and_wake(std::move(task));\n  }\n\n  //! Make a task group\n  TaskGroup::Pointer make_group() override {\n    return std::make_shared<SingleQueueIndexThreads::SingleQueueTaskGroup>(\n        pool_.make_group());\n  }\n\n  //! Get the current work thread index\n  int indexof_this() const override {\n    return pool_.indexof_this();\n  }\n\n public:\n  //! Disable them\n  BorrowedSingleQueueIndexThreads(const BorrowedSingleQueueIndexThreads &) =\n      delete;\n  BorrowedSingleQueueIndexThreads(BorrowedSingleQueueIndexThreads &&) = delete;\n  BorrowedSingleQueueIndexThreads &operator=(\n      const BorrowedSingleQueueIndexThreads &) = delete;\n\n private:\n  static constexpr size_t kMaxQueueSize = 4096u;\n\n  //! Members\n  ailego::ThreadPool &pool_;\n};\n"
+    },
+    "src/core/framework/index_converter.cc:27-36": {
+      "path": "src/core/framework/index_converter.cc",
+      "start_line": 27,
+      "end_line": 36,
+      "file_sha256": "130554868620aa1aa68e9ba4c4e1de320be04854bcdd746541b96d251e4b8ccb",
+      "span_sha256": "5ad14fcf79f44f31bee8fec6e353a0488f0198506dcac40fab66768ba6ce7746",
+      "text": "int IndexConverter::TrainAndTransform(const IndexConverter::Pointer &converter,\n                                      IndexHolder::Pointer holder,\n                                      IndexThreads::Pointer threads) {\n  auto two_pass_holder = IndexHelper::MakeTwoPassHolder(std::move(holder));\n  int ret = converter->train(two_pass_holder, std::move(threads));\n  if (ret == 0) {\n    ret = converter->transform(std::move(two_pass_holder));\n  }\n  return ret;\n}\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:391-394": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 391,
+      "end_line": 394,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "69b08228559a548575df778a7d6d25f2e5aac99c3caa74c8a4ee7e0544699e85",
+      "text": "  // The quantizer creates its own pool, so bound it by the caller's pool.\n  const auto pq_thread_count = static_cast<uint32_t>(std::max<size_t>(\n      1, std::min<size_t>(build_thread_count_, threads->count())));\n  qp.set(\"thread_count\", pq_thread_count);\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-357": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 319,
+      "end_line": 357,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "987cfac3d7eaff24acd77c87dfefbf98ec23e93133e4d5fc9941f171d6af6498",
+      "text": "void PqInt8Quantizer::train_all_chunks(const void *data, size_t num,\n                                       size_t stride, uint32_t max_iters) {\n  // Create thread pool.\n  auto threads =\n      std::make_shared<SingleQueueIndexThreads>(thread_count_, false);\n  auto task_group = threads->make_group();\n\n  // Distribute chunks across threads, dispatched by data type.\n  std::atomic<size_t> finished{0};\n  size_t pool_count = threads->count();\n\n  auto submit_training = [&](const auto *typed_data) {\n    using T = std::remove_const_t<std::remove_pointer_t<decltype(typed_data)>>;\n    for (size_t i = 0; i < pool_count; ++i) {\n      task_group->submit(\n          ailego::Closure::New([this, typed_data, num, stride, i, pool_count,\n                                max_iters, &finished]() {\n            for (uint32_t m = static_cast<uint32_t>(i); m < num_chunk_;\n                 m += static_cast<uint32_t>(pool_count)) {\n              train_chunk<T>(typed_data, num, stride, m, max_iters);\n              finished++;\n            }\n          }));\n    }\n  };\n\n  switch (input_data_type_) {\n    case DataType::kFp16:\n      submit_training(reinterpret_cast<const ailego::Float16 *>(data));\n      break;\n    case DataType::kFp32:\n      submit_training(reinterpret_cast<const float *>(data));\n      break;\n    default:\n      break;\n  }\n\n  task_group->wait_finish();\n}\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:49-61": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 49,
+      "end_line": 61,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "ddb6baf59157d702c6c287ff1dfc81af7019cfe4c914c1680dd6554e7aea017c",
+      "text": "  params.get(PARAM_DISKANN_BUILDER_MAX_DEGREE, &max_degree_);\n  params.get(PARAM_DISKANN_BUILDER_LIST_SIZE, &list_size_);\n  params.get(PARAM_DISKANN_BUILDER_THREAD_COUNT, &build_thread_count_);\n\n  if (build_thread_count_ == 0) {\n    build_thread_count_ = std::max(1U, std::thread::hardware_concurrency());\n  }\n\n  if (build_thread_count_ > std::thread::hardware_concurrency()) {\n    LOG_WARN(\"Build thread count [%s] greater than cpu cores %u\",\n             PARAM_DISKANN_BUILDER_THREAD_COUNT.c_str(),\n             std::thread::hardware_concurrency());\n  }\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:51-61": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 51,
+      "end_line": 61,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "fe6593cc27e8d4ca5482f3276ab3a026fe9bfe031ef54face773591f6dd63489",
+      "text": "  params.get(PARAM_DISKANN_BUILDER_THREAD_COUNT, &build_thread_count_);\n\n  if (build_thread_count_ == 0) {\n    build_thread_count_ = std::max(1U, std::thread::hardware_concurrency());\n  }\n\n  if (build_thread_count_ > std::thread::hardware_concurrency()) {\n    LOG_WARN(\"Build thread count [%s] greater than cpu cores %u\",\n             PARAM_DISKANN_BUILDER_THREAD_COUNT.c_str(),\n             std::thread::hardware_concurrency());\n  }\n"
+    },
+    "src/db/common/global_resource.cc:24-26": {
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 24,
+      "end_line": 26,
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "2a7345c05812c0e78247fe8fcf71ac7580267b449323bb46e04726682fcf5cc4",
+      "text": "    this->query_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().query_thread_count(),\n        GlobalConfig::Instance().query_thread_binding()));\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:200-200": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 200,
+      "end_line": 200,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "d664646fae973454c438b7aedb09ad5afc12a6eee308c617c95a2aa0b02a7bde",
+      "text": "  auto local_threads = std::make_shared<SingleQueueIndexThreads>(1, false);\n"
+    },
+    "src/include/zvec/core/framework/index_threads.h:184-205": {
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 184,
+      "end_line": 205,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "7cf8b88ea41684ba490e6c41b7530ed732d17c3f3f8985372614f7d70bdf5fb4",
+      "text": "  size_t count() const override {\n    return pool_.count();\n  }\n\n  //! Stop all threads\n  void stop() override {\n    pool_.stop();\n  }\n\n  //! Submit a task to be executed asynchronous\n  void submit(ailego::ClosureHandler &&task) override {\n    while (pool_.pending_count() >= kMaxQueueSize) {\n      std::this_thread::sleep_for(std::chrono::milliseconds(1));\n    }\n    pool_.enqueue_and_wake(std::move(task));\n  }\n\n  //! Make a task group\n  TaskGroup::Pointer make_group() override {\n    return std::make_shared<SingleQueueIndexThreads::SingleQueueTaskGroup>(\n        pool_.make_group());\n  }\n"
+    },
+    "src/include/zvec/core/framework/index_threads.h:194-199": {
+      "path": "src/include/zvec/core/framework/index_threads.h",
+      "start_line": 194,
+      "end_line": 199,
+      "file_sha256": "79428802cb0a212f589fa34b2c875714174ff5d345d507da35a4a84a4e223f26",
+      "span_sha256": "1c944d4c0afdeda5d85d49fc9c9f402e2704c48b3d72f5f03710f93825bdf6e6",
+      "text": "  void submit(ailego::ClosureHandler &&task) override {\n    while (pool_.pending_count() >= kMaxQueueSize) {\n      std::this_thread::sleep_for(std::chrono::milliseconds(1));\n    }\n    pool_.enqueue_and_wake(std::move(task));\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1560-1567": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1560,
+      "end_line": 1567,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "db799b5c45b3d6b236a6a9ec19bdb2c988240956f62a070b43c60c22d03caa9d",
+      "text": "  vector_column_params::MergeOptions merge_options;\n  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n    merge_options.write_concurrency =\n        static_cast<uint32_t>(merge_options.pool->count());\n  } else {\n    merge_options.write_concurrency = concurrency;\n  }\n"
+    },
+    "src/binding/python/model/common/python_config.cc:154-157": {
+      "path": "src/binding/python/model/common/python_config.cc",
+      "start_line": 154,
+      "end_line": 157,
+      "file_sha256": "89c975b2d3e17fd8b06cb4ea37ba93d5fe2cf5d8f10c7b6db5216e9475172116",
+      "span_sha256": "1c1141273897631e868280cf4f47f377b63bec20001802ada1c0e571325792b0",
+      "text": "    if (has_key(config_dict, \"optimize_threads\")) {\n      auto o = get_if<int32_t>(config_dict, \"optimize_threads\").value();\n      if (o <= 0) throw py::value_error(\"optimize_threads must be positive\");\n      data.optimize_thread_count = static_cast<uint32_t>(o);\n"
+    },
+    "src/db/common/global_resource.cc:21-29": {
+      "path": "src/db/common/global_resource.cc",
+      "start_line": 21,
+      "end_line": 29,
+      "file_sha256": "320e4e506e205980bec1cecbb23b26f2d32f4ff8b29766b7e9416e485c3364de",
+      "span_sha256": "a55f7aada395cf63360aad7725a775e90eeb182a5f8775640ba733bf1a1edf9a",
+      "text": "void GlobalResource::initialize() {\n  static std::once_flag flag;\n  std::call_once(flag, [this]() {\n    this->query_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().query_thread_count(),\n        GlobalConfig::Instance().query_thread_binding()));\n    this->optimize_thread_pool_.reset(new ailego::ThreadPool(\n        GlobalConfig::Instance().optimize_thread_count(),\n        GlobalConfig::Instance().optimize_thread_binding()));\n"
+    },
+    "src/ailego/parallel/thread_pool.cc:93-101": {
+      "path": "src/ailego/parallel/thread_pool.cc",
+      "start_line": 93,
+      "end_line": 101,
+      "file_sha256": "d8d0d7640c3a2a6eefb4d4a6f404e214c4de2ea43afb91879297d2a35b2c928e",
+      "span_sha256": "76ab25d53260fef1a5e33863301d8193499a4421b2d94abfdb8fc28f625f8f5e",
+      "text": "ThreadPool::ThreadPool(uint32_t size, bool binding) {\n  const uint32_t max_size = SafeWorkerCount();\n  const uint32_t safe_size = std::min(std::max(size, 1u), max_size);\n  if (safe_size != size) {\n    LOG_WARN(\n        \"ThreadPool worker count[%u] is outside supported range[1, %u], \"\n        \"clamped to %u\",\n        size, max_size, safe_size);\n  }\n"
+    },
+    "src/core/interface/index.cc:1416-1446": {
+      "path": "src/core/interface/index.cc",
+      "start_line": 1416,
+      "end_line": 1446,
+      "file_sha256": "948d23093b9b5ff59c4689ad94609eb0bf1446ca4e7d6c4681009217572e1abc",
+      "span_sha256": "c263628f76af3e8d72fb251e3d2c4ad555d63baf345248f93527bb6af9cf8dbf",
+      "text": "int Index::merge(const std::vector<Index::Pointer> &indexes,\n                 const IndexFilter &filter, const MergeOptions &options) {\n  if (indexes.empty()) {\n    return core::IndexError_Success;\n  }\n  // ivf need builder\n  auto reducer =\n      core::IndexFactory::CreateStreamerReducer(\"MixedStreamerReducer\");\n  if (reducer == nullptr) {\n    LOG_ERROR(\"Failed to create reducer\");\n    return core::IndexError_Runtime;\n  }\n\n  if (options.write_concurrency == 0) {\n    LOG_ERROR(\"Write concurrency must be greater than 0\");\n    return core::IndexError_InvalidArgument;\n  }\n  // must declare here to ensure its lifespan can cover reducer->reduce()\n  std::unique_ptr<ailego::ThreadPool> local_thread_pool = nullptr;\n  uint32_t effective_write_concurrency = options.write_concurrency;\n  if (options.pool != nullptr) {\n    reducer->set_thread_pool(options.pool);\n    effective_write_concurrency =\n        std::min<uint32_t>(effective_write_concurrency, options.pool->count());\n  } else {\n    local_thread_pool =\n        std::make_unique<ailego::ThreadPool>(options.write_concurrency, false);\n    reducer->set_thread_pool(local_thread_pool.get());\n    effective_write_concurrency =\n        static_cast<uint32_t>(local_thread_pool->count());\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:1561-1562": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 1561,
+      "end_line": 1562,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "944ed3c78336f08fde0e9138fee10d894a1b705b5564495278c9933352314033",
+      "text": "  if (concurrency == 0) {\n    merge_options.pool = GlobalResource::Instance().optimize_thread_pool();\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:319-323": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 319,
+      "end_line": 323,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "ea53d5759c34bd8d15e49d52dfe251b81c02d17191410f7831e0c5b4945b78f4",
+      "text": "void PqInt8Quantizer::train_all_chunks(const void *data, size_t num,\n                                       size_t stride, uint32_t max_iters) {\n  // Create thread pool.\n  auto threads =\n      std::make_shared<SingleQueueIndexThreads>(thread_count_, false);\n"
+    },
+    "src/core/algorithm/diskann/diskann_builder.cc:51-60": {
+      "path": "src/core/algorithm/diskann/diskann_builder.cc",
+      "start_line": 51,
+      "end_line": 60,
+      "file_sha256": "78c1555702e0678738b6e605f9849d49ad41b7c88a479845dea0b90649015695",
+      "span_sha256": "7ee370bd7a57dc549cc540069d126b27a110b0bc8990e3286dd8f54f473cf812",
+      "text": "  params.get(PARAM_DISKANN_BUILDER_THREAD_COUNT, &build_thread_count_);\n\n  if (build_thread_count_ == 0) {\n    build_thread_count_ = std::max(1U, std::thread::hardware_concurrency());\n  }\n\n  if (build_thread_count_ > std::thread::hardware_concurrency()) {\n    LOG_WARN(\"Build thread count [%s] greater than cpu cores %u\",\n             PARAM_DISKANN_BUILDER_THREAD_COUNT.c_str(),\n             std::thread::hardware_concurrency());\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:199-200": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 199,
+      "end_line": 200,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "106d161190573e6d5d69e33008e80dde678996c09974cd5fb7221a2bf5681cbf",
+      "text": "  // Single-threaded pool -- parallelism is at the chunk level.\n  auto local_threads = std::make_shared<SingleQueueIndexThreads>(1, false);\n"
+    },
+    "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc:326-343": {
+      "path": "src/turbo/quantizer/pq_int8_quantizer/pq_int8_quantizer.cc",
+      "start_line": 326,
+      "end_line": 343,
+      "file_sha256": "74796f99c9591897faf03a106450b3f4be91c7ff53d509b0e98ac5a2f982dd84",
+      "span_sha256": "017facf7375d304940b73d4e502645013efa521794bdb65b6b9840283a65e522",
+      "text": "  // Distribute chunks across threads, dispatched by data type.\n  std::atomic<size_t> finished{0};\n  size_t pool_count = threads->count();\n\n  auto submit_training = [&](const auto *typed_data) {\n    using T = std::remove_const_t<std::remove_pointer_t<decltype(typed_data)>>;\n    for (size_t i = 0; i < pool_count; ++i) {\n      task_group->submit(\n          ailego::Closure::New([this, typed_data, num, stride, i, pool_count,\n                                max_iters, &finished]() {\n            for (uint32_t m = static_cast<uint32_t>(i); m < num_chunk_;\n                 m += static_cast<uint32_t>(pool_count)) {\n              train_chunk<T>(typed_data, num, stride, m, max_iters);\n              finished++;\n            }\n          }));\n    }\n  };\n"
+    }
+  }
+}

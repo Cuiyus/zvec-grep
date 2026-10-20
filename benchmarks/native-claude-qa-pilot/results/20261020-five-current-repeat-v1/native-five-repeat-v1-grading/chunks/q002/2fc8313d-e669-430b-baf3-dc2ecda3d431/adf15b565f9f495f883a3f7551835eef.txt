@@ -1,0 +1,53 @@
+No installed `zvec` module exists and building the C++ tree (arrow/rocksdb/antlr submodules) is out of scope here, so **everything below is source-based inference; I executed no runtime validation.** The trace is complete, though, and the failure point is unambiguous.
+
+# Root cause
+
+**An empty "candidate ids" list produced by a zero-match scalar condition is silently reinterpreted as "no candidate restriction" by the FTS executor, so the scalar condition disappears and every full-text match is returned.**
+
+## End-to-end trace (anomaly: `hello` + `status='archived'` or `views > 1000` → {1,2,3})
+
+1. **Query intake.** The filter string is parsed into a condition tree, and the FTS clause becomes an `FtsCondInfo` attached to the `SelectInfo` — `sqlengine_impl.cc:287-345` (filter at 292-301, FTS at 313-322, 332-340). The analyzer copies it into `QueryInfo` at `query_analyzer.cc:401-404`.
+
+2. **Condition routing.** `SearchCondCheckWalker` classifies each relational condition: a field with `has_invert_index()` becomes an *invert* rel, otherwise a *forward filter* rel (`query_node_walker.cc:196,216,685-706`). `decide_filter_index_cond` then sets `invert_cond` (`query_analyzer.cc:276-287`) and leaves the rest as `filter_cond` (304-311). With inverted indexes present, both zero-match conditions land in `invert_cond`.
+
+3. **Optimizer keeps them as invert conds.** `InvertCondOptimizer::ratio_rule` never converts `Q_EQ` (`optimizer.cc:38-45`), and converts range ops only when the matched ratio ≥ `invert_to_forward_scan_ratio` = 0.9 (`optimizer.cc:66-94`, `config.cc:38`). `views > 1000` matches 0/3 → ratio 0 → stays invert.
+
+4. **Plan choice.** In `make_physical_plan`, the FTS branch takes precedence over the pure-invert branch (`query_planner.cc:410-422`), so `fts_scan` runs and the invert condition is folded into a `DocFilter` (`query_planner.cc:642-662,533-557`; `doc_filter.h:33-41` stores `invert_cond_`).
+
+5. **Zero-match invert execution.** For `status='archived'`, the term is absent from RocksDB: `get_bitmap_eq` returns a **null bitmap** (`inverted_column_indexer_search.cc:29-32`), wrapped into a valid `InvertedSearchResult` (`:811-813`). For `views > 1000`, `get_bitmap_gt` returns an **empty** roaring bitmap (`:364` ff.). Either way `count()==0` (`inverted_search_result.h:79-85`). Note also `make_filter()` returns **nullptr** when the bitmap is null (`inverted_search_result.h:48-50`), so for the EQ case even the bitmap-filter layer degrades to "no filter".
+
+6. **The fatal hand-off.** `FtsRecallNode::prepare()`:
+   - `compute_filter()` runs the invert search (`fts_recall_node.cc:110-114`, `doc_filter.cc:24-34`).
+   - `get_bf_by_keys_and_update(fts_brute_force_by_keys_ratio)` (`fts_recall_node.cc:126-129`): threshold = `(uint64_t)(3 × 0.05)` = 0 (`doc_filter.cc:119-124`; ratio default 0.05 at `config.cc:40`). `match_count = 0 ≤ 0` → it extracts ids (**empty vector**), **resets `invert_filter_` and `invert_result_`** (`doc_filter.cc:125-133`), and returns the empty vector inside an `optional` — which is *truthy*, so `params.candidate_ids = {}`.
+   - `params.filter = doc_filter_->empty() ? nullptr : doc_filter_` (`fts_recall_node.cc:132`); after the reset, `empty()` is true (`doc_filter.cc:68-71`), so no filter is pushed down either. (Even if a delete filter kept `empty()` false, `is_filtered` could no longer reject anything: the invert layer was nulled — `doc_filter.cc:73-86`.)
+
+7. **The bug site.** `FtsColumnIndexer::search` guards candidate-driven mode with `if (!query_params.candidate_ids.empty())` (`fts_column_indexer.cc:209-217`). An empty vector is indistinguishable from "no restriction" — this ambiguity is baked into the contract itself (`fts_types.h:30-35`: "*when non-empty*, FtsColumnIndexer restricts evaluation…"). So no `CandidateDocIterator` is AND-ed in, `filter_ptr` is null (`fts_column_indexer.cc:220,229-230`), and the walk scores **all** postings of `hello` → {1,2,3}. Ironically, `CandidateDocIterator` with an empty id list would already yield `NO_MORE_DOCS` immediately (`fts_candidate_iterator.h:33-53`) — correct semantics that never get a chance to run.
+
+## Why the three controls behave correctly
+
+- **Scalar-only, zero-match → ∅.** Plan goes to `invert_scan` (`query_planner.cc:416-418`); `InvertRecallNode` *iterates the condition's own match set* (`invert_recall_node.cc:80-84,40-45`). A null/empty bitmap yields an invalid iterator (`inverted_search_result.h:88-132`), so zero rows are produced. This path is immune because documents are pulled *from* the condition, not filtered *by* it.
+- **`hello` + `status='published'` → {2,3}.** `match_count = 2 > threshold 0` → brute-force-by-keys does **not** trigger (`doc_filter.cc:122-139`); `invert_filter_` survives, `empty()` is false, and `params.filter` pushes the bitmap check into the posting walk via `next_doc(filter_ptr)` (`fts_column_indexer.cc:226-250`), excluding doc 1. **`one` + `published` → ∅** for the same reason: the term matches only doc 1, which the surviving filter rejects.
+- **No inverted indexes → ∅.** The conditions are classified as forward filters (`query_node_walker.cc:240`, `add_forward_filter`), so `invert_cond` is null; `get_bf_by_keys_and_update` returns `nullopt` (`doc_filter.cc:116-118`) and the forward bitmap/expression evaluates false for every doc (`doc_filter.cc:36-49,80-107,143-165`; built at `query_planner.cc:537-556`). `params.filter` is set, everything is filtered, result empty.
+
+The anomaly therefore needs exactly the combination: **FTS recall + an invert-index condition + a match count at or below `doc_count × fts_brute_force_by_keys_ratio`** — which zero matches always satisfy. Notably, the *vector* path handles the same hand-off correctly: `vector_recall_node.cc:163-169` pushes even an empty key list into `bf_pks`, and the vector indexer treats "bf_pks present but empty" as *skip the block* (`combined_vector_column_indexer.cc:299-322`, `vector_column_indexer.cc:184-193`). The FTS path lost that presence/emptiness distinction.
+
+# Minimal repair principle
+
+**A restrictive condition that matches nothing must propagate as an empty result; "absent restriction" and "restriction to the empty set" must remain distinguishable at every hand-off.** Concretely, the smallest safe change (either layer suffices; doing both is belt-and-braces):
+
+1. **Short-circuit at the producer** — in `FtsRecallNode::prepare()` (`fts_recall_node.cc:126-129`), when `get_bf_by_keys_and_update` returns an id list, return `FtsIndexResults({})` immediately if it is empty. This is minimal, never touches the index, and preserves all non-empty behavior bit-for-bit.
+2. **Make the contract explicit at the consumer** — give `FtsQueryParams` a presence signal (e.g. `std::optional<std::vector<uint64_t>> candidate_ids` or a `bool restrict_to_candidates`, `fts_types.h:35`) and change the guard at `fts_column_indexer.cc:209` to build the `CandidateDocIterator` whenever the restriction is *present*, including empty (its `next_doc` already terminates immediately). This mirrors the vector path's `bf_pks` semantics.
+
+Also worth hardening (same conflation class): `InvertedSearchResult::make_filter()` returning `nullptr` for a null bitmap (`inverted_search_result.h:48-50`) means "matched nothing" degrades to "filter nothing" in `DocFilter::is_filtered`. Ordinary queries are untouched by all three changes: no scalar condition → no `invert_cond` → no candidate restriction and no filter, exactly as today; non-empty conditions → unchanged bf-by-keys or filter-pushdown paths.
+
+# Regression checks
+
+Existing coverage misses this: `fts_recall_test.cc` has a `fts_search_with_filter` helper with an inverted `tag` field (`tests/db/sqlengine/fts_recall_test.cc:105-131`) but only exercises *matching* filters (`tag = 1`, `tag = 2`, lines 509-531); the Python FTS tests cover only deletion tombstones (`python/tests/test_collection_fts.py:142-151`) and the hybrid test uses a `like` forward filter (`test_collection_fts_vector_hybrid.py:217-227`).
+
+- **Unit (C++, `fts_recall_test.cc`):** FTS + zero-match EQ on an absent term → ∅; FTS + zero-match range (`tag > 1000`) → ∅; FTS + zero-match `IN`/`NOT IN`/`NE` (NE has different bitmap semantics via `flip_bitmap`, `inverted_column_indexer_search.cc:131-139`) → correct sets; FTS + matching EQ (control B preserved); FTS + condition matching *all* docs → full FTS hit set; topk still respected under filtering.
+- **Boundary of the branch itself:** sweep `fts_brute_force_by_keys_ratio` ∈ {0.0, 0.05, 1.0} so that `match_count` lands below, exactly at (`match_count == threshold` equality at `doc_filter.cc:123-124`), and above the threshold — verifying both the candidate-driven and filter-pushdown paths for empty and non-empty match sets.
+- **Iterator level:** `CandidateDocIterator({})` returns `NO_MORE_DOCS` on first call (semantics already implied by `fts_candidate_iterator.h:33-53`).
+- **Multi-segment:** extend `fts_multi_segment_test.cc` — per-segment zero-match filter → globally empty; per-segment non-empty → global score re-sort still correct (`query_planner.cc:449-457`).
+- **Delete interaction:** zero-match scalar + tombstoned docs → ∅; matching scalar + deletes → tombstones excluded (`doc_filter.cc:73-79`).
+- **Vector-path parity guard:** vector query + zero-match invert condition → ∅ (locks in the correct `bf_pks` semantics at `combined_vector_column_indexer.cc:299-322` so a future refactor can't regress it into the FTS-style bug).
+- **Python E2E:** replicate the reported 3-doc table verbatim in `test_collection_fts.py` (assert ID *sets* for all four scenarios, plus the no-inverted-index variant), and add an inverted-index zero-match filter case to the hybrid `MultiQuery` test.

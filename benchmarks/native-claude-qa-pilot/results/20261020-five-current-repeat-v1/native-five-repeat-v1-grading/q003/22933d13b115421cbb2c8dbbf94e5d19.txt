@@ -1,0 +1,50 @@
+## Summary
+
+The failure is a label-rewriting bug in the **in-place vector-index build** that `optimize()` chooses when the deleted fraction is below the compaction threshold. The rebuilt HNSW index gets **densely renumbered labels (0…24)** while the segment's forward store and row→global-ID table still have **28 rows**, so every vector after the first deleted row is attributed to the wrong document.
+
+## Lifecycle in this checkout
+
+**Insert.** `SegmentImpl::internal_insert()` assigns a global `g_doc_id`, upserts `pk → g_doc_id` into the IDMap, appends the row to the forward store, inserts the vector into the memory indexer with the **segment-local row index** as its label (`InsertVector` uses `writing_forward_block().doc_count_`, `src/db/index/segment/segment.cc:702-705`), and records `doc_ids_.push_back(g_doc_id)` (`segment.cc:914`). `doc_ids_` is the ordered row→global-ID table; `get_global_doc_id()` is literally `doc_ids_[segment_doc_id]` (`segment.cc:4444-4450`).
+
+**Delete.** `internal_delete()` only tombstones: `delete_store_->mark_deleted(g_doc_id)` and `id_map_->remove(pk)` (`segment.cc:933-936`). The forward row, the `doc_ids_` slot, and the vector-index entry all remain; reads are expected to mask them via `SegmentIndexFilter::is_filtered()` (`segment.cc:464-476`), wired into queries through `doc_filter.h:38` and `get_filter()` (`segment.cc:1462-1464`).
+
+**Optimize.** Phase 1 seals the writing segment (`collection.cc:929-937`). `build_compact_task()` computes the deleted fraction: 3/28 ≈ 0.107 < `COMPACT_DELETE_RATIO_THRESHOLD = 0.3` (`src/db/common/constants.h:41`, check at `collection.cc:1100-1104`), so `rebuild=false`. With a single segment group, it emits a **`CreateVectorIndexTask`** (`collection.cc:1160-1171`), which runs `SegmentImpl::create_all_vector_index` → `create_vector_index` (FP32/non-quantized takes the `QuantizeType::UNDEFINED` branch, `segment.cc:1545-1578`) → `merge_vector_indexer`, which calls `vector_indexer->Merge(to_merge_indexers, filter_, ...)` — **passing the segment's delete filter** (`segment.cc:1511`).
+
+## Root cause
+
+`VectorColumnIndexer::Merge` (`vector_column_indexer.cc:103-134`) calls the engine `Index::merge` (HNSW has no override; base at `src/core/interface/index.cc:1016-1077`), which always sets `PARAM_MIXED_STREAMER_REDUCER_ENABLE_PK_REWRITE = true` (`index.cc:1048-1050`). In `MixedStreamerReducer::read_vec` (`src/core/mixed_reducer/mixed_streamer_reducer.cc:255-326`):
+
+- line 288: `filter(iterator->key() + id_offset)` **skips** the 3 deleted rows;
+- line 318: each survivor is produced as `VectorItem((*next_id)++, ...)` — **relabeled sequentially**;
+- lines 375-377 / 542-549 / 563: the target HNSW is populated with these rewritten keys.
+
+So the new index holds the vectors of old rows 3…27 under keys 0…24. But the in-place build changes nothing else: the forward store keeps all 28 rows, `doc_ids_` keeps 28 entries, and the new `BlockMeta` is even written with `doc_count = doc_ids_.size()` = 28 (`segment.cc:1573-1575`). The read path treats index keys as row IDs: search results carry `key()` as `doc_id()` (`vector_index_results.h:36-38`), `CombinedVectorColumnIndexer::Search` translates via `block_offset + doc.key()` (`combined_vector_column_indexer.cc:66`, offsets from `block_meta.doc_count_` at 279-284), and `VectorRecallNode` uses that value directly as a forward-store row index (`vector_recall_node.cc:225`).
+
+Net effect with rows 0-2 deleted: key *k* actually contains row *k+3*'s vector, so it is reported as `doc_ids_[k]` — every live doc ≥ doc-0003 is off by three (wrong live IDs); doc-0025…27's vectors live at keys 22…24, so those true tail IDs are unreachable (omitted tail docs); keys 0…2 are masked at query time as "rows 0…2 deleted", hiding doc-0003…0005; and `Fetch()` for rows 25…27 passes the block range check (`combined_vector_column_indexer.cc:432-441`, block claims 28) but `index->fetch(25..27)` fails since only keys 0…24 exist (`vector_column_indexer.cc:156-161`) — vector payload fetch fails while scalar forward fetch succeeds.
+
+**Why counts/scalars agree:** `doc_count(filter)` and scalar enumeration iterate `doc_ids_`/forward rows against the delete store (`segment.cc:616-627`) and never consult the vector index — both correctly report 25. The corruption exists only in the vector-index label space.
+
+**Why reopen doesn't help:** the mislabeled index file is flushed, and the updated `SegmentMeta` (with `add_indexed_vector_field`, `segment.cc:1540/1485`, and the 28-count block) is committed to the version manifest and swapped in via `reload_vector_index` (`collection.cc:1028-1040, 1063-1071`; `segment.cc:1752-1810`). A read-only reopen reloads exactly this persisted state.
+
+## The two controls
+
+1. **Optimize on the empty collection** returns early: the writing segment has no records so nothing is sealed, `persist_segments` is empty → `Status::OK()` (`collection.cc:929-942`). No index is built, so the post-delete optimize still takes the buggy filtered in-place build.
+2. **Optimize before deleting** runs the same `CreateVectorIndexTask`, but the delete store is empty, so `SegmentIndexFilter::is_filtered` is false for every row — nothing is skipped and the "rewrite" `0…27` is the identity; the invariant holds by coincidence. The segment is then marked `vector_indexed` (`segment.cc:1540`), so the second optimize (still ratio 0.107 < 0.3) hits the early return "already indexed with same params" (`segment.cc:1534-1539`; also `skip_task` via `all_vector_index_ready()` at `collection.cc:1133-1135`) and never rebuilds. Query-time delete masking then produces correct results.
+
+## The large-deleted-fraction path (contrast)
+
+When deleted/total > 0.3, `rebuild=true` (`collection.cc:1100-1104`) and a **`CompactTask` with the delete filter** is created (`collection.cc:1119-1127, 1166-1168`). `ExecuteCompactTask` (`segment_helper.cc:100-160`) rewrites the whole segment: `ReduceScalar`/`FilterRecordBatch` drop deleted rows from the forward store and record a `delete_row_id_bitmap` in scan order (`segment_helper.cc:127-148, 253-280`); `ReduceVectorIndex` then merges vector indexes with a `RowIdFilter` over that same bitmap (`segment_helper.cc:87-97, 151-155, 641-758`). There, sequential PK renumbering is **correct**, because the forward rows, `doc_ids_`, and vector labels are all compacted into the same new dense row space together. The bug is unique to running that same label-rewriting, row-skipping merge **in place** against an uncompacted row space.
+
+## Invariant a fix must preserve
+
+For every vector-index block of a segment: for each forward row *r* with `block_offset ≤ r < block_offset + block.doc_count`, the block's engine index must contain that row's vector under key `r − block_offset`, and `BlockMeta.doc_count` must equal the number of rows the block covers — i.e., **vector-index key + block offset ≡ segment row ID ≡ index into `doc_ids_`/forward store**, with deleted rows retained under their original keys and masked at query time by the delete store. Row-skipping relabeling is only legal inside a full rebuild (`CompactTask`) that renumbers the forward store identically. A fix could pass `nullptr` instead of `filter_` in `merge_vector_indexer` (`segment.cc:1511`), or make the in-place build disable PK rewrite so original keys survive.
+
+## Regression check (association, not counts)
+
+Unit-basis vectors make expected results exact. In `tests/db` (collection-level gtest):
+
+1. Insert 28 docs `doc-0000…0027`, each with a distinct 32-dim unit basis vector kept outside the collection; delete `doc-0000…0002` (ratio < 0.3, forcing the `CreateVectorIndexTask` path), flush, `optimize()`.
+2. **Per-document probe:** for every live ID, search with its saved basis vector at `topk=1` and assert (a) the returned ID equals the probed ID, (b) the returned/fetched vector equals the saved vector byte-for-byte, and (c) score is the exact self-match. This catches the off-by-three misattribution directly; count assertions cannot.
+3. **Exhaustive payload fetch:** enumerate all segment rows via scalar iteration and `Fetch` the vector payload for each row ID, asserting success and equality with the forward row's vector — this catches the "block claims 28, index has 25" fetch failures at rows 25-27.
+4. Assert deleted IDs never appear in any result; close and reopen read-only, then repeat steps 2-3 to catch the persisted corruption.
+5. Run the same assertions under both controls (optimize-before-delete; optimize-on-empty) and, optionally, a variant deleting > 30% to exercise the `CompactTask` rebuild path, ensuring the fix doesn't regress it.

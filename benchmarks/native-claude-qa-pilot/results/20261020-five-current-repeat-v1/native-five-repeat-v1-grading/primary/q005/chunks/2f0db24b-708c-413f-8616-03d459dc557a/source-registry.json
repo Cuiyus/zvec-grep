@@ -1,0 +1,518 @@
+{
+  "schema_version": 1,
+  "task_id": "q005",
+  "source_root": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-five-repeat-v1-preparation/prepared/runtime/q005/tasks/zvec-q005/environment/source",
+  "source_commit": "1a573058b24e11cdb7e91f27d6638c5f1c0cdcaa",
+  "verification": {
+    "files": 1596,
+    "inventory_sha256": "129579aae937735ed79c444bd6f83a05e42058a679e0077ff39599c9ce5d4eef",
+    "exact_file_set_and_bytes_verified": true,
+    "curated_spans_verified": 18
+  },
+  "spans": {
+    "src/db/index/common/identifier_validation.h:22-29": {
+      "path": "src/db/index/common/identifier_validation.h",
+      "start_line": 22,
+      "end_line": 29,
+      "file_sha256": "b36fa323134a9930473f5eea9b6b7178025bca67875279d41f7172105a0b3dfb",
+      "span_sha256": "d6ae977004058911467a8b24ee1c9f765e70782d4594a35f28f9edf54955fb61",
+      "text": "\ninline constexpr size_t kMaxDocumentIdBytes = 1024;\ninline constexpr size_t kMaxCollectionNameBytes = 256;\ninline constexpr size_t kMaxFieldNameBytes = 64;\n\nStatus validate_document_id(std::string_view id);\nStatus validate_collection_name(std::string_view name);\nStatus validate_field_name(std::string_view name);\n"
+    },
+    "src/db/index/common/identifier_validation.cc:28-80": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 28,
+      "end_line": 80,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "98ef3c6a849c3c2976471d7082dfb913c44850b367156cc43204f7fae8733b43",
+      "text": "const char *forbidden_codepoint_reason(utf8proc_int32_t codepoint) {\n  if (codepoint == 0) {\n    return \"contains a null character\";\n  }\n  if (codepoint == '\\n' || codepoint == '\\r') {\n    return \"contains a newline\";\n  }\n  if (codepoint == '\\t') {\n    return \"contains a tab\";\n  }\n  if (codepoint <= 0x1F || (codepoint >= 0x7F && codepoint <= 0x9F)) {\n    return \"contains a control character\";\n  }\n  if (codepoint == 0x2028) {\n    return \"contains a line separator\";\n  }\n  if (codepoint == 0x2029) {\n    return \"contains a paragraph separator\";\n  }\n  return nullptr;\n}\n\nStatus validate_utf8_name(std::string_view value, size_t max_bytes,\n                          const char *prefix) {\n  if (value.empty()) {\n    return Status::InvalidArgument(prefix, \" must not be empty\");\n  }\n  if (value.size() > max_bytes) {\n    return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                   \"] exceeds \", max_bytes, \" bytes (got \",\n                                   value.size(), \")\");\n  }\n\n  const auto *data = reinterpret_cast<const utf8proc_uint8_t *>(value.data());\n  size_t position = 0;\n  while (position < value.size()) {\n    utf8proc_int32_t codepoint;\n    auto bytes = utf8proc_iterate(\n        data + position, static_cast<utf8proc_ssize_t>(value.size() - position),\n        &codepoint);\n    if (bytes <= 0) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                     \"] is not valid UTF-8\");\n    }\n    if (const char *reason = forbidden_codepoint_reason(codepoint)) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value), \"] \",\n                                     reason);\n    }\n    position += static_cast<size_t>(bytes);\n  }\n  return Status::OK();\n}\n\n"
+    },
+    "src/db/index/common/identifier_validation.cc:91-130": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 91,
+      "end_line": 130,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "cb3e7da721632fece38ca665551e466c84f700a90b6ba99047775c46b05e7936",
+      "text": "Status validate_document_id(std::string_view id) {\n  return validate_utf8_name(id, kMaxDocumentIdBytes, \"Invalid doc: id\");\n}\n\nStatus validate_collection_name(std::string_view name) {\n  return validate_utf8_name(name, kMaxCollectionNameBytes,\n                            \"Invalid schema: collection name\");\n}\n\nStatus validate_field_name(std::string_view name) {\n  if (name.empty()) {\n    return Status::InvalidArgument(\n        \"Invalid schema: field name must not be empty\");\n  }\n  if (name.size() > kMaxFieldNameBytes) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", format_name(name),\n                                   \"] exceeds \", kMaxFieldNameBytes,\n                                   \" bytes (got \", name.size(), \")\");\n  }\n  for (unsigned char byte : name) {\n    if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||\n        (byte >= '0' && byte <= '9') || byte == '_' || byte == '-') {\n      continue;\n    }\n    const char *reason = byte >= 0x80 ? \"contains a non-ASCII character\"\n                                      : forbidden_codepoint_reason(byte);\n    if (!reason) {\n      reason = byte == ' ' ? \"contains a space\"\n                           : \"contains an unsupported character\";\n    }\n    return Status::InvalidArgument(\n        \"Invalid schema: field[\", format_name(name), \"] \", reason,\n        \"; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)\");\n  }\n  if (is_reserved_field_name(name)) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", format_name(name),\n                                   \"] is reserved; use a different name\");\n  }\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/common/doc.cc:728-737": {
+      "path": "src/db/index/common/doc.cc",
+      "start_line": 728,
+      "end_line": 737,
+      "file_sha256": "217223974ed1aa7382a92c7ede04c52f9a0cf2b93470053dd56eab0a7d5a6bb2",
+      "span_sha256": "73c38717eabd2cd6aafc4baee22725db66a4d70e00b88b73d9e6771049e9f651",
+      "text": "Status Doc::validate_and_sanitize(const CollectionSchema::Ptr &schema,\n                                  bool is_update) {\n  if (!schema) {\n    return Status::InternalError(\"schema is null during doc validation\");\n  }\n\n  if (auto s = validate_document_id(pk_); !s.ok()) {\n    return s;\n  }\n\n"
+    },
+    "src/db/collection.cc:1593-1603": {
+      "path": "src/db/collection.cc",
+      "start_line": 1593,
+      "end_line": 1603,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "538e234bb02772dad5ffab7636c148dc5ccfd0583a605304bdab7e713625a413",
+      "text": "Result<WriteResults> CollectionImpl::insert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::INSERT);\n}\n\nResult<WriteResults> CollectionImpl::update(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPDATE);\n}\n\nResult<WriteResults> CollectionImpl::upsert(std::vector<Doc> &docs) {\n  return write_impl(docs, WriteMode::UPSERT);\n}\n"
+    },
+    "src/db/collection.cc:1650-1709": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1709,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "71aece5eacf59e097ad7b9f89814e1764cc46877d3660a1fd9089ca4a8ecc117",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;\n}\n\nbool CollectionImpl::need_switch_to_new_segment() const {\n  return writing_segment_->doc_count() >= schema_->max_doc_count_per_segment();\n}\n\nStatus CollectionImpl::commit_schema_change_with_new_writing_segment(\n    const CollectionSchema::Ptr &new_schema,\n    const Segment::Ptr &old_writing_segment, const Version &old_version,\n"
+    },
+    "src/db/common/typedef.h:180-184": {
+      "path": "src/db/common/typedef.h",
+      "start_line": 180,
+      "end_line": 184,
+      "file_sha256": "7481533f08fa62764b027c6931f01bfd7dc63175308d49503deb888e386170a8",
+      "span_sha256": "9d2ccb559c41440776b78a724dcc31528c10a237505718e1140d851cb99aa99c",
+      "text": "#define CHECK_RETURN_STATUS_EXPECTED(status) \\\n  if (!status.ok()) {                        \\\n    return tl::make_unexpected(status);      \\\n  }\n\n"
+    },
+    "src/binding/python/model/python_collection.cc:49-84": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 84,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "0f753b94246ebed326775e3c2ca39b8d25b5b1a9186a9384325eba7ce745b4d0",
+      "text": "inline void throw_if_error(const Status &status) {\n  switch (status.code()) {\n    case StatusCode::OK:\n      return;\n    case StatusCode::NOT_FOUND:\n      throw py::key_error(status.message());\n    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n    case StatusCode::INTERNAL_ERROR:\n    case StatusCode::ALREADY_EXISTS:\n    case StatusCode::NOT_SUPPORTED:\n    case StatusCode::PERMISSION_DENIED:\n    case StatusCode::FAILED_PRECONDITION:\n    case StatusCode::UNKNOWN:\n    default:\n      throw std::runtime_error(status.message());\n  }\n}\n\n\ntemplate <typename T>\nT unwrap_expected(const tl::expected<T, Status> &exp) {\n  if (exp.has_value()) {\n    return exp.value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n\ntemplate <typename T>\nT unwrap_expected(tl::expected<T, Status> &&exp) {\n  if (exp.has_value()) {\n    return std::move(exp).value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n"
+    },
+    "src/binding/python/model/python_collection.cc:284-295": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 284,
+      "end_line": 295,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "e728ab1b59a8df059263cd254b0b31bf8a055a3ade535a4b447bcb803e5e4f47",
+      "text": "    py::class_<Collection, Collection::Ptr> &col) {\n  // bind collection upsert/insert/update/delete methods\n  col.def(\"Insert\",\n          [](Collection &self, std::vector<Doc> &docs) {\n            Result<WriteResults> result;\n            {\n              py::gil_scoped_release release;\n              result = self.insert(docs);\n            }\n            return unwrap_expected(result);\n          })\n      .def(\"Update\",\n"
+    },
+    "python/zvec/model/collection.py:337-354": {
+      "path": "python/zvec/model/collection.py",
+      "start_line": 337,
+      "end_line": 354,
+      "file_sha256": "eab65fddb6a5c1b7fcc01e93c0bc784c5ee922f9fe6afe22903fbb09d19a1bfb",
+      "span_sha256": "b8b7a7dbe5cf7d62bab0701dd81639bf8f17a8d64d29f8db478a38be05f5805c",
+      "text": "    def insert(self, docs: Union[Doc, list[Doc]]) -> Union[Status, list[Status]]:\n        \"\"\"Insert new documents into the collection.\n\n        Documents must have unique IDs and conform to the schema.\n\n        Args:\n            docs (Union[Doc, list[Doc]]): One or more documents to insert.\n\n        Returns:\n            Union[Status, list[Status]]: If a single Doc was given, returns its Status;\n            if a list was given, returns a list of Status objects.\n        \"\"\"\n        is_single = isinstance(docs, Doc)\n        doc_list = [docs] if is_single else docs\n        results = self._obj.Insert(\n            [convert_to_cpp_doc(doc, self.schema) for doc in doc_list]\n        )\n        return results[0] if is_single else results\n"
+    },
+    "src/db/index/segment/segment.cc:990-1006": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 990,
+      "end_line": 1006,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "8f685d4ca0f9d8c8a5cb124d151d0c702e14d16b5b1d9fa98c261c37bd48c3e4",
+      "text": "Status SegmentImpl::insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk_ref())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk_ref(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append WAL\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n  return internal_insert(doc);\n}\n\n"
+    },
+    "src/db/index/segment/segment.cc:924-968": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 924,
+      "end_line": 968,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "f4b01b90fe87460a8302ed012b79128a83392459ad635833c8e2386f9d08c80c",
+      "text": "Status SegmentImpl::internal_insert(Doc &doc) {\n  uint64_t g_doc_id = doc_id_allocator_.fetch_add(1);\n  doc.set_doc_id(g_doc_id);\n\n  if (ready_for_dump_block()) {\n    auto s = flush();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // init writing memory components\n  if (!memory_store_) {\n    auto s = init_memory_components();\n    CHECK_RETURN_STATUS(s);\n  }\n\n  // write idmap\n  auto s = id_map_->upsert(doc.pk_ref(), g_doc_id);\n  CHECK_RETURN_STATUS(s);\n\n  // write forward\n  s = memory_store_->insert(doc);\n  CHECK_RETURN_STATUS(s);\n\n  // write scalar index\n  s = insert_scalar_indexer(doc);\n  if (!s.ok() && s.code() != StatusCode::ALREADY_EXISTS) {\n    return s;\n  }\n  // write FTS index\n  s = insert_fts_indexer(doc);\n  CHECK_RETURN_STATUS(s);\n  // write vector index\n  s = insert_vector_indexer(doc);\n  if (!s.ok() && s != Status::AlreadyExists()) {\n    return s;\n  }\n\n  auto &mem_block = segment_meta_->writing_forward_block().value();\n  mem_block.max_doc_id_ = g_doc_id;\n  mem_block.doc_count_ = mem_block.doc_count_ + 1;\n\n  doc_ids_.push_back(g_doc_id);\n\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/common/schema.cc:84-91": {
+      "path": "src/db/index/common/schema.cc",
+      "start_line": 84,
+      "end_line": 91,
+      "file_sha256": "2a141255ce1e21240ce4efef553924c57e21d98da41667918ea23be42ff6fd48",
+      "span_sha256": "1b893b7f89a9e6681ca557cfad69f12d9bd305042d7e3d9004745280f4264665",
+      "text": "Status FieldSchema::validate() const {\n  if (auto s = validate_field_name(name_); !s.ok()) {\n    return s;\n  }\n\n  if (data_type_ == DataType::UNDEFINED) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", name_,\n                                   \"]'s data_type is not defined\");\n"
+    },
+    "src/db/index/common/schema.cc:406-413": {
+      "path": "src/db/index/common/schema.cc",
+      "start_line": 406,
+      "end_line": 413,
+      "file_sha256": "2a141255ce1e21240ce4efef553924c57e21d98da41667918ea23be42ff6fd48",
+      "span_sha256": "fd884d7396316369fb2b4fd0cd35aa78b792b9da908d8e3492ad5fd1aaeb3039",
+      "text": "Status CollectionSchema::validate() const {\n  if (auto s = validate_collection_name(name_); !s.ok()) {\n    return s;\n  }\n  std::unordered_set<std::string> names;\n  for (const auto &field : fields_) {\n    if (!field) {\n      return Status::InvalidArgument(\n"
+    },
+    "tests/db/index/common/identifier_validation_test.cc:61-87": {
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 61,
+      "end_line": 87,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "b5bfe0b29047f04929cd4c6bfe9a6d89069494473f6e7441d531817cec94f138",
+      "text": "  const std::vector<std::string> values{\n      \"a\",\n      \"A_b-9\",\n      \"https://example.com/docs/1?lang=zh#section\",\n      \"a/b.c:d@e+f\",\n      \"'quoted' \\\"text\\\" \\\\ value\",\n      \" \",\n      \"   \",\n      \" leading and trailing \",\n      u8\"\\u00A0\\u3000\",\n      u8\"中文\",\n      u8\"€\",\n      u8\"😀\",\n      u8\"👩\\u200D💻\",\n      u8\"é\",\n      u8\"e\\u0301\",\n      u8\"\\U0010FFFF\",\n  };\n  for (const auto &validator : kUtf8NameValidators) {\n    SCOPED_TRACE(validator.prefix);\n    for (const auto &value : values) {\n      EXPECT_TRUE(validator.validate(value).ok());\n    }\n  }\n}\n\nTEST(IdentifierValidationTest, RejectsEmptyNames) {\n"
+    },
+    "tests/db/index/common/identifier_validation_test.cc:100-120": {
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 100,
+      "end_line": 120,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "3b73c2f9bc0492855e49bd1d78b1b59478887afd6cdf18fac8cd0d8752ec2bcb",
+      "text": "    EXPECT_TRUE(validator.validate(std::string(max_bytes, 'a')).ok());\n    auto emoji = Repeat(u8\"😀\", max_bytes / 4);\n    ASSERT_EQ(emoji.size(), max_bytes);\n    EXPECT_TRUE(validator.validate(emoji).ok());\n    EXPECT_TRUE(\n        validator.validate(std::string(max_bytes - 3, 'a') + u8\"中\").ok());\n\n    const auto reason = \"exceeds \" + std::to_string(max_bytes) +\n                        \" bytes (got \" + std::to_string(max_bytes + 1) + \")\";\n    ExpectInvalidName(validator, std::string(max_bytes + 1, 'a'), reason);\n    ExpectInvalidName(validator, emoji + \"a\", reason);\n    ExpectInvalidName(validator, std::string(max_bytes - 2, 'a') + u8\"中\",\n                      reason);\n  }\n}\n\nTEST(IdentifierValidationTest, RejectsMalformedUtf8) {\n  const std::vector<std::string> malformed{\n      \"\\x80\",  // Isolated continuation byte.\n      \"\\xBF\",\n      \"\\xC2\",  // Truncated sequences.\n"
+    },
+    "tests/db/index/common/identifier_validation_test.cc:160-187": {
+      "path": "tests/db/index/common/identifier_validation_test.cc",
+      "start_line": 160,
+      "end_line": 187,
+      "file_sha256": "29a80ea41053f4f937c97188bc5fcbb3093a29ccdaa33c83e73f0f0f2c9a67d5",
+      "span_sha256": "13e6485c79bf9e16f2cdbcf8f98a0a093f9897e3762d6403a1c14c6cd277eac5",
+      "text": "TEST(IdentifierValidationTest, RejectsEveryC0AndC1ControlByCodepoint) {\n  for (const auto &validator : kUtf8NameValidators) {\n    SCOPED_TRACE(validator.prefix);\n    for (unsigned int codepoint = 0; codepoint <= 0x9F; ++codepoint) {\n      if (codepoint >= 0x20 && codepoint < 0x7F) {\n        continue;\n      }\n      SCOPED_TRACE(codepoint);\n      std::string value;\n      if (codepoint >= 0x80) {\n        value += '\\xC2';\n      }\n      value += static_cast<char>(codepoint);\n      std::string reason = \"contains a control character\";\n      if (codepoint == 0) {\n        reason = \"contains a null character\";\n      } else if (codepoint == '\\n' || codepoint == '\\r') {\n        reason = \"contains a newline\";\n      } else if (codepoint == '\\t') {\n        reason = \"contains a tab\";\n      }\n      ExpectInvalidName(validator, \"a\" + value + \"b\", reason);\n    }\n    // These continuation bytes overlap the C1 byte range, but their decoded\n    // codepoints are ordinary letters/symbols and must not be rejected.\n    EXPECT_TRUE(validator.validate(u8\"中文€😀\").ok());\n  }\n}\n"
+    },
+    "python/tests/test_collection.py:572-584": {
+      "path": "python/tests/test_collection.py",
+      "start_line": 572,
+      "end_line": 584,
+      "file_sha256": "c2eb92ac12ba8eb1baece51e4d22c3a42dc05cadf47ab75176884c9cc8b3486f",
+      "span_sha256": "f1d6183b6c11d1decf0a9a43d57b25184e2284db4983c29f8911780168964e19",
+      "text": "    def test_collection_insert_duplicate(\n        self, test_collection, single_doc, multiple_docs\n    ):\n        test_collection.insert(single_doc)\n        result = test_collection.insert(single_doc)\n        assert bool(result)\n        assert result.code() == StatusCode.ALREADY_EXISTS\n\n        stats = test_collection.stats\n        assert stats is not None\n        assert stats.doc_count == 1\n\n\n"
+    },
+    "src/db/index/common/identifier_validation.cc:28-79": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 28,
+      "end_line": 79,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "c1275f8c5e4e5bc5736244288c34b7f547dc74e4670bbde419d7637d111b6929",
+      "text": "const char *forbidden_codepoint_reason(utf8proc_int32_t codepoint) {\n  if (codepoint == 0) {\n    return \"contains a null character\";\n  }\n  if (codepoint == '\\n' || codepoint == '\\r') {\n    return \"contains a newline\";\n  }\n  if (codepoint == '\\t') {\n    return \"contains a tab\";\n  }\n  if (codepoint <= 0x1F || (codepoint >= 0x7F && codepoint <= 0x9F)) {\n    return \"contains a control character\";\n  }\n  if (codepoint == 0x2028) {\n    return \"contains a line separator\";\n  }\n  if (codepoint == 0x2029) {\n    return \"contains a paragraph separator\";\n  }\n  return nullptr;\n}\n\nStatus validate_utf8_name(std::string_view value, size_t max_bytes,\n                          const char *prefix) {\n  if (value.empty()) {\n    return Status::InvalidArgument(prefix, \" must not be empty\");\n  }\n  if (value.size() > max_bytes) {\n    return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                   \"] exceeds \", max_bytes, \" bytes (got \",\n                                   value.size(), \")\");\n  }\n\n  const auto *data = reinterpret_cast<const utf8proc_uint8_t *>(value.data());\n  size_t position = 0;\n  while (position < value.size()) {\n    utf8proc_int32_t codepoint;\n    auto bytes = utf8proc_iterate(\n        data + position, static_cast<utf8proc_ssize_t>(value.size() - position),\n        &codepoint);\n    if (bytes <= 0) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                     \"] is not valid UTF-8\");\n    }\n    if (const char *reason = forbidden_codepoint_reason(codepoint)) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value), \"] \",\n                                     reason);\n    }\n    position += static_cast<size_t>(bytes);\n  }\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:95-98": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 95,
+      "end_line": 98,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "3600f4c57c3dad723af27f2aaeb9d1efbce936354f9c8295f0796f9b393c133f",
+      "text": "Status validate_collection_name(std::string_view name) {\n  return validate_utf8_name(name, kMaxCollectionNameBytes,\n                            \"Invalid schema: collection name\");\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:50-79": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 50,
+      "end_line": 79,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "24604b1e4e19e587bd2bb7feddf86b08f22c25b33c0e396d7ae49e2948b3a4a7",
+      "text": "Status validate_utf8_name(std::string_view value, size_t max_bytes,\n                          const char *prefix) {\n  if (value.empty()) {\n    return Status::InvalidArgument(prefix, \" must not be empty\");\n  }\n  if (value.size() > max_bytes) {\n    return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                   \"] exceeds \", max_bytes, \" bytes (got \",\n                                   value.size(), \")\");\n  }\n\n  const auto *data = reinterpret_cast<const utf8proc_uint8_t *>(value.data());\n  size_t position = 0;\n  while (position < value.size()) {\n    utf8proc_int32_t codepoint;\n    auto bytes = utf8proc_iterate(\n        data + position, static_cast<utf8proc_ssize_t>(value.size() - position),\n        &codepoint);\n    if (bytes <= 0) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                     \"] is not valid UTF-8\");\n    }\n    if (const char *reason = forbidden_codepoint_reason(codepoint)) {\n      return Status::InvalidArgument(prefix, \"[\", format_name(value), \"] \",\n                                     reason);\n    }\n    position += static_cast<size_t>(bytes);\n  }\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:100-130": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 100,
+      "end_line": 130,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "fd38c25669134e8d4159548b335c65ff81aa40658b0e8842ff048a59861551ea",
+      "text": "Status validate_field_name(std::string_view name) {\n  if (name.empty()) {\n    return Status::InvalidArgument(\n        \"Invalid schema: field name must not be empty\");\n  }\n  if (name.size() > kMaxFieldNameBytes) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", format_name(name),\n                                   \"] exceeds \", kMaxFieldNameBytes,\n                                   \" bytes (got \", name.size(), \")\");\n  }\n  for (unsigned char byte : name) {\n    if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||\n        (byte >= '0' && byte <= '9') || byte == '_' || byte == '-') {\n      continue;\n    }\n    const char *reason = byte >= 0x80 ? \"contains a non-ASCII character\"\n                                      : forbidden_codepoint_reason(byte);\n    if (!reason) {\n      reason = byte == ' ' ? \"contains a space\"\n                           : \"contains an unsupported character\";\n    }\n    return Status::InvalidArgument(\n        \"Invalid schema: field[\", format_name(name), \"] \", reason,\n        \"; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)\");\n  }\n  if (is_reserved_field_name(name)) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", format_name(name),\n                                   \"] is reserved; use a different name\");\n  }\n  return Status::OK();\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:110-124": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 110,
+      "end_line": 124,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "0aa330bfc90a321d48ebe7995c49e2e7e712fcd8bf866593a5d9550f68da2bc4",
+      "text": "  for (unsigned char byte : name) {\n    if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||\n        (byte >= '0' && byte <= '9') || byte == '_' || byte == '-') {\n      continue;\n    }\n    const char *reason = byte >= 0x80 ? \"contains a non-ASCII character\"\n                                      : forbidden_codepoint_reason(byte);\n    if (!reason) {\n      reason = byte == ' ' ? \"contains a space\"\n                           : \"contains an unsupported character\";\n    }\n    return Status::InvalidArgument(\n        \"Invalid schema: field[\", format_name(name), \"] \", reason,\n        \"; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)\");\n  }\n"
+    },
+    "src/db/index/common/identifier_validation.cc:91-93": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 91,
+      "end_line": 93,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "eb9c34bd3a9744400d585817d431bd9119c293cbaa7ab206bc4a0812a336808e",
+      "text": "Status validate_document_id(std::string_view id) {\n  return validate_utf8_name(id, kMaxDocumentIdBytes, \"Invalid doc: id\");\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:28-48": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 28,
+      "end_line": 48,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "dbf41b7a471d08edcda80dd8c02b64a846c89be9b1f29b3c1569c9be9a46a511",
+      "text": "const char *forbidden_codepoint_reason(utf8proc_int32_t codepoint) {\n  if (codepoint == 0) {\n    return \"contains a null character\";\n  }\n  if (codepoint == '\\n' || codepoint == '\\r') {\n    return \"contains a newline\";\n  }\n  if (codepoint == '\\t') {\n    return \"contains a tab\";\n  }\n  if (codepoint <= 0x1F || (codepoint >= 0x7F && codepoint <= 0x9F)) {\n    return \"contains a control character\";\n  }\n  if (codepoint == 0x2028) {\n    return \"contains a line separator\";\n  }\n  if (codepoint == 0x2029) {\n    return \"contains a paragraph separator\";\n  }\n  return nullptr;\n}\n"
+    },
+    "src/db/index/common/identifier_validation.h:23-25": {
+      "path": "src/db/index/common/identifier_validation.h",
+      "start_line": 23,
+      "end_line": 25,
+      "file_sha256": "b36fa323134a9930473f5eea9b6b7178025bca67875279d41f7172105a0b3dfb",
+      "span_sha256": "e2824168176fbe5f78a5469bdbd8b3eb462c6c8369e49ac26d558299d4ff0e11",
+      "text": "inline constexpr size_t kMaxDocumentIdBytes = 1024;\ninline constexpr size_t kMaxCollectionNameBytes = 256;\ninline constexpr size_t kMaxFieldNameBytes = 64;\n"
+    },
+    "src/db/index/common/identifier_validation.cc:55-59": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 55,
+      "end_line": 59,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "0540f5cbfbf5b3217c4dc19090bee168e45fd94a7d909844b2f0eafcbbd4af89",
+      "text": "  if (value.size() > max_bytes) {\n    return Status::InvalidArgument(prefix, \"[\", format_name(value),\n                                   \"] exceeds \", max_bytes, \" bytes (got \",\n                                   value.size(), \")\");\n  }\n"
+    },
+    "src/db/index/common/identifier_validation.cc:35-37": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 35,
+      "end_line": 37,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "a7ceb9a515e7110344784ac2812e24de99de5fd3dfaec44d7c3847d96453c601",
+      "text": "  if (codepoint == '\\t') {\n    return \"contains a tab\";\n  }\n"
+    },
+    "src/db/index/common/doc.cc:728-736": {
+      "path": "src/db/index/common/doc.cc",
+      "start_line": 728,
+      "end_line": 736,
+      "file_sha256": "217223974ed1aa7382a92c7ede04c52f9a0cf2b93470053dd56eab0a7d5a6bb2",
+      "span_sha256": "0549ce926112baea28de15561f7b8c25462c2b5867e3ebd3b7de4abad367526a",
+      "text": "Status Doc::validate_and_sanitize(const CollectionSchema::Ptr &schema,\n                                  bool is_update) {\n  if (!schema) {\n    return Status::InternalError(\"schema is null during doc validation\");\n  }\n\n  if (auto s = validate_document_id(pk_); !s.ok()) {\n    return s;\n  }\n"
+    },
+    "src/db/collection.cc:1650-1698": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1698,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "f39f6e8959ecec3de9e344aee7afc9920632aece1bf0bc5b50c95f19aa525cb1",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n"
+    },
+    "src/db/collection.cc:1659-1662": {
+      "path": "src/db/collection.cc",
+      "start_line": 1659,
+      "end_line": 1662,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "5722b4086c463fd841362bb5dec8d8cd4daad317dcaa6b8d1d89a79291e34ed0",
+      "text": "  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n"
+    },
+    "src/db/common/typedef.h:180-183": {
+      "path": "src/db/common/typedef.h",
+      "start_line": 180,
+      "end_line": 183,
+      "file_sha256": "7481533f08fa62764b027c6931f01bfd7dc63175308d49503deb888e386170a8",
+      "span_sha256": "401f7d18741fd8741c6fea956da503f3d3145e0a590a7f50c27a1939cdef0488",
+      "text": "#define CHECK_RETURN_STATUS_EXPECTED(status) \\\n  if (!status.ok()) {                        \\\n    return tl::make_unexpected(status);      \\\n  }\n"
+    },
+    "src/db/collection.cc:1675-1698": {
+      "path": "src/db/collection.cc",
+      "start_line": 1675,
+      "end_line": 1698,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "b5f077943b1e90f1b6168e33bba08b28eb548cc0ea7cfad05e4fa206f981f52a",
+      "text": "  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n"
+    },
+    "src/binding/python/model/python_collection.cc:49-85": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 85,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "c753f354633816634a78f87b1ad4281996980c2f913bcefad3d6fb464ef7ea0b",
+      "text": "inline void throw_if_error(const Status &status) {\n  switch (status.code()) {\n    case StatusCode::OK:\n      return;\n    case StatusCode::NOT_FOUND:\n      throw py::key_error(status.message());\n    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n    case StatusCode::INTERNAL_ERROR:\n    case StatusCode::ALREADY_EXISTS:\n    case StatusCode::NOT_SUPPORTED:\n    case StatusCode::PERMISSION_DENIED:\n    case StatusCode::FAILED_PRECONDITION:\n    case StatusCode::UNKNOWN:\n    default:\n      throw std::runtime_error(status.message());\n  }\n}\n\n\ntemplate <typename T>\nT unwrap_expected(const tl::expected<T, Status> &exp) {\n  if (exp.has_value()) {\n    return exp.value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n\ntemplate <typename T>\nT unwrap_expected(tl::expected<T, Status> &&exp) {\n  if (exp.has_value()) {\n    return std::move(exp).value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n"
+    },
+    "src/binding/python/model/python_collection.cc:286-294": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 286,
+      "end_line": 294,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "70f1220cf32a05e3e930617a7d78ba9815705563ec9f9ee8fe58da2c5c80b51b",
+      "text": "  col.def(\"Insert\",\n          [](Collection &self, std::vector<Doc> &docs) {\n            Result<WriteResults> result;\n            {\n              py::gil_scoped_release release;\n              result = self.insert(docs);\n            }\n            return unwrap_expected(result);\n          })\n"
+    },
+    "src/binding/python/model/python_collection.cc:55-56": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 55,
+      "end_line": 56,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "32611f5e8a61c9f2610c00c81ecec6b79208653e80c6a6e8281b13e07c61ae01",
+      "text": "    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n"
+    },
+    "src/binding/python/model/python_collection.cc:69-85": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 69,
+      "end_line": 85,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "a37d92e41c8cd6bd97f70940efa3604443725ff143e7b528eb2f8d9f009e9665",
+      "text": "template <typename T>\nT unwrap_expected(const tl::expected<T, Status> &exp) {\n  if (exp.has_value()) {\n    return exp.value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n\ntemplate <typename T>\nT unwrap_expected(tl::expected<T, Status> &&exp) {\n  if (exp.has_value()) {\n    return std::move(exp).value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n"
+    },
+    "src/db/collection.cc:1675-1700": {
+      "path": "src/db/collection.cc",
+      "start_line": 1675,
+      "end_line": 1700,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "9fdd2904ac69d2de6369ea5680ecf82f3d4ff60efcb369e81a704b8742ca1c42",
+      "text": "  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;\n"
+    },
+    "src/include/zvec/db/doc.h:366-366": {
+      "path": "src/include/zvec/db/doc.h",
+      "start_line": 366,
+      "end_line": 366,
+      "file_sha256": "e2d74a35e088ffa7b46a99405ffefc12e8cc29d7e6d458e97ec0438c434ce612",
+      "span_sha256": "8f83ae350c58d3108aed129fc35deefea82e822dbdaff7e35213205095e7128d",
+      "text": "using WriteResults = std::vector<Status>;\n"
+    },
+    "src/db/index/segment/segment.cc:993-996": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 993,
+      "end_line": 996,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "db00be513c6898978fec1d94964a2ba7a1b750b121b050814bca05eefd70c1b1",
+      "text": "  if (id_map_ && id_map_->has(doc.pk_ref())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk_ref(),\n                                 \"] already exists in collection\");\n  }\n"
+    },
+    "src/db/index/segment/segment.cc:990-1005": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 990,
+      "end_line": 1005,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "948cfc7697020f4a3c734d31c0b073b9f260b213db8d1fdb4313d2d50b892a2c",
+      "text": "Status SegmentImpl::insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk_ref())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk_ref(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append WAL\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n  return internal_insert(doc);\n}\n"
+    },
+    "src/db/collection.cc:1697-1697": {
+      "path": "src/db/collection.cc",
+      "start_line": 1697,
+      "end_line": 1697,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "5aa071cf0f3b055b3cf9080279505e6a541aae2bf6cd2d1f8d30b12b1e03d5fa",
+      "text": "    results.push_back(s);\n"
+    },
+    "src/db/index/segment/segment.cc:974-982": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 974,
+      "end_line": 982,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "88ba7127c5117b29b5598d93f4b91b6a9eaadccaafe9f5ebcfd15ba30674ea69",
+      "text": "\nStatus SegmentImpl::internal_upsert(Doc &doc) {\n  uint64_t g_doc_id;\n  bool exist = id_map_->has(doc.pk_ref(), &g_doc_id);\n  if (exist) {\n    delete_store_->mark_deleted(g_doc_id);\n  }\n  return internal_insert(doc);\n}\n"
+    },
+    "src/db/index/common/identifier_validation.cc:100-124": {
+      "path": "src/db/index/common/identifier_validation.cc",
+      "start_line": 100,
+      "end_line": 124,
+      "file_sha256": "35cff191302fcf2d07e6697522b0c8eda103bb104e1615c1476f20975131c172",
+      "span_sha256": "2df2cbf8915cb79e453c3f42d6033d6f9c69d13ef362edfac88beedc9df2d4d8",
+      "text": "Status validate_field_name(std::string_view name) {\n  if (name.empty()) {\n    return Status::InvalidArgument(\n        \"Invalid schema: field name must not be empty\");\n  }\n  if (name.size() > kMaxFieldNameBytes) {\n    return Status::InvalidArgument(\"Invalid schema: field[\", format_name(name),\n                                   \"] exceeds \", kMaxFieldNameBytes,\n                                   \" bytes (got \", name.size(), \")\");\n  }\n  for (unsigned char byte : name) {\n    if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||\n        (byte >= '0' && byte <= '9') || byte == '_' || byte == '-') {\n      continue;\n    }\n    const char *reason = byte >= 0x80 ? \"contains a non-ASCII character\"\n                                      : forbidden_codepoint_reason(byte);\n    if (!reason) {\n      reason = byte == ' ' ? \"contains a space\"\n                           : \"contains an unsupported character\";\n    }\n    return Status::InvalidArgument(\n        \"Invalid schema: field[\", format_name(name), \"] \", reason,\n        \"; use letters (A-Z, a-z), digits, underscores (_) or hyphens (-)\");\n  }\n"
+    },
+    "src/db/index/common/doc.cc:734-736": {
+      "path": "src/db/index/common/doc.cc",
+      "start_line": 734,
+      "end_line": 736,
+      "file_sha256": "217223974ed1aa7382a92c7ede04c52f9a0cf2b93470053dd56eab0a7d5a6bb2",
+      "span_sha256": "ab7236ad39b1e1a3e522d2d49d5aa7b172d44f93f0dbab3f8227ac6f706ac239",
+      "text": "  if (auto s = validate_document_id(pk_); !s.ok()) {\n    return s;\n  }\n"
+    },
+    "src/binding/python/model/python_collection.cc:69-86": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 69,
+      "end_line": 86,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "7976eb5583decf268a1fe2ac3498ce7a9726319cb7c60c68284f7437eaeb4a80",
+      "text": "template <typename T>\nT unwrap_expected(const tl::expected<T, Status> &exp) {\n  if (exp.has_value()) {\n    return exp.value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n\ntemplate <typename T>\nT unwrap_expected(tl::expected<T, Status> &&exp) {\n  if (exp.has_value()) {\n    return std::move(exp).value();\n  }\n  throw_if_error(exp.error());\n  return T{};\n}\n\n"
+    },
+    "src/binding/python/model/python_collection.cc:49-56": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 56,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "f14254a895fd0a97e03d137e51f8037d119cbf51d120a823daedc197c56c35be",
+      "text": "inline void throw_if_error(const Status &status) {\n  switch (status.code()) {\n    case StatusCode::OK:\n      return;\n    case StatusCode::NOT_FOUND:\n      throw py::key_error(status.message());\n    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n"
+    },
+    "src/db/collection.cc:1700-1700": {
+      "path": "src/db/collection.cc",
+      "start_line": 1700,
+      "end_line": 1700,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "0cf7e1629ea2be5cd7ca9623669d044849bff17490e14d8133e41feb0e0d375d",
+      "text": "  return results;\n"
+    },
+    "python/zvec/model/collection.py:351-355": {
+      "path": "python/zvec/model/collection.py",
+      "start_line": 351,
+      "end_line": 355,
+      "file_sha256": "eab65fddb6a5c1b7fcc01e93c0bc784c5ee922f9fe6afe22903fbb09d19a1bfb",
+      "span_sha256": "1375b9a70ca8295454680f42e9bcc0a29aa83299e9ad9aa9a9f3b90fe4ca2214",
+      "text": "        results = self._obj.Insert(\n            [convert_to_cpp_doc(doc, self.schema) for doc in doc_list]\n        )\n        return results[0] if is_single else results\n\n"
+    },
+    "src/db/index/segment/segment.cc:990-1003": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 990,
+      "end_line": 1003,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "e42d2acb0d59722cd135b67f8a0807a10c69c17e2d936079b592decf4ddf7f55",
+      "text": "Status SegmentImpl::insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk_ref())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk_ref(),\n                                 \"] already exists in collection\");\n  }\n\n  doc.set_operator(Operator::INSERT);\n\n  // append WAL\n  auto s = append_wal(doc);\n  CHECK_RETURN_STATUS(s);\n\n"
+    },
+    "src/db/index/segment/segment.cc:975-982": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 975,
+      "end_line": 982,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "c2fdac22bb4e3ada8706a749ea839a9c6d665309927913f5d936e800aec6470b",
+      "text": "Status SegmentImpl::internal_upsert(Doc &doc) {\n  uint64_t g_doc_id;\n  bool exist = id_map_->has(doc.pk_ref(), &g_doc_id);\n  if (exist) {\n    delete_store_->mark_deleted(g_doc_id);\n  }\n  return internal_insert(doc);\n}\n"
+    },
+    "src/db/collection.cc:1650-1700": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1700,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "6e90b8242b12388c52d135f08cb5fcaaeb080057d3d7ee173ac9bcb4e67d49af",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;\n"
+    },
+    "src/db/index/common/schema.cc:406-408": {
+      "path": "src/db/index/common/schema.cc",
+      "start_line": 406,
+      "end_line": 408,
+      "file_sha256": "2a141255ce1e21240ce4efef553924c57e21d98da41667918ea23be42ff6fd48",
+      "span_sha256": "ed7505efbd1450ddfc1630e7824124b7cb503cb1e7508dc48f5f5032f04b8533",
+      "text": "Status CollectionSchema::validate() const {\n  if (auto s = validate_collection_name(name_); !s.ok()) {\n    return s;\n"
+    },
+    "src/db/index/common/identifier_validation.h:23-23": {
+      "path": "src/db/index/common/identifier_validation.h",
+      "start_line": 23,
+      "end_line": 23,
+      "file_sha256": "b36fa323134a9930473f5eea9b6b7178025bca67875279d41f7172105a0b3dfb",
+      "span_sha256": "92a4e05c36ae4d7bcfeb906c456ebe2a44f7dc7f88d0d354eb10cffce9c2f23d",
+      "text": "inline constexpr size_t kMaxDocumentIdBytes = 1024;\n"
+    },
+    "src/db/index/common/doc.cc:734-734": {
+      "path": "src/db/index/common/doc.cc",
+      "start_line": 734,
+      "end_line": 734,
+      "file_sha256": "217223974ed1aa7382a92c7ede04c52f9a0cf2b93470053dd56eab0a7d5a6bb2",
+      "span_sha256": "8995b92ffd9f18103ef5096eb48e74137b5a0ebb943e4ef5b05619bb54bbe2ff",
+      "text": "  if (auto s = validate_document_id(pk_); !s.ok()) {\n"
+    },
+    "src/db/collection.cc:1650-1675": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1675,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "14d5830b577d1dc5b1d7be1fea98a8463a442bcba3a65386120e4228e632859e",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n"
+    },
+    "src/db/collection.cc:1650-1710": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1710,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "88d3d022bee67e290a846f548fab39340c7f8d0e7eedfa78d665b8b4a1effd60",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n  }\n\n  return results;\n}\n\nbool CollectionImpl::need_switch_to_new_segment() const {\n  return writing_segment_->doc_count() >= schema_->max_doc_count_per_segment();\n}\n\nStatus CollectionImpl::commit_schema_change_with_new_writing_segment(\n    const CollectionSchema::Ptr &new_schema,\n    const Segment::Ptr &old_writing_segment, const Version &old_version,\n    Version *new_version, uint64_t writing_min_doc_id) {\n"
+    },
+    "src/binding/python/model/python_collection.cc:49-67": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 67,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "a43e3c1949b8f73c17ece44b02ffab454cf3fabb59187772adcaea46cc888073",
+      "text": "inline void throw_if_error(const Status &status) {\n  switch (status.code()) {\n    case StatusCode::OK:\n      return;\n    case StatusCode::NOT_FOUND:\n      throw py::key_error(status.message());\n    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n    case StatusCode::INTERNAL_ERROR:\n    case StatusCode::ALREADY_EXISTS:\n    case StatusCode::NOT_SUPPORTED:\n    case StatusCode::PERMISSION_DENIED:\n    case StatusCode::FAILED_PRECONDITION:\n    case StatusCode::UNKNOWN:\n    default:\n      throw std::runtime_error(status.message());\n  }\n}\n\n"
+    },
+    "python/zvec/model/collection.py:337-356": {
+      "path": "python/zvec/model/collection.py",
+      "start_line": 337,
+      "end_line": 356,
+      "file_sha256": "eab65fddb6a5c1b7fcc01e93c0bc784c5ee922f9fe6afe22903fbb09d19a1bfb",
+      "span_sha256": "b66118cb04dc6bbc9553d4d00e87a9da5af56eb7b1d45c560811fadca95aed13",
+      "text": "    def insert(self, docs: Union[Doc, list[Doc]]) -> Union[Status, list[Status]]:\n        \"\"\"Insert new documents into the collection.\n\n        Documents must have unique IDs and conform to the schema.\n\n        Args:\n            docs (Union[Doc, list[Doc]]): One or more documents to insert.\n\n        Returns:\n            Union[Status, list[Status]]: If a single Doc was given, returns its Status;\n            if a list was given, returns a list of Status objects.\n        \"\"\"\n        is_single = isinstance(docs, Doc)\n        doc_list = [docs] if is_single else docs\n        results = self._obj.Insert(\n            [convert_to_cpp_doc(doc, self.schema) for doc in doc_list]\n        )\n        return results[0] if is_single else results\n\n    @overload\n"
+    },
+    "src/db/index/segment/segment.cc:990-996": {
+      "path": "src/db/index/segment/segment.cc",
+      "start_line": 990,
+      "end_line": 996,
+      "file_sha256": "66595d08b9fa0c8cc6a444451aa647ccca10da7bbf70a88a406d80e3a0a4f776",
+      "span_sha256": "198ac454d4b50317525f82863e4e3a361841ab77d7f81499e68c24696abf4779",
+      "text": "Status SegmentImpl::insert(Doc &doc) {\n  std::lock_guard lock(seg_mtx_);\n\n  if (id_map_ && id_map_->has(doc.pk_ref())) {\n    return Status::AlreadyExists(\"insert failed: doc_id[\", doc.pk_ref(),\n                                 \"] already exists in collection\");\n  }\n"
+    },
+    "src/db/collection.cc:1650-1697": {
+      "path": "src/db/collection.cc",
+      "start_line": 1650,
+      "end_line": 1697,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "ac2d5f34c988d8aec07d256215eef2502405c74a80776e990399046c169fc20f",
+      "text": "Result<WriteResults> CollectionImpl::write_impl(std::vector<Doc> &docs,\n                                                WriteMode mode) {\n  CHECK_READONLY_RETURN_STATUS_EXPECTED();\n\n  std::shared_lock lock(schema_handle_mtx_);\n\n  CHECK_DESTROY_RETURN_STATUS_EXPECTED(destroyed_, false);\n  CHECK_CLOSED_RETURN_STATUS_EXPECTED(closed_, false);\n\n  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n    if (need_switch_to_new_segment()) {\n      auto s = switch_to_new_segment_for_writing();\n      CHECK_RETURN_STATUS_EXPECTED(s);\n    }\n\n    Status s;\n\n    switch (mode) {\n      case WriteMode::UPSERT:\n        s = handle_upsert(doc);\n        break;\n      case WriteMode::UPDATE:\n        s = handle_update(doc);\n        break;\n      case WriteMode::INSERT:\n        s = handle_insert(doc);\n        break;\n      default:\n        s = Status::InvalidArgument(\"Invalid write mode\");\n    }\n\n    results.push_back(s);\n"
+    },
+    "src/binding/python/model/python_collection.cc:49-66": {
+      "path": "src/binding/python/model/python_collection.cc",
+      "start_line": 49,
+      "end_line": 66,
+      "file_sha256": "f733c765d0d8c156aa655921d16e1907d33b6823d29db1b002a2160540f1f388",
+      "span_sha256": "6bf9c7931eb231be2081f246e9e02b82210772844523bdb53daf98e5727582c2",
+      "text": "inline void throw_if_error(const Status &status) {\n  switch (status.code()) {\n    case StatusCode::OK:\n      return;\n    case StatusCode::NOT_FOUND:\n      throw py::key_error(status.message());\n    case StatusCode::INVALID_ARGUMENT:\n      throw py::value_error(status.message());\n    case StatusCode::INTERNAL_ERROR:\n    case StatusCode::ALREADY_EXISTS:\n    case StatusCode::NOT_SUPPORTED:\n    case StatusCode::PERMISSION_DENIED:\n    case StatusCode::FAILED_PRECONDITION:\n    case StatusCode::UNKNOWN:\n    default:\n      throw std::runtime_error(status.message());\n  }\n}\n"
+    },
+    "src/db/collection.cc:1659-1675": {
+      "path": "src/db/collection.cc",
+      "start_line": 1659,
+      "end_line": 1675,
+      "file_sha256": "233b4a393943f00f635abe97537c25b3ad0e85d247b414d127544a453a3abd7f",
+      "span_sha256": "a180236f4cb6bce54ceec513c6bcd65b976f960bc5fccac891460d0350ef302d",
+      "text": "  for (auto &&doc : docs) {\n    auto s = doc.validate_and_sanitize(schema_, mode == WriteMode::UPDATE);\n    CHECK_RETURN_STATUS_EXPECTED(s);\n  }\n\n  // TODO: The granularity of the write_lock is too coarse.\n  std::lock_guard write_lock(write_mtx_);\n\n  WriteResults results;\n  // validate write batch size\n  if (docs.size() > kMaxWriteBatchSize) {\n    CHECK_RETURN_STATUS_EXPECTED(Status::InvalidArgument(\n        \"Too many docs: \", docs.size(), \" exceeds max write batch size of \",\n        kMaxWriteBatchSize));\n  }\n\n  for (auto &&doc : docs) {\n"
+    }
+  }
+}
