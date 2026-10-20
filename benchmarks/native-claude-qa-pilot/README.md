@@ -2,6 +2,11 @@
 
 This separate pilot tests the main benchmark's native Claude agent with the existing Qwen Anthropic endpoint. The main registry supports Claude/Opus only, so a small explicit routing adapter selects Qwen without editing the registry or the native agent loop.
 
+The user has accepted the existing q001–q005 question bank and stopped further
+expansion. The [scope record](question-bank-scope-v1.json) preserves that decision.
+Unfinished q006 author research is excluded; no canonical task or execution was
+created for it. Work continues on existing-case results and statistical analysis.
+
 The completed [q001 confirmation](results/20261020-confirmation-v1/README.md) and [q002/q003 expansion](results/20261020-expansion-v1/README.md) did not establish a stable favorable benchmark set. The user cancelled the original three-task repetition campaign and limited the next cohort to q001. The [completed q001 repetition study](results/20261020-zvec-q001-repeat-v1/README.md) retains ten fresh baseline and ten fresh zg executions. Reported input fell 36.08%, but full-slot time fell only 0.47% with an interval crossing zero. Score-tail trimming widened resource-comparison intervals under every reported rating interpretation. Source-scope failures and unresolved C7 judgments remain visible; this study establishes no stable favorable case. Historical and cancelled-run observations are excluded.
 
 The [completed live v2 pair](results/20261020-live-v2/README.md) passed both independent execution/source audits and blinded quality review. Both answers scored 8/10 and passed; zg reported input including cache fell 63.27%, native execution wall fell 20.24%, and full slot wall including fresh indexing fell 5.24%. This meets the prospectively frozen reported-input development candidate rule. It is one previously exercised task and one pair, not a confirmed stable benefit or a favorable benchmark set. All raw answers, logs, independent reviews and the unchanged primary grading are retained.
@@ -73,20 +78,19 @@ Seven integrity tests and four actual Harbor command previews passed locally.
 The fork Linux preflight must pass at the execution commit before the explicit
 20-trial dispatch. Push alone runs no solver.
 
-All ten confirmation jobs have now completed in
+All ten confirmation jobs and both independent reviews completed in
 [fork run 39380248003](https://github.com/Cuiyus/zvec-grep/actions/runs/39380248003).
-The [execution archive](results/20261020-zvec-q004-repeat-v1/execution/retained-evidence-manifest.json)
-preserves all original 20 answers, trajectories, API-bound retention receipts
-and independent execution reviews. All 730 original checks passed; the parent
-also rehashed 1,490 catalog reference occurrences. The
-[raw resource estimates](results/20261020-zvec-q004-repeat-v1/raw-resources/raw-resource-statistics.json)
-show 50.66% less complete input (paired 95% interval 39.92%–60.17%),
-24.42% less agent time (13.25%–33.93%), and 2.47% more cold full-slot time
-(reduction interval −15.88%–8.61%). Anonymous quality grading and source-scope
-semantic review are still in progress. One conditional outside-directory
-fallback remains unresolvable from its trace and is preserved as strict-scope
-unknown; these resource observations establish no favorable valid benchmark.
-No score trimming is computed before complete quality judgments are available.
+The [final q004 report](results/20261020-zvec-q004-repeat-v1/README.md) preserves
+all 20 answers, trajectories, receipts and source/quality reviews. Complete input
+fell 50.66% (paired 95% interval 39.92%–60.17%), agent time fell 24.42%
+(13.25%–33.93%), and the cold full slot took 2.47% longer (reduction interval
+−15.88%–8.61%). Four C4.2 interpretations remain unresolved: original quality
+pass counts are bounded at baseline 9–10/10 and zg 7–10/10, not invented exact
+rates. Only 16/20 pass all strict source and required-retrieval gates.
+The complete primary score-tail statistic is unavailable. The original primary
+review remains a separate numeric diagnostic; filtering raises its input-saving
+point estimate to 52.81% but widens the interval 10.32%. No stable favorable
+valid-cohort conclusion follows.
 
 
 The separately reviewed [q005 runtime/API case](../zvec-issue-qa/tasks/q005/instruction.md)
@@ -119,7 +123,9 @@ profile command previews and 18 original-record collection comparisons in
 [preflight 39383111550](https://github.com/Cuiyus/zvec-grep/actions/runs/39383111550).
 After q004 execution completed, exactly one pair was dispatched in
 [run 39383511290](https://github.com/Cuiyus/zvec-grep/actions/runs/39383511290).
-Both original profile workers are running; no q005 result is claimed.
+Both original profile workers and joint collection have completed. Execution
+and accounting audits passed; anonymous quality and source-scope results are
+being finalized, so no favorable q005 result is claimed here.
 The [admission and dispatch evidence](provenance/native-q005-v1/ci-admission-r2/retained-evidence-manifest.json)
 binds the execution commit, unchanged current upstream Rust tree, source and
 grading controls, full preflight byte checks, and the single dispatch intent.
