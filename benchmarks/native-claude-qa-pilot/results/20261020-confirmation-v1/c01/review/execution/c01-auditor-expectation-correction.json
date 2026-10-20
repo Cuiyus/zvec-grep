@@ -1,0 +1,62 @@
+{
+  "scope": "Auditor expectation correction only; no runtime, protocol, accounting implementation, raw evidence or metrics changed.",
+  "initial_report": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-confirmation-v1-audit/c01-execution-review-initial.json",
+    "sha256": "bd2143a27784a909ec3aaf228ecf0f1a499c8c3d809aa38cf3c0b3e5a079572a"
+  },
+  "initial_script": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-confirmation-v1-audit/review-c01-initial.py",
+    "sha256": "07a133e7e98886b0a00e1286a92a973ba6d987814b07ede23fbd75e11b7a762d"
+  },
+  "frozen_reader": {
+    "path": "/Users/cc/.codex/worktrees/claude-zvec-qa-pilot/zvec-grep/benchmarks/native-claude-qa-pilot/native_claude/accounting.py",
+    "sha256": "a3460881e4b28d72c6c230f2b6de45a702e03ab7b17e48730d5631b407d52d9b"
+  },
+  "frozen_reader_locations": [
+    "lines 10-11: only terminal per-message retained usage summed",
+    "lines 208-224: persisted terminal usage and regression handling",
+    "lines 261-263: project exact four required usage fields",
+    "lines 323-356: stream identity/content checks; stream usage is not counted"
+  ],
+  "corrections": [
+    {
+      "initial_expectation": "Entire persisted usage object equals collector usage object",
+      "correct_expectation": "Exact original four fields equal collector four fields; additional native diagnostic fields are retained in raw and do not contribute to the declared metric.",
+      "reason": "Original persisted usage also contains server_tool_use, service_tier, cache_creation, inference_geo, iterations and speed. Initial four-component sums already matched exactly."
+    },
+    {
+      "initial_expectation": "Last streamed assistant-block usage equals persisted terminal usage",
+      "correct_expectation": "Message IDs, event UUIDs, model and content match across stream/persisted records; terminal persisted four-field objects independently sum to terminal result.modelUsage.",
+      "reason": "Actual same-UUID stream blocks have stop_reason=null and omit both cache fields. Persisted events have terminal stop reasons and complete usage. No zero filling or merging stream usage is performed."
+    }
+  ],
+  "examples": [
+    {
+      "profile": "baseline",
+      "message_id": "msg_803ab500-0b92-978a-b991-d9fccc251e63",
+      "stream_lines": [
+        9,
+        10
+      ],
+      "persisted_lines": [
+        7,
+        8
+      ],
+      "stream_usage": {
+        "input_tokens": 19085,
+        "output_tokens": 0
+      },
+      "persisted_required_usage": {
+        "input_tokens": 6,
+        "output_tokens": 65,
+        "cache_creation_input_tokens": 20123,
+        "cache_read_input_tokens": 0
+      }
+    }
+  ],
+  "additional_shape_note": "The stream includes context_management:null; persisted events instead include stop_details:null. These are diagnostic envelope fields, not message identity/content or usage. Compare id/type/role/model/content and exact event UUID, and verify those optional diagnostic values are null. No content trimming, normalization, zero filling, or metric change.",
+  "shape_expectation_report": {
+    "path": "/Users/cc/workspace/zvec-grep/output/claude-qwen-qa-pilot-20261019/main-agent-pilot/native-claude-confirmation-v1-audit/c01-execution-review-shape-expectation.json",
+    "sha256": "7fb9b0f83ad4ae5035ffe12a4cf662d138163ab27cb7f408f5daf8d43a7abf40"
+  }
+}

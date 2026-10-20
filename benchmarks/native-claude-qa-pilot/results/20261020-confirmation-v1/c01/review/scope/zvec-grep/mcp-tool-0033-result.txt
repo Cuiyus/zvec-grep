@@ -1,0 +1,188 @@
+freshness: fresh
+#1 [group_coverage: Q1] matchedBy=fts+vector src/db/index/segment/segment.cc:2217-2324
+groups: Q1#1 (fts+vector)
+source:
+2217	Status SegmentImpl::flush() {
+2218	  CHECK_SEGMENT_READONLY_RETURN_STATUS;
+2219	
+2220	  if (wal_file_ == nullptr || !wal_file_->has_record()) {
+2221	    return Status::OK();
+2222	  }
+2223	
+2224	  if (wal_file_) {
+2225	    if (wal_file_->flush() != 0) {
+2226	      LOG_ERROR("WAL flush failed: segment[%d]", id());
+...
+
+#2 [global_fill] matchedBy=fts+vector src/db/collection.cc:1836-1892
+groups: Q1#2 (fts+vector)
+source:
+1836	Status CollectionImpl::recovery() {
+1837	  if (!FileHelper::DirectoryExists(path_.c_str())) {
+1838	    return Status::InvalidArgument("collection path{", path_, "} not exist.");
+1839	  }
+1840	
+1841	  // get lock file
+1842	  auto s = acquire_file_lock(false);
+1843	  CHECK_RETURN_STATUS(s);
+1844	
+1845	  // recovery version first
+...
+
+#3 [global_fill] matchedBy=fts+vector tests/db/index/segment/segment_test.cc:366-451
+groups: Q1#3 (fts+vector)
+source:
+366	TEST_P(SegmentTest, Recover) {
+367	  // first insert 100 doc
+368	  int doc_count = 100;
+369	  {
+370	    auto segment = test::TestHelper::CreateSegmentWithDoc(
+371	        col_path_, *schema_, 0, 0, id_map_, delete_store_, version_manager_, options_,
+372	        0, doc_count);
+373	    ASSERT_TRUE(segment != nullptr);
+374	  }
+375	
+...
+
+#4 [global_fill] matchedBy=fts+vector src/core/utility/buffer_storage.cc:92-1548
+groups: Q1#4 (fts+vector)
+source:
+92	class BufferStorage : public IndexStorage {
+93	 public:
+94	  /*! Index Storage Segment
+95	   */
+96	  class WrappedSegment : public IndexStorage::Segment,
+97	                         public std::enable_shared_from_this<Segment> {
+98	   public:
+99	    //! Index Storage Pointer
+100	    typedef std::shared_ptr<Segment> Pointer;
+101	
+...
+
+#5 [global_fill] matchedBy=fts+vector src/db/index/segment/segment.cc:4303-4322
+groups: Q1#5 (fts+vector)
+source:
+4303	Status SegmentImpl::open_wal_file() {
+4304	  auto mem_block = segment_meta_->writing_forward_block().value();
+4305	  std::string wal_file_path =
+4306	      FileHelper::MakeWalPath(path_, segment_meta_->id(), mem_block.id_);
+4307	  WalOptions wal_option;
+4308	  if (std::filesystem::exists(wal_file_path)) {
+4309	    wal_option.create_new = false;
+4310	  } else {
+4311	    wal_option.create_new = true;
+4312	  }
+...
+
+#6 [global_fill] matchedBy=fts+vector src/db/index/common/version_manager.h:180-238
+groups: Q1#6 (fts+vector)
+source:
+180	class VersionManager {
+181	 public:
+182	  using Ptr = std::shared_ptr<VersionManager>;
+183	
+184	  static Result<VersionManager::Ptr> Recovery(const std::string &path);
+185	
+186	  static Result<VersionManager::Ptr> Create(const std::string &path,
+187	                                            const Version &initial_version);
+188	
+189	 private:
+...
+
+#7 matchedBy=fts+vector src/db/index/storage/wal/local_wal_file.h:31-34
+groups: Q1#7 (fts+vector)
+source:
+31	struct WalHeader {
+32	  uint64_t wal_version{0U};
+33	  uint64_t reserved_[7];
+34	}
+
+#8 matchedBy=fts+vector src/core/utility/mmap_file_storage.cc:241-262
+groups: Q1#8 (fts+vector)
+source:
+241	int init_version_segment(void) {
+242	    size_t data_size = std::strlen(IndexVersion::Details());
+243	    int error_code =
+244	        this->append_segment(INDEX_VERSION_SEGMENT_NAME, data_size);
+245	    if (error_code != 0) {
+246	      return error_code;
+247	    }
+248	
+249	    IndexMapping::Segment *segment = get_segment(INDEX_VERSION_SEGMENT_NAME);
+250	    if (!segment) {
+...
+
+#9 matchedBy=fts+vector src/db/index/storage/wal/wal_file.h:31-65
+groups: Q1#9 (fts+vector)
+source:
+31	class WalFile {
+32	 public:
+33	  //! Constructor
+34	  WalFile() {}
+35	
+36	  //! Destructor
+37	  virtual ~WalFile() {}  // LCOV_EXCL_LINE
+38	
+39	  //! Create an instance
+40	  static WalFilePtr Create(const std::string &wal_path);
+...
+
+#10 matchedBy=fts+vector src/core/algorithm/vamana/vamana_entity.h:311-313
+groups: Q1#10 (fts+vector)
+source:
+311	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+312	                       const std::string &segment_id, const void *data,
+313	                       size_t size) const;
+
+#11 matchedBy=vector src/core/utility/memory_read_storage.cc:31-139
+groups: Q1#11 (vector)
+source:
+31	class Segment : public IndexStorage::Segment,
+32	                  public std::enable_shared_from_this<Segment> {
+33	   public:
+34	    //! Index Storage Pointer
+35	    typedef std::shared_ptr<Segment> Pointer;
+36	
+37	    //! Constructor
+38	    Segment(const IndexMemory::Rope::Pointer &rope,
+39	            const IndexUnpacker::SegmentMeta &segment)
+40	        : data_offset_(segment.data_offset()),
+...
+
+#12 matchedBy=fts+vector src/db/collection.cc:779-915
+groups: Q1#12 (fts+vector)
+source:
+779	Status CollectionImpl::Optimize(const OptimizeOptions &options) {
+780	  CHECK_COLLECTION_READONLY_RETURN_STATUS;
+781	
+782	  std::lock_guard lock(schema_handle_mtx_);
+783	  // when optimizing, schema operations(include another optimize) are not
+784	  // allowed
+785	
+786	  CHECK_DESTROY_RETURN_STATUS(destroyed_, false);
+787	
+788	  std::vector<Segment::Ptr> persist_segments;
+...
+
+#13 matchedBy=fts+vector src/core/algorithm/hnsw_rabitq/hnsw_rabitq_entity.h:416-418
+groups: Q1#13 (fts+vector)
+source:
+416	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+417	                       const std::string &segment_id, const void *data,
+418	                       size_t size) const;
+
+#14 matchedBy=vector src/include/zvec/core/framework/index_segment_storage.h:204-208
+groups: Q1#14 (vector)
+source:
+204	int close(void) override {
+205	    parent_ = nullptr;
+206	    segments_.clear();
+207	    return 0;
+208	  }
+
+#15 matchedBy=fts+vector src/core/algorithm/diskann/diskann_builder_entity.h:53-55
+groups: Q1#15 (fts+vector)
+source:
+53	int64_t dump_segment(const IndexDumper::Pointer &dumper,
+54	                       const std::string &segment_id, const void *data,
+55	                       size_t size) const;
