@@ -1,0 +1,195 @@
+name: Native Claude reserve expansion v1
+run-name: native Claude reserve expansion / ${{ github.event_name }} / execute=${{ inputs.execute_expansion || false }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute_expansion:
+        description: Execute the two frozen reserve task pairs, one per fresh runner
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-claude-expansion-v1-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  expansion:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        task: [q002, q003]
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - name: Set isolated runtime paths
+        run: |
+          cat >> "$GITHUB_ENV" <<EOF
+          MAIN_ROOT=$RUNNER_TEMP/qa-main/benchmarks/swe-qa-bench
+          REFERENCE_PREPARED_ROOT=$RUNNER_TEMP/qa-prepared
+          PREPARED_GROUP_ROOT=$RUNNER_TEMP/qa-reserve-group
+          REPAIR_ROOT=$RUNNER_TEMP/native-claude-expansion-v1-${{ matrix.task }}
+          EOF
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Export the pinned upstream harness and source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=a424e0ce06868dc9ad8f142f57de59b8f9b58699
+          test "$(gh api repos/zvec-ai/zvec-grep/commits/main --jq .sha)" = "$expected"
+          git init "$RUNNER_TEMP/qa-main-git"
+          git -C "$RUNNER_TEMP/qa-main-git" fetch --depth=1 https://github.com/zvec-ai/zvec-grep.git "$expected"
+          test "$(git -C "$RUNNER_TEMP/qa-main-git" rev-parse FETCH_HEAD)" = "$expected"
+          mkdir -p "$RUNNER_TEMP/qa-main" "$REPAIR_ROOT"
+          git -C "$RUNNER_TEMP/qa-main-git" archive "$expected" benchmarks/swe-qa-bench benchmarks/shared/rust-package-cache.mjs | tar -x -C "$RUNNER_TEMP/qa-main"
+          git init "$RUNNER_TEMP/qa-zvec-git"
+          for revision in ec8a78ee08b14a0b8c94158ffc1de42cd3f97f6d e906168cc19378358d8fa1c1559f48e4b920aa37 68078e55e7ae9d705b8829b5d416e022060bebf7; do
+            git -C "$RUNNER_TEMP/qa-zvec-git" fetch --depth=1 https://github.com/alibaba/zvec.git "$revision"
+          done
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project "$MAIN_ROOT" --frozen
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/benchmarks/native-claude-qa-pilot:$GITHUB_WORKSPACE/benchmarks/opencode-qa-pilot:$MAIN_ROOT" >> "$GITHUB_ENV"
+          echo "QA_MAIN_ROOT=$MAIN_ROOT" >> "$GITHUB_ENV"
+      - name: Verify immutable native inputs
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -c 'import os; from pathlib import Path; from native_claude.integration import validate_inputs; validate_inputs(Path(os.environ["GITHUB_WORKSPACE"]),Path(os.environ["MAIN_ROOT"]))'
+          cp benchmarks/native-claude-qa-pilot/inputs.json "$REPAIR_ROOT/inputs.json"
+          cp benchmarks/native-claude-qa-pilot/decision.json "$REPAIR_ROOT/decision.json"
+          docker version > "$REPAIR_ROOT/docker-version.txt"
+      - name: Read the existing upstream Rust artifact
+        uses: actions/download-artifact@v8
+        with:
+          repository: zvec-ai/zvec-grep
+          run-id: 39221698769
+          name: rust-native-linux-x64-gnu
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rust-native
+      - name: Derive the install-compatible archive without rebuilding Rust
+        run: |
+          set -euo pipefail
+          export QA_ORIGINAL_TGZ="$RUNNER_TEMP/rust-native/zvec-zvec-grep-linux-x64-gnu-0.0.1.tgz"
+          echo "QA_ORIGINAL_TGZ=$QA_ORIGINAL_TGZ" >> "$GITHUB_ENV"
+          "$MAIN_ROOT/.venv/bin/python" -m repair_v2.package \
+            --source "$QA_ORIGINAL_TGZ" --output "$REPAIR_ROOT/zg-install.tgz" \
+            --manifest "$REPAIR_ROOT/package-derivation.json"
+      - name: Test live controller boundaries without providers
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot -p 'test_live.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/unit-tests.txt"
+      - name: Replay actual sync and background logs through corrected collector
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot -p 'test_accounting_v2.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/accounting-tests.txt"
+      - name: Test reserve preparation and actual task identity
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot -p 'test_expansion_v1.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/preparation-tests.txt"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot -p 'test_expansion_identity_v1.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/identity-tests.txt"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover \
+            -s benchmarks/native-claude-qa-pilot -p 'test_expansion_live_v1.py' -v \
+            2>&1 | tee "$REPAIR_ROOT/driver-tests.txt"
+      - name: Prepare the unchanged full q001 source-only image
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/opencode-qa-pilot/pilot.py \
+            --plan benchmarks/opencode-qa-pilot/experiment.json \
+            --repo-root "$GITHUB_WORKSPACE" --main-root "$MAIN_ROOT" \
+            prepare --zvec-repo "$RUNNER_TEMP/qa-zvec-git" --output "$REFERENCE_PREPARED_ROOT"
+      - name: Prepare both original reserve tasks from the pinned template
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" -c 'import os; from pathlib import Path; import expansion_v1; expansion_v1.prepare(Path(os.environ["REFERENCE_PREPARED_ROOT"]), Path(os.environ["RUNNER_TEMP"])/"qa-zvec-git", Path(os.environ["PREPARED_GROUP_ROOT"]))'
+      - name: Check frozen plan and accepted offline evidence
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/expansion_live_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/expansion-plan-v1.json --task "${{ matrix.task }}" \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/dry-run" dry-run \
+            > "$REPAIR_ROOT/preflight.log"
+          cp "$REPAIR_ROOT/dry-run/execution.json" "$REPAIR_ROOT/preflight.json"
+      - name: Execute the selected reserve task pair
+        if: github.event_name == 'workflow_dispatch' && inputs.execute_expansion == true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/expansion_live_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/expansion-plan-v1.json --task "${{ matrix.task }}" \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" run \
+            2>&1 | tee "$REPAIR_ROOT/live.log"
+      - name: Collect retained answers, usage scopes and actual task identity
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.execute_expansion == true
+        run: |
+          set -euo pipefail
+          if test -d "$REPAIR_ROOT/live" || test -f "$REPAIR_ROOT/live-expansion-context.json"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/expansion_live_v1.py \
+              --plan benchmarks/native-claude-qa-pilot/expansion-plan-v1.json --task "${{ matrix.task }}" \
+              --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+              --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" collect \
+              2>&1 | tee "$REPAIR_ROOT/collect.log"
+          fi
+      - name: Retain frozen plan and scan actual secrets before publication
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPAIR_ROOT"
+          cp benchmarks/native-claude-qa-pilot/inputs.json "$REPAIR_ROOT/inputs.json"
+          cp benchmarks/native-claude-qa-pilot/decision.json "$REPAIR_ROOT/decision.json"
+          cp benchmarks/native-claude-qa-pilot/live-plan-v2.json "$REPAIR_ROOT/live-plan-v2.json"
+          cp benchmarks/native-claude-qa-pilot/live-decision-v2.json "$REPAIR_ROOT/live-decision-v2.json"
+          if test -f benchmarks/native-claude-qa-pilot/expansion-plan-v1.json; then cp benchmarks/native-claude-qa-pilot/expansion-plan-v1.json "$REPAIR_ROOT/expansion-plan-v1.json"; fi
+          cp benchmarks/native-claude-qa-pilot/expansion-decision-v1.json "$REPAIR_ROOT/expansion-decision-v1.json"
+          cp benchmarks/native-claude-qa-pilot/expansion-grader-contract-v1.json "$REPAIR_ROOT/expansion-grader-contract-v1.json"
+          if test -f "$PREPARED_GROUP_ROOT/group.json"; then
+            cp "$PREPARED_GROUP_ROOT/group.json" "$REPAIR_ROOT/prepared-group.json"
+            for task in q002 q003; do
+              cp "$PREPARED_GROUP_ROOT/$task/prepared.json" "$REPAIR_ROOT/$task-prepared.json"
+              cp "$PREPARED_GROUP_ROOT/$task/source-manifest.json" "$REPAIR_ROOT/$task-source-manifest.json"
+            done
+          fi
+          if test -x "$MAIN_ROOT/.venv/bin/python"; then
+            "$MAIN_ROOT/.venv/bin/python" -m zg_bench.ci.secret_scan --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPAIR_ROOT"
+          else
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-claude-expansion-v1-${{ github.run_id }}-${{ matrix.task }}
+          path: ${{ runner.temp }}/native-claude-expansion-v1-${{ matrix.task }}/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
