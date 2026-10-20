@@ -27,6 +27,10 @@ class ThreeArmTests(unittest.TestCase):
         profiles = source['cases'][0]['profiles']
         profiles = {'baseline': profiles['baseline'], 'node': profiles['zvec-grep'],
                     'rust': copy.deepcopy(profiles['zvec-grep'])}
+        for profile in profiles.values():
+            profile['judge'].update(model=run.MODEL, label=run.judge_label(run.MODEL))
+            for trial in profile['trials']:
+                trial['judge'].update(model=run.MODEL, label=run.judge_label(run.MODEL))
         return dict(kind=run.EXPERIMENT['kind'], model=run.MODEL, task_id='reflex:6', profiles=profiles,
                     judge=run.judge_metadata(profiles), provenance=dict(experiment=run.EXPERIMENT,
                     repetitions=10, harness_commit='test', identities={'node':'node','rust':'rust'},
@@ -52,7 +56,7 @@ class ThreeArmTests(unittest.TestCase):
                     cmd=run.command(task['task_slug'],arm,Path('/evidence'),Path('/packages'),rep)
                     self.assertEqual(cmd[cmd.index('--n-attempts')+1],'1')
                     self.assertEqual(cmd[cmd.index('--max-retries')+1],'2')
-                    self.assertEqual(cmd[cmd.index('--model')+1],'custom-openai/glm-5.2')
+                    self.assertEqual(cmd[cmd.index('--model')+1],'custom-openai/qwen3.8-max')
                     if arm=='baseline':
                         self.assertNotIn('--embedding-model',cmd)
                         self.assertNotIn('--zvec-grep-package',cmd)
@@ -89,7 +93,8 @@ class ThreeArmTests(unittest.TestCase):
             self.assertEqual(len(report['profiles']['rust']['trials']),10)
             markdown=(Path(temp)/'report.md').read_text()
             self.assertIn('Node 0.2.2 + zg',markdown)
-            self.assertIn('r10=5 (low)',markdown)
+            self.assertIn('Raw statistics:',markdown)
+            self.assertIn('Tool calls / execution',markdown)
 
     def test_failures_missing_trials_and_protocol_changes_cannot_pass(self):
         for mutate in (
@@ -133,7 +138,7 @@ class ThreeArmTests(unittest.TestCase):
             job = workflow['jobs']['package-' + arm]
             self.assertEqual(job['permissions']['actions'], 'read')
             download = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/download-artifact@'))
-            self.assertEqual(download['with']['run-id'], 38700270964)
+            self.assertEqual(download['with']['run-id'], 39231111089)
             self.assertEqual(download['with']['repository'], 'Cuiyus/zvec-grep')
             self.assertEqual(download['with']['name'], 'three-arm-package-' + arm)
             self.assertEqual(download['with']['github-token'], '${{ github.token }}')
@@ -141,17 +146,13 @@ class ThreeArmTests(unittest.TestCase):
             self.assertFalse(any('rust-candidate-package' in s.get('uses', '') for s in job['steps']))
         aggregate = workflow['jobs']['aggregate']
         self.assertEqual(aggregate['permissions']['actions'], 'read')
-        reference = next(s for s in aggregate['steps'] if s.get('name') == 'Download completed previous-round reports for comparison')
-        self.assertEqual(reference['with']['run-id'], 38700270964)
-        self.assertEqual(reference['with']['pattern'], 'three-arm-report-*')
-        self.assertEqual(reference['with']['path'], '${{ runner.temp }}/reference-reports')
-        comparison = next(s for s in aggregate['steps'] if s.get('name') == 'Compare rounds using one common six-group MAD mask')
-        self.assertIn('--reference-reports "$RUNNER_TEMP/reference-reports"', comparison['run'])
-        self.assertIn('--repeat-reports "$RUNNER_TEMP/task-reports"', comparison['run'])
-        self.assertIn('--output "$RUNNER_TEMP/three-arm-comparison"', comparison['run'])
-        self.assertEqual(run.EXPERIMENT['round'], 3)
-        self.assertEqual(run.EXPERIMENT['reference_run_id'], 38700270964)
-        self.assertEqual(run.EXPERIMENT['kind'], 'three-arm-glm-local-trim-repeat')
+        self.assertFalse(any('--reference-reports' in s.get('run','') for s in aggregate['steps']))
+        self.assertEqual(run.EXPERIMENT['independent_rounds'], 3)
+        self.assertEqual(run.EXPERIMENT['execution_reference_run_id'], 39231111089)
+        self.assertEqual(run.EXPERIMENT['kind'], 'three-arm-qwen-local-three-rounds')
+        self.assertEqual(run.EXPERIMENT['total_planned_agent_trials'], 1800)
+        self.assertEqual(workflow['env']['ZG_BENCH_ROUND'], '${{ inputs.round }}')
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['round']['options'], ['1','2','3'])
 
     def test_reused_package_verification_rejects_changed_package_and_cli(self):
         helper = run.ROOT.parent / 'version-comparison/verify_reused_package.py'

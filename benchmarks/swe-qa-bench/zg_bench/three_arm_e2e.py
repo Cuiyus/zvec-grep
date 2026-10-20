@@ -1,4 +1,4 @@
-"""Fork-only GLM/local three-arm execution, using PR #261 statistics unchanged."""
+"""Fork-only Qwen/local three-arm execution, using PR #261 statistics unchanged."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,10 @@ from zg_bench.settings import BENCHMARK_SEED
 from zg_bench.swe_qa.pairs import load_references
 
 ARMS = ('baseline', 'node', 'rust')
-MODEL = 'glm-5.2'
+MODEL = 'qwen3.8-max'
+ROUND_INDEX = int(os.environ.get('ZG_BENCH_ROUND', '1'))
+if ROUND_INDEX not in (1, 2, 3):
+    raise ValueError('Round must be 1, 2, or 3')
 LABELS = {'baseline': 'OpenCode baseline', 'node': 'Node 0.2.2 + zg', 'rust': 'Rust 732a440 + zg'}
 ROOT, DATA = versions.ROOT, versions.DATA
 REPETITIONS = versions.REPETITIONS
@@ -127,7 +130,7 @@ def run(args):
     else:
         if (output / 'provenance.json').exists():
             raise ValueError('Existing execution evidence; do not overwrite or rerun it')
-        meta = dict(task=args.task, model=MODEL, repetitions=REPETITIONS, identities=identities,
+        meta = dict(task=args.task, model=MODEL, round_index=ROUND_INDEX, workflow_run_id=os.environ.get("GITHUB_RUN_ID"), repetitions=REPETITIONS, identities=identities,
                     experiment=EXPERIMENT, execution=[],
                     harness_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
         versions.write_json(output / 'provenance.json', meta)

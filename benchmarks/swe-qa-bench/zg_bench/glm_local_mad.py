@@ -13,7 +13,7 @@ from zg_bench import three_arm_e2e as runner
 from zg_bench.metrics.summary import profile_statistics
 from zg_bench.metrics.task_screen import screen_tasks
 
-METRICS = ('judge', 'agent_wall_seconds', 'input_tokens')
+METRICS = ('judge', 'agent_wall_seconds', 'input_tokens', 'tool_calls')
 PREVIOUS_COMMIT = '614384b03b1793d452de1815643e851589bf232c'
 PREVIOUS_RUN = 38700270964
 LOCKED = ('zg_bench/swe_qa/data/selection.json', 'zg_bench/swe_qa/data/references.json',
@@ -103,26 +103,33 @@ def summarize(reports, output):
                 task_filter=screen, task_statistics=profiles,
                 source_harness_commits=sorted({r['provenance']['harness_commit'] for r in reports}))
     runner.versions.write_json(output / 'comparison.json', data)
-    lines = ['# GLM-5.2 / local embedding / PR #261 + #274', '',
+    rounds = sorted({r['provenance'].get('round_index', 1) for r in reports})
+    if len(rounds) != 1:
+        raise ValueError('A single-round summary cannot mix rounds')
+    data['round_index'] = rounds[0]
+    runner.versions.write_json(output / 'comparison.json', data)
+    lines = [f'# Qwen3.8-Max / local embedding / Round {rounds[0]}', '',
              f"Completed tasks: {len(profiles)}/20; judged trials: {data['judged_trials']}/600.", '',
-             '| Group | Stage | Samples | Score | Agent seconds | Input tokens |',
-             '|---|---|---:|---:|---:|---:|']
+             'Raw statistics: all completed judged trials, equally weighted task means. '
+             'No sample trimming or task exclusion is applied to the table below. '
+             'Full trim/MAD diagnostics remain in comparison.json.', '',
+             '| Group | Mean Judge score | Input tokens / execution | Tool calls / execution | Agent time (s) / execution |',
+             '|---|---:|---:|---:|---:|']
     for row in data['rows']:
-        for stage, count in [('raw', 'original_count'), ('trimmed', 'after_trim_count'),
-                             ('filtered', 'retained_count')]:
-            lines.append(f"| {row['label']} | {stage} | {row[count]} | " +
-                         ' | '.join(number(row[stage][m]) for m in METRICS) + ' |')
-    lines += screen_lines(screen)
-    lines += ['', 'Current report reference groups: baseline, node, rust. '
-              'Partial reports are provisional; the final task mask is recomputed once all 20 tasks finish.', '',
-              '| Task | Group | Retained/original | Score | Agent seconds | Input tokens | Removed score trials |',
-              '|---|---|---|---:|---:|---:|---|']
+        lines.append(f"| {row['label']} | " + ' | '.join(number(row['raw'][m])
+                     for m in ('judge', 'input_tokens', 'tool_calls', 'agent_wall_seconds')) + ' |')
+    lines += ['', 'Baseline is native OpenCode without zg. Node is @zvec/zvec-grep@0.2.2; '
+              'Rust is frozen upstream main 732a440. OpenCode 1.18.4; local/potion-code-16m-v2 '
+              '256 dimensions; 20 main tasks x 10 executions x 3 groups. '
+              'Eight parallel task jobs; one Agent per task; three Judge workers per task. '
+              'Per-execution time excludes container cleanup. Input includes the complete '
+              'OpenCode session tree and cache reads, excluding Judge usage.', '',
+              '| Task | Group | Mean Judge score | Input tokens / execution | Tool calls / execution | Agent time (s) / execution |',
+              '|---|---|---:|---:|---:|---:|']
     for task, groups in profiles.items():
         for arm, row in groups.items():
-            f = row['filter']
-            excluded = ', '.join(f"r{t['trial_index']}={t['score']} ({t['direction']})" for t in f['excluded_trials'])
-            lines.append(f"| {task} | {arm} | {f['retained_count']}/{f['original_count']} | " +
-                         ' | '.join(number(row['filtered'][m]) for m in METRICS) + f' | {excluded} |')
+            lines.append(f"| {task} | {arm} | " + ' | '.join(number(row['raw'][m])
+                         for m in ('judge', 'input_tokens', 'tool_calls', 'agent_wall_seconds')) + ' |')
     markdown = '\n'.join(lines) + '\n'
     (output / 'report.md').write_text(markdown)
     if os.environ.get('GITHUB_STEP_SUMMARY'):

@@ -1,5 +1,5 @@
-name: GLM local E2E - PR261 MAD + PR274 init
-run-name: GLM-5.2 local round 3 - main20 x baseline/Node/Rust x 10 - init fix
+name: Qwen local E2E - frozen three-arm / three rounds
+run-name: Qwen3.8-Max local Round ${{ inputs.round }} - main20 x baseline/Node/Rust x 10
 'on':
   workflow_dispatch:
     inputs:
@@ -8,9 +8,19 @@ run-name: GLM-5.2 local round 3 - main20 x baseline/Node/Rust x 10 - init fix
         required: false
         default: ''
         type: string
+      round:
+        description: Independent Qwen round (600 fresh scored executions)
+        type: choice
+        required: true
+        default: '1'
+        options:
+        - '1'
+        - '2'
+        - '3'
 permissions: {}
 env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+  ZG_BENCH_ROUND: ${{ inputs.round }}
 concurrency:
   group: three-arm-e2e-${{ github.run_id }}
   cancel-in-progress: false
@@ -86,7 +96,7 @@ jobs:
         assert len(tasks)==len(set(tasks))==20\nif os.environ['TASK_SCOPE']:\n    assert os.environ['TASK_SCOPE']\
         \ in tasks\n    tasks=[os.environ['TASK_SCOPE']]\nwith open(os.environ['GITHUB_OUTPUT'],'a') as f:\n   \
         \ print('matrix='+json.dumps({'task':tasks}),file=f)\nPYCODE\n"
-    - name: Require configured GLM credential
+    - name: Require configured Qwen service credential
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       run: test -n "$GLM_API_KEY"
@@ -129,7 +139,7 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: three-arm-package-node
-        run-id: 38700270964
+        run-id: 39231111089
         repository: Cuiyus/zvec-grep
         github-token: ${{ github.token }}
         path: ${{ runner.temp }}/package-node
@@ -181,7 +191,7 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: three-arm-package-rust
-        run-id: 38700270964
+        run-id: 39231111089
         repository: Cuiyus/zvec-grep
         github-token: ${{ github.token }}
         path: ${{ runner.temp }}/package-rust
@@ -282,7 +292,7 @@ jobs:
         if-no-files-found: error
         retention-days: 90
   aggregate:
-    name: Three-arm MAD report and previous-round comparison
+    name: Qwen raw results and archived statistics
     needs:
     - validate
     - task
@@ -333,17 +343,6 @@ jobs:
     - name: Recompute all task-weighted statistics without model calls
       run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.three_arm_e2e aggregate --reports "$RUNNER_TEMP/task-reports"
         --output "$RUNNER_TEMP/three-arm-comparison"
-    - name: Download completed previous-round reports for comparison
-      uses: actions/download-artifact@v8
-      with:
-        pattern: three-arm-report-*
-        run-id: 38700270964
-        repository: Cuiyus/zvec-grep
-        github-token: ${{ github.token }}
-        path: ${{ runner.temp }}/reference-reports
-    - name: Compare rounds using one common six-group MAD mask
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.glm_local_mad --reference-reports "$RUNNER_TEMP/reference-reports"
-        --repeat-reports "$RUNNER_TEMP/task-reports" --output "$RUNNER_TEMP/three-arm-comparison"
     - uses: actions/upload-artifact@v7
       if: always()
       with:
