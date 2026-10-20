@@ -53,3 +53,12 @@ The cancelled [three-task study status](results/20261020-repeat-v1/STATUS.md) re
 The next zvec QA candidate is the unchanged, previously reviewed [q004 architecture question](../zvec-issue-qa/tasks/q004/instruction.md). The [native preparation adapter](architecture_preparation_v1.py) exports its full 1,596-file source with the original native image/verifier templates; the [identity adapter](architecture_identity_v1.py) keeps the existing verifier body and binds it to q004. This is a new native-stack development preparation, not an unobserved holdout: q004's earlier custom-agent results are known and remain separate. The [host-only grading contract](architecture-grader-contract-v1.json) preserves the original ten atomic point units and all core/citation gates. It adds no regression-test requirement and explicitly retains unknown grading interpretations.
 
 The [provider-free preparation evidence](results/20261020-q004-native-preparation-v1/README.md) verifies the exact source export and both Harbor task hashes, four input-integrity tests, rejection of retained q001 evidence as q004, and two real native command previews pointing at `zvec-q004`. No model, Docker trial or paid CI run was executed in that phase. The subsequent [one-pair execution plan](architecture-live-plan-v1.json) and [decision](architecture-execution-decision-v1.json) now freeze exactly one fresh baseline→zg development pair. The private adapter retains the original native execution/collection bodies. Twelve local tests and actual command generation passed; the [local receipts](provenance/native-q004-v1/local-preflight-verification.json) retain their raw evidence. Source-only grading preparation found no current blocker, with reviewer reuse/exposure recorded. Linux preflight must pass on the same commit before explicit solver dispatch; push alone does not run providers. The original q001-q003 plans, source packages, results and statistical rules are unchanged.
+
+
+The separately reviewed [q005 runtime/API case](../zvec-issue-qa/tasks/q005/instruction.md)
+now has a [native preparation package](results/20261020-q005-native-preparation-v1/README.md).
+The [preparation adapter](runtime_preparation_v1.py) and [identity adapter](runtime_identity_v1.py)
+reuse the existing bodies privately while binding the exact accepted q005 dataset,
+question, rubric and canonical review. Four integrity tests, both real command
+previews and rejection of real q001 evidence passed. This is provider-free task
+preparation only; q005 has no native model result or execution admission yet.
