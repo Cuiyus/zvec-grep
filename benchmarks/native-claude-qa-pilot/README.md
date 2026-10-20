@@ -80,4 +80,18 @@ The [preparation adapter](runtime_preparation_v1.py) and [identity adapter](runt
 reuse the existing bodies privately while binding the exact accepted q005 dataset,
 question, rubric and canonical review. Four integrity tests, both real command
 previews and rejection of real q001 evidence passed. This is provider-free task
-preparation only; q005 has no native model result or execution admission yet.
+preparation only; q005 has no native model result yet.
+
+The prospective [q005 execution plan](runtime-live-plan-v1.json) schedules one
+baseline and one zg worker on separate fresh hosted jobs, then retains their
+original API-bound ZIPs and uses the unchanged native collector jointly.
+The [assembly helper](profile_assembly_v1.py) preserves every original slot and
+profile log byte without rewriting paths or inventing a shared host or pair
+duration. A real retained q001 fixture passed all 18 collection comparisons;
+that is parser fidelity evidence, not a q005 result or a new hardware trial.
+The original q005 question/rubric/contract remain unchanged, and two opaque
+answer IDs were registered before any solver answer. Worker execution requires
+the q004 confirmation run to be terminal. Push runs provider-free preflight
+only; the q005 pair requires a later explicit dispatch after its Linux checks.
+Profile timing remains per host; this scheduling change is disclosed and is not
+pooled with serial same-host timing results.
