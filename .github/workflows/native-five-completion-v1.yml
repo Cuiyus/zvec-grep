@@ -1,0 +1,124 @@
+name: Native five infrastructure-only completion v1
+run-name: native q004 unstarted-pair completion / execute=${{ inputs.execute_pair || false }}
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths:
+      - '.github/workflows/native-five-completion-v1.yml'
+      - '.github/actions/native-five-completion-setup/action.yml'
+      - 'benchmarks/native-claude-qa-pilot/five_completion_v1.py'
+      - 'benchmarks/native-claude-qa-pilot/five-completion-plan-v1.json'
+  workflow_dispatch:
+    inputs:
+      execute_pair:
+        description: Complete only q004-r04, whose original preparation failed before either agent started
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native-five-pre-agent-completion-v1-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-five-completion-setup
+        with:
+          stage: preflight
+      - name: Verify pre-agent-only boundary and preview unchanged q004 commands
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json "$REPAIR_ROOT/"
+          cp benchmarks/native-claude-qa-pilot/five-statistics-plan-v1.json "$REPAIR_ROOT/"
+          "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/native-claude-qa-pilot -p test_five_completion_v1.py -v 2>&1 | tee "$REPAIR_ROOT/tests.log"
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/five_completion_v1.py dry-run \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/dry"
+      - name: Scan provider-free completion retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/native-five-v1-preflight"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-five-completion-v1-${{ github.run_id }}-preflight
+          path: ${{ runner.temp }}/native-five-v1-preflight/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+  completion:
+    needs: preflight
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute_pair == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-five-completion-setup
+        with:
+          stage: q004-r04
+      - name: Retain original and supplemental controls
+        run: |
+          set -euo pipefail
+          cp benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json "$REPAIR_ROOT/"
+          cp benchmarks/native-claude-qa-pilot/five-statistics-plan-v1.json "$REPAIR_ROOT/"
+          "$MAIN_ROOT/.venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          import five_completion_v1 as completion
+          completion.five.candidate.write(Path(os.environ['REPAIR_ROOT'])/'scheduled-pair.json',completion.PAIR)
+          PY
+      - name: Execute only the two previously unstarted agents after original cohort ends
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/five_completion_v1.py run \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" 2>&1 | tee "$REPAIR_ROOT/live.log"
+      - name: Collect supplemental original records even on failure
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if test -n "${REPAIR_ROOT:-}" && test -f "$REPAIR_ROOT/live-five-context.json"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/five_completion_v1.py collect \
+              --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+              --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" 2>&1 | tee "$REPAIR_ROOT/collect.log"
+          fi
+      - name: Scan supplemental actual secrets before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py \
+            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPAIR_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-five-completion-v1-${{ github.run_id }}-q004-r04
+          path: |
+            ${{ runner.temp }}/native-five-v1-q004-r04/
+            !${{ runner.temp }}/native-five-v1-q004-r04/zg-install.tgz
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
