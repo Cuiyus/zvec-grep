@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "review_scope": "当前离群值过滤方案；评论草稿保存在本地，未对外发布。",
+  "overall": "已确认存在改进空间；不能把过滤后zg点估计更好当作降低随机性的证据。原实现的配对重采样与每轮重选尾部应保留。",
+  "confirmed_findings": [
+    {
+      "file": "benchmarks/native-claude-qa-pilot/robust_statistics_v1.py",
+      "line": 323,
+      "kind": "统计目标与解释风险",
+      "finding": "分别按每臂质量分数去尾，会把资源对比变成各自质量条件下的均值对比。即使每个原始baseline/zg资源对完全相同，过滤后的资源节省也可明显偏离零。",
+      "evidence": "review.json 的固定反例；historical-resource-sensitivity.json 的1000组合成演示中，573组出现绝对超过10个百分点的非零资源差异。",
+      "interpretation_limit": "不证明方法固有偏向zg，不证明共享配对bootstrap代码错误；如果刻意关注不同质量条件下的资源均值，这属于不同估计目标。",
+      "recommendation": "全部原始十次均值作为主结果，PR261兼容结果单列；资源稳健敏感性使用原始配对对数比，清楚说明它与总资源均值的区别。"
+    },
+    {
+      "file": "benchmarks/native-claude-qa-pilot/robust_statistics_v1.py",
+      "line": 323,
+      "kind": "并列分数",
+      "finding": "10次分数完全并列时，仍按序号机械排除两个观测，无法证明这两个观测是资源离群值。",
+      "recommendation": "本轮保留原规则供兼容对比并公开被排除序号；未来若改并列规则应事先固定，并报告不去尾的完整结果。"
+    },
+    {
+      "file": "benchmarks/native-claude-qa-pilot/robust_statistics_v1.py",
+      "line": 187,
+      "kind": "任务筛除的解释边界",
+      "finding": "最少5题是工程门槛；在5题上用两臂最大离散度与多个指标筛题，不能把modified-Z阈值解释成已校准的错误数据识别。去掉1题也会改变这套固定题库的目标。",
+      "recommendation": "任务MAD只标记潜在异常，保留全部5题主结果；公开标记原因、零MAD/缺证状态和逐题影响，不能用筛除补救质量或scope失败。"
+    }
+  ],
+  "historical_checks": {
+    "q001_original_primary_diagnostic_interval_width_change_pct": {
+      "input": 17.69277449131172,
+      "agent_time": 12.503979152113232,
+      "cold_slot": 9.718124907603379
+    },
+    "q004_original_primary_diagnostic_interval_width_change_pct": {
+      "input": 10.324831087482057,
+      "agent_time": 13.757873583860105,
+      "cold_slot": 12.90776106043325
+    },
+    "reading": "均为变宽。历史质量未知保持原样；这些评分视角只作原始诊断，不替代完成评分，也不与本轮新样本混合。",
+    "robust_check": "历史资源配对中位数/Winsorized区间也未保证变窄；不同目标的宽度不得用来挑选有利结论。"
+  },
+  "preserve_correct_behavior": [
+    "同一原始pair的两臂共享bootstrap抽样索引。",
+    "每次bootstrap抽样内重新选择去尾样本。",
+    "同一臂所选原始样本用于所有资源指标。",
+    "少于5题和零MAD时明确禁止相应任务筛除。",
+    "保留原始失败、未知和每个被排除观测。"
+  ],
+  "implemented_for_current_cohort": [
+    "原始0–10分与mandatory/citation gates分别报告。",
+    "全部原始100个计划行保留，缺失不填零；两条pre-agent缺失和补充组单独标注。",
+    "主结果全部原始均值，PR261兼容与配对稳健统计单独报告。",
+    "配对bootstrap 10000次、seed20261020，结果公开区间与波动，不假定过滤会有效。"
+  ],
+  "primary_sources": [
+    {
+      "url": "https://itl.nist.gov/div898/handbook/eda/section3/eda35h.htm",
+      "supports": "区分潜在离群标记与已确认错误，未解释观测不应直接删除。"
+    },
+    {
+      "url": "https://itl.nist.gov/div898/software/dataplot/refman2/auxillar/trimmse.htm",
+      "supports": "截尾均值不确定性针对其自身估计目标，需要对应的截尾/Winsorized方差处理。"
+    }
+  ],
+  "current_cohort_quality_outcomes_read": false,
+  "current_fixed_statistical_methods_changed_after_outcomes": false
+}
