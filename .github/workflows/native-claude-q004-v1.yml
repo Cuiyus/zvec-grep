@@ -1,0 +1,114 @@
+name: Native Claude zvec q004 development v1
+run-name: native Claude q004 / ${{ github.event_name }} / execute=${{ inputs.execute_pair || false }}
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths:
+      - 'benchmarks/native-claude-qa-pilot/architecture*'
+      - 'benchmarks/native-claude-qa-pilot/test_architecture*'
+      - '.github/actions/native-claude-q004-setup/action.yml'
+      - '.github/workflows/native-claude-q004-v1.yml'
+  workflow_dispatch:
+    inputs:
+      execute_pair:
+        type: boolean
+        default: false
+        required: true
+        description: Execute exactly one fresh q004 baseline/zg development pair
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native-claude-q004-v1-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-claude-q004-setup
+        with:
+          stage: preflight
+      - name: Check q004 controls without providers
+        run: |
+          set -euo pipefail
+          for pattern in test_architecture_preparation_v1.py test_architecture_live_v1.py; do
+            "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/native-claude-qa-pilot -p "$pattern" -v 2>&1 | tee "$REPAIR_ROOT/$pattern.log"
+          done
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/architecture_live_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/architecture-live-plan-v1.json \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/dry" dry-run
+      - name: Scan preflight retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/native-claude-q004-v1-preflight"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-q004-v1-${{ github.run_id }}-preflight
+          path: ${{ runner.temp }}/native-claude-q004-v1-preflight/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+  pilot:
+    needs: preflight
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute_pair == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-claude-q004-setup
+        with:
+          stage: pilot
+      - name: Execute one original q004 pair
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/architecture_live_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/architecture-live-plan-v1.json \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" run \
+            2>&1 | tee "$REPAIR_ROOT/live.log"
+      - name: Collect exact answers and task identity
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -n "${REPAIR_ROOT:-}" && test -f "$REPAIR_ROOT/live-q004-context.json"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/architecture_live_v1.py \
+              --plan benchmarks/native-claude-qa-pilot/architecture-live-plan-v1.json \
+              --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+              --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" collect \
+              2>&1 | tee "$REPAIR_ROOT/collect.log"
+          fi
+      - name: Scan actual secrets before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py \
+            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$RUNNER_TEMP/native-claude-q004-v1-pilot"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-q004-v1-${{ github.run_id }}-pilot
+          path: ${{ runner.temp }}/native-claude-q004-v1-pilot/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
