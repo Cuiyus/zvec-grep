@@ -95,3 +95,6 @@ the q004 confirmation run to be terminal. Push runs provider-free preflight
 only; the q005 pair requires a later explicit dispatch after its Linux checks.
 Profile timing remains per host; this scheduling change is disclosed and is not
 pooled with serial same-host timing results.
+The reusable install archive is retained once in preflight. Worker and joint
+uploads omit that duplicate static input while preserving its exact hash and
+derivation and every original experimental output, reducing result downloads.
