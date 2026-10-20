@@ -1,0 +1,142 @@
+name: Zvec QA first execution for never-started GLM slot
+run-name: Zvec QA q004-r09 zg / ${{ inputs.execute && 'first actual agent execution' || 'provider-free admission tests' }}
+on:
+  push:
+    branches: [dev/zvec-qa-glm52-local]
+    paths:
+      - '.github/workflows/zvec-qa-glm-native-recovery-v1.yml'
+      - 'benchmarks/zvec-qa-glm-recovery-v1/**'
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: Execute only q004-r09 zg, whose original Docker build failed before any agent started
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: zvec-qa-glm-zero-start-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+env:
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+jobs:
+  admission-tests:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify sealed one-slot eligibility without model calls
+        run: |
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          d=json.loads(Path('benchmarks/zvec-qa-glm-recovery-v1/source-seal-v1.json').read_text())
+          for rel,digest in d['controls'].items():assert hashlib.sha256(Path(rel).read_bytes()).hexdigest()==digest,rel
+          PY
+          python -m unittest discover -s benchmarks/zvec-qa-glm-recovery-v1 -p 'test_*.py' -v
+  first-agent-execution:
+    needs: admission-tests
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/zvec-qa-glm-local-setup
+      - name: Retain immutable original workflow and artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/glm-recovery"
+          gh api repos/Cuiyus/zvec-grep/actions/runs/39414480210 > "$RUNNER_TEMP/glm-recovery/original-run-metadata.json"
+          gh api 'repos/Cuiyus/zvec-grep/actions/runs/39414480210/artifacts?per_page=100' > "$RUNNER_TEMP/glm-recovery/original-artifact-metadata.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ['RUNNER_TEMP'])/'glm-recovery/original-run-metadata.json').read_text())
+          assert d['id']==39414480210 and d['head_sha']=='4e72601048a2eed840b5bcb99105c4d9aa6314a8' and d['run_attempt']==1
+          assert d['repository']['full_name']=='Cuiyus/zvec-grep'
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          repository: Cuiyus/zvec-grep
+          run-id: 39414480210
+          name: zvec-qa-glm-local-preflight-39414480210
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/glm-original-preflight
+      - uses: actions/download-artifact@v4
+        with:
+          repository: Cuiyus/zvec-grep
+          run-id: 39414480210
+          name: zvec-qa-glm-local-pair-q004-r09
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/glm-original-pair
+      - name: Restore the exact accepted inputs and preserve the recovery admission plan
+        run: |
+          mkdir -p "$GLM_QA_PREPARED"
+          tar -xzf "$RUNNER_TEMP/glm-original-preflight/accepted-five-inputs.tgz" -C "$GLM_QA_PREPARED"
+          cmp "$GLM_QA_PLAN" "$RUNNER_TEMP/glm-original-preflight/plan-v1.json"
+          cp benchmarks/zvec-qa-glm-recovery-v1/plan-v1.json "$RUNNER_TEMP/glm-recovery/completion-plan.json"
+          cp benchmarks/zvec-qa-glm-recovery-v1/source-seal-v1.json "$RUNNER_TEMP/glm-recovery/"
+      - name: Execute only the one proven never-started agent profile
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-recovery-v1/recovery.py run \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --candidate "$GLM_QA_CANDIDATE" \
+            --plan "$GLM_QA_PLAN" --original "$RUNNER_TEMP/glm-original-pair/output" \
+            --output "$RUNNER_TEMP/glm-recovery/execution"
+      - name: Wait for the original native workload to terminate before singleton quality scoring
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess,time
+          from pathlib import Path
+          for _ in range(40):
+              data=json.loads(subprocess.check_output(['gh','api','repos/Cuiyus/zvec-grep/actions/runs/39414480210']))
+              assert data['head_sha']=='4e72601048a2eed840b5bcb99105c4d9aa6314a8' and data['run_attempt']==1
+              if data['status']=='completed':
+                  (Path(os.environ['RUNNER_TEMP'])/'glm-recovery/original-terminal-metadata.json').write_text(json.dumps(data,indent=2)+'\n')
+                  break
+              time.sleep(45)
+          else:raise RuntimeError('Original workload remains active; no quality call permitted')
+          PY
+      - name: Score the admitted first answer with the unchanged main GLM self-judge
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          "$GLM_QA_MAIN_ROOT/.venv/bin/python" benchmarks/zvec-qa-glm-recovery-v1/recovery.py judge \
+            --main-root "$GLM_QA_MAIN_ROOT" --prepared "$GLM_QA_PREPARED" --candidate "$GLM_QA_CANDIDATE" \
+            --plan "$GLM_QA_PLAN" --original "$RUNNER_TEMP/glm-original-pair/output" \
+            --output "$RUNNER_TEMP/glm-recovery/execution"
+      - name: Keep a failed first execution or grading visibly incomplete
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'glm-recovery/execution'
+          r=json.loads((p/'recovery-summary.json').read_text());j=json.loads((p/'native/judgements.json').read_text())
+          assert r['native_valid'] and len(j['profiles'])==1 and j['profiles'][0]['status']=='scored'
+          PY
+      - name: Scan retained completion evidence
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GLM_API_KEY --root "$RUNNER_TEMP/glm-recovery"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zvec-qa-glm-preagent-completion-${{ github.run_id }}
+          path: ${{ runner.temp }}/glm-recovery/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
