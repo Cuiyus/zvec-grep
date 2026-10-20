@@ -184,7 +184,7 @@ def capture(output, pair, profile, known):
         for identity in ids:
             if identity in known: continue
             inspected = json.loads(subprocess.check_output(['docker', 'inspect', identity], text=True, timeout=20))[0]
-            known[identity] = {'id': identity, 'project': project,
+            known[identity] = {'id': identity, 'compose_project': project, 'trial_dir': str(trial),
                 'mounts': inspected.get('Mounts', []), 'state': inspected.get('State', {}),
                 'labels': inspected.get('Config', {}).get('Labels', {})}
 
@@ -282,7 +282,10 @@ def collect(args, plan, pair):
             pilot.check_mounts(load(args.output / (profile + '-containers.json')), profile,
                 {'candidate_sha256': PACKAGE_SHA})
             if not audit.get('valid'): raise ValueError('source_or_session_export_invalid')
-            if sorted(audit['exported_sessions']) != sorted(selected): raise ValueError('session_tree_not_fully_exported')
+            if (audit.get('session_exports_complete') is not True
+                or audit.get('exported_root_session_id') != usage['root_session_id']
+                or sorted(audit['exported_sessions']) != sorted(selected)):
+                raise ValueError('session_tree_not_fully_exported')
             final = pilot.final_answer(trial / 'agent/opencode.txt', load(trial / 'agent/trajectory.json'),
                 usage, snapshot, load(trial / 'qa-session-exports' / (usage['root_session_id'] + '.json')))
             row.update(answer=final['answer'], answer_sha256=final['answer_sha256'], root_session_id=usage['root_session_id'])

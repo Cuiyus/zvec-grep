@@ -59,7 +59,7 @@ def assemble(args):
     return {'schema_version': 1, 'protocol_id': cohort.PROTOCOL,
         'plan_sha256': cohort.sha(args.plan), 'cases': cases, 'evidence': proofs,
         'measurement_scope': 'Pinned-main opencode-session-tree-v1: recursively counted root/descendant input (uncached+cache-read+cache-write), output and tool calls. Not provider billing or all unlinked background requests. Local embeddings have no remote embedding API token total.',
-        'time_scope': 'Harbor agent_execution.seconds including native recursive usage collection and separately retained source/session audit overhead. Independent outer-slot wall includes cold container, native installation/local model download/index, collection and cleanup; excludes CI queue and host source export.',
+        'time_scope': 'Pinned-main Harbor agent_execution.seconds minus native recursive usage collection time; source/session integrity audit overhead is included and separately retained. Independent outer-slot wall includes cold container, native installation/local model download/index, collection and cleanup; excludes CI queue and host source export.',
         'quality_scope': 'Same-model pinned-main GLM SWE-QA self-judge total100, not the prior original-rubric factual score or strict e2e gate.',
         'original_failures_removed': False, 'historical_trials_pooled': False}
 

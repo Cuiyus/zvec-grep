@@ -32,7 +32,10 @@ def run(args):
             if not result['all_valid']: raise ValueError('scripted_native_pair_failed')
             for row in result['profiles']:
                 if row['answer'] != FINAL_SENTINEL: raise ValueError('wrong_scripted_terminal_answer')
-                usage = row['metrics']['session_usage']; expected = 5 if row['profile'] == 'baseline' else 6
+                trial = selected.output / 'runs' / ('q001-' + row['profile']) / row['retained_trials'][0]
+                from zg_bench.metrics.usage import validate_session_usage
+                usage = validate_session_usage(cohort.load(trial / 'agent/session-usage.json'), require_identity=True)
+                expected = 5 if row['profile'] == 'baseline' else 6
                 if len(usage['sessions']) != 2: raise ValueError('real_root_and_child_required')
                 for key, value in {'llm_calls': expected, 'input_tokens': expected * 100,
                         'output_tokens': expected * 50, 'cache_read_tokens': expected * 60,
