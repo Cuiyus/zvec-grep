@@ -1,0 +1,153 @@
+name: Native fixed five-question repetitions v1
+run-name: native five / baseline50 + zg50 / execute=${{ inputs.execute_study || false }}
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths:
+      - '.github/workflows/native-five-repeat-v1.yml'
+      - 'benchmarks/native-claude-qa-pilot/five_repeat_v1.py'
+      - 'benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json'
+  workflow_dispatch:
+    inputs:
+      execute_study:
+        description: Execute exactly 50 new pairs, baseline10 and zg10 on each of the five existing questions
+        type: boolean
+        default: false
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native-five-repeat-v1-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      matrix: ${{ steps.schedule.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-five-setup
+        with:
+          stage: preflight
+      - name: Verify 100-slot controls and preview both profile orders on all five questions
+        id: schedule
+        run: |
+          set -euo pipefail
+          cp benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json "$REPAIR_ROOT/"
+          cp benchmarks/native-claude-qa-pilot/five-statistics-plan-v1.json "$REPAIR_ROOT/"
+          for pattern in test_five_repeat_v1.py test_quality_scores_v1.py; do
+            "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/native-claude-qa-pilot -p "$pattern" -v 2>&1 | tee "$REPAIR_ROOT/$pattern.log"
+          done
+          "$MAIN_ROOT/.venv/bin/python" - <<'PY'
+          import copy,json,os
+          from pathlib import Path
+          from types import SimpleNamespace
+          import five_repeat_v1 as five
+          root=Path(os.environ['REPAIR_ROOT'])
+          args=SimpleNamespace(plan=Path('benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json').resolve(),task_id=None,repetition=None,main_root=Path(os.environ['MAIN_ROOT']),reference_prepared=Path(os.environ['REFERENCE_PREPARED_ROOT']),prepared_group=Path(os.environ['PREPARED_GROUP_ROOT']),candidate=root/'zg-install.tgz',output=root/'schedule',command='dry-run')
+          plan,base,proof,manifest=five.validate_plan(args)
+          for task in five.preparation.TASK_IDS:
+              for repetition in (1,2):
+                  selected=copy.copy(args);selected.task_id=task;selected.repetition=repetition;selected.output=root/f'dry-{task}-{repetition}'
+                  assert five.execute(selected,plan,base,proof,manifest)==0
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('matrix='+json.dumps({'include':five.schedule()},separators=(',',':'))+'\n')
+          PY
+      - name: Scan provider-free preflight
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/native-five-v1-preflight"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-five-repeat-v1-${{ github.run_id }}-preflight
+          path: ${{ runner.temp }}/native-five-v1-preflight/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+  repeat:
+    name: repeat (${{ matrix.key }})
+    needs: preflight
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.execute_study == true
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-five-setup
+        with:
+          stage: ${{ matrix.key }}
+      - name: Retain the frozen cohort and exact pair
+        env:
+          TASK_ID: ${{ matrix.task_id }}
+          TRIAL_INDEX: ${{ matrix.trial_index }}
+          PAIR_KEY: ${{ matrix.key }}
+        run: |
+          set -euo pipefail
+          cp benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json "$REPAIR_ROOT/"
+          cp benchmarks/native-claude-qa-pilot/five-statistics-plan-v1.json "$REPAIR_ROOT/"
+          "$MAIN_ROOT/.venv/bin/python" - <<'PY'
+          import json,os
+          from pathlib import Path
+          import five_repeat_v1 as five
+          pair=five.selected_pair(os.environ['TASK_ID'],int(os.environ['TRIAL_INDEX']))
+          assert pair['key']==os.environ['PAIR_KEY']
+          five.candidate.write(Path(os.environ['REPAIR_ROOT'])/'scheduled-pair.json',pair)
+          PY
+      - name: Execute exactly the scheduled original native pair
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          TASK_ID: ${{ matrix.task_id }}
+          TRIAL_INDEX: ${{ matrix.trial_index }}
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/five_repeat_v1.py \
+            --plan benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json --task "$TASK_ID" --repetition "$TRIAL_INDEX" \
+            --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" run 2>&1 | tee "$REPAIR_ROOT/live.log"
+      - name: Collect original answers and accounting even after failure
+        if: always()
+        env:
+          TASK_ID: ${{ matrix.task_id }}
+          TRIAL_INDEX: ${{ matrix.trial_index }}
+        run: |
+          set -euo pipefail
+          if test -n "${REPAIR_ROOT:-}" && test -f "$REPAIR_ROOT/live-five-context.json"; then
+            "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/five_repeat_v1.py \
+              --plan benchmarks/native-claude-qa-pilot/five-repeat-plan-v1.json --task "$TASK_ID" --repetition "$TRIAL_INDEX" \
+              --main-root "$MAIN_ROOT" --reference-prepared "$REFERENCE_PREPARED_ROOT" --prepared-group "$PREPARED_GROUP_ROOT" \
+              --candidate "$REPAIR_ROOT/zg-install.tgz" --output "$REPAIR_ROOT/live" collect 2>&1 | tee "$REPAIR_ROOT/collect.log"
+          fi
+      - name: Scan actual secrets before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+        run: |
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py \
+            --secret-env GH_TOKEN --secret-env ANTHROPIC_API_KEY --secret-env ZVEC_GREP_API_KEY --root "$REPAIR_ROOT"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-five-repeat-v1-${{ github.run_id }}-${{ matrix.key }}
+          path: |
+            ${{ runner.temp }}/native-five-v1-${{ matrix.key }}/
+            !${{ runner.temp }}/native-five-v1-${{ matrix.key }}/zg-install.tgz
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

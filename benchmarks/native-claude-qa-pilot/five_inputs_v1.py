@@ -37,19 +37,27 @@ def validate(group,reference_prepared,repo_root=REPO):
     if actual!=expected:raise ValueError('fixed_five_task_group_changed')
     return actual
 
+def task_root(group,reference_prepared,task_id):
+    if task_id not in TASK_IDS:raise ValueError('only_five_existing_tasks_allowed')
+    if task_id=='q001':return reference_prepared
+    name='reserves' if task_id in ('q002','q003') else 'architecture' if task_id=='q004' else 'runtime'
+    return group/name/task_id
+
+def _selected_after_validation(group,reference_prepared,task_id,repo_root):
+    if task_id=='q001':
+        return first_three.selected_inputs(group/'reserves',reference_prepared,task_id,repo_root)
+    root=task_root(group,reference_prepared,task_id)
+    return pilot.load(root/'prepared.json'),pilot.load(root/'source-manifest.json')['files'],root
+
 def selected_inputs(group,reference_prepared,task_id,repo_root=REPO):
     validate(group,reference_prepared,repo_root)
-    if task_id in first_three.TASK_IDS:
-        return first_three.selected_inputs(group/'reserves',reference_prepared,task_id,repo_root)
-    if task_id not in TASK_IDS:raise ValueError('only_five_existing_tasks_allowed')
-    root=group/('architecture' if task_id=='q004' else 'runtime')/task_id
-    return pilot.load(root/'prepared.json'),pilot.load(root/'source-manifest.json')['files'],root
+    return _selected_after_validation(group,reference_prepared,task_id,repo_root)
 
 def references(group,reference_prepared,repo_root=REPO):
     validate(group,reference_prepared,repo_root)
     result={'group_sha256':pilot.digest(group/'group.json'),'tasks':{}}
     for task in TASK_IDS:
-        metadata,_,root=selected_inputs(group,reference_prepared,task,repo_root)
+        metadata,_,root=_selected_after_validation(group,reference_prepared,task,repo_root)
         result['tasks'][task]={'metadata_sha256':pilot.digest(root/'prepared.json'),
             'source_manifest_sha256':pilot.digest(root/'source-manifest.json'),
             'source_commit':metadata['source_commit'],'source_inventory_sha256':metadata['source_inventory_sha256'],

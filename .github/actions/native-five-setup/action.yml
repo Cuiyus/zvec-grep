@@ -25,6 +25,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        FIVE_STAGE: ${{ inputs.stage }}
       run: |
         set -euo pipefail
         gh api repos/zvec-ai/zvec-grep/commits/main > "$REPAIR_ROOT/current-upstream.json"
@@ -34,7 +35,12 @@ runs:
         import json,os
         from pathlib import Path
         d=json.loads((Path(os.environ['REPAIR_ROOT'])/'current-upstream-tree.json').read_text())
-        assert next(r['sha'] for r in d['tree'] if r['path']=='rust')=='577d1fd05902ba844bc9c85e2cc58d64f425252e','current upstream Rust changed'
+        actual=next(r['sha'] for r in d['tree'] if r['path']=='rust')
+        expected='577d1fd05902ba844bc9c85e2cc58d64f425252e'
+        record={'stage':os.environ['FIVE_STAGE'],'observed_current_rust_tree':actual,'cohort_rust_tree':expected,'matches':actual==expected,'cohort_binary_changed':False}
+        (Path(os.environ['REPAIR_ROOT'])/'current-rust-observation.json').write_text(json.dumps(record,indent=2)+'\n')
+        if os.environ['FIVE_STAGE'] in ('offline','preflight'):
+            assert actual==expected,'current upstream Rust changed before cohort admission'
         PY
     - uses: actions/setup-python@v6
       with:

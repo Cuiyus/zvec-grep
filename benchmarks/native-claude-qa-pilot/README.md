@@ -7,6 +7,32 @@ expansion. The [scope record](question-bank-scope-v1.json) preserves that decisi
 Unfinished q006 author research is excluded; no canonical task or execution was
 created for it. Work continues on existing-case results and statistical analysis.
 
+The user's latest instruction schedules one new complete five-question round:
+**baseline10 and zg10 on each question, 100 executions in total**, with the
+questions interleaved across up to twenty fresh pair jobs and five pairs in each
+profile order per question. The [frozen plan](five-repeat-plan-v1.json) excludes
+all historical answers. Quality is reported as original **0–10 rubric points**,
+with per-task means, dispersion and paired differences; mandatory/citation
+gates remain separate. The [score contract](five-quality-contract-v1.json)
+preserves unresolved score bounds rather than converting pass/fail into points.
+
+Current Rust `ae1ac57` passed the fork build and packaged smoke test. The
+[current native offline gate](results/20261020-five-current-offline-v1/summary.json)
+passed all 44 native checks and both actual-provider common-workspace-context
+checks, with no paid model calls. Both profiles receive the same environment
+context locating source at `/workspace`. Source, questions and rubrics remain
+unchanged. The exact Rust binary stays pinned throughout the cohort; admission
+checks current main and workers retain later upstream-drift observations.
+
+The [filter review](provenance/outlier-review-v1/review.json) reproduces how
+independent score-tail selection can change a resource comparison whose every
+original resource pair is equal. This changes the estimand; it does not mean
+the existing paired bootstrap is implemented incorrectly. The separately
+[frozen statistical policy](five-statistics-plan-v1.json) therefore keeps all ten
+observations and all five questions in the primary mean result. Original PR261
+trimming/task-MAD results and robust paired-contrast estimates are separately
+labelled sensitivities, with no method chosen for a favorable zg result.
+
 Current fixed-bank evidence includes q001 and q004 at **10 executions per
 profile**, and q005 at **one execution per profile**. Q004 reported input fell
 50.66% and agent time fell 24.42%, while the cold full slot took 2.47% longer;
