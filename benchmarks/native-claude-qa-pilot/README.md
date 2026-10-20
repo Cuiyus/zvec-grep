@@ -62,6 +62,17 @@ checks and the separate source/retrieval audit pass. Complete model input fell
 This is an input-efficiency candidate from one pair, with no trimming or stable
 effect claim. A subsequent ten-per-profile confirmation must exclude this pair.
 
+The [q004 confirmation plan](architecture-repeat-plan-v1.json) now schedules
+exactly ten new pairs, baseline10 and zg10, with five pairs in each profile
+order. The [driver](architecture_repeat_v1.py) retains the original native
+execution and collection bodies. Up to ten fresh hosted pair jobs run in
+parallel; each pair executes its two profiles serially. The original PR261
+statistics and strict scope policy are retained, including raw10 and
+score-trimmed8 views and unavailable task-level MAD for one distinct task.
+Seven integrity tests and four actual Harbor command previews passed locally.
+The fork Linux preflight must pass at the execution commit before the explicit
+20-trial dispatch. Push alone runs no solver.
+
 
 The separately reviewed [q005 runtime/API case](../zvec-issue-qa/tasks/q005/instruction.md)
 now has a [native preparation package](results/20261020-q005-native-preparation-v1/README.md).
