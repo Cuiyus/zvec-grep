@@ -33,6 +33,8 @@ observations and all five questions in the primary mean result. Original PR261
 trimming/task-MAD results and robust paired-contrast estimates are separately
 labelled sensitivities, with no method chosen for a favorable zg result.
 
+The same-commit Linux preflight passed in [run 39392426042](https://github.com/Cuiyus/zvec-grep/actions/runs/39392426042). The new study was dispatched exactly once as [run 39392884840](https://github.com/Cuiyus/zvec-grep/actions/runs/39392884840), pinned to `df0d37796435a596b4f6d62215a8fe28f401774a`. Its [admission ledger](provenance/native-five-repeat-v1/admission/manifest.json) binds all 100 scheduled trials, original preflight retention and the preassigned opaque answer IDs. Execution remains in progress. The [analysis implementation](five_analysis_v1.py) follows the frozen methods; four synthetic tests cover changed score-selection estimands, explicit unknown scores, missing planned rows and scope failures. No current answer or grade was read while implementing these methods.
+
 Current fixed-bank evidence includes q001 and q004 at **10 executions per
 profile**, and q005 at **one execution per profile**. Q004 reported input fell
 50.66% and agent time fell 24.42%, while the cold full slot took 2.47% longer;
