@@ -1,0 +1,58 @@
+name: Native five-question current-Rust offline gate v1
+run-name: native five / current Rust + shared workspace / fake providers only
+on:
+  push:
+    branches: [dev/opencode-qa-repair-v2]
+    paths:
+      - '.github/workflows/native-five-offline-v1.yml'
+      - '.github/actions/native-five-setup/action.yml'
+      - 'benchmarks/native-claude-qa-pilot/five_inputs_v1.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native-five-offline-v1-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  native:
+    if: github.repository == 'Cuiyus/zvec-grep' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-five-setup
+        with:
+          stage: offline
+      - name: Check native flag transport and unchanged runtime bodies
+        run: |
+          set -euo pipefail
+          for pattern in test_workspace_context_v1.py test_rust_candidate_v1.py; do
+            "$MAIN_ROOT/.venv/bin/python" -m unittest discover -s benchmarks/native-claude-qa-pilot -p "$pattern" -v 2>&1 | tee "$REPAIR_ROOT/$pattern.log"
+          done
+      - name: Exercise real native root, child, source and MCP with fake providers
+        run: |
+          set -euo pipefail
+          "$MAIN_ROOT/.venv/bin/python" benchmarks/native-claude-qa-pilot/rust_candidate_v1.py offline \
+            --manifest "$REPAIR_ROOT/candidate-manifest.json" \
+            --manifest-sha256 66deaa80a0028919c85219daeaee921285373a2f7f16f4b30154804ac9551d6f \
+            --candidate "$REPAIR_ROOT/zg-install.tgz" --main-root "$MAIN_ROOT" \
+            --prepared "$REFERENCE_PREPARED_ROOT" --output "$REPAIR_ROOT/native"
+      - name: Scan provider-free evidence before retention
+        id: scan
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 benchmarks/native-claude-qa-pilot/repeat_secret_scan_v1.py --secret-env GH_TOKEN --root "$RUNNER_TEMP/native-five-v1-offline"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: native-five-offline-v1-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-five-v1-offline/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
