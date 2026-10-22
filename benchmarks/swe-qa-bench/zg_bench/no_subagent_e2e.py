@@ -1,7 +1,9 @@
-"""One GLM-5.2 three-arm round with OpenCode delegation disabled in every arm.
+"""One GLM-5.2 four-arm round isolating delegation availability and ZG access.
 
-The smoke experiment is separate evidence (one conan-19 block, three trials).
-The formal experiment is the frozen 20-task corpus, ten blocks each (600 trials).
+The smoke experiment is separate evidence (one conan-19 block, four trials).
+The formal experiment is the frozen 20-task corpus, ten blocks each (800 trials).
+One native baseline permits delegation without forcing the model to use it;
+the other native baseline and both ZG arms deny delegation at the tool layer.
 Existing product, model, collection and judging implementations are reused.
 """
 from __future__ import annotations
@@ -20,7 +22,7 @@ from zg_bench import native_baseline_e2e as native
 from zg_bench import version_e2e as versions
 from zg_bench.swe_qa.pairs import load_references
 
-ARMS = three_arm.ARMS
+ARMS = ('baseline_allowed', 'baseline', 'node', 'rust')
 MODEL = three_arm.MODEL
 DATA = three_arm.DATA
 SOURCE_COMMIT = '9baeaa134b50080b621dc1834f467b2f14f9dc6d'
@@ -47,16 +49,16 @@ def configure(phase):
     preserved = (
         'node', 'rust', 'models', 'embeddings', 'embedding_model',
         'embedding_dimension', 'agent_runtime', 'node_native_binding_package',
-        'locked_input_sha256', 'groups', 'max_parallel_task_jobs',
+        'locked_input_sha256', 'max_parallel_task_jobs',
         'per_task_agent_parallelism', 'judge_concurrency_per_task',
         'agent_timeout_seconds', 'mcp_timeout_seconds', 'max_harbor_retries',
         'fresh_executions', 'container_fix_pr', 'container_fix_commit', 'container_init',
     )
     experiment = {key: copy.deepcopy(SOURCE_EXPERIMENT[key]) for key in preserved}
     experiment.update(
-        kind='glm52-no-subagent', phase=phase, round=1,
+        kind='glm52-subagent-ablation', phase=phase, round=1, groups=list(ARMS),
         e2e_repetitions=repetitions, expected_tasks=len(selected_tasks(phase)),
-        planned_agent_trials=len(selected_tasks(phase)) * repetitions * 3,
+        planned_agent_trials=len(selected_tasks(phase)) * repetitions * len(ARMS),
         created_at='2026-10-22', harness_base=SOURCE_COMMIT,
         task_selection={'source': 'frozen historical 20-task selection.json',
                         'scheduled_tasks': selected_tasks(phase)},
@@ -64,18 +66,55 @@ def configure(phase):
         source_harness_commit=SOURCE_COMMIT,
         source_experiment_kind=SOURCE_EXPERIMENT['kind'],
         source_experiment_round=SOURCE_EXPERIMENT['round'],
-        no_subagent={'enabled': True, 'mechanism': 'permission.task=deny'},
-        execution_order='Rotate baseline/node/rust within each task and repetition; same historical ordering',
+        no_subagent={'enabled': True, 'mechanism': 'permission.task=deny',
+                     'denied_arms': ['baseline', 'node', 'rust'],
+                     'allowed_control': 'baseline_allowed',
+                     'allowed_control_policy': 'Original OpenCode permissions; delegation permitted, not forced'},
+        subagent_policy={arm: 'allowed_not_forced' if arm == 'baseline_allowed' else 'denied' for arm in ARMS},
+        execution_order='Rotate all four arms within each task and repetition; each arm starts 50 of 200 formal blocks',
         aggregation_policy='All trials without trimming or task exclusion; equal-weight task means; paired task bootstrap',
         analysis_policy='All completed scheduled trials; no quality or resource trimming; retain all failed attempts',
         historical_comparison='Descriptive only: historical rounds ran on different dates',
     )
     for module in (three_arm, native, versions):
         module.REPETITIONS = repetitions
+    three_arm.ARMS = ARMS
     three_arm.EXPERIMENT = experiment
     versions.EXPERIMENT = experiment
     os.environ['ZG_BENCH_DISABLE_SUBAGENTS'] = '1'
     return experiment
+
+
+def ordered_arms(task, repetition):
+    tasks = [row['task_slug'] for row in json.loads((DATA / 'selection.json').read_text())['tasks']]
+    shift = (tasks.index(task) + repetition - 1) % len(ARMS)
+    return ARMS[shift:] + ARMS[:shift]
+
+
+def command(task, arm, output, packages, repetition):
+    if arm == 'baseline_allowed':
+        return native.command(task, MODEL, output / 'baseline_allowed', repetition)
+    if arm not in ARMS:
+        raise ValueError(f'Unknown arm: {arm}')
+    return three_arm.command(task, arm, output, packages, repetition)
+
+
+def validate_report(report, path):
+    # The historical validator covers the two ZG-versus-denied-baseline pairs
+    # and validates the execution slots and aggregate judge usage for all arms.
+    three_arm.validate_report(report, path)
+    # Also validate allowed-versus-denied native baselines with the same full
+    # quality and session-usage checks. The generic pair schema uses historical
+    # baseline/zvec-grep slot names only internally; neither arm here has ZG.
+    native_comparison = dict(report, profiles={
+        'baseline': report['profiles']['baseline_allowed'],
+        'baseline_allowed': report['profiles']['baseline'],
+    })
+    pair = three_arm.paired_report(native_comparison, 'baseline_allowed')
+    three_arm.validate_task_report(copy.deepcopy(pair), path)
+    if any(profile['trial_count'] != three_arm.REPETITIONS
+           for profile in pair['cases'][0]['profiles'].values()):
+        raise ValueError('Wrong native baseline trial count')
 
 
 def summarize(reports, output, *, phase, expected_tasks):
@@ -107,22 +146,22 @@ def run(args):
         meta['task_image'] = versions.prebuild_task_image(versions.ROOT / 'datasets' / args.task, output)
         versions.write_json(output / 'provenance.json', meta)
         for repetition in range(1, repetitions + 1):
-            for arm in three_arm.ordered_arms(args.task, repetition):
-                env = dict(os.environ, ZG_BENCH_DISABLE_SUBAGENTS='1')
+            for arm in ordered_arms(args.task, repetition):
+                env = dict(os.environ, ZG_BENCH_DISABLE_SUBAGENTS='0' if arm == 'baseline_allowed' else '1')
                 for key in ('ZG_BENCH_CLI_RUNTIME', 'ZG_BENCH_EXPECTED_CLI_SHA256', 'ZG_BENCH_CAPTURE_INDEX_OUTPUT'):
                     env.pop(key, None)
-                if arm != 'baseline':
+                if arm in ('node', 'rust'):
                     env.update(ZG_BENCH_CLI_RUNTIME=arm,
                                ZG_BENCH_EXPECTED_CLI_SHA256=identities[arm]['cli_sha256'],
                                ZG_BENCH_CAPTURE_INDEX_OUTPUT='1')
-                command = three_arm.command(args.task, arm, output, packages, repetition)
+                execution_command = command(args.task, arm, output, packages, repetition)
                 started_at = datetime.now(timezone.utc).isoformat()
                 started = time.monotonic()
                 print(f'START {args.phase} {args.task} {arm} repetition={repetition}/{repetitions}', flush=True)
-                result = subprocess.run(command, env=env)
+                result = subprocess.run(execution_command, env=env)
                 meta['execution'].append(dict(
                     arm=arm, repetition=repetition, returncode=result.returncode,
-                    command=command, started_at=started_at,
+                    command=execution_command, started_at=started_at,
                     completed_at=datetime.now(timezone.utc).isoformat(),
                     wall_seconds_including_setup_and_retries=time.monotonic() - started,
                 ))
@@ -131,15 +170,16 @@ def run(args):
     # Inspect every attempt, including retries. This precedes all collection and
     # paid judging; an execution failure never leads to a partial quality report.
     from zg_bench.no_subagent_audit import audit
-    meta['no_subagent_audit'] = audit(output, expected_slots=3 * repetitions)
+    meta['no_subagent_audit'] = audit(output, expected_slots=len(ARMS) * repetitions)
     versions.write_json(output / 'provenance.json', meta)
-    if len(meta['execution']) != repetitions * 3 or any(row['returncode'] for row in meta['execution']):
+    if len(meta['execution']) != repetitions * len(ARMS) or any(row['returncode'] for row in meta['execution']):
         raise RuntimeError('Execution slots failed or missing; preserve all evidence and no complete-quality report')
     # collect() has a definition-time default of ten; pass the count explicitly
     # so smoke collection cannot accidentally expect ten repetitions.
     pair = versions.collect(output, args.task, identities, repetitions=repetitions,
                             expected_model=MODEL, expected_embedding=experiment['embedding_model'])
-    trials = {'baseline': native.collect(output / 'baseline', args.task, MODEL),
+    trials = {'baseline_allowed': native.collect(output / 'baseline_allowed', args.task, MODEL),
+              'baseline': native.collect(output / 'baseline', args.task, MODEL),
               'node': pair['profiles']['baseline']['trials'],
               'rust': pair['profiles']['zvec-grep']['trials']}
     versions.write_json(output / 'trials.json', trials)
@@ -148,7 +188,7 @@ def run(args):
     report = dict(schema_version=1, kind=experiment['kind'], model=MODEL,
                   task_id=reference['task_id'], profiles=profiles,
                   judge=three_arm.judge_metadata(profiles), provenance=meta)
-    three_arm.validate_report(report, output / 'report/report.json')
+    validate_report(report, output / 'report/report.json')
     versions.write_json(output / 'report/report.json', report)
     summary = summarize([report], output / 'report', phase=args.phase, expected_tasks=1)
     if not summary['complete']:
@@ -161,7 +201,7 @@ def aggregate(args):
     reports = [json.loads(path.read_text()) for path in paths]
     allowed = set(selected_tasks(args.phase))
     for path, report in zip(paths, reports):
-        three_arm.validate_report(report, path)
+        validate_report(report, path)
         if report['provenance']['task'] not in allowed:
             raise ValueError(f'Unexpected task in {args.phase} aggregate: {path}')
     return summarize(reports, args.output, phase=args.phase, expected_tasks=len(allowed))

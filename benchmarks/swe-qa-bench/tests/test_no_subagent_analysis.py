@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from zg_bench.agents.opencode_usage import summarize_session_usage
-from zg_bench.no_subagent_audit import ARMS, BUILTIN_AGENTS, audit
+from zg_bench.no_subagent_audit import ARMS, BUILTIN_AGENTS, DENIED_ARMS, audit
 from zg_bench.no_subagent_summary import summarize
 
 
@@ -15,12 +15,15 @@ def write(path, value):
 
 
 def attempt(root, arm, rep=1, *, retry=False, child=False, failed=False):
-    base = root / ('baseline/runs' if arm == 'baseline' else f'runs/{arm}') / f'r{rep}' / 'job'
+    base = root / (f'{arm}/runs' if arm in ('baseline_allowed', 'baseline') else f'runs/{arm}') / f'r{rep}' / 'job'
     name = f'task__{arm}{rep}'
     directory = base / (f'.retry-history/{name}/attempt-1' if retry else name)
+    permissions = {'websearch': 'deny', 'webfetch': 'deny'}
+    if arm in DENIED_ARMS:
+        permissions['task'] = 'deny'
     config = dict(trial_name=name, task={}, agent={'kwargs': {'opencode_config': {
-        'permission': {'task': 'deny'},
-        'agent': {key: {'permission': {'task': 'deny'}} for key in BUILTIN_AGENTS}}}})
+        'permission': dict(permissions),
+        'agent': {key: {'permission': dict(permissions)} for key in BUILTIN_AGENTS}}}})
     write(directory / 'config.json', config)
     identity = name + ('-failed' if retry else '-current')
     write(directory / 'result.json', dict(id=identity, trial_name=name, config=config, finished_at='2026-10-22T00:00:00Z',
@@ -33,7 +36,11 @@ def attempt(root, arm, rep=1, *, retry=False, child=False, failed=False):
     if child:
         snapshot += [{'kind': 'session', 'data': {'id': 'child', 'parent_id': 'root'}},
                      {'kind': 'tool', 'data': dict(id='tool', name='task', session_id='root', message_id='msg',
-                                                 status='completed', child_session_id='child')}]
+                                                 status='completed', child_session_id='child')},
+                     {'kind': 'message', 'data': dict(id='child-msg', session_id='child', provider_id='custom-openai',
+                                                    model_id='glm-5.2', cost_usd=0, input=5, output=2, reasoning=3,
+                                                    cache_read=0, cache_write=0, tokens_present=True,
+                                                    finished=True, has_error=False)}]
     write(directory / 'agent/opencode-session-snapshot.json', snapshot)
     usage = summarize_session_usage(snapshot, 'root')
     write(directory / 'agent/session-usage.json', usage)
@@ -52,11 +59,14 @@ def clean(root, reps=1):
     for arm in ARMS:
         for rep in range(1, reps + 1):
             attempt(root, arm, rep)
-    return audit(root, 3 * reps)
+    return audit(root, len(ARMS) * reps)
 
 
-def report(root, reps=1, task_id='astropy:38'):
+def report(root, reps=1, task_id='astropy:38', *, child_allowed=False):
     evidence = clean(root, reps)
+    if child_allowed:
+        attempt(root, 'baseline_allowed', child=True)
+        evidence = audit(root, len(ARMS) * reps)
     profiles = {}
     for arm in ARMS:
         trials = []
@@ -69,7 +79,8 @@ def report(root, reps=1, task_id='astropy:38'):
                                             session_usage=usage)))
         profiles[arm] = {'trial_count': len(trials), 'trials': trials}
     return dict(task_id=task_id, model='glm-5.2', profiles=profiles, provenance=dict(
-        repetitions=reps, experiment={'no_subagent': {'enabled': True, 'mechanism': 'permission.task=deny'}},
+        repetitions=reps, experiment={'no_subagent': {'enabled': True, 'mechanism': 'permission.task=deny',
+                                                      'denied_arms': list(DENIED_ARMS), 'allowed_control': 'baseline_allowed'}},
         identities={'node': 'frozen', 'rust': 'frozen'}, harness_commit='commit', no_subagent_audit=evidence,
         execution=[dict(arm=arm, repetition=rep, returncode=0, wall_seconds_including_setup_and_retries=2)
                    for arm in ARMS for rep in range(1, reps + 1)]))
@@ -86,15 +97,39 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         result = clean(tmp_path)
         assert result['complete']
         assert result['task_tool_calls'] == result['child_sessions'] == 0
-        assert result['physical_attempts'] == 3
+        assert result['physical_attempts'] == 4
         assert result['attempts'][0]['usage']['output_tokens'] == 10
+
+    def test_allowed_arm_preserves_optional_delegation_and_accepts_children(self):
+        tmp_path = self.root
+        clean(tmp_path)
+        attempt(tmp_path, 'baseline_allowed', child=True)
+        result = audit(tmp_path, 4)
+        assert result['complete']
+        assert result['task_tool_calls'] == result['child_sessions'] == 1
+        allowed = result['per_arm']['baseline_allowed']
+        assert allowed['complete'] and allowed['task_policy'] == 'allow'
+        for arm in DENIED_ARMS:
+            assert result['per_arm'][arm]['task_tool_calls'] == 0
+            assert result['per_arm'][arm]['child_sessions'] == 0
+
+    def test_allowed_arm_must_keep_original_permission_policy(self):
+        tmp_path = self.root
+        clean(tmp_path)
+        path, _ = attempt(tmp_path, 'baseline_allowed')
+        config = json.loads((path / 'config.json').read_text())
+        config['agent']['kwargs']['opencode_config']['permission']['task'] = 'allow'
+        write(path / 'config.json', config)
+        with self.assertRaises(ValueError):
+            audit(tmp_path, 4)
+        assert not audit(tmp_path)['per_arm']['baseline_allowed']['complete']
 
     def test_retry_child_is_not_hidden_by_successful_replacement(self):
         tmp_path = self.root
         clean(tmp_path)
         attempt(tmp_path, 'baseline', retry=True, child=True, failed=True)
         with self.assertRaisesRegex(ValueError, 'audit incomplete'):
-            audit(tmp_path, 3)
+            audit(tmp_path, 4)
         evidence = json.loads((tmp_path / 'no-subagent-audit.json').read_text())
         assert evidence['retry_attempts'] == 1
         assert evidence['child_sessions'] == 1
@@ -107,7 +142,7 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         path, _ = attempt(tmp_path, 'node', retry=True, failed=True)
         (path / 'agent/opencode-session-snapshot.json').unlink()
         with self.assertRaises(ValueError):
-            audit(tmp_path, 3)
+            audit(tmp_path, 4)
         result = audit(tmp_path)
         assert result['task_tool_calls'] is None
         assert result['child_sessions'] is None
@@ -120,7 +155,7 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         path, _ = attempt(tmp_path, 'baseline', retry=True, failed=True)
         shutil.rmtree(path)
         with self.assertRaises(ValueError):
-            audit(tmp_path, 3)
+            audit(tmp_path, 4)
         result = audit(tmp_path)
         assert not result['complete']
         assert any('missing_declared_attempt' in issue for issue in result['issues'])
@@ -134,7 +169,7 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         result['config']['agent']['kwargs']['opencode_config']['agent']['explore']['permission']['task'] = 'allow'
         write(path / 'result.json', result)
         with self.assertRaises(ValueError):
-            audit(tmp_path, 3)
+            audit(tmp_path, 4)
         assert any('agent_task_permission_not_deny:explore' in e
                    for row in audit(tmp_path)['attempts'] for e in row['errors'])
 
@@ -145,7 +180,7 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         usage['total']['output_tokens'] = 3
         write(path / 'agent/session-usage.json', usage)
         with self.assertRaises(ValueError):
-            audit(tmp_path, 3)
+            audit(tmp_path, 4)
 
     def test_summary_keeps_extreme_scores_and_zero_zg_trials(self):
         tmp_path = self.root
@@ -155,12 +190,30 @@ class NoSubagentAnalysisTests(unittest.TestCase):
                 trial['judge']['total'] = quality
         result = summarize([value], tmp_path / 'summary', expected_tasks=1, repetitions=3)
         assert result['complete']
-        assert result['observed_samples'] == 9
+        assert result['observed_samples'] == 12
         self.assertAlmostEqual(result['rows'][0]['means']['quality'], 110 / 3)
         assert result['rows'][1]['means']['zg_used'] == 0
         assert result['rows'][0]['means']['answer_output'] == 3
         assert result['rows'][0]['means']['reasoning'] == 7
         assert result['rows'][0]['means']['generated_total'] == 10
+
+    def test_summary_separates_delegation_policy_from_zg_effect(self):
+        tmp_path = self.root
+        value = report(tmp_path / 'raw', child_allowed=True)
+        for arm, quality in [('baseline_allowed', 20), ('baseline', 10), ('node', 15), ('rust', 5)]:
+            value['profiles'][arm]['trials'][0]['judge']['total'] = quality
+        result = summarize([value], tmp_path / 'summary', expected_tasks=1, repetitions=1)
+        assert result['complete']
+        assert result['comparisons']['subagent_availability']['quality']['delta'] == -10
+        assert result['comparisons']['subagent_availability']['input_tokens']['delta'] == -5
+        assert result['comparisons']['node']['quality']['delta'] == 5
+        assert result['comparisons']['node']['input_tokens']['delta'] == 0
+        assert result['comparisons']['rust']['quality']['delta'] == -5
+        assert result['per_arm_audit']['baseline_allowed']['child_sessions'] == 1
+        means = result['rows'][0]['means']
+        assert means['root_input_tokens'] == 12 and means['child_input_tokens'] == 5
+        assert means['child_used'] == 1 and means['task_calls'] == 1
+        assert 'root_native_output_chars' in means and 'native_output_chars' not in means
 
     def test_summary_reports_partial_population_without_imputing(self):
         tmp_path = self.root
@@ -168,7 +221,7 @@ class NoSubagentAnalysisTests(unittest.TestCase):
         result = summarize([value], tmp_path / 'summary', expected_tasks=20, repetitions=1)
         assert not result['complete']
         assert len(result['missing_tasks']) == 19
-        assert result['observed_samples'] == 3
+        assert result['observed_samples'] == 4
 
     def test_summary_rejects_duplicate_and_wrong_protocol(self):
         tmp_path = self.root

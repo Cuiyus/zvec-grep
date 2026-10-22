@@ -12,13 +12,14 @@ import random
 import statistics
 
 from zg_bench.metrics.usage import validate_usage_metrics
-from zg_bench.no_subagent_audit import ARMS
+from zg_bench.no_subagent_audit import ARMS, DENIED_ARMS
 
 METRICS = ('quality', 'input_tokens', 'answer_output', 'reasoning', 'generated_total',
            'agent_wall_seconds', 'tool_calls', 'llm_calls', 'cache_read_tokens',
            'uncached_input_tokens', 'zg_calls', 'zg_used', 'native_search_calls',
-           'read_calls', 'bash_calls', 'bash_search_or_read_calls', 'zg_output_chars',
-           'native_output_chars')
+           'read_calls', 'bash_calls', 'root_bash_search_or_read_calls', 'root_zg_output_chars',
+           'root_native_output_chars', 'root_input_tokens', 'child_input_tokens',
+           'task_calls', 'child_sessions', 'child_used')
 
 
 def _mean(values):
@@ -34,9 +35,9 @@ def _delta(base, current):
                 change_pct=None if base in (None, 0) or current is None else 100 * (current / base - 1))
 
 
-def _bootstrap(tasks, arm, metric, iterations=2000):
+def _bootstrap(tasks, arm, metric, iterations=2000, *, base_arm='baseline'):
     """Resample paired tasks; uncertainty concerns task composition, not new runs."""
-    pairs = [(t['arms']['baseline']['means'][metric], t['arms'][arm]['means'][metric]) for t in tasks]
+    pairs = [(t['arms'][base_arm]['means'][metric], t['arms'][arm]['means'][metric]) for t in tasks]
     if len(pairs) < 2 or any(a is None or b is None for a, b in pairs):
         return None
     rng = random.Random(42)
@@ -72,7 +73,9 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         seen.add(task_id)
         experiment = meta.get('experiment', {})
         contract = experiment.get('no_subagent', {})
-        if contract.get('enabled') is not True or contract.get('mechanism') != 'permission.task=deny':
+        if (contract.get('enabled') is not True or contract.get('mechanism') != 'permission.task=deny'
+                or contract.get('allowed_control') != 'baseline_allowed'
+                or contract.get('denied_arms') != list(DENIED_ARMS)):
             raise ValueError(f'Missing no-subagent protocol: {task_id}')
         if meta.get('repetitions') != repetitions:
             raise ValueError(f'Repetition protocol mismatch: {task_id}')
@@ -86,9 +89,16 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         identities = meta.get('identities')
         commits.add(meta.get('harness_commit', 'unknown'))
         audit = meta.get('no_subagent_audit', {})
-        if audit.get('complete') is not True or audit.get('task_tool_calls') != 0 or audit.get('child_sessions') != 0:
-            issues.append(f'{task_id}:no_subagent_audit_not_passed')
-        if audit.get('expected_slots') != repetitions * 3:
+        if audit.get('complete') is not True:
+            issues.append(f'{task_id}:subagent_policy_audit_not_passed')
+        for arm in ARMS:
+            arm_audit = audit.get('per_arm', {}).get(arm, {})
+            expected_policy = 'allow' if arm == 'baseline_allowed' else 'deny'
+            if arm_audit.get('complete') is not True or arm_audit.get('task_policy') != expected_policy:
+                issues.append(f'{task_id}/{arm}:permission_policy_not_verified')
+            if arm in DENIED_ARMS and (arm_audit.get('task_tool_calls') != 0 or arm_audit.get('child_sessions') != 0):
+                issues.append(f'{task_id}/{arm}:delegation_disable_not_verified')
+        if audit.get('expected_slots') != repetitions * len(ARMS):
             issues.append(f'{task_id}:audit_expected_slots_mismatch')
         execution = meta.get('execution', [])
         slots = [(r.get('arm'), r.get('repetition')) for r in execution]
@@ -99,7 +109,7 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
             issues.append(f'{task_id}:execution_failures')
         attempts = audit.get('attempts', [])
         active = {(r['arm'], r['repetition']): r for r in attempts if not r.get('retry_history')}
-        task = dict(task_id=task_id, arms={}, execution_failures=sum(r.get('returncode') != 0 for r in execution),
+        task = dict(task_id=task_id, arms={}, per_arm_audit=audit.get('per_arm', {}), execution_failures=sum(r.get('returncode') != 0 for r in execution),
                     physical_attempts=audit.get('physical_attempts'), retry_attempts=audit.get('retry_attempts'),
                     failed_attempts=audit.get('failed_attempts'), audit_complete=audit.get('complete') is True)
         for arm in ARMS:
@@ -136,11 +146,15 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
                               'llm_calls', 'cache_read_tokens', 'uncached_input_tokens')},
                            answer_output=metrics['text_output_tokens'], reasoning=metrics['reasoning_tokens'],
                            generated_total=metrics['output_tokens'], zg_calls=zg_calls,
+                           root_input_tokens=metrics['session_usage']['root']['input_tokens'],
+                           child_input_tokens=metrics['session_usage']['descendants']['input_tokens'],
+                           task_calls=attempt.get('task_tool_calls'), child_sessions=attempt.get('child_sessions'),
+                           child_used=None if attempt.get('child_sessions') is None else int(attempt['child_sessions'] > 0),
                            zg_used=None if zg_calls is None else int(zg_calls > 0),
                            native_search_calls=None if tool_counts is None else sum(tool_counts.get(k, 0) for k in ('grep', 'glob')),
                            read_calls=None if tool_counts is None else tool_counts.get('read', 0),
                            bash_calls=None if tool_counts is None else tool_counts.get('bash', 0),
-                           **{key: None if behavior is None else behavior.get(key) for key in
+                           **{'root_' + key: None if behavior is None else behavior.get(key) for key in
                               ('bash_search_or_read_calls', 'zg_output_chars', 'native_output_chars')})
                 if attempt.get('usage') and any(attempt['usage'].get(k) != metrics[k]
                                               for k in ('input_tokens', 'output_tokens', 'tool_calls')):
@@ -164,13 +178,31 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
                          means={key: _mean([g['means'][key] for g in group]) for key in METRICS},
                          tool_counts=dict(sum((Counter(g['tool_counts']) for g in group), Counter()))))
     comparisons = {}
-    for row in rows[1:]:
-        comparisons[row['group']] = {key: _delta(rows[0]['means'][key], row['means'][key]) for key in METRICS}
+    row_by_arm = {row['group']: row for row in rows}
+    comparison_definitions = {
+        'subagent_availability': {'base': 'baseline_allowed', 'current': 'baseline',
+                                 'estimand': 'disabling optional delegation; all assigned trials'},
+        'node': {'base': 'baseline', 'current': 'node', 'estimand': 'ZG Node with delegation disabled'},
+        'rust': {'base': 'baseline', 'current': 'rust', 'estimand': 'ZG Rust with delegation disabled'},
+    }
+    for name, definition in comparison_definitions.items():
+        base, current = definition['base'], definition['current']
+        comparisons[name] = {key: _delta(row_by_arm[base]['means'][key], row_by_arm[current]['means'][key])
+                             for key in METRICS}
         for key in ('quality', 'input_tokens', 'generated_total', 'agent_wall_seconds'):
-            comparisons[row['group']][key]['task_bootstrap'] = _bootstrap(tasks, row['group'], key)
-    data = dict(schema_version=1, kind='glm52-no-subagent-unfiltered', complete=not issues,
+            comparisons[name][key]['task_bootstrap'] = _bootstrap(tasks, current, key, base_arm=base)
+    def observed_sum(values):
+        return sum(values) if values and all(value is not None for value in values) else None
+    per_arm_audit = {}
+    for arm in ARMS:
+        arm_audits = [task['per_arm_audit'].get(arm, {}) for task in tasks]
+        per_arm_audit[arm] = dict(task_policy='allow' if arm == 'baseline_allowed' else 'deny',
+                                  complete=bool(arm_audits) and all(a.get('complete') is True for a in arm_audits),
+                                  **{key: observed_sum([a.get(key) for a in arm_audits])
+                                     for key in ('physical_attempts', 'task_tool_calls', 'child_sessions')})
+    data = dict(schema_version=1, kind='glm52-subagent-ablation-unfiltered', complete=not issues,
                 expected_tasks=expected_tasks, expected_repetitions=repetitions,
-                expected_samples=expected_tasks * repetitions * 3,
+                expected_samples=expected_tasks * repetitions * len(ARMS),
                 observed_samples=sum(r['samples'] for r in rows), completed_tasks=sorted(seen),
                 missing_tasks=None if expected_ids is None else sorted(set(expected_ids) - seen),
                 issues=sorted(set(issues)), filter_policy='none; retain all trials and tasks, including zero-ZG trials',
@@ -181,10 +213,14 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
                 scope_notes=['Agent session-tree input includes cache; output includes reasoning.',
                              'Primary quality/resource means describe retained physical answers, not retry-inclusive cost.',
                              'Every retry is audited; execution wall time includes setup and retries.',
+                             'baseline_allowed permits delegation without forcing it; comparisons use all assigned trials.',
+                             'Disabling delegation changes the overall strategy; it is not merely subtracting child tokens.',
+                             'Tool-name counts cover the session tree. root_* trajectory behavior/characters cover the root only.',
                              'Bootstrap intervals resample tasks; they do not isolate changes versus earlier run dates.'],
                 experiment=protocol, identities=identities, source_harness_commits=sorted(commits),
                 report_sha256=[hashlib.sha256(json.dumps(r, sort_keys=True).encode()).hexdigest() for r in reports],
-                rows=rows, comparisons=comparisons, task_statistics=tasks,
+                rows=rows, comparisons=comparisons, comparison_definitions=comparison_definitions,
+                per_arm_audit=per_arm_audit, task_statistics=tasks,
                 execution=dict(failed_slots=sum(t['execution_failures'] for t in tasks),
                                physical_attempts=sum(t['physical_attempts'] or 0 for t in tasks),
                                retry_attempts=sum(t['retry_attempts'] or 0 for t in tasks),
@@ -195,9 +231,11 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
     (output / 'comparison.json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
     def fmt(value):
         return '未确认' if value is None else f'{value:,.2f}'
-    lines = ['# GLM5.2 禁用子 agent 对照', '',
+    lines = ['# GLM5.2 子 agent 可用性与 ZG 四组对照', '',
              f"状态：{'完整' if data['complete'] else '部分结果，尚不能作为完整对照结论'}；"
              f"任务 {len(tasks)}/{expected_tasks}，样本 {data['observed_samples']}/{data['expected_samples']}。", '',
+             '四组同期执行：baseline_allowed 允许自主委派；baseline、node、rust 禁用委派。'
+             '允许不代表强迫调用，按全部分配样本比较，不筛选实际使用子 agent 的子集。', '',
              '全部样本按任务等权汇总，不按分数、资源消耗或是否调用 ZG 筛选。', '',
              '| 组 | 样本 | 质量 | 输入 token | 回答 token | 推理 token | 生成合计 | Agent 秒 | 工具次数 | ZG 使用率 |',
              '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
@@ -207,12 +245,23 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
                      ('quality', 'input_tokens', 'answer_output', 'reasoning', 'generated_total', 'agent_wall_seconds', 'tool_calls')) +
                      ' | ' + ('未确认' if means['zg_used'] is None else f"{means['zg_used']:.1%}") + ' |')
     lines += ['', '输入包括缓存；生成合计 = 回答 + 推理。主表为最终答案对应执行的均值；失败、重试保留于审计，'
-              'setup/重试成本另见 JSON execution。任务重采样区间衡量题目组成的不确定性，不证明跨日期因果效应。', '',
-              '| ZG 组相对 Baseline | 质量差 | 输入变化 | 生成变化 | 时间变化 |', '|---|---:|---:|---:|---:|']
-    for arm in ('node', 'rust'):
-        comp = comparisons[arm]
-        lines.append(f"| {arm} | {fmt(comp['quality']['delta'])} | " + ' | '.join(
+              'setup/重试成本另见 JSON execution。禁用委派的影响包括主 agent 策略变化，不能等同于删除子 agent token。', '',
+              '| 对比（当前 − 参照） | 质量点差 | 输入变化 | 生成变化 | 时间变化 |', '|---|---:|---:|---:|---:|']
+    labels = {'subagent_availability': '禁用委派 baseline − 允许委派 baseline_allowed',
+              'node': 'ZG Node − 禁用委派 baseline', 'rust': 'ZG Rust − 禁用委派 baseline'}
+    for name, label in labels.items():
+        comp = comparisons[name]
+        lines.append(f"| {label} | {fmt(comp['quality']['delta'])} | " + ' | '.join(
             fmt(comp[k]['change_pct']) + '%' for k in ('input_tokens', 'generated_total', 'agent_wall_seconds')) + ' |')
+    lines += ['', '| 组 | 主会话输入 | 子会话输入 | task 调用均值 | 子会话使用率 |',
+              '|---|---:|---:|---:|---:|']
+    for row in rows:
+        means = row['means']
+        lines.append(f"| {row['group']} | " + ' | '.join(fmt(means[k]) for k in
+                     ('root_input_tokens', 'child_input_tokens', 'task_calls')) + ' | ' +
+                     ('未确认' if means['child_used'] is None else f"{means['child_used']:.1%}") + ' |')
+    lines += ['', '工具名称计数覆盖主会话及子会话；JSON 中 root_* 检索行为与返回字符仅来自主会话轨迹。'
+              '任务重采样区间衡量题目组成的不确定性，跨日期历史比较仅作描述。']
     if issues:
         lines += ['', '**未完成/不一致项：** ' + '; '.join(sorted(set(issues)))]
     lines += ['', '<details><summary>任务级完整均值</summary>', '',

@@ -11,7 +11,8 @@ from typing import Any
 from zg_bench.agents.opencode_usage import summarize_session_usage
 
 BUILTIN_AGENTS = ('build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary')
-ARMS = ('baseline', 'node', 'rust')
+ARMS = ('baseline_allowed', 'baseline', 'node', 'rust')
+DENIED_ARMS = ('baseline', 'node', 'rust')
 
 
 def _read(path: Path) -> Any:
@@ -24,8 +25,8 @@ def _slot(path: Path, root: Path) -> tuple[str | None, int | None]:
         if name == 'runs' and i + 1 < len(parts):
             if parts[i + 1] in ('node', 'rust') and i + 2 < len(parts):
                 arm, rep = parts[i + 1], parts[i + 2]
-            elif i and parts[i - 1] == 'baseline':
-                arm, rep = 'baseline', parts[i + 1]
+            elif i and parts[i - 1] in ('baseline_allowed', 'baseline'):
+                arm, rep = parts[i - 1], parts[i + 1]
             else:
                 continue
             if re.fullmatch(r'r[1-9][0-9]*', rep):
@@ -33,16 +34,22 @@ def _slot(path: Path, root: Path) -> tuple[str | None, int | None]:
     return None, None
 
 
-def _config_errors(config: Any) -> list[str]:
+def _config_errors(config: Any, arm: str | None) -> list[str]:
     errors = []
     try:
         value = config['agent']['kwargs']['opencode_config']
         value = json.loads(value) if isinstance(value, str) else value
-        if value.get('permission', {}).get('task') != 'deny':
-            errors.append('global_task_permission_not_deny')
-        for name in BUILTIN_AGENTS:
-            if value.get('agent', {}).get(name, {}).get('permission', {}).get('task') != 'deny':
-                errors.append(f'agent_task_permission_not_deny:{name}')
+        expected = {'websearch': 'deny', 'webfetch': 'deny'}
+        if arm != 'baseline_allowed':
+            expected['task'] = 'deny'
+        permissions = [('global', value.get('permission'))] + [
+            (f'agent:{name}', value.get('agent', {}).get(name, {}).get('permission'))
+            for name in BUILTIN_AGENTS]
+        for label, permission in permissions:
+            if permission != expected:
+                errors.append(f'permission_policy_mismatch:{label}')
+            if isinstance(permission, dict) and arm in DENIED_ARMS and permission.get('task') != 'deny':
+                errors.append(f'agent_task_permission_not_deny:{label.split(":")[-1]}')
     except (KeyError, TypeError, ValueError, AttributeError):
         errors.append('missing_or_invalid_opencode_config')
     return errors
@@ -79,6 +86,7 @@ def _trajectory_statistics(trajectory: dict) -> dict:
 
 def _attempt(path: Path, root: Path) -> dict:
     errors = []
+    arm, repetition = _slot(path, root)
     def read(name):
         try:
             return _read(path / name)
@@ -87,9 +95,9 @@ def _attempt(path: Path, root: Path) -> dict:
             return None
     result, config = read('result.json'), read('config.json')
     if config is not None:
-        errors.extend(_config_errors(config))
+        errors.extend(_config_errors(config, arm))
     if result is not None:
-        errors.extend('result:' + e for e in _config_errors(result.get('config')))
+        errors.extend('result:' + e for e in _config_errors(result.get('config'), arm))
     snapshot, usage = read('agent/opencode-session-snapshot.json'), read('agent/session-usage.json')
     tools, sessions, child_refs = {}, {}, set()
     snapshot_valid = isinstance(snapshot, list)
@@ -133,22 +141,23 @@ def _attempt(path: Path, root: Path) -> dict:
     elif usage is not None:
         errors.append('invalid_session_usage_type')
     children = len(child_ids) if snapshot_valid and isinstance(usage, dict) else None
-    if task_calls:
+    if arm in DENIED_ARMS and task_calls:
         errors.append('task_tool_called')
-    if child_ids:
+    if arm in DENIED_ARMS and child_ids:
         errors.append('child_session_created_or_referenced')
     trajectory = read('agent/trajectory.json')
     behavior = _trajectory_statistics(trajectory) if isinstance(trajectory, dict) else None
     if behavior and behavior['task_calls']:
-        errors.append('trajectory_task_tool_called')
+        if arm in DENIED_ARMS:
+            errors.append('trajectory_task_tool_called')
         task_calls = max(task_calls or 0, behavior['task_calls'])
-    arm, repetition = _slot(path, root)
     if arm is None:
         errors.append('unknown_execution_slot')
     result = result or {}
     failed = bool(result.get('exception_info')) or not result.get('finished_at')
     return dict(path=str(path.relative_to(root)), trial_id=result.get('id'), trial_name=result.get('trial_name', path.name),
-                arm=arm, repetition=repetition, retry_history='.retry-history' in path.parts,
+                arm=arm, repetition=repetition, task_policy='allow' if arm == 'baseline_allowed' else 'deny',
+                retry_history='.retry-history' in path.parts,
                 failed=failed, exception_type=(result.get('exception_info') or {}).get('exception_type'),
                 complete=not errors, errors=sorted(set(errors)), task_tool_calls=task_calls,
                 child_sessions=children, tool_counts=dict(Counter(t.get('name', '') for t in tools.values()))
@@ -252,9 +261,9 @@ def audit(output: Path, expected_slots: int | None = None) -> dict:
     if len(current_slots) != len(set(current_slots)):
         issues.append('duplicate_current_attempt_slot')
     if expected_slots is not None:
-        if expected_slots < 1 or expected_slots % 3:
-            raise ValueError('expected_slots must be positive and divisible by three')
-        expected = {(arm, rep) for arm in ARMS for rep in range(1, expected_slots // 3 + 1)}
+        if expected_slots < 1 or expected_slots % len(ARMS):
+            raise ValueError('expected_slots must be positive and divisible by four')
+        expected = {(arm, rep) for arm in ARMS for rep in range(1, expected_slots // len(ARMS) + 1)}
         if slots != expected or set(current_slots) != expected:
             issues.append('missing_or_unexpected_execution_slots')
         if any(row['failed'] for row in current):
@@ -262,17 +271,27 @@ def audit(output: Path, expected_slots: int | None = None) -> dict:
     # Terminal failures may exist both in the active folder and the archive.
     # Audit both copies, but count their physical execution only once.
     physical = {row['trial_id'] or row['path']: row for row in attempts}
-    def known_sum(key):
-        values = [row[key] for row in physical.values()]
+    def known_sum(key, rows=None):
+        values = [row[key] for row in (physical.values() if rows is None else rows)]
         return sum(values) if values and all(value is not None for value in values) else None
     complete = bool(attempts) and not issues and all(row['complete'] for row in attempts)
-    data = dict(schema_version=1, kind='glm52-no-subagent-audit', complete=complete,
+    per_arm = {}
+    for arm in ARMS:
+        rows = [row for row in physical.values() if row['arm'] == arm]
+        all_copies = [row for row in attempts if row['arm'] == arm]
+        per_arm[arm] = dict(task_policy='allow' if arm == 'baseline_allowed' else 'deny',
+                            policy='allowed_not_forced' if arm == 'baseline_allowed' else 'denied',
+                            complete=bool(rows) and not issues and all(row['complete'] for row in all_copies),
+                            physical_attempts=len(rows),
+                            task_tool_calls=known_sum('task_tool_calls', rows),
+                            child_sessions=known_sum('child_sessions', rows))
+    data = dict(schema_version=2, kind='glm52-subagent-ablation-audit', complete=complete,
                 expected_slots=expected_slots, observed_slots=len(slots),
                 physical_attempts=len(physical), evidence_directories=len(attempts),
                 retry_attempts=max(0, len(physical) - len(current)),
                 failed_attempts=sum(r['failed'] for r in physical.values()),
                 task_tool_calls=known_sum('task_tool_calls'), child_sessions=known_sum('child_sessions'),
-                issues=issues, incomplete_attempts=sum(not r['complete'] for r in attempts), attempts=attempts)
+                per_arm=per_arm, issues=issues, incomplete_attempts=sum(not r['complete'] for r in attempts), attempts=attempts)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'no-subagent-audit.json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
     if expected_slots is not None and not complete:

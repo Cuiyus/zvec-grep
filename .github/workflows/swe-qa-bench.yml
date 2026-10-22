@@ -1,10 +1,10 @@
-name: GLM-5.2 no-subagent E2E
-run-name: GLM-5.2 no-subagent ${{ inputs.phase }} - baseline/Node/Rust
+name: GLM-5.2 subagent availability ablation
+run-name: GLM-5.2 subagent ablation ${{ inputs.phase }} - native allow/deny + ZG Node/Rust
 'on':
   workflow_dispatch:
     inputs:
       phase:
-        description: Separate smoke (conan-19 x 1 x 3) or formal (main20 x 10 x 3)
+        description: Separate smoke (conan-19 x 1 x 4) or formal (main20 x 10 x 4)
         required: true
         default: smoke
         type: choice
@@ -16,7 +16,7 @@ env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
   ZG_BENCH_DISABLE_SUBAGENTS: '1'
 concurrency:
-  group: glm52-no-subagent-${{ github.run_id }}
+  group: glm52-subagent-ablation-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   validate:
@@ -77,7 +77,7 @@ jobs:
       id: opencode-guard
       run: |
         npm install --prefix "$RUNNER_TEMP/opencode-guard" --no-audit --no-fund opencode-ai@1.18.4
-    - name: Validate frozen corpus and no-subagent experiment contracts
+    - name: Validate frozen corpus and subagent ablation experiment contracts
       run: |
         uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa validate --selection benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json --references benchmarks/swe-qa-bench/zg_bench/swe_qa/data/references.json --dataset benchmarks/swe-qa-bench/datasets
         uv run --project benchmarks/swe-qa-bench python - <<'PYCODE'
@@ -248,7 +248,7 @@ jobs:
         if-no-files-found: error
         retention-days: 30
   task:
-    name: No subagents / ${{ matrix.task }}
+    name: Subagent availability / ${{ matrix.task }}
     needs:
     - validate
     - package-node
@@ -335,7 +335,7 @@ jobs:
       if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       uses: actions/upload-artifact@v7
       with:
-        name: no-subagent-${{ inputs.phase }}-evidence-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
+        name: subagent-ablation-${{ inputs.phase }}-evidence-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
           }}
         path: ${{ runner.temp }}/three-arm-evidence/
         include-hidden-files: true
@@ -345,13 +345,13 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v7
       with:
-        name: no-subagent-${{ inputs.phase }}-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
+        name: subagent-ablation-${{ inputs.phase }}-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
           }}
         path: ${{ runner.temp }}/three-arm-evidence/report/
         if-no-files-found: error
         retention-days: 90
   aggregate:
-    name: Unfiltered no-subagent report
+    name: Unfiltered subagent ablation report
     needs:
     - validate
     - task
@@ -410,7 +410,7 @@ jobs:
         uv sync --project benchmarks/swe-qa-bench --frozen
     - uses: actions/download-artifact@v8
       with:
-        pattern: no-subagent-${{ inputs.phase }}-report-*
+        pattern: subagent-ablation-${{ inputs.phase }}-report-*
         path: ${{ runner.temp }}/task-reports
     - name: Report all scheduled tasks without score or resource filtering
       run: |
@@ -420,7 +420,7 @@ jobs:
     - uses: actions/upload-artifact@v7
       if: always() && steps.authorize.outcome == 'success'
       with:
-        name: no-subagent-${{ inputs.phase }}-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+        name: subagent-ablation-${{ inputs.phase }}-comparison-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/three-arm-comparison/
         if-no-files-found: error
         retention-days: 90
