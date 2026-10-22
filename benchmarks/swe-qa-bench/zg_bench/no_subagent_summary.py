@@ -13,6 +13,7 @@ import statistics
 
 from zg_bench.metrics.usage import validate_usage_metrics
 from zg_bench.no_subagent_audit import ARMS, DENIED_ARMS
+from zg_bench.no_subagent_qualification import verify_report_qualification
 
 METRICS = ('quality', 'input_tokens', 'answer_output', 'reasoning', 'generated_total',
            'agent_wall_seconds', 'tool_calls', 'llm_calls', 'cache_read_tokens',
@@ -89,12 +90,16 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         identities = meta.get('identities')
         commits.add(meta.get('harness_commit', 'unknown'))
         audit = meta.get('no_subagent_audit', {})
-        if audit.get('complete') is not True:
+        qualification = None
+        if meta.get('final_answer_qualification') is not None:
+            qualification = verify_report_qualification(report)
+        if audit.get('complete') is not True and qualification is None:
             issues.append(f'{task_id}:subagent_policy_audit_not_passed')
         for arm in ARMS:
             arm_audit = audit.get('per_arm', {}).get(arm, {})
             expected_policy = 'allow' if arm == 'baseline_allowed' else 'deny'
-            if arm_audit.get('complete') is not True or arm_audit.get('task_policy') != expected_policy:
+            qualified_allowed = arm == 'baseline_allowed' and qualification is not None and qualification['eligible']
+            if (arm_audit.get('complete') is not True and not qualified_allowed) or arm_audit.get('task_policy') != expected_policy:
                 issues.append(f'{task_id}/{arm}:permission_policy_not_verified')
             if arm in DENIED_ARMS and (arm_audit.get('task_tool_calls') != 0 or arm_audit.get('child_sessions') != 0):
                 issues.append(f'{task_id}/{arm}:delegation_disable_not_verified')
@@ -111,7 +116,8 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         active = {(r['arm'], r['repetition']): r for r in attempts if not r.get('retry_history')}
         task = dict(task_id=task_id, arms={}, per_arm_audit=audit.get('per_arm', {}), execution_failures=sum(r.get('returncode') != 0 for r in execution),
                     physical_attempts=audit.get('physical_attempts'), retry_attempts=audit.get('retry_attempts'),
-                    failed_attempts=audit.get('failed_attempts'), audit_complete=audit.get('complete') is True)
+                    failed_attempts=audit.get('failed_attempts'), audit_complete=audit.get('complete') is True,
+                    final_answer_qualification=qualification)
         for arm in ARMS:
             profile = report.get('profiles', {}).get(arm, {})
             trials = profile.get('trials', [])
@@ -200,7 +206,12 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
                                   complete=bool(arm_audits) and all(a.get('complete') is True for a in arm_audits),
                                   **{key: observed_sum([a.get(key) for a in arm_audits])
                                      for key in ('physical_attempts', 'task_tool_calls', 'child_sessions')})
+    qualified_tasks = [task['task_id'] for task in tasks if not task['audit_complete'] and task['final_answer_qualification'] is not None]
+    limitations = sorted({text for task in tasks for text in (task['final_answer_qualification'] or {}).get('limitations', [])})
     data = dict(schema_version=1, kind='glm52-subagent-ablation-unfiltered', complete=not issues,
+                completeness_scope='complete final-answer statistics; full physical-attempt accounting is separate',
+                full_attempt_audit_complete=bool(tasks) and all(task['audit_complete'] for task in tasks),
+                qualified_tasks=qualified_tasks, limitations=limitations,
                 expected_tasks=expected_tasks, expected_repetitions=repetitions,
                 expected_samples=expected_tasks * repetitions * len(ARMS),
                 observed_samples=sum(r['samples'] for r in rows), completed_tasks=sorted(seen),
@@ -232,13 +243,15 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
     def fmt(value):
         return '未确认' if value is None else f'{value:,.2f}'
     lines = ['# GLM5.2 子 agent 可用性与 ZG 四组对照', '',
-             f"状态：{'完整' if data['complete'] else '部分结果，尚不能作为完整对照结论'}；"
+             f"状态：{'最终答案统计完整' if data['complete'] else '部分结果，尚不能作为完整对照结论'}；"
              f"任务 {len(tasks)}/{expected_tasks}，样本 {data['observed_samples']}/{data['expected_samples']}。", '',
              '四组同期执行：baseline_allowed 允许自主委派；baseline、node、rust 禁用委派。'
              '允许不代表强迫调用，按全部分配样本比较，不筛选实际使用子 agent 的子集。', '',
              '全部样本按任务等权汇总，不按分数、资源消耗或是否调用 ZG 筛选。', '',
-             '| 组 | 样本 | 质量 | 输入 token | 回答 token | 推理 token | 生成合计 | Agent 秒 | 工具次数 | ZG 使用率 |',
+             '| 组 | 样本 | 质量 | 输入 token | 非推理输出 | 推理 token | 生成合计 | Agent 秒 | 工具次数 | ZG 使用率 |',
              '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+    if limitations:
+        lines[4:4] = ['**限定：全物理执行审计仍未通过。** ' + ' '.join(limitations), '']
     for row in rows:
         means = row['means']
         lines.append(f"| {row['group']} | {row['samples']} | " + ' | '.join(fmt(means[k]) for k in

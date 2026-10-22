@@ -230,9 +230,12 @@ class NoSubagentE2ETests(unittest.TestCase):
         workflow = yaml.safe_load((run.versions.ROOT.parents[1] / '.github/workflows/swe-qa-bench.yml').read_text())
         self.assertEqual(set(workflow['on']), {'workflow_dispatch'})
         inputs = workflow['on']['workflow_dispatch']['inputs']
-        self.assertEqual(set(inputs), {'phase'})
-        self.assertEqual(inputs['phase']['options'], ['smoke', 'formal'])
+        self.assertEqual(set(inputs), {'phase', 'recovery_task'})
+        self.assertEqual(inputs['phase']['options'], ['smoke', 'formal', 'recover'])
         self.assertEqual(inputs['phase']['default'], 'smoke')
+        self.assertEqual(inputs['recovery_task']['type'], 'string')
+        self.assertIs(inputs['recovery_task']['required'], False)
+        self.assertEqual(inputs['recovery_task']['default'], 'astropy-38')
         self.assertEqual(workflow['env']['ZG_BENCH_DISABLE_SUBAGENTS'], '1')
         task = workflow['jobs']['task']
         self.assertEqual(task['strategy']['max-parallel'], 8)
