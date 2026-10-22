@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ...settings import BENCHMARK_SEED, OPENCODE_OPENAI_COMPATIBLE_PACKAGE
@@ -13,6 +14,14 @@ def build_opencode_config(model: OpenCodeModel, *, profile: str) -> dict[str, An
     # and compaction/title/summary requests. Explicit web denials also apply
     # when Harbor uses --auto/skip-permissions.
     web_permissions = {"websearch": "deny", "webfetch": "deny"}
+    # This experiment changes delegation permissions only. Deny at both the
+    # global and agent layers: OpenCode evaluates the last matching rule, and
+    # --auto/--dangerously-skip-permissions must not reopen delegation.
+    disable_subagents = os.environ.get("ZG_BENCH_DISABLE_SUBAGENTS", "0")
+    if disable_subagents not in ("0", "1"):
+        raise ValueError("ZG_BENCH_DISABLE_SUBAGENTS must be 0 or 1")
+    if disable_subagents == "1":
+        web_permissions["task"] = "deny"
     agent_config = {
         name: {
             "temperature": model.temperature,
