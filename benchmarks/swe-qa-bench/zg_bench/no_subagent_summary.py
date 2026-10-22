@@ -13,7 +13,7 @@ import statistics
 
 from zg_bench.metrics.usage import validate_usage_metrics
 from zg_bench.no_subagent_audit import ARMS, DENIED_ARMS
-from zg_bench.no_subagent_qualification import verify_report_qualification
+from zg_bench.no_subagent_qualification import qualification_allows_incomplete_arm, verify_report_qualification
 
 METRICS = ('quality', 'input_tokens', 'answer_output', 'reasoning', 'generated_total',
            'agent_wall_seconds', 'tool_calls', 'llm_calls', 'cache_read_tokens',
@@ -98,10 +98,10 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         for arm in ARMS:
             arm_audit = audit.get('per_arm', {}).get(arm, {})
             expected_policy = 'allow' if arm == 'baseline_allowed' else 'deny'
-            qualified_allowed = arm == 'baseline_allowed' and qualification is not None and qualification['eligible']
-            if (arm_audit.get('complete') is not True and not qualified_allowed) or arm_audit.get('task_policy') != expected_policy:
+            qualified_failure = qualification_allows_incomplete_arm(qualification, arm)
+            if (arm_audit.get('complete') is not True and not qualified_failure) or arm_audit.get('task_policy') != expected_policy:
                 issues.append(f'{task_id}/{arm}:permission_policy_not_verified')
-            if arm in DENIED_ARMS and (arm_audit.get('task_tool_calls') != 0 or arm_audit.get('child_sessions') != 0):
+            if arm in DENIED_ARMS and not qualified_failure and (arm_audit.get('task_tool_calls') != 0 or arm_audit.get('child_sessions') != 0):
                 issues.append(f'{task_id}/{arm}:delegation_disable_not_verified')
         if audit.get('expected_slots') != repetitions * len(ARMS):
             issues.append(f'{task_id}:audit_expected_slots_mismatch')
@@ -257,7 +257,7 @@ def summarize(reports: list, output: Path, expected_tasks: int = 20, repetitions
         lines.append(f"| {row['group']} | {row['samples']} | " + ' | '.join(fmt(means[k]) for k in
                      ('quality', 'input_tokens', 'answer_output', 'reasoning', 'generated_total', 'agent_wall_seconds', 'tool_calls')) +
                      ' | ' + ('未确认' if means['zg_used'] is None else f"{means['zg_used']:.1%}") + ' |')
-    lines += ['', '输入包括缓存；生成合计 = 回答 + 推理。主表为最终答案对应执行的均值；失败、重试保留于审计，'
+    lines += ['', '输入包括缓存；生成合计 = 非推理输出 + 推理。主表为最终答案对应执行的均值；失败、重试保留于审计，'
               'setup/重试成本另见 JSON execution。禁用委派的影响包括主 agent 策略变化，不能等同于删除子 agent token。', '',
               '| 对比（当前 − 参照） | 质量点差 | 输入变化 | 生成变化 | 时间变化 |', '|---|---:|---:|---:|---:|']
     labels = {'subagent_availability': '禁用委派 baseline − 允许委派 baseline_allowed',
