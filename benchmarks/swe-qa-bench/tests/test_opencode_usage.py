@@ -133,7 +133,7 @@ class SessionUsageTests(unittest.TestCase):
         self.assertEqual(report["total"]["llm_calls"], 1)
         self.assertIn("child_outside_session_tree:other", report["errors"])
 
-    def test_sql_filters_private_content_and_ignores_step_finish_duplicates(self):
+    def test_sql_retains_tool_evidence_without_message_text_or_duplicate_usage(self):
         db = sqlite3.connect(":memory:")
         db.row_factory = sqlite3.Row
         db.executescript("""
@@ -153,7 +153,10 @@ class SessionUsageTests(unittest.TestCase):
         })))
         for pid, data in [
             ("t", {"type": "tool", "tool": "read", "callID": "c", "state": {
-                "status": "completed", "input": "PRIVATE_INPUT", "output": "PRIVATE_OUTPUT",
+                "status": "completed", "input": {"filePath": "README.md"}, "output": "Fixture 42.",
+            }}),
+            ("failed", {"type": "tool", "tool": "read", "callID": "failed-call", "state": {
+                "status": "error", "error": "File does not exist",
             }}),
             ("finish", {"type": "step-finish", "tokens": usage}),
             ("reasoning", {"type": "reasoning", "text": "PRIVATE_REASONING"}),
@@ -161,12 +164,28 @@ class SessionUsageTests(unittest.TestCase):
             db.execute("INSERT INTO part VALUES (?, ?, ?, ?)", (pid, "r", "m", json.dumps(data)))
         rows = [dict(row) for row in db.execute(USAGE_SQL)]
         self.assertNotIn("PRIVATE_", json.dumps(rows))
+        payloads = {data["id"]: data for row in rows if row["kind"] == "tool"
+                    for data in [json.loads(row["data"])]}
+        self.assertEqual(payloads["t"]["input"], {"filePath": "README.md"})
+        self.assertEqual(payloads["t"]["output"], "Fixture 42.")
+        self.assertIsNone(payloads["t"]["error"])
+        self.assertIsNone(payloads["failed"]["input"])
+        self.assertIsNone(payloads["failed"]["output"])
+        self.assertEqual(payloads["failed"]["error"], "File does not exist")
         report = summarize_session_usage(rows, "r")
         self.assertTrue(report["complete"], report["errors"])
         self.assertEqual(report["total"]["input_tokens"], 100)
         self.assertEqual(report["total"]["output_tokens"], 50)
-        self.assertEqual(report["total"]["tool_calls"], 1)
+        self.assertEqual(report["total"]["tool_calls"], 2)
         self.assertEqual(report["total"]["llm_calls"], 1)
+        usage_only_rows = []
+        for row in rows:
+            data = json.loads(row["data"])
+            if row["kind"] == "tool":
+                for key in ("input", "output", "error"):
+                    del data[key]
+            usage_only_rows.append({"kind": row["kind"], "data": data})
+        self.assertEqual(report, summarize_session_usage(usage_only_rows, "r"))
 
 
 if __name__ == "__main__":

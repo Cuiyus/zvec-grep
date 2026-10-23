@@ -14,9 +14,10 @@ from collections import defaultdict
 from typing import Any
 
 
-# Pass as one argv argument to `opencode db ... --format json`. JSON objects
-# keep the three row types distinct without exposing content, tool arguments,
-# tool output, reasoning text, or credentials from the local database.
+# Pass as one argv argument to `opencode db ... --format json`. Message and
+# reasoning text remain excluded. Tool payloads are retained as behavior
+# evidence across the session tree; they do not contribute token accounting.
+# Missing tool fields stay JSON null. Artifact upload scans for credentials.
 USAGE_SQL = """
 SELECT 'session' AS kind,
        json_object('id', id, 'parent_id', parent_id) AS data
@@ -46,7 +47,10 @@ SELECT 'tool' AS kind,
            'session_id', session_id, 'message_id', message_id,
            'name', json_extract(data, '$.tool'),
            'status', json_extract(data, '$.state.status'),
-           'child_session_id', json_extract(data, '$.state.metadata.sessionId')
+           'child_session_id', json_extract(data, '$.state.metadata.sessionId'),
+           'input', json_extract(data, '$.state.input'),
+           'output', json_extract(data, '$.state.output'),
+           'error', json_extract(data, '$.state.error')
        ) AS data
 FROM part
 WHERE json_extract(data, '$.type') = 'tool'

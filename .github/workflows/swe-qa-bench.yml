@@ -1,32 +1,25 @@
-name: GLM-5.2 subagent availability ablation
-run-name: GLM-5.2 subagent ablation ${{ inputs.phase }} - native allow/deny + ZG Node/Rust
+name: Qwen3.8-Max subagent availability ablation
+run-name: Qwen3.8-Max subagent ablation ${{ inputs.phase }} - native allow/deny + Rust ZG
 'on':
   workflow_dispatch:
     inputs:
       phase:
-        description: Smoke, formal 800 executions, or collect-only recovery of existing formal answers
+        description: Independent smoke or one formal round of 600 executions
         required: true
         default: smoke
         type: choice
         options:
         - smoke
         - formal
-        - recover
-      recovery_task:
-        description: "Only for recover: task from formal run 39757221956; no agent rerun"
-        required: false
-        default: astropy-38
-        type: string
 permissions: {}
 env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
   ZG_BENCH_DISABLE_SUBAGENTS: '1'
 concurrency:
-  group: glm52-subagent-ablation-${{ github.run_id }}
+  group: qwen38-subagent-ablation-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   validate:
-    if: inputs.phase != 'recover'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -91,7 +84,7 @@ jobs:
         from zg_bench.native_baseline_e2e import validate_inputs
         print(validate_inputs())
         PYCODE
-        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_no_subagent*.py' -v
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_qwen_subagent*.py' -v
         uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_opencode_usage.py -v
       env:
         OPENCODE_TEST_BINARY: ${{ runner.temp }}/opencode-guard/node_modules/.bin/opencode
@@ -112,81 +105,14 @@ jobs:
       run: |
         uv run --project benchmarks/swe-qa-bench python - <<'PYCODE'
         import json, os
-        from zg_bench.no_subagent_e2e import selected_tasks
+        from zg_bench.qwen_subagent_e2e import selected_tasks
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             print('matrix=' + json.dumps({'task': selected_tasks(os.environ['BENCH_PHASE'])}), file=output)
         PYCODE
-    - name: Require configured GLM credential
+    - name: Require configured Bailian Qwen credential
       env:
         GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       run: test -n "$GLM_API_KEY"
-  package-node:
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-    - uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-    - name: Reuse exact node package from previous round
-      uses: actions/download-artifact@v8
-      with:
-        name: three-arm-package-node
-        run-id: 38700270964
-        repository: Cuiyus/zvec-grep
-        github-token: ${{ github.token }}
-        path: ${{ runner.temp }}/package-node
-    - name: Verify Node manifest, package and CLI fingerprints
-      run: python benchmarks/version-comparison/verify_reused_package.py --directory "$RUNNER_TEMP/package-node"
-        --variant node
-    - uses: actions/upload-artifact@v7
-      with:
-        name: three-arm-package-node
-        path: ${{ runner.temp }}/package-node/
-        if-no-files-found: error
-        retention-days: 30
   package-rust:
     needs: validate
     runs-on: ubuntu-24.04
@@ -253,13 +179,11 @@ jobs:
         name: three-arm-package-rust
         path: ${{ runner.temp }}/package-rust/
         if-no-files-found: error
-        retention-days: 30
+        retention-days: 90
   task:
-    if: inputs.phase != 'recover'
     name: Subagent availability / ${{ matrix.task }}
     needs:
     - validate
-    - package-node
     - package-rust
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -314,10 +238,6 @@ jobs:
         node-version: '24'
     - uses: actions/download-artifact@v8
       with:
-        name: three-arm-package-node
-        path: ${{ runner.temp }}/packages/node
-    - uses: actions/download-artifact@v8
-      with:
         name: three-arm-package-rust
         path: ${{ runner.temp }}/packages/rust
     - name: Install locked harness
@@ -331,7 +251,7 @@ jobs:
         ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/three-arm-index-seeds
         BENCH_PHASE: ${{ inputs.phase }}
       run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.no_subagent_e2e run --phase "$BENCH_PHASE" --task "$BENCH_TASK" --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/three-arm-evidence"
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.qwen_subagent_e2e run --phase "$BENCH_PHASE" --task "$BENCH_TASK" --packages "$RUNNER_TEMP/packages" --output "$RUNNER_TEMP/three-arm-evidence"
     - name: Scan evidence for credential leakage
       id: secret-scan
       if: always() && steps.authorize.outcome == 'success'
@@ -343,17 +263,17 @@ jobs:
       if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
       uses: actions/upload-artifact@v7
       with:
-        name: subagent-ablation-${{ inputs.phase }}-evidence-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
+        name: qwen38-subagent-ablation-${{ inputs.phase }}-evidence-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
           }}
         path: ${{ runner.temp }}/three-arm-evidence/
         include-hidden-files: true
         if-no-files-found: error
-        retention-days: 30
+        retention-days: 90
     - name: Preserve compact report
       if: success()
       uses: actions/upload-artifact@v7
       with:
-        name: subagent-ablation-${{ inputs.phase }}-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
+        name: qwen38-subagent-ablation-${{ inputs.phase }}-report-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt
           }}
         path: ${{ runner.temp }}/three-arm-evidence/report/
         if-no-files-found: error
@@ -418,145 +338,17 @@ jobs:
         uv sync --project benchmarks/swe-qa-bench --frozen
     - uses: actions/download-artifact@v8
       with:
-        pattern: subagent-ablation-${{ inputs.phase }}-report-*
+        pattern: qwen38-subagent-ablation-${{ inputs.phase }}-report-*
         path: ${{ runner.temp }}/task-reports
     - name: Report all scheduled tasks without score or resource filtering
       run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.no_subagent_e2e aggregate --phase "$BENCH_PHASE" --reports "$RUNNER_TEMP/task-reports" --output "$RUNNER_TEMP/three-arm-comparison"
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.qwen_subagent_e2e aggregate --phase "$BENCH_PHASE" --reports "$RUNNER_TEMP/task-reports" --output "$RUNNER_TEMP/three-arm-comparison"
       env:
         BENCH_PHASE: ${{ inputs.phase }}
     - uses: actions/upload-artifact@v7
       if: always() && steps.authorize.outcome == 'success'
       with:
-        name: subagent-ablation-${{ inputs.phase }}-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+        name: qwen38-subagent-ablation-${{ inputs.phase }}-comparison-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/three-arm-comparison/
-        if-no-files-found: error
-        retention-days: 90
-  recover:
-    name: Collect existing answers / ${{ inputs.recovery_task }}
-    if: inputs.phase == 'recover'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      actions: read
-    env:
-      BENCH_SOURCE_RUN_ID: '39757221956'
-      BENCH_SOURCE_HEAD: 7a957f4f1e25fa45452d18c0e063bfe574d0fa61
-    steps:
-    - name: Authorize manual benchmark run
-      id: authorize
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_REPOSITORY: ${{ github.repository }}
-        BENCH_EVENT_NAME: ${{ github.event_name }}
-        BENCH_ACTOR: ${{ github.actor }}
-        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-      run: |
-        test "$BENCH_REPOSITORY" = Cuiyus/zvec-grep
-        set -euo pipefail
-        if [[ "$BENCH_EVENT_NAME" != "workflow_dispatch" ]]; then
-          echo "::error::SWE-QA Bench only accepts manual workflow_dispatch runs."
-          exit 1
-        fi
-        if [[ -z "$BENCH_ACTOR" || -z "$BENCH_TRIGGERING_ACTOR" ]]; then
-          echo "::error::Both the original actor and the current triggering actor are required."
-          exit 1
-        fi
-        for actor in "$BENCH_ACTOR" "$BENCH_TRIGGERING_ACTOR"; do
-          # The legacy permission field maps maintain to write; use role_name.
-          role="$(gh api "repos/$BENCH_REPOSITORY/collaborators/$actor/permission" --jq '.role_name')"
-          case "$role" in
-            admin|maintain)
-              echo "Authorized $actor with repository role $role."
-              ;;
-            *)
-              echo "::error::SWE-QA Bench requires the admin or maintain repository role; $actor has $role."
-              exit 1
-              ;;
-          esac
-        done
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-    - uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-    - name: Install locked harness
-      run: |
-        python -m pip install --disable-pip-version-check uv==0.9.17
-        uv sync --project benchmarks/swe-qa-bench --frozen
-    - name: Verify source run identity
-      env:
-        GH_TOKEN: ${{ github.token }}
-        BENCH_TASK: ${{ inputs.recovery_task }}
-      run: |
-        set -euo pipefail
-        [[ "$BENCH_TASK" =~ ^[a-z]+-[0-9]+$ ]]
-        gh api "repos/Cuiyus/zvec-grep/actions/runs/$BENCH_SOURCE_RUN_ID" > "$RUNNER_TEMP/recovery-source-run.json"
-        python - <<'PYCODE'
-        import json, os
-        from pathlib import Path
-        r=json.loads((Path(os.environ['RUNNER_TEMP'])/'recovery-source-run.json').read_text())
-        assert r['id'] == int(os.environ['BENCH_SOURCE_RUN_ID'])
-        assert r['head_sha'] == os.environ['BENCH_SOURCE_HEAD']
-        assert r['repository']['full_name'] == 'Cuiyus/zvec-grep'
-        assert r['event'] == 'workflow_dispatch'
-        PYCODE
-    - uses: actions/download-artifact@v8
-      with:
-        name: subagent-ablation-formal-evidence-${{ inputs.recovery_task }}-39757221956-1
-        run-id: 39757221956
-        repository: Cuiyus/zvec-grep
-        github-token: ${{ github.token }}
-        path: ${{ runner.temp }}/source-evidence
-    - uses: actions/download-artifact@v8
-      with:
-        name: three-arm-package-node
-        path: ${{ runner.temp }}/packages/node
-        run-id: 39757221956
-        repository: Cuiyus/zvec-grep
-        github-token: ${{ github.token }}
-    - uses: actions/download-artifact@v8
-      with:
-        name: three-arm-package-rust
-        path: ${{ runner.temp }}/packages/rust
-        run-id: 39757221956
-        repository: Cuiyus/zvec-grep
-        github-token: ${{ github.token }}
-    - name: Qualify and score existing answers without agent execution
-      env:
-        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-        BENCH_TASK: ${{ inputs.recovery_task }}
-      run: |
-        uv run --project benchmarks/swe-qa-bench python -m zg_bench.no_subagent_recover --source "$RUNNER_TEMP/source-evidence" --output "$RUNNER_TEMP/recovered-evidence" --packages "$RUNNER_TEMP/packages" --task "$BENCH_TASK" --source-run "$RUNNER_TEMP/recovery-source-run.json" --source-run-id "$BENCH_SOURCE_RUN_ID" --expected-source-head "$BENCH_SOURCE_HEAD"
-    - name: Scan evidence for credential leakage
-      id: secret-scan
-      if: always() && steps.authorize.outcome == 'success'
-      env:
-        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
-      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root
-        "$RUNNER_TEMP/recovered-evidence"
-    - name: Preserve all trials and failed attempts
-      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
-      uses: actions/upload-artifact@v7
-      with:
-        name: subagent-ablation-recovery-evidence-${{ inputs.recovery_task }}-${{ github.run_id }}-${{ github.run_attempt
-          }}
-        path: ${{ runner.temp }}/recovered-evidence/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 90
-    - name: Preserve compact report
-      if: success()
-      uses: actions/upload-artifact@v7
-      with:
-        name: subagent-ablation-recovery-report-${{ inputs.recovery_task }}-${{ github.run_id }}-${{ github.run_attempt
-          }}
-        path: ${{ runner.temp }}/recovered-evidence/report/
         if-no-files-found: error
         retention-days: 90

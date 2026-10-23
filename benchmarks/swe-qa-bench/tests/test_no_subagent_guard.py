@@ -26,7 +26,8 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
-def run_case(binary: str, root: Path, *, deny: bool, flag: str) -> dict:
+def run_case(binary: str, root: Path, *, deny: bool, flag: str,
+             model_name: str = "custom-openai/glm-5.2") -> dict:
     root.mkdir(parents=True, exist_ok=False)
     corpus = root / "corpus"
     corpus.mkdir()
@@ -97,7 +98,7 @@ def run_case(binary: str, root: Path, *, deny: bool, flag: str) -> dict:
     # switch. Keep model and agent settings; override only the network endpoint
     # and fixture runtime controls. Host credentials never reach the child.
     with patch.dict(os.environ, {"ZG_BENCH_DISABLE_SUBAGENTS": "1" if deny else "0"}, clear=True):
-        model = resolve_opencode_model("custom-openai/glm-5.2").configuration
+        model = resolve_opencode_model(model_name).configuration
         config = build_opencode_config(model, profile="baseline")
     write_json(root / "rendered-benchmark-config.json", config)
     config.update(autoupdate=False, share="disabled", lsp=False)
@@ -117,7 +118,7 @@ def run_case(binary: str, root: Path, *, deny: bool, flag: str) -> dict:
         **{"XDG_" + name + "_HOME": str(root / name.lower())
            for name in ("CONFIG", "DATA", "STATE", "CACHE")},
     }
-    command = [binary, "--model", "custom-openai/glm-5.2", "run", "--format", "json",
+    command = [binary, "--model", model_name, "run", "--format", "json",
                flag, "--", "Use general and explore subagents to find the fixture."]
     write_json(root / "command.json", command)
     try:
