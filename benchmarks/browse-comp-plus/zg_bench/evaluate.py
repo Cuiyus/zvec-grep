@@ -854,6 +854,17 @@ def evaluate_run(
                 console=console,
             )
 
+    return summarize_evaluation(run_root, codex_version=actual_version)
+
+
+def summarize_evaluation(run_root: Path, *, codex_version: str) -> Path:
+    """Recompute scores and costs from existing judgements without model calls."""
+    metadata = read_json(run_root / "run.json")
+    trial_pairs = _eligible_trial_pairs(run_root)
+    evaluation_root = run_root / "evaluation"
+    actual_version = codex_version
+    model = str(metadata["model"])
+    reasoning_effort = str(metadata["reasoning_effort"])
     completed_results = [
         read_json(path)
         for query_id, trial_index in trial_pairs

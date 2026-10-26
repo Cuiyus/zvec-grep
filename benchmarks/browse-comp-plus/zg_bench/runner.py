@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +164,7 @@ class SuiteSelection:
     scanned_query_count: int | None
     excluded_query_ids: tuple[str, ...]
     query_ids: tuple[str, ...]
+    case_filter: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         resolved = self.path.resolve()
@@ -180,6 +181,7 @@ class SuiteSelection:
             "scanned_query_count": self.scanned_query_count,
             "excluded_query_ids": list(self.excluded_query_ids),
             "selected_query_count": len(self.query_ids),
+            **({"case_filter": self.case_filter} if self.case_filter else {}),
         }
 
 
@@ -311,6 +313,14 @@ def load_suite(name: str, queries: list[dict[str, Any]]) -> SuiteSelection:
         raise ValueError(f"suite contains no query IDs: {path}")
     all_ids = [str(row["query_id"]) for row in queries]
     return _select_suite(path, lines, all_ids, hashlib.sha256(definition).hexdigest())
+
+
+def select_case(selection: SuiteSelection, case_id: str | None) -> SuiteSelection:
+    if case_id is None:
+        return selection
+    if case_id not in selection.query_ids:
+        raise ValueError(f"case {case_id} is not in the selected suite")
+    return replace(selection, query_ids=(case_id,), case_filter=case_id)
 
 
 def _randomized_profile_orders(
@@ -773,6 +783,8 @@ def run_benchmark(
     suite: str,
     run_id: str | None = None,
     codex_bin: str = "codex",
+    case_id: str | None = None,
+    planned_orders: dict[str, dict[int, tuple[Profile, Profile]]] | None = None,
 ) -> Path:
     model = config.run.model
     reasoning_effort = config.run.reasoning_effort
@@ -828,7 +840,9 @@ def run_benchmark(
         suite_path = Path(str(suite_metadata["definition"]))
         if not suite_path.is_absolute():
             suite_path = BENCHMARK_ROOT / suite_path
-        current_suite = load_suite(str(suite_path), queries)
+        current_suite = select_case(
+            load_suite(str(suite_path), queries), suite_metadata.get("case_filter")
+        )
         if (
             current_suite.to_dict() != suite_metadata
             or list(current_suite.query_ids) != query_ids
@@ -885,12 +899,19 @@ def run_benchmark(
             name: artifacts / "state" / f"{name}.json"
             for name in ("corpus", "index")
         }
-        suite_selection = load_suite(suite, queries)
+        full_selection = load_suite(suite, queries)
+        suite_selection = select_case(full_selection, case_id)
         suite_metadata = suite_selection.to_dict()
         query_ids = list(suite_selection.query_ids)
-        profile_orders = _randomized_profile_orders(
-            query_ids, config.run.trials_per_case
+        all_orders = planned_orders or _randomized_profile_orders(
+            list(full_selection.query_ids), config.run.trials_per_case
         )
+        profile_orders = {query_id: all_orders[query_id] for query_id in query_ids}
+        for orders in profile_orders.values():
+            if set(orders) != set(range(1, config.run.trials_per_case + 1)) or any(
+                len(order) != 2 or set(order) != set(PROFILES) for order in orders.values()
+            ):
+                raise ValueError("invalid planned profile order")
         corpus_state = read_json(required_states["corpus"])
         index_state = read_json(required_states["index"])
 

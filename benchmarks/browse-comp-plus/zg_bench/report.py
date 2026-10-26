@@ -345,9 +345,17 @@ def _interaction_quality(
         gold = _expected_docids(query["gold_docs"])
         for profile in PROFILES:
             result = _result(trial, profile)
+            # Evidence may have moved from a case runner to the aggregate runner.
+            # Keep raw result bytes intact: smoke audits hash the original result.
+            events = (
+                Path(trial[profile]["result"]).parent
+                / "attempts"
+                / f"attempt-{int(result['attempt']):03d}"
+                / "events.jsonl"
+            )
             values[profile].append(
                 _tool_interaction_batches(
-                    Path(result["paths"]["events"]), evidence=evidence, gold=gold
+                    events, evidence=evidence, gold=gold
                 )
             )
 

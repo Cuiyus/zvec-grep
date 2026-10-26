@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="suite name or .txt path (default: study)",
     )
     run.add_argument("--codex-bin", default="codex")
+    run.add_argument("--case", help="run one case from the selected suite")
 
     resume = subparsers.add_parser("resume", help="resume an interrupted run")
     resume.add_argument("run_id")
@@ -465,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                 artifacts,
                 suite=args.suite,
                 codex_bin=args.codex_bin,
+                case_id=args.case,
             )
         except (OSError, RuntimeError, ValueError) as error:
             console.error(str(error))

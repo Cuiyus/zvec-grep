@@ -1,0 +1,296 @@
+"""Plan parallel case jobs and combine their raw results without re-judging."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+from pathlib import Path
+
+from .artifacts import read_json, sha256_file, utc_now, write_json
+from .config import DEFAULT_ARTIFACTS_DIR, load_config
+from .dataset import load_queries
+from .evaluate import evaluation_complete, summarize_evaluation
+from .index import _prepare_remote_authorization, index_is_ready
+from .process import resolve_executable
+from .profiles import server_environment
+from .runner import (
+    _randomized_profile_orders,
+    _write_pair,
+    load_suite,
+    run_benchmark,
+    select_case,
+)
+
+
+def create_plan(artifacts: Path, suite: str, output: Path) -> Path:
+    config = load_config()
+    query_path = artifacts / "source" / "browsecomp_plus_decrypted.jsonl"
+    selection = load_suite(suite, load_queries(query_path))
+    plan = {
+        "suite": suite,
+        "selection": selection.to_dict(),
+        "query_ids": list(selection.query_ids),
+        "profile_orders": _randomized_profile_orders(
+            list(selection.query_ids), config.run.trials_per_case
+        ),
+        "configuration_sha256": sha256_file(config.path),
+        "query_set_sha256": sha256_file(query_path),
+        "candidate_commit": os.environ["BROWSE_CANDIDATE_COMMIT"],
+        "harness_commit": os.environ["BROWSE_HARNESS_COMMIT"],
+    }
+    write_json(output / "plan.json", plan)
+    (output / "source").mkdir(exist_ok=True)
+    shutil.copyfile(query_path, output / "source" / query_path.name)
+    print("cases=" + json.dumps(plan["query_ids"]))
+    return output / "plan.json"
+
+
+def validate_plan(path: Path, artifacts: Path) -> dict:
+    plan = read_json(path)
+    config = load_config()
+    query_path = artifacts / "source" / "browsecomp_plus_decrypted.jsonl"
+    if (
+        plan["configuration_sha256"] != sha256_file(config.path)
+        or plan["query_set_sha256"] != sha256_file(query_path)
+        or plan["candidate_commit"] != os.environ["BROWSE_CANDIDATE_COMMIT"]
+        or plan["harness_commit"] != os.environ["BROWSE_HARNESS_COMMIT"]
+    ):
+        raise ValueError("CI plan identity changed")
+    selection = load_suite(plan["suite"], load_queries(query_path))
+    if plan["selection"] != selection.to_dict() or plan["query_ids"] != list(
+        selection.query_ids
+    ):
+        raise ValueError("CI suite selection changed")
+    for case in plan["query_ids"]:
+        orders = plan["profile_orders"][case]
+        if set(orders) != {
+            str(i) for i in range(1, config.run.trials_per_case + 1)
+        } or any(
+            len(order) != 2 or set(order) != {"baseline", "zvec-grep"}
+            for order in orders.values()
+        ):
+            raise ValueError("CI plan has invalid paired trial orders")
+    return plan
+
+
+def run_case(artifacts: Path, plan_path: Path, case: str) -> int:
+    plan = validate_plan(plan_path, artifacts)
+    if case not in plan["query_ids"]:
+        raise ValueError("case is not part of the CI plan")
+    config = load_config()
+    zg = resolve_executable("zg")
+    if zg is None or not index_is_ready(config, artifacts):
+        raise ValueError("prepared index is unavailable; workers never rebuild it")
+    # Authorization belongs to this VM's fresh runtime, never to the cached snapshot.
+    from .corpus import workspace_root
+
+    _prepare_remote_authorization(
+        config,
+        zg,
+        workspace_root(artifacts, "zvec-grep"),
+        server_environment(config, artifacts),
+    )
+    orders = {
+        query_id: {int(i): tuple(order) for i, order in trials.items()}
+        for query_id, trials in plan["profile_orders"].items()
+    }
+    root = run_benchmark(
+        config, artifacts, suite=plan["suite"], case_id=case, planned_orders=orders
+    )
+    return 0 if read_json(root / "run.json")["status"] == "completed" else 1
+
+
+def select_shards(shards: Path, plan_path: Path, plan: dict) -> list[Path]:
+    """Reuse earlier successful jobs on re-runs, without mixing evaluation plans."""
+    selected = {}
+    for evidence in sorted(shards.iterdir()) if shards.is_dir() else []:
+        identity = read_json(evidence / "ci.json")
+        if any(
+            identity.get(key) != plan[key]
+            for key in ("candidate_commit", "harness_commit")
+        ) or identity.get("plan_sha256") != sha256_file(plan_path):
+            continue
+        case = identity.get("case_id")
+        if case not in plan["query_ids"]:
+            raise ValueError("unexpected CI case")
+        if (
+            os.environ.get("GITHUB_RUN_ID")
+            and identity.get("workflow_run_id") != os.environ["GITHUB_RUN_ID"]
+        ):
+            raise ValueError("case artifact belongs to a different workflow run")
+        attempt = int(identity["workflow_run_attempt"])
+        if case in selected and attempt == selected[case][0]:
+            raise ValueError("duplicate CI case artifact for the same attempt")
+        if case not in selected or attempt > selected[case][0]:
+            selected[case] = (attempt, evidence)
+    return [entry[1] for entry in selected.values()]
+
+
+def aggregate(artifacts: Path, plan_path: Path, shards: Path) -> Path:
+    # Only the small query set is needed here, not the multi-GB index snapshot.
+    source = artifacts / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        plan_path.parent / "source" / "browsecomp_plus_decrypted.jsonl",
+        source / "browsecomp_plus_decrypted.jsonl",
+    )
+    plan = validate_plan(plan_path, artifacts)
+    config = load_config()
+    selection = load_suite(
+        plan["suite"], load_queries(source / "browsecomp_plus_decrypted.jsonl")
+    )
+    root = artifacts / "runs" / "ci-aggregate"
+    root.mkdir(parents=True, exist_ok=False)
+    seen = set()
+    metadata = None
+    errors = []
+    runtime_setups = []
+    for evidence in select_shards(shards, plan_path, plan):
+        identity = read_json(evidence / "ci.json")
+        if any(
+            identity.get(key) != plan[key]
+            for key in ("candidate_commit", "harness_commit")
+        ) or identity.get("plan_sha256") != sha256_file(plan_path):
+            raise ValueError("shard identity does not match the CI plan")
+        case = identity.get("case_id")
+        if case not in plan["query_ids"] or case in seen:
+            raise ValueError("unexpected or duplicate CI case")
+        seen.add(case)
+        runs = list((evidence / "runs").glob("*/run.json"))
+        if not runs:
+            errors.append(f"case {case}: no run was created")
+            continue
+        if len(runs) != 1:
+            raise ValueError("expected exactly one run per CI case")
+        run = runs[0].parent
+        current = read_json(runs[0])
+        if (
+            current["query_ids"] != [case]
+            or current["suite"] != plan["suite"]
+            or current["suite_selection"] != select_case(selection, case).to_dict()
+            or current["trials_per_case"] != config.run.trials_per_case
+            or current["model"] != config.run.model
+            or current["reasoning_effort"] != config.run.reasoning_effort
+            or current["profile_orders"] != {case: plan["profile_orders"][case]}
+        ):
+            raise ValueError("shard protocol does not match the CI plan")
+        if metadata is None:
+            metadata = current.copy()
+        elif any(
+            current[key] != metadata[key]
+            for key in ("corpus_fingerprint", "index_fingerprint", "index_statistics")
+        ):
+            raise ValueError("shards used different prepared corpora or indexes")
+        if any(
+            current["environment"][key] != metadata["environment"][key]
+            for key in ("codex_version", "zg_version", "machine")
+        ):
+            raise ValueError(
+                "shards used different executable versions or architectures"
+            )
+        runtime_setups.extend(current["runtime_setups"])
+        case_root = run / "cases" / case
+        if case_root.exists():
+            shutil.copytree(case_root, root / "cases" / case)
+        for profile in ("baseline", "zvec-grep"):
+            relative = Path("evaluation/results") / profile / case
+            if (run / relative).exists():
+                shutil.copytree(run / relative, root / relative)
+        relative = Path("evaluation/usage-audit/results") / case
+        if (run / relative).exists():
+            shutil.copytree(run / relative, root / relative)
+        # Recreate absolute result references for this aggregate workspace.
+        if (
+            not _write_pair(root, case, config.run.trials_per_case)
+            or current["status"] != "completed"
+        ):
+            errors.append(f"case {case}: incomplete or failed trials")
+        write_json(root / "shards" / f"{case}.json", current)
+    missing = sorted(set(plan["query_ids"]) - seen)
+    errors.extend(f"case {case}: missing artifact" for case in missing)
+    if metadata is None:
+        raise ValueError("no case results are available to aggregate")
+    metadata.update(
+        run_id=root.name,
+        query_ids=plan["query_ids"],
+        suite_selection=plan["selection"],
+        profile_orders=plan["profile_orders"],
+        generated_at=utc_now(),
+        created_at=utc_now(),
+        finished_at=utc_now(),
+        execution="parallel_cases",
+        aggregate_only=True,
+        shard_errors=errors,
+        runtime_setups=runtime_setups,
+        status="partial" if errors else "completed",
+    )
+    # This is a derived report, not a resumable execution; keep source protocols in shards/.
+    for key in (
+        "profiles_manifest",
+        "profiles_fingerprint",
+        "protocol",
+        "protocol_fingerprint",
+        "error",
+    ):
+        metadata.pop(key, None)
+    write_json(root / "run.json", metadata)
+    report = summarize_evaluation(
+        root, codex_version=metadata["environment"]["codex_version"]
+    )
+    summary = read_json(report / "summary.json")
+    if summary["cases"]["completed"] != len(
+        plan["query_ids"]
+    ) or not evaluation_complete(root):
+        errors.append("not all planned trials and judgements completed")
+    metadata["completed_cases"] = summary["cases"]["completed"]
+    metadata["status"] = "partial" if errors else "completed"
+    write_json(root / "run.json", metadata)
+    completeness = {
+        "complete": not errors,
+        "errors": errors,
+        "planned_cases": plan["query_ids"],
+    }
+    write_json(report / "ci-completeness.json", completeness)
+    summary["ci"] = {"execution": "parallel_cases", **completeness}
+    write_json(report / "summary.json", summary)
+    markdown = report / "summary.md"
+    status = "COMPLETE" if not errors else "INCOMPLETE"
+    notes = (
+        f"**CI result: {status}.** Cases ran on separate runners; each case kept "
+        "three sequential paired trials. Runtime preparation totals sum worker "
+        "time, not elapsed workflow time. Index build time describes the original "
+        "snapshot build. The environment table is one worker's environment; "
+        "all worker metadata is in `shards/`.\n\n"
+    )
+    if errors:
+        notes += "\n".join(f"- {error}" for error in errors) + "\n\n"
+    markdown.write_text(notes + markdown.read_text(encoding="utf-8"), encoding="utf-8")
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    plan = sub.add_parser("plan")
+    plan.add_argument("--suite", choices=("ci", "smoke"), required=True)
+    plan.add_argument("--output", type=Path, required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--plan", type=Path, required=True)
+    run.add_argument("--case", required=True)
+    collect = sub.add_parser("aggregate")
+    collect.add_argument("--plan", type=Path, required=True)
+    collect.add_argument("--shards", type=Path, required=True)
+    args = parser.parse_args()
+    if args.command == "plan":
+        create_plan(DEFAULT_ARTIFACTS_DIR, args.suite, args.output)
+        return 0
+    if args.command == "run":
+        return run_case(DEFAULT_ARTIFACTS_DIR, args.plan, args.case)
+    report = aggregate(DEFAULT_ARTIFACTS_DIR, args.plan, args.shards)
+    return 0 if read_json(report / "ci-completeness.json")["complete"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

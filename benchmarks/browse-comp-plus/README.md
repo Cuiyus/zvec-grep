@@ -196,6 +196,83 @@ workspaces, and reusable index:
 zg-bench clean
 ```
 
+## GitHub Actions (manual)
+
+The [BrowseComp-Plus workflow](../../.github/workflows/browse-comp-plus.yml)
+is started manually by a repository maintainer or administrator. It does not
+run on pushes, PRs, comments, or a schedule.
+
+1. Configure the Actions settings below.
+2. Once the workflow is on the default branch, open **Actions → BrowseComp-Plus
+   → Run workflow**. Select a trusted workflow branch and set `candidate_ref`
+   to the trusted branch, tag, or commit to benchmark in this repository.
+3. Choose `ci` (default: 5 cases, 15 paired trials / 30 agent runs) or `smoke`
+   (1 case, 3 paired trials / 6 agent runs, plus the usage audit). Set
+   `parallel_cases` to 1, 2, or 5 (default) to fit provider rate limits.
+
+| Actions setting | Purpose |
+| --- | --- |
+| Secret `OPENAI_API_KEY` | Codex API key, logged in through stdin. Must support the configured model. |
+| Secret `QWEN_EMBEDDING_API_KEY` | Credentials for the configured Qwen embedding model. |
+| Variable `QWEN_EMBEDDING_ENDPOINT` | Embedding endpoint, as in the SWE-QA workflow. |
+| Secret `HF_TOKEN` (optional) | Hugging Face download authentication. |
+
+The workflow keeps `benchmark.toml` unchanged, including `gpt-5.6-sol`, `high`
+reasoning, the pinned dataset, and three trials per case. The chosen Codex
+credentials must have access to that model; CI does not substitute another
+model. A small model preflight checks access before indexing. Codex CLI is
+pinned to `0.147.0`, the version in the published report.
+See [Codex authentication](https://learn.chatgpt.com/docs/auth) for credential
+setup. Parallel CI uses API keys: sharing an account `auth.json` across runners
+can cause refresh-token conflicts. Authentication files are temporary and are
+never cached or uploaded.
+
+**Execution time:** preparation runs once, then cases run on independent runners.
+Each case keeps its three sequential paired trials on the same runner; the
+suite-wide randomized A/B order is planned once. Judges run alongside the other
+cases, and the final report recomputes metrics from raw results without more
+model calls. This changes the cross-case scheduling from the local serial run;
+the original metadata for every case is retained under `shards/`.
+
+| Stage | Reuse / parallelism |
+| --- | --- |
+| Rust package | Cached for the exact candidate commit. |
+| Corpus and index | A complete snapshot is reused only for the same candidate, dataset, embedding configuration/endpoint, preparation code, OS/architecture, and workspace path. No fallback to another candidate's index. |
+| Case execution | Up to five independent runners; no shared daemon or mutable index. |
+| Partial rerun | “Re-run failed jobs” keeps successful case artifacts; aggregation accepts only the current plan and latest attempt for each case. |
+
+**Cold-run cost:** both suites prepare all 100,195 documents. The published
+index build took about 2.7 hours and produced a 7.9 GB index; a new candidate or
+evicted cache still requires that build. No end-to-end speedup has yet been
+measured on Actions. Preparation allows six hours, each case three hours. Runs
+are queued, and each hosted runner frees SDK space and requires 35 GiB free.
+The compressed snapshot preserves nanosecond timestamps to avoid reindexing,
+is cached best-effort, and is also uploaded for the case jobs (one-day
+retention). Allow for multi-GB artifact transfer/storage and repository cache
+quota. Even `smoke` incurs embedding, agent, and judge costs on a cold run.
+
+The small plan artifact is retained for seven days. Retry failed jobs while
+the one-day prepared artifact still exists; after expiry, start a new run.
+
+The candidate is built in a separate job without model credentials. Only select
+trusted candidate code: that executable subsequently runs with the embedding
+credentials. The harness and candidate commit SHAs are recorded separately.
+
+Results appear in the Actions job summary and a 30-day evidence artifact,
+including JSON/Markdown/CSV reports, trajectories, judge results, preparation
+logs, and the candidate manifest. Partial runs remain failed but completed
+pairs are still judged and exported. Cancellation stops further judging.
+Missing credentials, runtime failures, incomplete trials, or incomplete judging
+fail the workflow; accuracy and efficiency are reported without a regression
+threshold. Evidence excludes profiles, runtime credentials, and corpus files;
+upload is blocked if configured secret values are detected.
+
+Run the CI integration checks locally without model calls or dataset downloads:
+
+```sh
+uv run --frozen python -m unittest discover -s tests -v
+```
+
 ## Artifacts
 
 Generated data is stored under `artifacts/` and is not committed. It contains

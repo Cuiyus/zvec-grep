@@ -1,0 +1,394 @@
+name: BrowseComp-Plus
+run-name: BrowseComp-Plus / ${{ inputs.candidate_ref }} / ${{ inputs.suite }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Trusted Rust source branch, tag, or commit in this repository
+        required: true
+        default: main
+        type: string
+      suite:
+        description: Paired suite (both use the complete corpus and three trials per case)
+        required: true
+        default: ci
+        type: choice
+        options: [ci, smoke]
+      parallel_cases:
+        description: Maximum concurrent case runners (lower this for provider rate limits)
+        default: '5'
+        type: choice
+        options: ['1', '2', '5']
+
+permissions: {}
+
+# Serialize costly preparation across workflow runs, including re-runs.
+concurrency:
+  group: browse-comp-plus
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Validate harness and build candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.candidate.outputs.commit }}
+    steps:
+      - &authorize
+        name: Authorize manual benchmark
+        id: authorize
+        uses: actions/github-script@v8
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          RERUN_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            if (context.eventName !== 'workflow_dispatch') {
+              throw new Error('BrowseComp-Plus requires a manual workflow dispatch.');
+            }
+            for (const username of new Set([process.env.DISPATCH_ACTOR, process.env.RERUN_ACTOR])) {
+              if (!username) throw new Error('Missing workflow actor.');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo, username,
+              });
+              if (!['maintain', 'admin'].includes(data.role_name)) {
+                throw new Error('BrowseComp-Plus requires the maintain or admin repository role.');
+              }
+            }
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install locked benchmark environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/browse-comp-plus --frozen
+      - name: Run offline CI integration tests
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m unittest discover
+          -s benchmarks/browse-comp-plus/tests -v
+      - name: Build the selected Rust candidate without model credentials
+        id: candidate
+        uses: ./.github/actions/rust-candidate-package
+        with:
+          candidate_repository: ${{ github.repository }}
+          candidate_ref: ${{ inputs.candidate_ref }}
+          cache_namespace: browse-comp-plus-rust
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/rust-package-cache/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  prepare:
+    name: Prepare or restore corpus and index once
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      cases: ${{ steps.plan.outputs.cases }}
+      snapshot-key: ${{ steps.snapshot-key.outputs.key }}
+    env: &benchmark-env
+      NO_COLOR: '1'
+      BROWSE_CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+      BROWSE_HARNESS_COMMIT: ${{ github.workflow_sha }}
+    steps:
+      - *authorize
+      - &checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - &python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - &node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - &tools
+        name: Install pinned benchmark tools
+        run: |
+          echo "CODEX_HOME=$RUNNER_TEMP/browse-comp-plus-codex" >> "$GITHUB_ENV"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/browse-comp-plus --frozen
+          npm install --global @openai/codex@0.147.0
+          if ! command -v zstd >/dev/null || ! command -v rg >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y zstd ripgrep
+          fi
+      - &candidate-download
+        name: Download the candidate from this run
+        uses: actions/download-artifact@v8
+        with:
+          name: browse-comp-plus-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/candidate-package
+      - &candidate-install
+        name: Verify and install the exact candidate
+        run: |
+          node benchmarks/shared/rust-package-cache.mjs verify \
+            --directory "$RUNNER_TEMP/candidate-package" --commit "$BROWSE_CANDIDATE_COMMIT"
+          npm install --global "$RUNNER_TEMP/candidate-package/candidate.tgz"
+      - &space
+        name: Reserve space for corpus, index, and compressed snapshot
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          python -c 'import shutil; free = shutil.disk_usage(".").free; print(f"Free disk: {free / 2**30:.1f} GiB"); assert free >= 35 * 2**30, "BrowseComp-Plus needs at least 35 GiB free disk"'
+      - &credentials
+        name: Configure isolated credentials and verify tools
+        id: setup
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: |
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci auth
+          uv run --project benchmarks/browse-comp-plus --frozen zg-bench doctor
+      - name: Verify configured model access before indexing
+        run: uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci preflight
+      - name: Compute exact preparation identity
+        id: snapshot-key
+        env:
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_snapshot key >> "$GITHUB_OUTPUT"
+      - name: Restore the complete prepared snapshot
+        id: prepared-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/browse-comp-plus-snapshot
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.snapshot-key.outputs.key }}
+      - name: Restore prepared files with exact timestamps
+        if: steps.prepared-cache.outputs.cache-hit == 'true'
+        env:
+          SNAPSHOT_KEY: ${{ steps.snapshot-key.outputs.key }}
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_snapshot unpack
+          --archive "$RUNNER_TEMP/browse-comp-plus-snapshot/prepared.tar.zst" --key "$SNAPSHOT_KEY"
+      - name: Restore pinned source snapshots on a cold preparation
+        if: steps.prepared-cache.outputs.cache-hit != 'true'
+        id: source-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            benchmarks/browse-comp-plus/artifacts/source
+            benchmarks/browse-comp-plus/artifacts/state/dataset.json
+          key: browse-comp-plus-source-v1-${{ runner.os }}-${{ hashFiles('benchmarks/browse-comp-plus/benchmark.toml', 'benchmarks/browse-comp-plus/zg_bench/dataset.py', 'benchmarks/browse-comp-plus/uv.lock') }}
+      - name: Validate a restored snapshot without rebuilding it
+        if: steps.prepared-cache.outputs.cache-hit == 'true'
+        run: uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_snapshot verify
+      - name: Build the corpus and index once on a miss
+        if: steps.prepared-cache.outputs.cache-hit != 'true'
+        id: prepare
+        env: &embedding-env
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+        run: uv run --project benchmarks/browse-comp-plus --frozen zg-bench prepare --yes
+      - name: Save verified source snapshots
+        if: steps.prepared-cache.outputs.cache-hit != 'true' && steps.source-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            benchmarks/browse-comp-plus/artifacts/source
+            benchmarks/browse-comp-plus/artifacts/state/dataset.json
+          key: ${{ steps.source-cache.outputs.cache-primary-key }}
+      - name: Pack a credential-scanned snapshot with fast parallel compression
+        if: steps.prepared-cache.outputs.cache-hit != 'true'
+        env:
+          SNAPSHOT_KEY: ${{ steps.snapshot-key.outputs.key }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_snapshot pack
+          --archive "$RUNNER_TEMP/browse-comp-plus-snapshot/prepared.tar.zst" --key "$SNAPSHOT_KEY"
+      - name: Save the complete preparation for repeat runs
+        if: steps.prepared-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/browse-comp-plus-snapshot
+          key: ${{ steps.prepared-cache.outputs.cache-primary-key }}
+      - name: Publish this run's prepared snapshot for all case jobs
+        uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-prepared-${{ github.run_id }}
+          path: ${{ runner.temp }}/browse-comp-plus-snapshot/
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 1
+      - name: Plan the suite and balanced A/B orders once
+        id: plan
+        env:
+          BENCH_SUITE: ${{ inputs.suite }}
+        run: |
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_parallel plan \
+            --suite "$BENCH_SUITE" --output "$RUNNER_TEMP/browse-comp-plus-plan" >> "$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/candidate-package/manifest.json" "$RUNNER_TEMP/browse-comp-plus-plan/candidate-manifest.json"
+      - name: Publish the small evaluation plan and query set
+        uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/browse-comp-plus-plan/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Export preparation diagnostics on failure
+        id: diagnostics
+        if: ${{ failure() && steps.setup.outcome == 'success' }}
+        env: &scan-env
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci export
+          --output "$RUNNER_TEMP/preparation-diagnostics"
+          --candidate-manifest "$RUNNER_TEMP/candidate-package/manifest.json"
+      - name: Upload preparation diagnostics
+        if: ${{ failure() && steps.diagnostics.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-preparation-error-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/preparation-diagnostics/
+          retention-days: 7
+      - &cleanup
+        name: Remove temporary authentication
+        if: always()
+        run: |
+          if [[ -n "${CODEX_HOME:-}" ]]; then
+            rm -rf -- "$CODEX_HOME"
+          fi
+
+  case:
+    name: Case ${{ matrix.case }} / three paired trials and judge
+    needs: [package, prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.parallel_cases) }}
+      matrix:
+        case: ${{ fromJSON(needs.prepare.outputs.cases) }}
+    env:
+      NO_COLOR: '1'
+      BROWSE_CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+      BROWSE_HARNESS_COMMIT: ${{ github.workflow_sha }}
+      BROWSE_CASE: ${{ matrix.case }}
+    steps:
+      - *authorize
+      - *checkout
+      - *python
+      - *node
+      - *tools
+      - *candidate-download
+      - *candidate-install
+      - *space
+      - *credentials
+      - name: Download the shared prepared snapshot
+        uses: actions/download-artifact@v8
+        with:
+          name: browse-comp-plus-prepared-${{ github.run_id }}
+          path: ${{ runner.temp }}/browse-comp-plus-snapshot
+      - &plan-download
+        name: Download the immutable suite plan
+        uses: actions/download-artifact@v8
+        with:
+          name: browse-comp-plus-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/browse-comp-plus-plan
+      - name: Restore prepared files without rebuilding the index
+        id: restore
+        env:
+          SNAPSHOT_KEY: ${{ needs.prepare.outputs.snapshot-key }}
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_snapshot unpack
+          --archive "$RUNNER_TEMP/browse-comp-plus-snapshot/prepared.tar.zst" --key "$SNAPSHOT_KEY"
+      - name: Run this case's paired trials in the planned order
+        id: run
+        env: *embedding-env
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_parallel run
+          --plan "$RUNNER_TEMP/browse-comp-plus-plan/plan.json" --case "$BROWSE_CASE"
+      - name: Judge completed pairs
+        if: ${{ !cancelled() && steps.run.outcome != 'skipped' && steps.restore.outcome == 'success' }}
+        run: uv run --project benchmarks/browse-comp-plus --frozen zg-bench evaluate
+      - name: Stage reports and reject credential leakage
+        id: evidence
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
+        env: *scan-env
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci export
+          --output "$RUNNER_TEMP/browse-comp-plus-evidence"
+          --candidate-manifest "$RUNNER_TEMP/candidate-package/manifest.json"
+          --plan "$RUNNER_TEMP/browse-comp-plus-plan/plan.json"
+      - name: Upload independent case evidence
+        if: ${{ !cancelled() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-case-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/browse-comp-plus-evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - *cleanup
+
+  aggregate:
+    name: Aggregate raw trials without more model calls
+    needs: [package, prepare, case]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env: *benchmark-env
+    steps:
+      - *authorize
+      - *checkout
+      - *python
+      - name: Install locked reporting environment
+        run: |
+          echo "CODEX_HOME=$RUNNER_TEMP/browse-comp-plus-codex" >> "$GITHUB_ENV"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/browse-comp-plus --frozen
+      - *plan-download
+      - name: Download case evidence including earlier successful attempts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: browse-comp-plus-case-*-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/browse-comp-plus-shards
+      - name: Recompute aggregate metrics and require every planned pair and judgement
+        id: aggregate
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_parallel aggregate
+          --plan "$RUNNER_TEMP/browse-comp-plus-plan/plan.json" --shards "$RUNNER_TEMP/browse-comp-plus-shards"
+      - name: Stage the aggregate report
+        id: evidence
+        if: ${{ !cancelled() && steps.aggregate.outcome != 'skipped' }}
+        env: *scan-env
+        run: >-
+          uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci export
+          --output "$RUNNER_TEMP/browse-comp-plus-aggregate"
+          --candidate-manifest "$RUNNER_TEMP/browse-comp-plus-plan/candidate-manifest.json"
+          --plan "$RUNNER_TEMP/browse-comp-plus-plan/plan.json"
+      - name: Upload the aggregate report
+        if: ${{ !cancelled() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browse-comp-plus-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/browse-comp-plus-aggregate/
+          if-no-files-found: error
+          retention-days: 30

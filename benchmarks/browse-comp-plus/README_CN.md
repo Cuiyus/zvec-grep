@@ -147,6 +147,67 @@ zg-bench report <run-id>
 zg-bench clean
 ```
 
+## GitHub Actions（手动触发）
+
+[BrowseComp-Plus workflow](../../.github/workflows/browse-comp-plus.yml)
+仅供仓库 maintain/admin 角色手动触发，不会随 push、PR、评论或定时任务运行。
+
+1. 配置下表中的 Actions 设置。
+2. workflow 合入默认分支后，打开 **Actions → BrowseComp-Plus → Run workflow**。
+   选择可信的 workflow 分支，将 `candidate_ref` 设为本仓库待评测的可信分支、tag 或 commit。
+3. 选择 `ci`（默认：5 题、15 次配对试验，共 30 次 Agent 运行）或 `smoke`
+   （1 题、3 次配对试验，共 6 次 Agent 运行，另含工具使用审计）。
+   `parallel_cases` 可选 1、2、5（默认），按服务端限流调整。
+
+| Actions 设置 | 用途 |
+| --- | --- |
+| Secret `OPENAI_API_KEY` | Codex API key，通过 stdin 登录；必须能调用配置中的模型。 |
+| Secret `QWEN_EMBEDDING_API_KEY` | 所配置 Qwen embedding 模型的凭据。 |
+| Variable `QWEN_EMBEDDING_ENDPOINT` | Embedding endpoint，与 SWE-QA workflow 使用相同配置。 |
+| Secret `HF_TOKEN`（可选） | Hugging Face 下载认证。 |
+
+工作流保留 `benchmark.toml` 的模型、数据和评测协议，包括 `gpt-5.6-sol`、`high`
+推理强度及每题 3 次试验。建索引前通过一次小型模型调用检查访问权限，CI 不会自动替换模型。
+Codex CLI 固定为已发布报告使用的 `0.147.0`。
+凭据配置参考 [Codex 认证文档](https://learn.chatgpt.com/docs/auth)。并行 CI 使用 API key，
+避免多个 runner 共用账号 `auth.json` 时的 token 刷新冲突。认证文件仅临时使用，不进入缓存或上传产物。
+
+**耗时优化：** 准备阶段只执行一次，随后各题在独立 runner 上并行。每题仍在同一 runner
+内顺序执行 3 次 A/B 配对试验；全套题目的随机 A/B 顺序统一生成。各题评审与其他题执行
+重叠，最终报告从原始结果重算指标，不重复调用模型。题目间调度与本地串行执行不同，
+各题原始元数据保留在 `shards/`。
+
+| 阶段 | 复用或并行方式 |
+| --- | --- |
+| Rust 包 | 按候选 commit 精确缓存。 |
+| 语料和索引 | 仅在候选版本、数据、embedding 配置及 endpoint、准备脚本、系统架构和目录一致时复用完整快照，不回退复用其他候选版本的索引。 |
+| 题目执行 | 最多 5 个独立 runner，不共享 daemon 或可写索引。 |
+| 失败重跑 | “Re-run failed jobs” 保留成功题目的产物，汇总仅接受当前计划下各题最新 attempt。 |
+
+**冷启动成本：** 两个 suite 都准备完整的 100,195 篇语料。已发布报告中的索引构建耗时约
+2.7 小时、索引约 7.9 GB；新候选版本或缓存被淘汰后仍需重建，尚未测得 Actions 端到端提速。
+准备阶段限时 6 小时，各题限时 3 小时；不同 workflow 排队运行。runner 会释放 SDK 空间，
+并检查至少 35 GiB 可用磁盘。压缩快照保留纳秒时间戳以避免误触发重建，尽力写入缓存，
+同时作为有效期 1 天的 artifact 供各题下载。需计入数 GB 的传输/存储与仓库缓存配额；
+冷启动的 `smoke` 同样产生 embedding、Agent 和评审费用。
+
+小型计划 artifact 保留 7 天；失败 job 应在准备快照的 1 天有效期内重跑，过期后启动新运行。
+
+候选程序在不含模型凭据的独立 job 中构建。请只选择可信候选代码，因为该程序随后会使用
+embedding 凭据运行。产物分别记录评测脚本与候选程序的 commit SHA。
+
+结果展示在 Actions job summary，并保存为保留 30 天的 artifact，包含 JSON/Markdown/CSV
+报告、运行轨迹、评审结果、准备阶段日志和候选包 manifest。部分试验失败时仍评审并导出
+已完成的配对，原失败状态保留；取消运行后不再启动评审。缺少凭据、运行失败、试验或评审
+不完整都会使 workflow 失败；准确率与效率仅报告，不设置回归阈值。导出排除 profile、运行时
+凭据与语料文件，检测到配置的 secret 值时阻止上传。
+
+本地可运行不调用模型、不下载数据的 CI 集成检查：
+
+```sh
+uv run --frozen python -m unittest discover -s tests -v
+```
+
 ## 产物
 
 生成的数据保存在 `artifacts/` 下，不会提交到代码仓库。其中包括锁定的源数据快照、生成的语料库、可复用索引、各次运行隔离的 profile、原始尝试、评审器输入和报告。Gold data 和 manifest 始终位于 Agent workspace 之外。
