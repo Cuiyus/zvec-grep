@@ -40,6 +40,7 @@ class ParallelCIIntegrationTests(unittest.TestCase):
             BROWSE_CANDIDATE_COMMIT="candidate-sha",
             BROWSE_HARNESS_COMMIT="harness-sha",
             GITHUB_RUN_ID="workflow-1",
+            BROWSE_COMP_MODEL_BASE_URL="https://qwen.example.test/v1",
         )
         environment.start()
         self.addCleanup(environment.stop)
@@ -60,7 +61,7 @@ class ParallelCIIntegrationTests(unittest.TestCase):
                 for case in ("628", "700", "966", "827", "241", "770")
             )
         )
-        # An aggregation must never start Codex or any other child process.
+        # An aggregation must never start OpenCode or any other child process.
         process = patch(
             "subprocess.Popen",
             side_effect=AssertionError("unexpected model/process call"),
@@ -109,7 +110,8 @@ class ParallelCIIntegrationTests(unittest.TestCase):
                 "index_build_wall_seconds": 9721.0,
                 "index_bytes": 7897230894,
                 "environment": {
-                    "codex_version": "codex-cli 0.147.0",
+                    "opencode_version": "1.18.4",
+                    "model_base_url": "https://qwen.example.test/v1",
                     "available_cpu_count": 4,
                     "logical_cpu_count": 4,
                     "operating_system": "Ubuntu 24.04",
@@ -117,8 +119,8 @@ class ParallelCIIntegrationTests(unittest.TestCase):
                     "machine": "x86_64",
                     "cpu_model": "fixture CPU",
                     "python": "3.12",
-                    "codex_bin": "/usr/bin/codex",
-                    "codex_sandbox": "workspace-write",
+                    "opencode_bin": "/usr/bin/opencode",
+                    "agent_isolation": "separate-home-and-workspace; no OS sandbox",
                     "web_search": "disabled",
                     "history_persistence": "none",
                     "query_dataset_repo": self.config.dataset.queries_repo,
@@ -281,6 +283,7 @@ class ParallelCIIntegrationTests(unittest.TestCase):
             {"candidate_commit": "other"},
             {"harness_commit": "other"},
             {"configuration_sha256": "other"},
+            {"model_base_url": "https://different.example.test/v1"},
             {"query_set_sha256": "other"},
             {"query_ids": ["628"]},
             {
@@ -443,7 +446,7 @@ class ParallelCIIntegrationTests(unittest.TestCase):
         self.shard("628")
         _, run = self.shard("700")
         original = read_json(run / "run.json")["environment"]
-        for key in ("codex_version", "zg_version", "machine"):
+        for key in ("opencode_version", "zg_version", "machine"):
             with self.subTest(key=key):
                 self.change(
                     run / "run.json", environment={**original, key: "different"}

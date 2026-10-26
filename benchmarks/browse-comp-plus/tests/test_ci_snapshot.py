@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import pyarrow as arrow
 from pyarrow import parquet
+
 from zg_bench.ci_snapshot import (
     STATE_FILES,
     cache_key,

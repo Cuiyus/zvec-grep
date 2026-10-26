@@ -14,7 +14,7 @@ from .dataset import load_queries
 from .evaluate import evaluation_complete, summarize_evaluation
 from .index import _prepare_remote_authorization, index_is_ready
 from .process import resolve_executable
-from .profiles import server_environment
+from .profiles import model_base_url, server_environment
 from .runner import (
     _randomized_profile_orders,
     _write_pair,
@@ -39,6 +39,7 @@ def create_plan(artifacts: Path, suite: str, output: Path) -> Path:
         "query_set_sha256": sha256_file(query_path),
         "candidate_commit": os.environ["BROWSE_CANDIDATE_COMMIT"],
         "harness_commit": os.environ["BROWSE_HARNESS_COMMIT"],
+        "model_base_url": model_base_url(),
     }
     write_json(output / "plan.json", plan)
     (output / "source").mkdir(exist_ok=True)
@@ -56,6 +57,7 @@ def validate_plan(path: Path, artifacts: Path) -> dict:
         or plan["query_set_sha256"] != sha256_file(query_path)
         or plan["candidate_commit"] != os.environ["BROWSE_CANDIDATE_COMMIT"]
         or plan["harness_commit"] != os.environ["BROWSE_HARNESS_COMMIT"]
+        or plan["model_base_url"] != model_base_url()
     ):
         raise ValueError("CI plan identity changed")
     selection = load_suite(plan["suite"], load_queries(query_path))
@@ -174,6 +176,7 @@ def aggregate(artifacts: Path, plan_path: Path, shards: Path) -> Path:
             or current["model"] != config.run.model
             or current["reasoning_effort"] != config.run.reasoning_effort
             or current["profile_orders"] != {case: plan["profile_orders"][case]}
+            or current["environment"]["model_base_url"] != plan["model_base_url"]
         ):
             raise ValueError("shard protocol does not match the CI plan")
         if metadata is None:
@@ -185,7 +188,7 @@ def aggregate(artifacts: Path, plan_path: Path, shards: Path) -> Path:
             raise ValueError("shards used different prepared corpora or indexes")
         if any(
             current["environment"][key] != metadata["environment"][key]
-            for key in ("codex_version", "zg_version", "machine")
+            for key in ("opencode_version", "zg_version", "machine")
         ):
             raise ValueError(
                 "shards used different executable versions or architectures"
@@ -237,7 +240,7 @@ def aggregate(artifacts: Path, plan_path: Path, shards: Path) -> Path:
         metadata.pop(key, None)
     write_json(root / "run.json", metadata)
     report = summarize_evaluation(
-        root, codex_version=metadata["environment"]["codex_version"]
+        root, opencode_version=metadata["environment"]["opencode_version"]
     )
     summary = read_json(report / "summary.json")
     if summary["cases"]["completed"] != len(

@@ -73,7 +73,10 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/browse-comp-plus --frozen
+          npm install --global opencode-ai@1.18.4
       - name: Run offline CI integration tests
+        env:
+          OPENCODE_BENCHMARK_TEST_BINARY: opencode
         run: >-
           uv run --project benchmarks/browse-comp-plus --frozen python -m unittest discover
           -s benchmarks/browse-comp-plus/tests -v
@@ -106,6 +109,7 @@ jobs:
       NO_COLOR: '1'
       BROWSE_CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
       BROWSE_HARNESS_COMMIT: ${{ github.workflow_sha }}
+      BROWSE_COMP_MODEL_BASE_URL: ${{ vars.BROWSE_COMP_MODEL_BASE_URL || vars.SWE_QA_MODEL_BASE_URL }}
     steps:
       - *authorize
       - &checkout
@@ -124,10 +128,10 @@ jobs:
       - &tools
         name: Install pinned benchmark tools
         run: |
-          echo "CODEX_HOME=$RUNNER_TEMP/browse-comp-plus-codex" >> "$GITHUB_ENV"
+          echo "OPENCODE_HOME=$RUNNER_TEMP/browse-comp-plus-opencode" >> "$GITHUB_ENV"
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/browse-comp-plus --frozen
-          npm install --global @openai/codex@0.147.0
+          npm install --global opencode-ai@1.18.4
           if ! command -v zstd >/dev/null || ! command -v rg >/dev/null; then
             sudo apt-get update -qq
             sudo apt-get install -y zstd ripgrep
@@ -153,13 +157,15 @@ jobs:
         name: Configure isolated credentials and verify tools
         id: setup
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
           uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci auth
           uv run --project benchmarks/browse-comp-plus --frozen zg-bench doctor
       - name: Verify configured model access before indexing
+        env: &model-env
+          OPENAI_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
         run: uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci preflight
       - name: Compute exact preparation identity
         id: snapshot-key
@@ -194,7 +200,7 @@ jobs:
       - name: Build the corpus and index once on a miss
         if: steps.prepared-cache.outputs.cache-hit != 'true'
         id: prepare
-        env: &embedding-env
+        env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
@@ -211,6 +217,7 @@ jobs:
         if: steps.prepared-cache.outputs.cache-hit != 'true'
         env:
           SNAPSHOT_KEY: ${{ steps.snapshot-key.outputs.key }}
+          OPENAI_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: >-
@@ -251,7 +258,7 @@ jobs:
         id: diagnostics
         if: ${{ failure() && steps.setup.outcome == 'success' }}
         env: &scan-env
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: >-
@@ -269,8 +276,8 @@ jobs:
         name: Remove temporary authentication
         if: always()
         run: |
-          if [[ -n "${CODEX_HOME:-}" ]]; then
-            rm -rf -- "$CODEX_HOME"
+          if [[ -n "${OPENCODE_HOME:-}" ]]; then
+            rm -rf -- "$OPENCODE_HOME"
           fi
 
   case:
@@ -289,6 +296,7 @@ jobs:
       NO_COLOR: '1'
       BROWSE_CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
       BROWSE_HARNESS_COMMIT: ${{ github.workflow_sha }}
+      BROWSE_COMP_MODEL_BASE_URL: ${{ vars.BROWSE_COMP_MODEL_BASE_URL || vars.SWE_QA_MODEL_BASE_URL }}
       BROWSE_CASE: ${{ matrix.case }}
     steps:
       - *authorize
@@ -320,12 +328,16 @@ jobs:
           --archive "$RUNNER_TEMP/browse-comp-plus-snapshot/prepared.tar.zst" --key "$SNAPSHOT_KEY"
       - name: Run this case's paired trials in the planned order
         id: run
-        env: *embedding-env
+        env:
+          OPENAI_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.GLM_API_KEY }}
+          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
+          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: >-
           uv run --project benchmarks/browse-comp-plus --frozen python -m zg_bench.ci_parallel run
           --plan "$RUNNER_TEMP/browse-comp-plus-plan/plan.json" --case "$BROWSE_CASE"
       - name: Judge completed pairs
         if: ${{ !cancelled() && steps.run.outcome != 'skipped' && steps.restore.outcome == 'success' }}
+        env: *model-env
         run: uv run --project benchmarks/browse-comp-plus --frozen zg-bench evaluate
       - name: Stage reports and reject credential leakage
         id: evidence
@@ -361,7 +373,7 @@ jobs:
       - *python
       - name: Install locked reporting environment
         run: |
-          echo "CODEX_HOME=$RUNNER_TEMP/browse-comp-plus-codex" >> "$GITHUB_ENV"
+          echo "OPENCODE_HOME=$RUNNER_TEMP/browse-comp-plus-opencode" >> "$GITHUB_ENV"
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/browse-comp-plus --frozen
       - *plan-download

@@ -23,19 +23,20 @@ from .artifacts import (
     utc_now,
     write_json,
 )
-from .codex import (
-    run_attempt,
-    validate_model,
-)
+from .config import BENCHMARK_ROOT, PROMPT_PATH, SUITES_DIR, BenchmarkConfig
 from .console import Console
-from .config import BENCHMARK_ROOT, BenchmarkConfig, PROMPT_PATH, SUITES_DIR
 from .corpus import prepared_corpus, validate_workspace
 from .dataset import load_queries, prepared_dataset
 from .index import prepared_index
 from .models import PROFILES, AttemptResult, Profile
+from .opencode import (
+    run_attempt,
+    validate_model,
+)
 from .process import resolve_executable, run_command
 from .profiles import (
     ensure_server,
+    model_base_url,
     prepare_profiles,
     prepare_search_runtime,
     server_url,
@@ -116,8 +117,8 @@ def _available_cpu_count() -> int | None:
 def _environment_metadata(
     config: BenchmarkConfig,
     *,
-    codex: Path,
-    codex_version: str,
+    opencode: Path,
+    opencode_version: str,
     zg_version: str,
 ) -> dict[str, Any]:
     return {
@@ -130,8 +131,13 @@ def _environment_metadata(
         "logical_cpu_count": os.cpu_count(),
         "available_cpu_count": _available_cpu_count(),
         "python": sys.version.split()[0],
-        "codex_bin": str(codex),
-        "codex_version": codex_version,
+        "opencode_bin": str(opencode),
+        "opencode_version": opencode_version,
+        "model_base_url": model_base_url(),
+        "temperature_requested": config.run.temperature,
+        "seed": config.run.seed,
+        "max_output_tokens": config.run.max_output_tokens,
+        "context_limit": config.run.context_limit,
         "query_dataset_repo": config.dataset.queries_repo,
         "query_dataset_revision": config.dataset.queries_revision,
         "query_dataset_split": config.dataset.queries_split,
@@ -148,9 +154,9 @@ def _environment_metadata(
         "mcp_tool_timeout_seconds": config.zvec_grep.mcp_tool_timeout_seconds,
         "server_port": config.zvec_grep.server_port,
         "zg_server_url": server_url(config),
-        "codex_sandbox": "workspace-write",
+        "agent_isolation": "separate-home-and-workspace; no OS sandbox",
         "web_search": "disabled",
-        "history_persistence": "none",
+        "history_persistence": "isolated session per attempt",
     }
 
 
@@ -426,7 +432,7 @@ def _run_profile(
     model: str,
     reasoning_effort: str,
     profiles_root: Path,
-    codex_bin: str,
+    opencode_bin: str,
 ) -> AttemptResult:
     query_id = str(query["query_id"])
     selected_path = _result_path(run_root, query_id, profile, trial_index)
@@ -484,7 +490,7 @@ def _run_profile(
                 attempt=number,
                 output_dir=output,
                 profiles_root=profiles_root,
-                codex_bin=codex_bin,
+                opencode_bin=opencode_bin,
                 idle_timeout_seconds=config.run.idle_timeout_seconds,
             )
         finally:
@@ -505,7 +511,7 @@ def _execution_source_fingerprint() -> str:
     paths = [
         BENCHMARK_ROOT / "zg_bench" / name
         for name in (
-            "codex.py",
+            "opencode.py",
             "config.py",
             "artifacts.py",
             "corpus.py",
@@ -536,8 +542,8 @@ def _run_protocol(
     profile_orders: dict[str, dict[int, tuple[Profile, Profile]]],
     model: str,
     reasoning_effort: str,
-    codex: Path,
-    codex_version: str,
+    opencode: Path,
+    opencode_version: str,
     profiles_fingerprint: str,
 ) -> dict[str, Any]:
     dataset_state = read_json(artifacts / "state" / "dataset.json")
@@ -568,17 +574,18 @@ def _run_protocol(
         "corpus_fingerprint": corpus_state["fingerprint"],
         "index_fingerprint": index_state["fingerprint"],
         "profiles_fingerprint": profiles_fingerprint,
-        "codex_sha256": sha256_file(codex),
-        "codex_path": str(codex),
-        "codex_version": codex_version,
+        "opencode_sha256": sha256_file(opencode),
+        "opencode_path": str(opencode),
+        "opencode_version": opencode_version,
         "platform": platform.platform(),
         "machine": platform.machine(),
         "python": sys.version.split()[0],
         "model": model,
+        "model_base_url": model_base_url(),
         "reasoning_effort": reasoning_effort,
-        "sandbox": "workspace-write",
+        "isolation": "separate-home-and-workspace; no OS sandbox",
         "web_search": "disabled",
-        "history_persistence": "none",
+        "history_persistence": "isolated session per attempt",
         "git_ceiling": "workspace-parent",
         "infrastructure_retries": config.run.infrastructure_retries,
         "trials_per_case": config.run.trials_per_case,
@@ -782,7 +789,7 @@ def run_benchmark(
     *,
     suite: str,
     run_id: str | None = None,
-    codex_bin: str = "codex",
+    opencode_bin: str = "opencode",
     case_id: str | None = None,
     planned_orders: dict[str, dict[int, tuple[Profile, Profile]]] | None = None,
 ) -> Path:
@@ -794,13 +801,13 @@ def run_benchmark(
     queries = load_queries(query_path)
     by_id = {str(row["query_id"]): row for row in queries}
     validate_model(artifacts, model)
-    codex = resolve_executable(codex_bin)
+    opencode = resolve_executable(opencode_bin)
     zg = resolve_executable("zg")
-    if codex is None or zg is None:
-        raise RuntimeError("Codex and zvec-grep must be available before a run")
-    codex_version = run_command([codex, "--version"], timeout=30)
-    if not codex_version.ok or not codex_version.stdout.strip():
-        raise RuntimeError("could not determine the installed Codex version")
+    if opencode is None or zg is None:
+        raise RuntimeError("OpenCode and zvec-grep must be available before a run")
+    opencode_version = run_command([opencode, "--version"], timeout=30)
+    if not opencode_version.ok or not opencode_version.stdout.strip():
+        raise RuntimeError("could not determine the installed OpenCode version")
     zg_version = run_command([zg, "--version"], timeout=30)
     actual_zg_version = (
         zg_version.stdout.strip().splitlines()[0] if zg_version.stdout else ""
@@ -885,8 +892,8 @@ def run_benchmark(
             profile_orders=profile_orders,
             model=model,
             reasoning_effort=reasoning_effort,
-            codex=codex,
-            codex_version=codex_version.stdout.strip(),
+            opencode=opencode,
+            opencode_version=opencode_version.stdout.strip(),
             profiles_fingerprint=profile_manifest["fingerprint"],
         )
         if metadata["protocol_fingerprint"] != _protocol_fingerprint(
@@ -963,7 +970,7 @@ def run_benchmark(
                 prepare_profiles(
                     config,
                     artifacts,
-                    codex_bin=str(codex),
+                    opencode_bin=str(opencode),
                     profiles_root=profiles_root,
                     manifest_path=profiles_manifest_path,
                 )
@@ -984,8 +991,8 @@ def run_benchmark(
                     profile_orders=profile_orders,
                     model=model,
                     reasoning_effort=reasoning_effort,
-                    codex=codex,
-                    codex_version=codex_version.stdout.strip(),
+                    opencode=opencode,
+                    opencode_version=opencode_version.stdout.strip(),
                     profiles_fingerprint=profile_manifest["fingerprint"],
                 )
                 metadata = {
@@ -1012,8 +1019,8 @@ def run_benchmark(
                     "configuration": str(config.path),
                     "environment": _environment_metadata(
                         config,
-                        codex=codex,
-                        codex_version=codex_version.stdout.strip(),
+                        opencode=opencode,
+                        opencode_version=opencode_version.stdout.strip(),
                         zg_version=zg_version.stdout.strip(),
                     ),
                     "corpus_fingerprint": corpus_state["fingerprint"],
@@ -1071,7 +1078,7 @@ def run_benchmark(
                     model,
                     reasoning_effort,
                     profiles_root,
-                    str(codex),
+                    str(opencode),
                 )
                 _write_pair(
                     run_root, query_id, config.run.trials_per_case
@@ -1169,7 +1176,7 @@ def resume_benchmark(
     artifacts: Path,
     run_id: str,
     *,
-    codex_bin: str = "codex",
+    opencode_bin: str = "opencode",
 ) -> Path:
     metadata = read_json(find_run(artifacts, run_id) / "run.json")
     return run_benchmark(
@@ -1177,5 +1184,5 @@ def resume_benchmark(
         artifacts,
         suite=str(metadata["suite"]),
         run_id=run_id,
-        codex_bin=codex_bin,
+        opencode_bin=opencode_bin,
     )

@@ -182,7 +182,7 @@ def main() -> int:
                     DEFAULT_ARTIFACTS_DIR,
                     process.stdin,
                     args.key,
-                    secret_values(Path(os.environ["CODEX_HOME"])),
+                    secret_values(Path(os.environ["OPENCODE_HOME"])),
                 )
         except BaseException:
             process.kill()

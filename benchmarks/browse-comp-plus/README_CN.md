@@ -6,20 +6,22 @@
 
 [BrowseComp-Plus](https://github.com/texttron/BrowseComp-Plus) 用于评估深度研究 Agent：题目通常需要在多篇文档中定位并串联线索，才能得出答案。与实时网页搜索不同，它使用约 10 万篇经人工核验的固定语料，使不同检索器能够在可控、可复现的条件下进行比较。
 
-本 benchmark 使用 Codex 在该语料库上进行原生配对评测。
+当前 harness 使用 **OpenCode 1.18.4 + `custom-openai/qwen3.8-max`** 在该语料库上进行配对评测，执行和盲测评审使用同一模型。
 
 整体原则与原论文一致，但在语料处理和评测流程上略有调整，以更贴近用户实际使用通用 Agent 的场景。
 
-每个问题均通过相互独立的配对 trial 进行评测；每次评测都使用相同的模型、prompt、语料库、Codex 配置和限制：
+每个问题均通过相互独立的配对 trial 进行评测；每次评测都使用相同的模型、prompt、语料库、OpenCode 配置和限制：
 
-- **Baseline：** Codex 使用其标准工具集。
-- **zvec-grep：** 保持相同的 Codex 配置，仅通过 `zg --install` 增加 zvec-grep MCP 工具和使用指引。
+- **Baseline：** OpenCode 使用本地工具，关闭网页搜索、网页抓取和子代理。
+- **zvec-grep：** 保持相同的 OpenCode 配置，仅通过 `zg --install --target opencode` 增加 zvec-grep MCP 工具和使用指引。
 
-Benchmark 记录回答质量、Token 用量、Agent 执行耗时、工具调用次数和完整的 Codex 轨迹。
+Benchmark 记录回答质量、Token 用量、Agent 执行耗时、工具调用次数和完整的 OpenCode 轨迹。
 
-## 评测结果
+## 已发布结果（历史 Codex 协议）
 
-[最新完整报告](./LATEST_REPORT.md)提供了完整结果和复现信息。以下是本次 study 的摘要：在 300 组配对 trial 中，zvec-grep 在保持回答质量的同时，将平均 Input Token 减少 **37.56%**、工具调用次数减少 **43.52%**、Agent 执行时间减少 **38.58%**。
+[已发布完整报告](./LATEST_REPORT.md)及下列数字来自 Codex `0.147.0` + `gpt-5.6-sol`，**并非 OpenCode/Qwen 的结果**。Agent、模型与工具协议已变化，新运行应作为独立研究，不能直接将这些数字作为回归基线。
+
+以下是历史 study 的摘要：在 300 组配对 trial 中，zvec-grep 在保持回答质量的同时，将平均 Input Token 减少 **37.56%**、工具调用次数减少 **43.52%**、Agent 执行时间减少 **38.58%**。
 
 ### 评测配置
 
@@ -58,20 +60,23 @@ BrowseComp-Plus 数据集中也存在少量瑕疵，例如个别 query 的线索
 
 ## 前置条件
 
-在此目录中安装 Python 环境并检查宿主环境：
+宿主环境需要 macOS 或 Linux，并安装 `uv`、Node.js 和 `zg`。安装固定版本的 OpenCode，配置模型 API key 及其业务空间对应的 OpenAI 兼容 base URL；模型地址与 embedding 地址分别配置。
 
 ```sh
 cd benchmarks/browse-comp-plus
-uv sync
+npm install --global opencode-ai@1.18.4
+uv sync --frozen
 source .venv/bin/activate
+
+# 从环境变量或密钥管理器读取凭据。
+export OPENAI_API_KEY="$QWEN_API_KEY"
+export BROWSE_COMP_MODEL_BASE_URL='https://YOUR-WORKSPACE.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+export ZVEC_GREP_API_KEY="$QWEN_EMBEDDING_API_KEY"
+export ZVEC_GREP_ENDPOINT="$QWEN_EMBEDDING_ENDPOINT"
 zg-bench doctor
 ```
 
-宿主环境需要提供：
-
-- 安装了 `uv` 的 macOS 或 Linux；
-- 已安装并完成身份验证的 Codex CLI；
-- 已安装 `zg`。
+无需交互式登录。每个 profile 使用隔离的 OpenCode 配置与数据目录，模型凭据从 `OPENAI_API_KEY` 读取。
 
 ## 准备 benchmark
 
@@ -93,7 +98,7 @@ zg-bench prepare
 zg-bench run --suite smoke
 ```
 
-Codex 模型和 reasoning effort 在 `benchmark.toml` 中配置。Runner 会在创建 trial 前验证配置的模型。
+模型与请求参数在 `benchmark.toml` 中配置：开启思考，reasoning effort 为 `high`，请求温度 `0`、seed `42`，输出上限 32,000 Token，上下文上限 1,000,000 Token。服务端对参数的实际处理依模型而定。关闭自动压缩与子代理委派，确保 trial 用量属于所记录的会话。
 
 运行固定随机选取的 5 个问题组成的 CI 子集：
 
@@ -115,7 +120,7 @@ zg-bench run --suite full
 
 ## 评测与报告
 
-使用盲测 Codex 评审器评测最近一次运行，并生成最终报告：
+使用盲测 OpenCode/Qwen 评审器评测最近一次运行，并生成最终报告：
 
 ```sh
 zg-bench evaluate
@@ -161,16 +166,15 @@ zg-bench clean
 
 | Actions 设置 | 用途 |
 | --- | --- |
-| Secret `OPENAI_API_KEY` | Codex API key，通过 stdin 登录；必须能调用配置中的模型。 |
+| Secret `QWEN_API_KEY` | 可调用 `qwen3.8-max` 的 API key；未配置时沿用已有 `GLM_API_KEY` secret。 |
+| Variable `BROWSE_COMP_MODEL_BASE_URL` | 模型的 OpenAI 兼容 base URL，百炼地址以 `/compatible-mode/v1` 结尾；未配置时使用 `SWE_QA_MODEL_BASE_URL`。必填，与 embedding endpoint 分开配置。 |
 | Secret `QWEN_EMBEDDING_API_KEY` | 所配置 Qwen embedding 模型的凭据。 |
 | Variable `QWEN_EMBEDDING_ENDPOINT` | Embedding endpoint，与 SWE-QA workflow 使用相同配置。 |
 | Secret `HF_TOKEN`（可选） | Hugging Face 下载认证。 |
 
-工作流保留 `benchmark.toml` 的模型、数据和评测协议，包括 `gpt-5.6-sol`、`high`
-推理强度及每题 3 次试验。建索引前通过一次小型模型调用检查访问权限，CI 不会自动替换模型。
-Codex CLI 固定为已发布报告使用的 `0.147.0`。
-凭据配置参考 [Codex 认证文档](https://learn.chatgpt.com/docs/auth)。并行 CI 使用 API key，
-避免多个 runner 共用账号 `auth.json` 时的 token 刷新冲突。认证文件仅临时使用，不进入缓存或上传产物。
+工作流固定 OpenCode `1.18.4`，执行与评审均使用 `custom-openai/qwen3.8-max`，保留锁定数据集及每题 3 次试验。建索引前通过一次小型模型调用检查访问权限。
+所选 key 通过 `OPENAI_API_KEY` 提供给每个调用模型的步骤，无需 Codex 登录或账号 `auth.json`。
+[OpenCode 配置](https://opencode.ai/docs/config/)通过环境变量引用 key；临时 home 与 profile 不进入缓存或上传产物。
 
 **耗时优化：** 准备阶段只执行一次，随后各题在独立 runner 上并行。每题仍在同一 runner
 内顺序执行 3 次 A/B 配对试验；全套题目的随机 A/B 顺序统一生成。各题评审与其他题执行
@@ -207,6 +211,8 @@ embedding 凭据运行。产物分别记录评测脚本与候选程序的 commit
 ```sh
 uv run --frozen python -m unittest discover -s tests -v
 ```
+
+设置 `OPENCODE_BENCHMARK_TEST_BINARY=opencode` 后，还会用离线协议测试验证已安装的 CLI。
 
 ## 产物
 

@@ -10,26 +10,33 @@ connecting evidence across multiple documents. Rather than searching the live
 web, it uses a fixed corpus of roughly 100,000 human-verified documents,
 enabling controlled and reproducible retriever comparisons.
 
-This benchmark runs a native paired evaluation of Codex on that corpus.
+The current harness runs paired evaluations with **OpenCode 1.18.4 and
+`custom-openai/qwen3.8-max`** on that corpus. Both execution and blind judging
+use this model.
 
 It follows the original paper's core principles, with small differences in
 corpus processing and evaluation protocol to better reflect real-world use of a
 general-purpose agent.
 
 Each query is evaluated in independent paired trials with the same model,
-prompt, corpus, Codex settings, and limits:
+prompt, corpus, OpenCode settings, and limits:
 
-- **Baseline:** Codex with its standard set of tools.
-- **zvec-grep:** the same Codex setup, with only the zvec-grep MCP tools and
-  usage instructions added by `zg --install`.
+- **Baseline:** OpenCode with local tools; web search, web fetch, and subagents
+  are disabled.
+- **zvec-grep:** the same OpenCode setup, with only the zvec-grep MCP tools and
+  usage instructions added by `zg --install --target opencode`.
 
 The benchmark records answer quality, token usage, wall-clock time, tool calls,
-and complete Codex trajectories.
+and complete OpenCode trajectories.
 
-## Results
+## Published results (historical Codex protocol)
 
-The [latest full report](./LATEST_REPORT.md) contains the complete results and
-reproduction details. The sections below summarize the study: across 300 paired
+The [published full report](./LATEST_REPORT.md) and figures below use Codex
+`0.147.0` with `gpt-5.6-sol`. **They are not OpenCode/Qwen results.** Changing the
+agent, model, and tool protocol means new runs must be treated as a separate
+study, not as a direct regression against these figures.
+
+The sections below summarize that study: across 300 paired
 trials, zvec-grep maintained answer quality while reducing average input tokens
 by **37.56%**, tool calls by **43.52%**, and Agent time by **38.58%**.
 
@@ -101,20 +108,27 @@ variation.
 
 ## Prerequisites
 
-From this directory, install the Python environment and verify the host:
+Use macOS or Linux with `uv`, Node.js, and `zg` installed. Install the pinned
+OpenCode CLI, then configure a model API key and the matching OpenAI-compatible
+base URL for your provider workspace. The model endpoint is separate from the
+embedding endpoint.
 
 ```sh
 cd benchmarks/browse-comp-plus
-uv sync
+npm install --global opencode-ai@1.18.4
+uv sync --frozen
 source .venv/bin/activate
+
+# Read credentials from your environment or secret manager.
+export OPENAI_API_KEY="$QWEN_API_KEY"
+export BROWSE_COMP_MODEL_BASE_URL='https://YOUR-WORKSPACE.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+export ZVEC_GREP_API_KEY="$QWEN_EMBEDDING_API_KEY"
+export ZVEC_GREP_ENDPOINT="$QWEN_EMBEDDING_ENDPOINT"
 zg-bench doctor
 ```
 
-The host environment should provide:
-
-- macOS or Linux with `uv`;
-- an installed and authenticated Codex CLI;
-- `zg` installed.
+No interactive login is needed. Profiles use isolated OpenCode configuration
+and data directories; provider credentials are read from `OPENAI_API_KEY`.
 
 ## Prepare the benchmark
 
@@ -138,8 +152,11 @@ Verify the complete paired workflow on one query:
 zg-bench run --suite smoke
 ```
 
-The Codex model and reasoning effort are configured in `benchmark.toml`. The
-runner validates the configured model before creating trials.
+Model and request settings are configured in `benchmark.toml`: thinking enabled,
+`high` reasoning effort, requested temperature `0`, seed `42`, a 32,000-token
+output limit, and a 1,000,000-token context limit. Provider-side interpretation
+of those settings is model-specific. Automatic compaction and delegated
+subagents are disabled so all trial usage belongs to the recorded session.
 
 Run the fixed random 5-query CI subset:
 
@@ -161,7 +178,7 @@ zg-bench run --suite full
 
 ## Evaluate and report
 
-Evaluate the latest run with a blind Codex judge and generate its final report:
+Evaluate the latest run with a blind OpenCode/Qwen judge and generate its final report:
 
 ```sh
 zg-bench evaluate
@@ -212,20 +229,19 @@ run on pushes, PRs, comments, or a schedule.
 
 | Actions setting | Purpose |
 | --- | --- |
-| Secret `OPENAI_API_KEY` | Codex API key, logged in through stdin. Must support the configured model. |
+| Secret `QWEN_API_KEY` | API key authorized to invoke `qwen3.8-max`. The existing `GLM_API_KEY` secret is used as a fallback when `QWEN_API_KEY` is absent. |
+| Variable `BROWSE_COMP_MODEL_BASE_URL` | Model's OpenAI-compatible base URL, ending in `/compatible-mode/v1` for Bailian; falls back to `SWE_QA_MODEL_BASE_URL`. Required and separate from the embedding endpoint. |
 | Secret `QWEN_EMBEDDING_API_KEY` | Credentials for the configured Qwen embedding model. |
 | Variable `QWEN_EMBEDDING_ENDPOINT` | Embedding endpoint, as in the SWE-QA workflow. |
 | Secret `HF_TOKEN` (optional) | Hugging Face download authentication. |
 
-The workflow keeps `benchmark.toml` unchanged, including `gpt-5.6-sol`, `high`
-reasoning, the pinned dataset, and three trials per case. The chosen Codex
-credentials must have access to that model; CI does not substitute another
-model. A small model preflight checks access before indexing. Codex CLI is
-pinned to `0.147.0`, the version in the published report.
-See [Codex authentication](https://learn.chatgpt.com/docs/auth) for credential
-setup. Parallel CI uses API keys: sharing an account `auth.json` across runners
-can cause refresh-token conflicts. Authentication files are temporary and are
-never cached or uploaded.
+The workflow pins OpenCode `1.18.4` and uses `custom-openai/qwen3.8-max` for
+both agent execution and judging, retaining the pinned dataset and three trials
+per case. A small model preflight checks access before indexing. The selected
+key is supplied as `OPENAI_API_KEY` to each model-calling step; no Codex login or
+account `auth.json` is used. [OpenCode configuration](https://opencode.ai/docs/config/)
+references the key through an environment variable. Temporary homes and profiles
+are excluded from caches and evidence artifacts.
 
 **Execution time:** preparation runs once, then cases run on independent runners.
 Each case keeps its three sequential paired trials on the same runner; the
@@ -272,6 +288,9 @@ Run the CI integration checks locally without model calls or dataset downloads:
 ```sh
 uv run --frozen python -m unittest discover -s tests -v
 ```
+
+Set `OPENCODE_BENCHMARK_TEST_BINARY=opencode` to also check the installed CLI
+against the offline protocol fixtures.
 
 ## Artifacts
 

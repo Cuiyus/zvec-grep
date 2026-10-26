@@ -12,20 +12,10 @@ import tempfile
 from pathlib import Path
 
 from .config import DEFAULT_ARTIFACTS_DIR, DEFAULT_CONFIG_PATH, load_config
+from .process import resolve_executable
+from .profiles import opencode_environment, prepare_judge_home
 
-SECRET_ENV = ("OPENAI_API_KEY", "CODEX_AUTH_JSON", "ZVEC_GREP_API_KEY", "HF_TOKEN")
-AUTH_FIELDS = {"access_token", "refresh_token", "id_token", "OPENAI_API_KEY"}
-
-
-def _auth_secrets(value: object) -> set[str]:
-    if not isinstance(value, dict):
-        return set()
-    result = set()
-    for key, item in value.items():
-        if key in AUTH_FIELDS and isinstance(item, str) and item:
-            result.add(item)
-        result.update(_auth_secrets(item))
-    return result
+SECRET_ENV = ("OPENAI_API_KEY", "ZVEC_GREP_API_KEY", "HF_TOKEN")
 
 
 def configure_auth(home: Path) -> None:
@@ -33,109 +23,72 @@ def configure_auth(home: Path) -> None:
         raise ValueError("QWEN_EMBEDDING_API_KEY Actions secret is required")
     if not os.environ.get("ZVEC_GREP_ENDPOINT"):
         raise ValueError("QWEN_EMBEDDING_ENDPOINT Actions variable is required")
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    auth_json = os.environ.get("CODEX_AUTH_JSON", "")
-    if bool(api_key) == bool(auth_json):
-        raise ValueError("configure exactly one of OPENAI_API_KEY or CODEX_AUTH_JSON")
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
+        raise ValueError("QWEN_API_KEY (or GLM_API_KEY) Actions secret is required")
+    if not os.environ.get("BROWSE_COMP_MODEL_BASE_URL", "").strip():
+        raise ValueError(
+            "BROWSE_COMP_MODEL_BASE_URL (or SWE_QA_MODEL_BASE_URL) Actions variable "
+            "must specify the model's OpenAI-compatible base URL"
+        )
     # Fail before the expensive full-corpus preparation if the pinned CLI is incompatible.
-    help_text = subprocess.run(
-        ["codex", "exec", "--help"], check=True, capture_output=True, text=True
-    ).stdout
-    for flag in ("--ignore-rules", "--ephemeral", "--output-schema"):
+    help_result = subprocess.run(
+        ["opencode", "run", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=opencode_environment(home),
+    )
+    help_text = help_result.stdout + help_result.stderr
+    for flag in ("--format", "--model", "--agent", "--dir", "--pure"):
         if flag not in help_text:
-            raise ValueError(f"installed Codex does not support required flag {flag}")
+            raise ValueError(
+                f"installed OpenCode does not support required flag {flag}"
+            )
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     home.chmod(0o700)
-    if auth_json:
-        try:
-            auth = json.loads(auth_json)
-        except ValueError:
-            raise ValueError(
-                "CODEX_AUTH_JSON must be a valid auth.json object"
-            ) from None
-        if not isinstance(auth, dict) or not _auth_secrets(auth):
-            raise ValueError("CODEX_AUTH_JSON contains no supported credentials")
-        for value in _auth_secrets(auth):
-            # GitHub masks the whole JSON secret automatically, but not each nested token.
-            escaped = (
-                value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-            )
-            print(f"::add-mask::{escaped}")
-        auth_path = home / "auth.json"
-        auth_path.touch(mode=0o600, exist_ok=False)
-        auth_path.write_text(json.dumps(auth), encoding="utf-8")
-    else:
-        subprocess.run(
-            [
-                "codex",
-                "-c",
-                'cli_auth_credentials_store="file"',
-                "login",
-                "--with-api-key",
-            ],
-            input=api_key + "\n",
-            text=True,
-            check=True,
-            env={**os.environ, "CODEX_HOME": str(home)},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        (home / "auth.json").chmod(0o600)
+    prepare_judge_home(load_config(), DEFAULT_ARTIFACTS_DIR, home)
 
 
 def verify_model() -> None:
     """Make one small model call before paying for a full-corpus index build."""
+    from .opencode import run_prompt
+
     config = load_config()
+    executable = resolve_executable("opencode")
+    if executable is None:
+        raise ValueError("OpenCode executable is required")
     with tempfile.TemporaryDirectory(prefix="browse-comp-plus-preflight-") as directory:
-        response = Path(directory) / "response.txt"
-        result = subprocess.run(
-            [
-                "codex",
-                "exec",
-                "--ephemeral",
-                "--ignore-rules",
-                "--skip-git-repo-check",
-                "--sandbox",
-                "read-only",
-                "--model",
-                config.run.model,
-                "-c",
-                f'model_reasoning_effort="{config.run.reasoning_effort}"',
-                "-c",
-                'web_search="disabled"',
-                "-C",
-                directory,
-                "-o",
-                str(response),
-                "Reply exactly OK. Do not use tools.",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        home = prepare_judge_home(config, root / "artifacts", root / "home")
+        result = run_prompt(
+            executable,
+            home=home,
+            workspace=workspace,
+            model=config.run.model,
+            prompt="Reply exactly OK. Do not use tools.",
+            output_dir=root / "response",
+            idle_timeout_seconds=180,
+            timeout_seconds=180,
         )
         if (
-            result.returncode != 0
-            or not response.is_file()
-            or not response.read_text().strip()
+            result["exit_code"] != 0
+            or result["idle_killed"]
+            or not result["trace"].turn_completed
+            or not result["trace"].final_response.strip()
+            or result["trace"].errors
         ):
             raise ValueError(
-                f"Codex preflight failed; verify credential access to {config.run.model} "
+                f"OpenCode preflight failed; verify credential access to {config.run.model} "
                 "and service availability before preparing the corpus"
             )
 
 
-def secret_values(home: Path, profile_auth: tuple[Path, ...] = ()) -> set[bytes]:
+def secret_values(home: Path) -> set[bytes]:
+    # OpenCode configs reference environment variables; no persistent account login.
+    del home
     values = {os.environ[name] for name in SECRET_ENV if os.environ.get(name)}
-    auth_json = os.environ.get("CODEX_AUTH_JSON")
-    if auth_json:
-        values.update(_auth_secrets(json.loads(auth_json)))
-    # Include refreshed account tokens, not just the original Actions secret.
-    for auth_path in (home / "auth.json", *profile_auth):
-        if auth_path.is_file():
-            values.update(
-                _auth_secrets(json.loads(auth_path.read_text(encoding="utf-8")))
-            )
     values.update(json.dumps(value)[1:-1] for value in tuple(values))
     return {value.encode() for value in values if value}
 
@@ -176,9 +129,7 @@ def export_evidence(
 ) -> None:
     if output.exists():
         raise ValueError("evidence output must be a new directory")
-    # A CLI token refresh may replace a profile's auth symlink with a regular file.
-    profile_auth = tuple((artifacts / "runs").glob("*/profiles/*/codex-home/auth.json"))
-    secrets = secret_values(home, profile_auth)
+    secrets = secret_values(home)
     output.mkdir(parents=True)
     try:
         _copy_evidence(DEFAULT_CONFIG_PATH, output / "benchmark.toml", secrets)
@@ -196,7 +147,7 @@ def export_evidence(
                 raise ValueError("refusing to export a symlink in benchmark evidence")
             if not run.is_dir():
                 continue
-            # Never traverse profiles (auth symlinks), runtime, or the corpus.
+            # Never traverse profile homes, runtime, or the corpus.
             for name in ("run.json", "report", "cases", "evaluation", "shards"):
                 _copy_evidence(run / name, output / "runs" / run.name / name, secrets)
         identity = {
@@ -243,7 +194,7 @@ def main() -> int:
     export.add_argument("--plan", type=Path)
     args = parser.parse_args()
     try:
-        home = Path(os.environ["CODEX_HOME"])
+        home = Path(os.environ["OPENCODE_HOME"])
         if args.command == "auth":
             configure_auth(home)
         elif args.command == "preflight":

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import os
 import subprocess
@@ -18,6 +16,7 @@ from zg_bench.ci import (
     verify_model,
 )
 from zg_bench.config import load_config
+from zg_bench.models import TraceSummary, Usage
 from zg_bench.runner import load_suite
 
 
@@ -26,12 +25,14 @@ class CIIntegrationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.home = self.root / "codex-home"
+        self.home = self.root / "opencode-home"
         self.artifacts = self.root / "artifacts"
         self.output = self.root / "evidence"
         self.manifest = self.root / "candidate.json"
         self.manifest.write_text('{"commit":"candidate-sha"}')
-        environment = patch.dict(os.environ, {}, clear=True)
+        environment = patch.dict(
+            os.environ, {"PATH": os.environ.get("PATH", "")}, clear=True
+        )
         environment.start()
         self.addCleanup(environment.stop)
 
@@ -48,60 +49,71 @@ class CIIntegrationTests(unittest.TestCase):
         os.environ.update(
             ZVEC_GREP_API_KEY="embedding-secret",
             ZVEC_GREP_ENDPOINT="https://example.test",
+            OPENAI_API_KEY="model-api-secret",
+            BROWSE_COMP_MODEL_BASE_URL="https://model.example.test/v1",
         )
 
+    @patch("zg_bench.ci.prepare_judge_home")
     @patch("zg_bench.ci.subprocess.run")
-    def test_auth_json_is_private_and_masks_nested_tokens(self, run):
+    def test_credentials_stay_in_environment_and_home_is_private(self, run, prepare):
         self.configure()
-        os.environ["CODEX_AUTH_JSON"] = json.dumps(
-            {"tokens": {"access_token": "test-token", "refresh_token": "refresh-token"}}
-        )
-        run.return_value.stdout = "--ignore-rules --ephemeral --output-schema"
-        with contextlib.redirect_stdout(io.StringIO()) as output:
-            configure_auth(self.home)
-        self.assertEqual((self.home / "auth.json").stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.home.stat().st_mode & 0o777, 0o700)
-        self.assertIn("::add-mask::test-token", output.getvalue())
-        self.assertIn("::add-mask::refresh-token", output.getvalue())
-        self.assertEqual(run.call_count, 1)
-
-    @patch("zg_bench.ci.subprocess.run")
-    def test_api_key_is_sent_via_stdin_to_isolated_login(self, run):
-        self.configure()
-        os.environ["OPENAI_API_KEY"] = "test-api-key"
-
-        def command(args, **kwargs):
-            if "--help" in args:
-                return subprocess.CompletedProcess(
-                    args, 0, "--ignore-rules --ephemeral --output-schema"
-                )
-            self.assertNotIn("test-api-key", args)
-            self.assertEqual(kwargs["input"], "test-api-key\n")
-            self.assertEqual(kwargs["env"]["CODEX_HOME"], str(self.home))
-            (self.home / "auth.json").write_text('{"OPENAI_API_KEY":"test-api-key"}')
-            return subprocess.CompletedProcess(args, 0)
-
-        run.side_effect = command
+        run.return_value.stdout = "--format --model --agent --dir --pure"
+        run.return_value.stderr = ""
         configure_auth(self.home)
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual((self.home / "auth.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o700)
+        self.assertFalse((self.home / "auth.json").exists())
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["opencode", "run", "--help"])
+        self.assertEqual(
+            run.call_args.kwargs["env"]["OPENAI_API_KEY"], "model-api-secret"
+        )
+        self.assertNotIn("model-api-secret", run.call_args.args[0])
+        self.assertEqual(prepare.call_args.args[2], self.home)
 
-    def test_missing_or_ambiguous_credentials_fail_before_commands(self):
+    def test_missing_credentials_or_endpoints_fail_before_commands(self):
         self.configure()
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            configure_auth(self.home)
-        os.environ.update(OPENAI_API_KEY="key", CODEX_AUTH_JSON="{}")
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            configure_auth(self.home)
+        for name in (
+            "OPENAI_API_KEY",
+            "BROWSE_COMP_MODEL_BASE_URL",
+            "ZVEC_GREP_API_KEY",
+            "ZVEC_GREP_ENDPOINT",
+        ):
+            with (
+                self.subTest(name=name),
+                patch.dict(os.environ, {name: ""}),
+                patch("zg_bench.ci.subprocess.run") as run,
+            ):
+                with self.assertRaises(ValueError):
+                    configure_auth(self.home)
+                run.assert_not_called()
 
+    @patch("zg_bench.ci.prepare_judge_home")
     @patch("zg_bench.ci.subprocess.run")
-    def test_incompatible_codex_fails_before_corpus_preparation(self, run):
+    def test_incompatible_opencode_fails_before_corpus_preparation(self, run, prepare):
         self.configure()
-        os.environ["OPENAI_API_KEY"] = "key"
-        run.return_value.stdout = "--ephemeral"
-        with self.assertRaisesRegex(ValueError, "--ignore-rules"):
+        run.return_value.stdout = "--model"
+        run.return_value.stderr = ""
+        with self.assertRaisesRegex(ValueError, "--format"):
             configure_auth(self.home)
-        self.assertFalse(self.home.exists())
+        prepare.assert_not_called()
+
+    @unittest.skipUnless(
+        os.environ.get("OPENCODE_BENCHMARK_TEST_BINARY"),
+        "set OPENCODE_BENCHMARK_TEST_BINARY to validate the installed CLI offline",
+    )
+    def test_pinned_opencode_supports_required_run_flags(self):
+        # setUp isolates credentials, so capture the explicitly selected binary on the class.
+        result = subprocess.run(
+            [self.opencode_binary, "run", "--help"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        for flag in ("--format", "--model", "--agent", "--dir", "--pure"):
+            self.assertIn(flag, result.stdout + result.stderr)
+
+    opencode_binary = os.environ.get("OPENCODE_BENCHMARK_TEST_BINARY", "opencode")
 
     def test_export_keeps_partial_evidence_and_excludes_auth_and_corpus(self):
         self.write("runs/run-1/run.json", '{"status":"partial"}')
@@ -113,8 +125,8 @@ class CIIntegrationTests(unittest.TestCase):
         self.write("source/data.jsonl", "gold data")
         self.write("workspaces/a/doc.md", "corpus")
         credential = self.root / "auth.json"
-        credential.write_text('{"tokens":{"access_token":"credential"}}')
-        profile = self.artifacts / "runs/run-1/profiles/baseline/codex-home"
+        credential.write_text('{"openai":{"key":"credential"}}')
+        profile = self.artifacts / "runs/run-1/profiles/baseline/opencode-home"
         profile.mkdir(parents=True)
         (profile / "auth.json").symlink_to(credential)
         summary = self.root / "step-summary.md"
@@ -143,16 +155,11 @@ class CIIntegrationTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertFalse(summary.exists())
 
-    def test_nested_and_refreshed_tokens_are_scanned(self):
-        os.environ["CODEX_AUTH_JSON"] = '{"tokens":{"access_token":"old-token"}}'
-        self.home.mkdir()
-        (self.home / "auth.json").write_text(
-            '{"tokens":{"access_token":"new-token","refresh_token":"new-refresh"}}'
-        )
-        self.assertTrue(
-            {b"old-token", b"new-token", b"new-refresh"} <= secret_values(self.home)
-        )
-        self.write("runs/run-1/cases/628/events.jsonl", "new-token")
+    def test_model_key_and_json_escaped_credentials_are_scanned(self):
+        os.environ["OPENAI_API_KEY"] = 'model-secret-with-"quote'
+        escaped = json.dumps(os.environ["OPENAI_API_KEY"])[1:-1]
+        self.assertIn(escaped.encode(), secret_values(self.home))
+        self.write("runs/run-1/cases/628/events.jsonl", escaped)
         with self.assertRaisesRegex(ValueError, "credential material"):
             self.export()
 
@@ -161,30 +168,39 @@ class CIIntegrationTests(unittest.TestCase):
         self.assertTrue(_contains_secret(path, {b"my-secret"}))
         self.assertFalse(_contains_secret(path, {b"absent"}))
 
-    def test_refreshed_profile_credentials_are_scanned(self):
-        self.write(
-            "runs/run-1/profiles/baseline/codex-home/auth.json",
-            '{"tokens":{"access_token":"profile-refreshed-token"}}',
-        )
-        self.write("runs/run-1/cases/628/events.jsonl", "profile-refreshed-token")
-        with self.assertRaisesRegex(ValueError, "credential material"):
-            self.export()
-
-    @patch("zg_bench.ci.subprocess.run")
-    def test_model_preflight_preserves_configured_model(self, run):
-        def command(args, **kwargs):
-            self.assertEqual(args[args.index("--model") + 1], load_config().run.model)
-            self.assertEqual(kwargs["timeout"], 180)
-            Path(args[args.index("-o") + 1]).write_text("OK")
-            return subprocess.CompletedProcess(args, 0)
-
-        run.side_effect = command
+    @patch("zg_bench.ci.resolve_executable", return_value=Path("/test/opencode"))
+    @patch("zg_bench.ci.prepare_judge_home")
+    @patch("zg_bench.opencode.run_prompt")
+    def test_model_preflight_preserves_configured_model(self, run, prepare, resolve):
+        prepare.side_effect = lambda config, artifacts, home: home
+        run.return_value = self.preflight_result()
         verify_model()
+        self.assertEqual(run.call_args.kwargs["model"], load_config().run.model)
+        self.assertEqual(run.call_args.kwargs["idle_timeout_seconds"], 180)
+        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 180)
+        self.assertEqual(run.call_args.args[0], resolve.return_value)
+        self.assertNotEqual(run.call_args.kwargs["home"], self.home)
+        self.assertFalse(run.call_args.kwargs["home"].exists())
 
-    @patch("zg_bench.ci.subprocess.run")
-    def test_model_preflight_failure_does_not_echo_provider_output(self, run):
-        run.return_value.returncode = 1
-        run.return_value.stderr = "unexpected credential in provider error"
+    @staticmethod
+    def preflight_result(*, errors=()):
+        return {
+            "exit_code": 0,
+            "idle_killed": False,
+            "trace": TraceSummary(
+                "test-session", "OK", "OK", True, Usage(), (), (), errors
+            ),
+        }
+
+    @patch("zg_bench.ci.resolve_executable", return_value=Path("/test/opencode"))
+    @patch("zg_bench.ci.prepare_judge_home")
+    @patch("zg_bench.opencode.run_prompt")
+    def test_model_preflight_failure_does_not_echo_provider_output(
+        self, run, prepare, resolve
+    ):
+        run.return_value = self.preflight_result(
+            errors=("unexpected credential in provider error",)
+        )
         with self.assertRaisesRegex(ValueError, "verify credential access") as error:
             verify_model()
         self.assertNotIn("unexpected credential", str(error.exception))
