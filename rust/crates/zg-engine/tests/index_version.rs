@@ -31,7 +31,6 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn explicit_options(root: &Path, address: SocketAddr) -> IndexOptions {
     IndexOptions {
-        name: Some(format!("index-version-{}", uuid::Uuid::new_v4())),
         embedding: Some(EmbeddingModelSpec {
             reference: "qwen/text-embedding-v4".into(),
             revision: None,
@@ -81,7 +80,7 @@ async fn assert_incompatible_operations(
             panic!("expected rebuild-required compatibility");
         };
         assert_eq!(actual, actual_version);
-        assert_eq!(expected_version, 3);
+        assert_eq!(expected_version, 2);
         assert!(!reason.is_empty());
         assert_manifest_unchanged(root, manifest)?;
     }
@@ -125,12 +124,12 @@ async fn assert_current_index(engine: &ZvecGrep, root: &Path) -> TestResult<Valu
     assert!(info.indexed);
     assert_eq!(
         info.compatibility,
-        IndexCompatibility::Compatible { version: 3 }
+        IndexCompatibility::Compatible { version: 2 }
     );
     assert_eq!(info.index_status(), IndexStatus::Ready);
     let manifest: Value =
         serde_json::from_slice(&fs::read(root.join(".zvec-grep/manifest.json"))?)?;
-    assert_eq!(manifest["indexVersion"], 3);
+    assert_eq!(manifest["indexVersion"], 2);
     assert!(manifest.get("manifestVersion").is_none());
     assert!(manifest["storageGeneration"].as_str().is_some());
     Ok(manifest)
@@ -149,8 +148,7 @@ async fn incompatible_versions_require_explicit_rebuild_across_public_operations
     for version in [
         Some(json!(0)),
         Some(json!(1)),
-        Some(json!(2)),
-        Some(json!(4)),
+        Some(json!(3)),
         Some(json!(5)),
         None,
         Some(Value::Null),
@@ -299,9 +297,12 @@ async fn rebuilding_node_index_preserves_old_data_until_successful_publication()
     assert_eq!((rebuilt.files_added, rebuilt.files_failed), (1, 0));
     assert_eq!(server.inputs.load(Ordering::Acquire), 1);
     let current = assert_current_index(&engine, root).await?;
-    assert_eq!(current["embeddings"][0]["model"]["provider"], "qwen");
     assert_eq!(
-        current["embeddings"][0]["model"]["name"],
+        current["defaultEmbeddingModel"]["model"]["provider"],
+        "qwen"
+    );
+    assert_eq!(
+        current["defaultEmbeddingModel"]["model"]["name"],
         "text-embedding-v4"
     );
     assert!(current.get("rootPaths").is_none());

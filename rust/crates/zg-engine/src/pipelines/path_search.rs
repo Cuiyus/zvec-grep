@@ -138,9 +138,9 @@ async fn selected_files(options: &PathsOptions) -> EngineResult<PathsResult> {
             // Workspace policy owns ignore and hidden selection for automatic lookup.
             hidden: true,
             no_ignore: true,
-            follow: scan.follow_symlinks,
-            max_depth: scan.max_depth,
-            max_file_size_bytes: scan.max_file_size_bytes,
+            follow: scan.follow_symlinks(),
+            max_depth: scan.max_depth(),
+            max_file_size_bytes: scan.max_file_size_bytes(),
             file_types: options.filter.file_types.clone(),
             excluded_file_types: options.filter.excluded_file_types.clone(),
             modified_after_epoch_ms: options.filter.modified_after_epoch_ms,
@@ -283,6 +283,7 @@ mod tests {
     use crate::{
         ZvecGrep,
         api::context::options::{FileCategory, FileFormat, GlobRule, QueryFilter},
+        api::index::options::ScanRulesUpdate,
         domain::{IndexState, ScanRules, Workspace},
         workspace::manifest::{WorkspaceManifest, write_workspace_manifest},
     };
@@ -310,7 +311,6 @@ mod tests {
         let home = root.join(".zvec-grep");
         let manifest = WorkspaceManifest::new(
             Workspace {
-                name: "paths".to_owned(),
                 root,
                 scan,
                 index: IndexState::Uninitialized,
@@ -442,20 +442,35 @@ mod tests {
             "src/a/auth.ts",
             "src/z/auth.ts",
             "src/z/noauth.ts",
+            "src/z/notes.md",
+            "src/z/tsconfig.json",
         ]);
         save_scan(
             root.path(),
-            ScanRules {
-                globs: vec![GlobRule::from("src/**")],
-                ..ScanRules::default()
-            },
+            ScanRulesUpdate {
+                globs: Some(vec![GlobRule::from("src/**")]),
+                included_formats: Some(vec![FileFormat::TypeScript]),
+                excluded_formats: Some(vec![FileFormat::Json]),
+                ..ScanRulesUpdate::default()
+            }
+            .apply(&ScanRules::default())
+            .expect("scan rules"),
         );
+        for query in ["notes.md", "tsconfig.json"] {
+            assert!(
+                search(options(root.path(), query))
+                    .await
+                    .expect("saved format restriction")
+                    .paths
+                    .is_empty()
+            );
+        }
         let mut request = options(&root.path().join("src"), "auth.ts");
         request.limit = Some(1);
         request.filter = QueryFilter {
             globs: vec![GlobRule::from("src/z/**")],
             file_types: vec!["ts".to_owned()],
-            formats: vec![FileFormat::TypeScript],
+            included_formats: vec![FileFormat::TypeScript],
             categories: vec![FileCategory::Code],
             modified_after_epoch_ms: Some(0),
             ..QueryFilter::default()
@@ -519,7 +534,13 @@ mod tests {
 
     #[tokio::test]
     async fn literal_fallback_intersects_saved_and_caller_filters_without_a_model() {
-        let root = fixture(&["src/notes.md", "src/decoy.md", "excluded/notes.md"]);
+        let root = fixture(&[
+            "src/notes.md",
+            "src/decoy.md",
+            "src/notes.txt",
+            "src/tsconfig.json",
+            "excluded/notes.md",
+        ]);
         fs::write(
             root.path().join("src/notes.md"),
             "Import src/auth.ts here.\n",
@@ -535,17 +556,35 @@ mod tests {
             "Import src/auth.ts here.\n",
         )
         .expect("excluded reference");
+        fs::write(
+            root.path().join("src/notes.txt"),
+            "Import src/auth.ts here.\n",
+        )
+        .expect("excluded text format");
+        fs::write(
+            root.path().join("src/tsconfig.json"),
+            "{\"reference\":\"src/auth.ts\"}\n",
+        )
+        .expect("excluded overlapping format");
         save_scan(
             root.path(),
-            ScanRules {
-                globs: vec![GlobRule::from("src/**")],
-                ..ScanRules::default()
-            },
+            ScanRulesUpdate {
+                globs: Some(vec![GlobRule::from("src/**")]),
+                included_formats: Some(vec![FileFormat::Markdown, FileFormat::TypeScript]),
+                excluded_formats: Some(vec![FileFormat::Json]),
+                ..ScanRulesUpdate::default()
+            }
+            .apply(&ScanRules::default())
+            .expect("scan rules"),
         );
         let engine = ZvecGrep::new();
         let mut request = options(root.path(), "src/auth.ts");
-        request.filter.formats = vec![FileFormat::Markdown];
-        request.filter.categories = vec![FileCategory::Document];
+        request.filter.included_formats = vec![
+            FileFormat::Markdown,
+            FileFormat::TypeScript,
+            FileFormat::Text,
+        ];
+        request.filter.categories = vec![FileCategory::Document, FileCategory::Code];
         request.limit = Some(1);
         let PathLookupResult::Text(result) = engine
             .lookup_path(request.clone())
@@ -557,6 +596,7 @@ mod tests {
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].relative_path, PathBuf::from("src/notes.md"));
         assert!(result.items[0].content.contains("src/auth.ts"));
+        assert_eq!(result.coverage, ContextCoverage::RgExhaustive);
         request.filter.globs = vec![GlobRule::from("excluded/**")];
         let PathLookupResult::Text(result) = engine
             .lookup_path(request)

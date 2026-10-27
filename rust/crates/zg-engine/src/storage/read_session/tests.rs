@@ -8,7 +8,7 @@ use crate::{
     domain::{
         Content, Entity, EntityFragment, EntityId, FileIndexStatus, FileRecord, FileSnapshot,
         FragmentId, IndexDescriptor, IndexState, Range, SourcePath, Workspace,
-        model::{EmbeddingModelInfo, Metric, ModelInfo},
+        model::{EmbeddingMetric, EmbeddingModelInfo, ModelInfo},
     },
     models::ModelRuntimeManager,
     pipelines::{indexed_search::service::context, indexing::service::WorkspaceIndexService},
@@ -59,10 +59,16 @@ impl Fixture {
         let root = self.home.parent().expect("workspace root");
         let mut manifest = WorkspaceManifest::new(
             Workspace {
-                name: "cache-fixture".into(),
                 root: root.to_path_buf(),
                 scan: crate::domain::ScanRules::default(),
-                index: IndexState::Enabled(IndexDescriptor::single(schema())),
+                index: IndexState::Enabled(Box::new(
+                    IndexDescriptor::new(
+                        schema(),
+                        std::collections::BTreeMap::new(),
+                        crate::domain::FTS_CONFIG,
+                    )
+                    .expect("index descriptor"),
+                )),
                 created_epoch_ms: 1,
                 updated_epoch_ms: 1,
             },
@@ -93,18 +99,24 @@ impl Fixture {
 }
 
 fn schema() -> EmbeddingModelInfo {
-    EmbeddingModelInfo {
-        model: ModelInfo {
-            provider: "fixture".into(),
-            name: "read-cache".into(),
-            endpoint: None,
-        },
-        dimension: 3,
-        metric: Metric::Cosine,
-        max_batch_size: 32,
-        max_input_tokens: None,
-        max_image_bytes: None,
-    }
+    EmbeddingModelInfo::new(
+        ModelInfo::new(
+            "fixture",
+            "read-cache",
+            [
+                crate::domain::ContentKind::Text,
+                crate::domain::ContentKind::Code,
+                crate::domain::ContentKind::Image,
+            ],
+            32,
+        )
+        .expect("valid model metadata"),
+        3,
+        EmbeddingMetric::Cosine,
+        None,
+        None,
+    )
+    .expect("valid embedding metadata")
 }
 
 fn write_text(home: &Path, storage_home: &Path, text: &str) {
@@ -120,30 +132,32 @@ fn write_text(home: &Path, storage_home: &Path, text: &str) {
         .resolve_file_ids(&[relative_path.to_path_buf()])
         .expect("file ID")[0];
     fs::write(home.parent().expect("root").join("source.txt"), text).expect("source file");
-    let file = FileRecord {
+    let file = FileRecord::new(
         id,
         relative_path,
-        snapshot: FileSnapshot {
+        FileSnapshot {
             size_bytes: text.len() as u64,
             modified_epoch_ms: None,
             content_hash: Some(crate::utils::sha256_hex(text.as_bytes())),
         },
-        index_status: FileIndexStatus::NotIndexed,
-    };
+        FileIndexStatus::NotIndexed,
+    )
+    .expect("file record");
     let content = Content::Text(text.into());
     let entity_id = EntityId::new(id, &content, Range::Full).expect("entity ID");
     let fragment_id = FragmentId::new(&entity_id, 0);
-    let entity = Entity {
-        id: entity_id.clone(),
-        file_id: id,
+    let entity = Entity::new(
+        entity_id.clone(),
+        id,
+        Range::Full,
         content,
-        source_range: Range::Full,
-        metadata: None,
-        fragments: vec![EntityFragment {
+        None,
+        vec![EntityFragment {
             id: fragment_id.clone(),
             range: Range::Full,
         }],
-    };
+    )
+    .expect("valid entity");
     storage
         .replace_file(
             &file,
@@ -151,7 +165,7 @@ fn write_text(home: &Path, storage_home: &Path, text: &str) {
             &[IndexedFragment {
                 entity_id,
                 fragment_id,
-                model: schema().model.reference(),
+                model: schema().model().reference(),
                 vector: vec![1.0, 0.0, 0.0],
                 fts_text: text.into(),
             }],
@@ -162,6 +176,96 @@ fn write_text(home: &Path, storage_home: &Path, text: &str) {
 
 fn cache() -> ReadSessionCache {
     ReadSessionCache::new(Duration::from_secs(60)).expect("cache worker")
+}
+
+fn assert_shutdown_waits_for_maintenance(shutdown: fn(ReadSessionCache), callers: usize) {
+    let (started, running) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let cache = ReadSessionCache::spawn(Duration::from_secs(60), move |weak| {
+        // Native retirement can keep the inner state alive after the last
+        // public cache handle is dropped. Shutdown must wait for that work.
+        let _inner = weak.upgrade().expect("cache state");
+        started.send(()).expect("worker started");
+        released
+            .recv_timeout(Duration::from_secs(5))
+            .expect("release maintenance");
+    })
+    .expect("cache worker");
+    running
+        .recv_timeout(Duration::from_secs(5))
+        .expect("maintenance running");
+    let (closing, close_started) = std::sync::mpsc::channel();
+    let (closed, close_finished) = std::sync::mpsc::channel();
+    let mut caches = (1..callers).map(|_| cache.clone()).collect::<Vec<_>>();
+    caches.push(cache);
+    let closers = caches
+        .into_iter()
+        .map(|cache| {
+            let closing = closing.clone();
+            let closed = closed.clone();
+            std::thread::spawn(move || {
+                closing.send(()).expect("shutdown started");
+                shutdown(cache);
+                closed.send(()).expect("shutdown finished");
+            })
+        })
+        .collect::<Vec<_>>();
+    for _ in 0..callers {
+        close_started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("start shutdown");
+    }
+    let premature_close = close_finished.recv_timeout(Duration::from_millis(100));
+    release.send(()).expect("release worker even on failure");
+    for _ in usize::from(premature_close.is_ok())..callers {
+        close_finished
+            .recv_timeout(Duration::from_secs(5))
+            .expect("shutdown completes after maintenance");
+    }
+    for closer in closers {
+        closer.join().expect("shutdown thread");
+    }
+    assert!(
+        matches!(
+            premature_close,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "shutdown returned before maintenance finished"
+    );
+}
+
+#[test]
+fn explicit_close_waits_for_maintenance() {
+    assert_shutdown_waits_for_maintenance(|cache| cache.close(), 1);
+}
+
+#[test]
+fn last_cache_drop_waits_for_maintenance() {
+    assert_shutdown_waits_for_maintenance(drop, 1);
+}
+
+#[test]
+fn concurrent_close_calls_wait_for_maintenance() {
+    assert_shutdown_waits_for_maintenance(|cache| cache.close(), 2);
+}
+
+#[test]
+fn dropping_a_clone_preserves_the_cache_until_the_last_owner() {
+    let fixture = Fixture::new();
+    let cache = cache();
+    let remaining = cache.clone();
+    let (home_lock, lease) = fixture.read(&cache);
+    let session = Arc::downgrade(&lease.session);
+    drop(lease);
+    drop(cache);
+    let lease = remaining
+        .acquire(&fixture.home, &fixture.storage_home)
+        .expect("remaining cache owner");
+    assert!(Weak::ptr_eq(&session, &Arc::downgrade(&lease.session)));
+    drop(lease);
+    drop(remaining);
+    assert_eq!(session.strong_count(), 0, "last owner closes idle storage");
+    drop(home_lock);
 }
 
 #[test]
@@ -205,7 +309,10 @@ fn expiry_starts_at_final_release_and_protects_active_queries() {
     let cache = cache();
     let (home_lock, lease) = fixture.read(&cache);
     let session = Arc::downgrade(&lease.session);
-    cache.inner.reap(Instant::now() + Duration::from_secs(120));
+    cache
+        .owner
+        .inner
+        .reap(Instant::now() + Duration::from_secs(120));
     assert!(
         lease.storage().list_files().is_ok(),
         "active query remains usable"
@@ -213,9 +320,9 @@ fn expiry_starts_at_final_release_and_protects_active_queries() {
     drop(lease);
     drop(home_lock);
     let released = Instant::now();
-    cache.inner.reap(released + Duration::from_secs(59));
+    cache.owner.inner.reap(released + Duration::from_secs(59));
     assert_eq!(session.strong_count(), 1);
-    cache.inner.reap(released + Duration::from_secs(61));
+    cache.owner.inner.reap(released + Duration::from_secs(61));
     assert_eq!(session.strong_count(), 0);
 }
 
@@ -278,7 +385,7 @@ fn maintenance_does_not_recreate_removed_lock_files() {
     drop(home_lock);
     let lock_file = fixture.home.join("locks/home");
     fs::remove_file(&lock_file).expect("remove workspace lock");
-    cache.inner.reap(Instant::now());
+    cache.owner.inner.reap(Instant::now());
     assert!(
         !lock_file.exists(),
         "maintenance must not recreate deleted workspace paths"
@@ -393,7 +500,7 @@ fn failed_open_can_be_retried_without_leaking_a_residency_lock() {
 #[tokio::test]
 async fn indexed_queries_reuse_storage_but_resolve_the_current_manifest() {
     let fixture = Fixture::new();
-    let indexing = WorkspaceIndexService::with_test_registry();
+    let indexing = WorkspaceIndexService::new();
     let models = ModelRuntimeManager::new();
     let cache = cache();
     let (mut manifest, options) = fixture.publish();
@@ -402,7 +509,7 @@ async fn indexed_queries_reuse_storage_but_resolve_the_current_manifest() {
         .expect("first query");
     assert_eq!(first.items.len(), 1);
     let session = Arc::downgrade(
-        &lock(&lock(&cache.inner.state).entries[&fixture.home].entry)
+        &lock(&lock(&cache.owner.inner.state).entries[&fixture.home].entry)
             .as_ref()
             .expect("session")
             .session,
@@ -414,7 +521,7 @@ async fn indexed_queries_reuse_storage_but_resolve_the_current_manifest() {
     assert!(Weak::ptr_eq(
         &session,
         &Arc::downgrade(
-            &lock(&lock(&cache.inner.state).entries[&fixture.home].entry)
+            &lock(&lock(&cache.owner.inner.state).entries[&fixture.home].entry)
                 .as_ref()
                 .expect("session")
                 .session
@@ -446,7 +553,7 @@ async fn indexed_queries_reuse_storage_but_resolve_the_current_manifest() {
 async fn benchmark_warm_queries() {
     let fixture = Fixture::new();
     let (_, options) = fixture.publish();
-    let indexing = WorkspaceIndexService::with_test_registry();
+    let indexing = WorkspaceIndexService::new();
     let models = ModelRuntimeManager::new();
     let cache = cache();
     for (name, selected_cache) in [("uncached", None), ("resident", Some(&cache))] {

@@ -190,9 +190,12 @@ impl ModelSelection {
 
     fn lines(&self, root: &Path, height: u16) -> Vec<String> {
         let mut lines = vec![
-            format!("No index found in {}.", clean(&root.display().to_string())),
+            format!(
+                "No index found in {}.",
+                clean(&crate::output_path(root).display().to_string())
+            ),
             String::new(),
-            "Select an embedding model:".into(),
+            "Select an embedding model to build zg index:".into(),
             String::new(),
             if self.tab == 0 {
                 "  [ Local models ]    Remote models"
@@ -303,7 +306,10 @@ pub fn prompt_setup_authorization(
         let mut lines = vec![
             "Remote embedding authorization".into(),
             String::new(),
-            format!("  Workspace  {}", target.root.display()),
+            format!(
+                "  Workspace  {}",
+                crate::output_path(&target.root).display()
+            ),
             format!("  Model      {}", target.model),
             format!("  Endpoint   {}", target.endpoint),
             format!(
@@ -521,6 +527,7 @@ mod tests {
         picker.key(key(KeyCode::Down));
         let lines = picker.lines(Path::new("/workspace"), 12).join("\n");
         assert!(lines.contains("› local/two"));
+        assert!(lines.contains("Select an embedding model to build zg index:"));
         assert!(!lines.contains("local/one"));
         assert!(lines.contains("Esc Exit"));
     }

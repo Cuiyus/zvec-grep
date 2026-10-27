@@ -331,7 +331,7 @@ fn config_merges_settings_and_index_consumes_model_defaults() {
     )
     .expect("JSON");
     assert_eq!(
-        manifest["embeddings"][0]["model"]["name"],
+        manifest["defaultEmbeddingModel"]["model"]["name"],
         "potion-code-16m-v2"
     );
     assert_eq!(
@@ -395,7 +395,7 @@ fn binary_consumes_compact_color_and_debug_options() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("Context"));
     assert!(stdout.contains("sample.txt"));
-    assert!(stdout.contains("1: needle"));
+    assert!(stdout.contains("1: \x1b[1;33mneedle\x1b[0m"));
     assert!(stdout.contains("\x1b["));
     assert!(String::from_utf8_lossy(&output.stderr).contains("Diagnostics:"));
     let output = fixture.success(&["--rg", "--color", "never", "needle"]);

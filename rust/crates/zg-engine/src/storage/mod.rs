@@ -3,6 +3,7 @@ mod directories;
 mod entities;
 mod files;
 mod fragments;
+pub(crate) mod graph;
 mod path;
 pub(crate) mod read_session;
 mod record;

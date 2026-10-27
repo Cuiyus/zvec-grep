@@ -5,7 +5,10 @@ use rmcp::{ClientHandler, ServiceExt, model::*};
 use std::{collections::VecDeque, sync::Arc};
 
 #[derive(Default)]
-struct Jobs(Mutex<Vec<IndexOptions>>);
+struct Jobs(
+    Mutex<Vec<IndexOptions>>,
+    Mutex<Option<crate::IndexOperationError>>,
+);
 
 struct ExistingIndex;
 
@@ -84,6 +87,7 @@ impl IndexOperationProvider for Jobs {
             .expect("jobs")
             .iter()
             .find(|options| options.root.as_deref() == Some(root))?;
+        let error = self.1.lock().expect("job error").clone();
         Some(IndexRuntimeSnapshot {
             index_status: None,
             completion_baseline: None,
@@ -91,9 +95,13 @@ impl IndexOperationProvider for Jobs {
             dirty_revision: 0,
             indexed_revision: 0,
             active_job_id: Some("setup-job".into()),
-            job_state: Some(IndexOperationState::Queued),
+            job_state: Some(if error.is_some() {
+                IndexOperationState::Failed
+            } else {
+                IndexOperationState::Queued
+            }),
             progress: None,
-            error: None,
+            error,
         })
     }
 }
@@ -174,6 +182,69 @@ fn value(response: CallToolResponse) -> Value {
         other => panic!("expected complete response, got {other:?}"),
     };
     result.structured_content.expect("structured response")
+}
+
+fn setup_value(response: CallToolResponse, root: &Path) -> Value {
+    let CallToolResponse::Complete(result) = &response else {
+        panic!("expected setup result");
+    };
+    let ContentBlock::Text(text) = &result.content[0] else {
+        panic!("expected JSON text");
+    };
+    let text: Value = serde_json::from_str(&text.text).expect("JSON text");
+    let result = value(response);
+    assert_eq!(text, result);
+    let canonical = std::fs::canonicalize(root).expect("canonical root");
+    let expected = canonical.to_str().expect("Unicode temporary directory");
+    #[cfg(windows)]
+    let expected = expected
+        .strip_prefix(r"\\?\")
+        .expect("verbatim fixture path");
+    assert_eq!(result["root"], expected);
+    result
+}
+
+fn in_isolated_model_cache(test_name: &str) -> bool {
+    const FIXTURE_ENV: &str = "ZG_MCP_SETUP_TEST_MODEL_CACHE";
+    if let Some(cache) = std::env::var_os(FIXTURE_ENV) {
+        assert_eq!(
+            std::env::var_os("ZVEC_GREP_MODEL_CACHE"),
+            Some(cache.clone())
+        );
+        assert!(
+            std::fs::read_dir(cache)
+                .expect("isolated model cache")
+                .next()
+                .is_none(),
+            "setup protocol tests must start with an empty model cache"
+        );
+        return true;
+    }
+    // The MCP request has no model-cache override. Set it only in a child
+    // process so parallel tests never mutate or scan the real CI model cache.
+    let cache = tempfile::tempdir().expect("isolated model cache");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", test_name, "--nocapture"])
+        .env(FIXTURE_ENV, cache.path())
+        .env("ZVEC_GREP_MODEL_CACHE", cache.path())
+        .output()
+        .expect("isolated setup test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed; 0 failed;"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        cache
+            .path()
+            .read_dir()
+            .expect("model cache")
+            .next()
+            .is_none(),
+        "setup protocol tests must not download models"
+    );
+    false
 }
 
 #[test]
@@ -271,6 +342,11 @@ fn model_and_authorization_forms_follow_the_negotiated_protocol() {
 
 #[tokio::test]
 async fn an_existing_index_preserves_the_original_model_not_found_error() {
+    if !in_isolated_model_cache(
+        "setup::tests::an_existing_index_preserves_the_original_model_not_found_error",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().expect("workspace");
     let server = ZvecGrepMcpServer::build_with_index_operations(
         Arc::new(ZvecGrep::new()),
@@ -315,6 +391,11 @@ async fn an_existing_index_preserves_the_original_model_not_found_error() {
 
 #[tokio::test]
 async fn modern_setup_accepts_key_reordering_binds_arguments_and_rejects_replay() {
+    if !in_isolated_model_cache(
+        "setup::tests::modern_setup_accepts_key_reordering_binds_arguments_and_rejects_replay",
+    ) {
+        return;
+    }
     tokio::time::timeout(Duration::from_secs(15), async {
         let root = tempfile::tempdir().expect("workspace");
         let jobs = Arc::new(Jobs::default());
@@ -396,11 +477,12 @@ async fn modern_setup_accepts_key_reordering_binds_arguments_and_rejects_replay(
         for changed in [changed_value, changed_array] {
             assert!(client.call_tool_once(changed).await.is_err());
         }
-        let result = value(
+        let result = setup_value(
             client
                 .call_tool_once(retry.clone())
                 .await
                 .expect("accepted setup"),
+            root.path(),
         );
         assert_eq!(result["status"], "indexing");
         assert_eq!(result["job_id"], "setup-job");
@@ -409,17 +491,32 @@ async fn modern_setup_accepts_key_reordering_binds_arguments_and_rejects_replay(
             client.call_tool_once(retry).await.is_err(),
             "state is single use"
         );
-        let status = value(
+        let status = setup_value(
             client
-                .call_tool_once(original)
+                .call_tool_once(original.clone())
                 .await
                 .expect("pending index"),
+            root.path(),
         );
         assert_eq!(status["state"], "queued");
         assert_eq!(
             jobs.0.lock().expect("jobs").len(),
             1,
             "pending queries must not submit another job"
+        );
+        *jobs.1.lock().expect("job error") = Some(crate::IndexOperationError {
+            report: EngineError::storage_failure("injected build failure").into_report(),
+            retryable: true,
+        });
+        let failed = setup_value(
+            client.call_tool_once(original).await.expect("failed index"),
+            root.path(),
+        );
+        assert_eq!(failed["status"], "indexing_failed");
+        assert_eq!(
+            jobs.0.lock().expect("jobs")[0].root,
+            Some(std::fs::canonicalize(root.path()).expect("canonical root")),
+            "formatting replies must preserve the internal job location"
         );
         client.cancel().await.expect("close client");
         task.await.expect("server task").expect("stop server");
@@ -430,6 +527,9 @@ async fn modern_setup_accepts_key_reordering_binds_arguments_and_rejects_replay(
 
 #[tokio::test]
 async fn cancelled_or_expired_setup_never_submits_an_index() {
+    if !in_isolated_model_cache("setup::tests::cancelled_or_expired_setup_never_submits_an_index") {
+        return;
+    }
     tokio::time::timeout(Duration::from_secs(15), async {
         let root = tempfile::tempdir().expect("workspace");
         let jobs = Arc::new(Jobs::default());
@@ -517,6 +617,11 @@ async fn cancelled_or_expired_setup_never_submits_an_index() {
 
 #[tokio::test]
 async fn legacy_forms_can_select_models_and_unsupported_clients_receive_instructions() {
+    if !in_isolated_model_cache(
+        "setup::tests::legacy_forms_can_select_models_and_unsupported_clients_receive_instructions",
+    ) {
+        return;
+    }
     tokio::time::timeout(Duration::from_secs(15), async {
         for (version, forms) in [
             (ProtocolVersion::V_2025_06_18, true),

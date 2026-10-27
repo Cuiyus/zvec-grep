@@ -41,6 +41,14 @@ pub(crate) struct StoredEntity {
     pub file: FileRecord,
 }
 
+/// Canonical definition metadata for resolution, without source bodies or fragments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolutionCandidate {
+    pub entity_id: EntityId,
+    pub file: FileRecord,
+    pub metadata: crate::domain::CodeMetadata,
+}
+
 /// File attributes needed by query filters, without content hashes or index status.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StoredFileAttributes {
@@ -52,9 +60,9 @@ pub(crate) struct StoredFileAttributes {
 impl From<&FileRecord> for StoredFileAttributes {
     fn from(file: &FileRecord) -> Self {
         Self {
-            id: file.id,
-            relative_path: file.relative_path.to_path_buf(),
-            modified_epoch_ms: file.snapshot.modified_epoch_ms,
+            id: file.id(),
+            relative_path: file.relative_path().to_path_buf(),
+            modified_epoch_ms: file.snapshot().modified_epoch_ms,
         }
     }
 }

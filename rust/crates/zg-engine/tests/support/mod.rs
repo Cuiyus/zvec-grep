@@ -93,9 +93,9 @@ pub fn configure_remote_model(root: &Path, address: SocketAddr) -> std::io::Resu
     let manifest = json!({
         "name": name, "path": home,
         "root": root, "scan": {},
-        "indexPolicy": "enabled", "embeddings": [{ "model": { "provider": "qwen", "name": "text-embedding-v4", "endpoint": format!("http://{address}/embeddings") }, "dimension": 1024, "metric": "cosine", "maxBatchSize": 10, "maxInputTokens": 8192, "maxImageBytes": null }],
-        "embeddingRoutes": { "text": "qwen/text-embedding-v4" },
-        "indexVersion": 3, "storageGeneration": generation, "createdTime": 1, "updatedTime": 1,
+        "indexPolicy": "enabled", "defaultEmbeddingModel": { "model": { "provider": "qwen", "name": "text-embedding-v4", "contentKinds": ["text", "code"], "maxBatchSize": 10 }, "dimension": 1024, "metric": "cosine", "maxInputTokens": 8192, "maxImageBytes": null },
+        "embeddingRoutes": {},
+        "indexVersion": 2, "storageGeneration": generation, "createdTime": 1, "updatedTime": 1,
         "embeddingRuntimes": { "qwen/text-embedding-v4": { "apiKey": "local-test-key", "endpoint": format!("http://{address}/embeddings") } }
     });
     fs::write(home.join("manifest.json"), serde_json::to_vec(&manifest)?)

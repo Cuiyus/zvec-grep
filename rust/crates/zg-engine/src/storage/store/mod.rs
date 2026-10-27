@@ -18,16 +18,20 @@ use crate::{
 
 use super::{
     directories::Directories,
-    entities::{self, Entities},
+    entities::Entities,
     files::Files,
     fragments::{self, Fragments},
+    graph::{self, OpenMode, SqliteGraphStorage},
     types::{
         IndexedFragment, StorageSearchFilter, StorageSearchHit, StoredEntity, StoredFileAttributes,
         StoredSearchData, WorkspaceIndexStorageOptions,
     },
     zvec::{corrupt, initialize},
 };
+use crate::domain::FileGraphResult;
 use crate::domain::model::EmbeddingModelInfo;
+
+mod resolution;
 
 type StoreRegistry = Mutex<HashMap<PathBuf, Weak<SharedStore>>>;
 static STORES: OnceLock<StoreRegistry> = OnceLock::new();
@@ -45,6 +49,7 @@ struct StoreState {
     directories: Directories,
     entities: Entities,
     fragments: Fragments,
+    graph: Option<SqliteGraphStorage>,
     needs_optimize: bool,
     closed: bool,
 }
@@ -85,13 +90,12 @@ fn validate_models(embeddings: &[EmbeddingModelInfo]) -> EngineResult<()> {
     }
     let mut models = std::collections::HashSet::new();
     for embedding in embeddings {
-        embedding.validate()?;
-        if !(1..=20_000).contains(&embedding.dimension) {
+        if !(1..=20_000).contains(&embedding.dimension()) {
             return Err(EngineError::invalid_argument(
                 "embedding dimension must be in 1..=20,000",
             ));
         }
-        if !models.insert(embedding.model.reference()) {
+        if !models.insert(embedding.model().reference()) {
             return Err(EngineError::invalid_argument(
                 "embedding model references must be unique",
             ));
@@ -151,6 +155,18 @@ impl IndexStore {
         let directories = Directories::open(&path, read_only)?;
         let entities = Entities::open(&path, read_only)?;
         let fragments = Fragments::open(&path, &schema, read_only)?;
+        // Ordinary readers do not depend on the graph's availability.
+        let graph = if read_only {
+            None
+        } else {
+            let graph_path = home.join("graph").join("graph.sqlite");
+            // Current extractors produce no graph, so pre-graph indexes can
+            // initialize an empty database without rebuilding canonical data.
+            let graph =
+                SqliteGraphStorage::open(&graph_path, OpenMode::ReadWrite).map_err(graph_error)?;
+            sync_directory(&home.join("graph"))?;
+            Some(graph)
+        };
         if !read_only {
             directories.load()?;
         }
@@ -168,6 +184,7 @@ impl IndexStore {
                 directories,
                 entities,
                 fragments,
+                graph,
                 needs_optimize: false,
                 closed: false,
             }),
@@ -204,6 +221,12 @@ impl IndexStore {
             ));
         }
         let _lock = acquire_storage_lock(&home, false)?;
+        let graph_path = home.join("graph");
+        match fs::remove_dir_all(&graph_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error("delete workspace graph", &graph_path, &error)),
+        }
         fs::remove_dir_all(&path)
             .map_err(|error| io_error("delete workspace storage", &path, &error))?;
         sync_directory(&home)?;
@@ -308,38 +331,65 @@ impl IndexStore {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_file(
         &self,
         file: &FileRecord,
         entities: &[Entity],
         entries: &[IndexedFragment],
     ) -> EngineResult<()> {
+        self.replace_file_with_graph(file, entities, entries, &FileGraphResult::default())
+    }
+
+    /// Replace canonical content and relationships under the same store lock.
+    pub(crate) fn replace_file_with_graph(
+        &self,
+        file: &FileRecord,
+        entities: &[Entity],
+        entries: &[IndexedFragment],
+        graph: &FileGraphResult,
+    ) -> EngineResult<()> {
         let shared = self.shared()?;
         validate_batch(file, entities, entries, &shared.schema)?;
+        SqliteGraphStorage::validate_snapshot(file.id().get(), graph).map_err(graph_error)?;
+        let ids: HashSet<_> = entities.iter().map(|entity| entity.id().as_str()).collect();
+        if graph
+            .nodes
+            .iter()
+            .any(|node| !ids.contains(node.id.as_str()))
+        {
+            return Err(EngineError::invalid_argument(
+                "graph entity is absent from canonical file entities",
+            ));
+        }
         let mut file = file.clone();
-        file.index_status = FileIndexStatus::Indexed {
+        file.set_index_status(FileIndexStatus::Indexed {
             indexed_epoch_ms: now_epoch_ms()?,
             entity_count: u64::try_from(entities.len())
                 .map_err(|_| EngineError::invalid_argument("entity count exceeds u64"))?,
-        };
-        file.validate()?;
-        self.write(|state| replace_file(state, &file, entities, entries))
+        })?;
+        self.write(|state| replace_file(state, &file, entities, entries, graph))
     }
 
     pub(crate) fn mark_file_failed(&self, file: &FileRecord, error: &str) -> EngineResult<()> {
-        file.validate()?;
         let mut file = file.clone();
-        file.index_status = FileIndexStatus::Failed {
+        file.set_index_status(FileIndexStatus::Failed {
             error: error.to_owned(),
-        };
-        file.validate()?;
-        self.write(|state| replace_file(state, &file, &[], &[]))
+        })?;
+        self.write(|state| replace_file(state, &file, &[], &[], &FileGraphResult::default()))
     }
 
     pub(crate) fn delete_file(&self, file_id: FileId) -> EngineResult<()> {
         self.write(|state| {
             state.needs_optimize = true;
+            let old_ids = invalidation_entity_ids(state, file_id)?;
             state.files.mark_deleting(file_id)?;
+            state
+                .graph
+                .as_mut()
+                .expect("writable graph")
+                .delete_file_graph(file_id.get(), &old_ids)
+                .map_err(graph_error)?;
             state.fragments.delete_file(file_id)?;
             state.entities.delete_file(file_id)?;
             state.files.delete(file_id)
@@ -390,7 +440,12 @@ impl IndexStore {
         // Reject a write that acquired its Arc before close but is still waiting
         // for this lock. A successful close commits every accepted write.
         state.closed = true;
-        flush(&state)
+        let checkpoint = flush(&state);
+        let graph_close = state
+            .graph
+            .take()
+            .map_or(Ok(()), |graph| graph.close().map_err(graph_error));
+        checkpoint.and(graph_close)
     }
 }
 
@@ -400,23 +455,55 @@ fn replace_file(
     file: &FileRecord,
     entities: &[Entity],
     entries: &[IndexedFragment],
+    graph: &FileGraphResult,
 ) -> EngineResult<()> {
     state.files.validate(file)?;
-    state.entities.validate_ownership(entities, file.id)?;
-    state.fragments.validate_ownership(entries, file.id)?;
+    state.entities.validate_ownership(entities, file.id())?;
+    state.fragments.validate_ownership(entries, file.id())?;
     state.needs_optimize = true;
-    let directories = state.directories.ensure(&file.relative_path)?;
+    let directories = state.directories.ensure(file.relative_path())?;
     // Encode every projection before removing any of the previous file's data.
     let entity_docs = Entities::prepare(entities)?;
     let fragment_docs = Fragments::prepare(file, entities, entries, &directories)?;
+    let old_ids = invalidation_entity_ids(state, file.id())?;
     let mut unfinished = file.clone();
-    unfinished.index_status = FileIndexStatus::NotIndexed;
+    unfinished.set_index_status(FileIndexStatus::NotIndexed)?;
     state.files.put(&unfinished, &directories)?;
-    state.fragments.delete_file(file.id)?;
-    state.entities.delete_file(file.id)?;
+    // zvec writes are durable on success: record retry intent before advancing SQLite.
+    state
+        .graph
+        .as_mut()
+        .expect("writable graph")
+        .write_file_graph(file.id().get(), graph, &old_ids)
+        .map_err(graph_error)?;
+    state.fragments.delete_file(file.id())?;
+    state.entities.delete_file(file.id())?;
     state.entities.write(&entity_docs)?;
     state.fragments.write(&fragment_docs)?;
+    // Indexed is the publication marker: all content must already be durable.
     state.files.put(file, &directories)
+}
+
+fn invalidation_entity_ids(state: &StoreState, file_id: FileId) -> EngineResult<Vec<String>> {
+    // An empty graph has no incoming relationships to invalidate. Avoid a
+    // canonical entity scan on every file while extractors produce no graph.
+    if state
+        .graph
+        .as_ref()
+        .expect("writable graph")
+        .is_empty()
+        .map_err(graph_error)?
+    {
+        return Ok(Vec::new());
+    }
+    state.entities.list_ids_for_file(file_id)
+}
+
+fn graph_error(error: graph::Error) -> EngineError {
+    match error {
+        graph::Error::InvalidInput(message) => EngineError::invalid_argument(message),
+        error => EngineError::storage_failure(format!("workspace graph operation failed: {error}")),
+    }
 }
 
 fn load_search_hits(
@@ -441,10 +528,10 @@ fn load_search_hits(
     let mut fragments = HashMap::new();
     for entity in stored_entities.into_values() {
         // A replacement or deletion can stop between collection writes.
-        let Some(file) = files.get(&entity.file_id) else {
+        let Some(file) = files.get(&entity.file_id()) else {
             continue;
         };
-        for fragment in &entity.fragments {
+        for fragment in entity.fragments() {
             if fragments
                 .insert(fragment.id.as_str().to_owned(), fragment.clone())
                 .is_some()
@@ -453,7 +540,7 @@ fn load_search_hits(
             }
         }
         entities.insert(
-            entity.id.clone(),
+            entity.id().clone(),
             StoredEntity {
                 entity,
                 file: file.clone(),
@@ -462,7 +549,7 @@ fn load_search_hits(
     }
     for hit in hits {
         if let Some(owner) = entities.get(&hit.entity_id)
-            && owner.file.id != hit.file_id
+            && owner.file.id() != hit.file_id
         {
             return Err(corrupt("search identities differ from their stored entity"));
         }
@@ -493,21 +580,18 @@ fn validate_batch(
     entries: &[IndexedFragment],
     schema: &[EmbeddingModelInfo],
 ) -> EngineResult<()> {
-    file.validate()?;
     let mut entity_ids = HashSet::new();
     let mut fragment_ids = HashSet::new();
     for entity in entities {
-        if entity.file_id != file.id {
+        if entity.file_id() != file.id() {
             return Err(EngineError::invalid_argument(
                 "entity belongs to a different file",
             ));
         }
-        if !entity_ids.insert(&entity.id) {
+        if !entity_ids.insert(entity.id()) {
             return Err(EngineError::invalid_argument("duplicate entity id"));
         }
-        entity.validate()?;
-        entities::validate_content(&entity.content)?;
-        for fragment in &entity.fragments {
+        for fragment in entity.fragments() {
             if !fragment_ids.insert(&fragment.id) {
                 return Err(EngineError::invalid_argument("duplicate fragment id"));
             }
@@ -526,15 +610,15 @@ fn model_schema<'a>(
 ) -> EngineResult<&'a EmbeddingModelInfo> {
     schemas
         .iter()
-        .find(|schema| schema.model.reference() == model)
+        .find(|schema| schema.model().reference() == model)
         .ok_or_else(|| EngineError::invalid_argument(format!("unknown embedding model {model:?}")))
 }
 
 fn validate_vector(vector: &[f32], schema: &EmbeddingModelInfo) -> EngineResult<()> {
-    if vector.len() != schema.dimension || vector.iter().any(|value| !value.is_finite()) {
+    if vector.len() != schema.dimension() || vector.iter().any(|value| !value.is_finite()) {
         return Err(EngineError::invalid_argument(format!(
             "expected a finite {}-dimensional vector, got {} values",
-            schema.dimension,
+            schema.dimension(),
             vector.len()
         )));
     }
@@ -556,12 +640,14 @@ fn load_schema(
             }
             for stored in &schema {
                 let current =
-                    model_schema(embeddings, &stored.model.reference()).map_err(|_| {
+                    model_schema(embeddings, &stored.model().reference()).map_err(|_| {
                         EngineError::invalid_argument(
                             "embedding model set changed; rebuild the index",
                         )
                     })?;
-                stored.ensure_index_compatible(current)?;
+                stored.ensure_index_compatible(current).map_err(|error| {
+                    error.with_help("Rebuild the index with `zg --index --rebuild`.")
+                })?;
             }
         }
         return Ok(schema);
@@ -691,3 +777,6 @@ mod tests;
 
 #[cfg(test)]
 mod tables_tests;
+
+#[cfg(test)]
+mod graph_tests;
