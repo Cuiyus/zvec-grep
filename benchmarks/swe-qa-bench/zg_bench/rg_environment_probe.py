@@ -53,7 +53,7 @@ def agent_spec(command: list[str]) -> tuple[str, str, dict]:
     return command_value(command, "--agent"), command_value(command, "--model"), kwargs
 
 
-def fixture_command(version: str) -> str:
+def fixture_command(version: str, binary_sha256: str) -> str:
     """Runs inside OpenCode's bash tool with its inherited identity/PATH/cwd."""
     return (
         "set -euo pipefail; "
@@ -63,9 +63,11 @@ def fixture_command(version: str) -> str:
         "printf 'RG_PROBE_PATH=%s\\n' \"$PATH\"; "
         "printf 'RG_PROBE_BINARY=%s\\n' \"$(command -v rg)\"; "
         "command -v rg; rg --version; "
-        f"test \"$(rg --version | head -n 1)\" = {shlex.quote('ripgrep ' + version)}; "
-        "sha256sum \"$(readlink -f \"$(command -v rg)\")\"; "
-        "printf 'RG_PROBE_SHA256=%s\\n' \"$(sha256sum \"$(readlink -f \"$(command -v rg)\")\" | cut -d ' ' -f 1)\"; "
+        # Official builds include a revision suffix after the version field.
+        f"test \"$(rg --version | awk 'NR == 1 {{print $2}}')\" = {shlex.quote(version)}; "
+        "rg_binary_sha256=\"$(sha256sum \"$(readlink -f \"$(command -v rg)\")\" | cut -d ' ' -f 1)\"; "
+        "printf 'RG_PROBE_SHA256=%s\\n' \"$rg_binary_sha256\"; "
+        f"test \"$rg_binary_sha256\" = {shlex.quote(binary_sha256)}; "
         "test \"$(pwd -P)\" = /app; "
         "printf 'RG_PROBE_NEEDLE\\nother\\n' | rg -n -x -F RG_PROBE_NEEDLE; "
         "probe_file=README.md; test -f \"$probe_file\"; "
@@ -257,7 +259,8 @@ async def run_case(model_key: str, arm: str, *, task, output: Path,
                 {"type": "bind", "source": str(paths.artifacts_dir), "target": "/logs/artifacts"},
             ])
         provider_path = paths.agent_dir / "probe-provider.cjs"
-        provider_path.write_text(provider_source(fixture_command(RIPGREP_VERSION), allow_children=allowed))
+        provider_path.write_text(provider_source(
+            fixture_command(RIPGREP_VERSION, RIPGREP_BINARY_SHA256), allow_children=allowed))
         started = time.monotonic()
         evidence = {"model_key": model_key, "arm": arm, "passed": False,
                     "paid_model_calls": 0, "adapter": adapter}

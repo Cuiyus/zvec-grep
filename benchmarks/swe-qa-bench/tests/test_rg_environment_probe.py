@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import importlib
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -28,7 +30,7 @@ def evidence(*, allowed: bool):
                 "RG_PROBE_UID=0", "RG_PROBE_USER=root", "RG_PROBE_CWD=/app",
                 "RG_PROBE_PATH=/usr/local/bin:/usr/bin", "RG_PROBE_BINARY=/usr/local/bin/rg",
                 "RG_PROBE_SHA256=" + "a" * 64,
-                "ripgrep 14.1.1", "1:RG_PROBE_NEEDLE", "1:Conan README", "RG_PROBE_SUCCESS",
+                "ripgrep 14.1.1 (rev 4649aa9700)", "1:RG_PROBE_NEEDLE", "1:Conan README", "RG_PROBE_SUCCESS",
             ]),
         })})
     if allowed:
@@ -150,8 +152,9 @@ class ProbeTests(unittest.TestCase):
                             "ZvecOpenCode" if profile == "zvec-grep" else "ResilientOpenCode")
 
     def test_fixture_has_command_lookup_strict_version_and_repo_search(self):
-        command = fixture_command("14.1.1")
-        for expected in ("command -v rg", "rg --version", "ripgrep 14.1.1",
+        command = fixture_command("14.1.1", "a" * 64)
+        for expected in ("command -v rg", "rg --version", "= 14.1.1;",
+                         'test "$rg_binary_sha256" = ' + "a" * 64,
                          "sha256sum", "id -u", "pwd -P", '"$PATH"',
                          "rg -n -x -F RG_PROBE_NEEDLE", "probe_file=README.md", "RG_PROBE_SUCCESS"):
             self.assertIn(expected, command)
@@ -159,6 +162,45 @@ class ProbeTests(unittest.TestCase):
         self.assertIn('server.listen(settings.port, "127.0.0.1"', source)
         self.assertIn('"general", "explore"', source)
         self.assertNotIn("https://", source)
+
+    def test_real_bash_accepts_revision_suffix_but_rejects_wrong_version_or_sha(self):
+        # Replay the official first line seen in run 40437012841. Execute the
+        # actual shell fixture, not a Python imitation of its comparisons.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("Probe README\n")
+            scripts = {
+                "rg": '''#!/bin/sh
+case "$*" in
+  --version) printf '%s\\n' "$RG_FIXTURE_VERSION" '' 'features:+pcre2' ;;
+  '-n -x -F RG_PROBE_NEEDLE') read -r line; test "$line" = RG_PROBE_NEEDLE || exit 2; printf '1:RG_PROBE_NEEDLE\\n' ;;
+  '-n -m 1 [A-Za-z] README.md') test -f README.md || exit 2; printf '1:Probe README\\n' ;;
+  *) exit 3 ;;
+esac
+''',
+                "sha256sum": '#!/bin/sh\nprintf "%s  %s\\n" "$RG_FIXTURE_SHA256" "$1"\n',
+                "readlink": '#!/bin/sh\nprintf "%s\\n" "$2"\n',
+            }
+            for name, source in scripts.items():
+                executable = root / name
+                executable.write_text(source)
+                executable.chmod(0o755)
+            for label, version, digest, success in (
+                ("official-revision", "ripgrep 14.1.1 (rev 4649aa9700)", "a" * 64, True),
+                ("plain-version", "ripgrep 14.1.1", "a" * 64, True),
+                ("different-version", "ripgrep 14.1.10 (rev 4649aa9700)", "a" * 64, False),
+                ("wrong-binary", "ripgrep 14.1.1 (rev 4649aa9700)", "b" * 64, False),
+            ):
+                with self.subTest(case=label):
+                    result = subprocess.run([
+                        "bash", "-c", "pwd() { printf '/app\\n'; }; " + fixture_command("14.1.1", "a" * 64),
+                    ], cwd=root, capture_output=True, text=True, env={
+                        **os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                        "RG_FIXTURE_VERSION": version, "RG_FIXTURE_SHA256": digest,
+                    }, timeout=10)
+                    self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                    self.assertEqual("RG_PROBE_SUCCESS" in result.stdout, success)
+                    self.assertEqual("1:RG_PROBE_NEEDLE" in result.stdout, success)
 
 
 if __name__ == "__main__":
