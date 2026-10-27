@@ -11,7 +11,7 @@ import tarfile
 import threading
 
 BASE = '732a44014654c7acf08553716af67865bcfb8430'
-PATCHED = '1bf6c0073d297d6f78fae133214568d09fe99941'
+PATCHED = '307e428800838090986f57ec4f216b75fe0ab1eb'
 OLD_TARBALL_SHA = '30592b2be9c2cfc10e10211b38b7fb956b35c93ceee01ae890f6d7bdff768221'
 
 
@@ -87,6 +87,10 @@ def main():
         assert unannotated(before['tools'])==unannotated(after['tools']), 'Schema types/constraints or metadata changed'
         search=next(t for t in after['tools'] if t['name']=='zvec_grep_search')
         assert 'Do not JSON-stringify arrays.' in search['description']
+        query_type=search['inputSchema']['$defs']['QueryListInput']
+        assert 'one literal query' in query_type['description']
+        assert 'not decoded' in query_type['anyOf'][0]['description']
+        assert 'array of strings directly' in query_type['anyOf'][1]['description']
         for f in ['queries','fts','vector']:
             assert 'Do not JSON-stringify arrays.' in search['inputSchema']['properties'][f]['description']
     results['passed']=True
