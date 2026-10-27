@@ -120,12 +120,13 @@ class QwenE2ETests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'do not overwrite'):
                 run.run(args)
 
-    def test_workflow_only_rust_and_two_explicit_phases(self):
+    def test_workflow_only_rust_and_explicit_description_phases(self):
         wf = yaml.safe_load((run.versions.ROOT.parents[1] / '.github/workflows/swe-qa-bench.yml').read_text())
         self.assertIn('package-rust', wf['jobs'])
         self.assertNotIn('package-node', wf['jobs'])
         commands = '\n'.join(step.get('run', '') for job in wf['jobs'].values() for step in job.get('steps', []))
-        self.assertIn('zg_bench.qwen_subagent_e2e', commands)
+        self.assertIn('zg_bench.mcp_description_e2e', commands)
+        self.assertEqual(wf['on']['workflow_dispatch']['inputs']['phase']['options'], ['package', 'smoke', 'formal'])
         self.assertNotIn('zg_bench.no_subagent_e2e', commands)
         self.assertEqual(wf['jobs']['task']['strategy']['max-parallel'], 8)
         self.assertFalse(wf['jobs']['task']['strategy']['fail-fast'])
