@@ -30,7 +30,8 @@ LIFECYCLE_CONTRACT = dict(
     rule='frozen-opencode-pre-agent-apt-curl-exit100', source_binding='exact-reviewed-lifecycle-file-hashes-and-recorded-execution-head',
     harbor_version='0.18.0',
     repository_sha256={
-        'zg_bench/agents/opencode.py': '5e3e2bdbb6fed972bc0e73eb9bed9ad8782ef2d5b8829a8639c5dbf62953891b',
+        'zg_bench/agents/opencode.py': '6403be34ad6b7513acb18ff4d17e1fa9518378c4a8f4fcb77e80046156d02d41',
+        'zg_bench/agents/ripgrep.py': '81f88372d8988bf62d5aa96f255ac69ce9b210560a98069fed975fecf02338bd',
         'zg_bench/agents/zvec_grep.py': '759bec239d95192892d415c9d668fa75618c55d55460322760b08bb3e9147ece',
         'zg_bench/agents/zvec_opencode.py': 'f72f0ed054fc6e37bcb375634315adf7ccad5882d1a0206089195e51f3a3412a',
         'uv.lock': '136fb8c5a3cc96828223968c572f39847f85476415bc59fa28f9765d37b7b751',
