@@ -1184,10 +1184,13 @@ struct ModelStatusOutput {
     active_leases: usize,
 }
 
+/// A string is one literal query; an array creates one query per string.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum QueryListInput {
+    /// One literal query. JSON text is not decoded into multiple queries.
     One(#[schemars(length(max = 4000))] String),
+    /// Multiple queries. Pass an array of strings directly, e.g. ["a","b"].
     Many(#[schemars(length(max = 32), inner(length(max = 4000)))] Vec<String>),
 }
 
