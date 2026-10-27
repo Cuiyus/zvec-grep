@@ -12,11 +12,17 @@ run-name: Qwen3.8-Max MCP descriptions ${{ inputs.phase }}
         - package
         - smoke
         - formal
+      verified_package_run:
+        description: Formal requires a successful smoke run whose exact native package is reused
+        required: false
+        default: ''
+        type: string
 permissions: {}
 env:
   SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
   ZG_BENCH_DISABLE_SUBAGENTS: '1'
   MCP_DESCRIPTION_PACKAGE_RUN_ID: ${{ github.run_id }}
+  MCP_VERIFIED_PACKAGE_RUN: ${{ inputs.verified_package_run }}
 concurrency:
   group: qwen38-subagent-ablation-${{ github.run_id }}
   cancel-in-progress: false
@@ -166,15 +172,46 @@ jobs:
     - uses: actions/setup-node@v6
       with:
         node-version: '24'
+    - name: Require successful smoke provenance before formal package reuse
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERIFIED_PACKAGE_RUN: ${{ inputs.verified_package_run }}
+        BENCH_PHASE: ${{ inputs.phase }}
+      run: |-
+        python3 - <<'PYCODE'
+        import os,json,subprocess
+        run_id=os.environ['VERIFIED_PACKAGE_RUN']
+        if os.environ['BENCH_PHASE']=='formal':
+         assert run_id, 'Formal evaluation requires a successful independent smoke run'
+        if run_id:
+         assert run_id.isdigit()
+         source=json.loads(subprocess.check_output(['gh','api',f'repos/Cuiyus/zvec-grep/actions/runs/{run_id}'],text=True))
+         assert source['repository']['full_name']=='Cuiyus/zvec-grep'
+         assert source['head_branch']=='dev/e2e-mcp-query-description-qwen38-20261028'
+         assert source['event']=='workflow_dispatch' and source['status']=='completed' and source['conclusion']=='success'
+         assert source['display_title']=='Qwen3.8-Max MCP descriptions smoke'
+         print('Reusing the exact package from verified smoke run',run_id,source['head_sha'])
+        PYCODE
+    - name: Download the exact smoke-verified native package
+      if: inputs.verified_package_run != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: three-arm-package-rust
+        run-id: ${{ inputs.verified_package_run }}
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/rust-package-cache
     - name: Build frozen Rust plus only MCP descriptions
       uses: ./.github/actions/rust-candidate-package
       with:
         candidate_repository: Cuiyus/zvec-grep
         candidate_ref: 16dc26598be92b5ae9cbaf1f4d99b1856ff862bb
         cache_namespace: sweqa-mcp-description-frozen
+      if: inputs.verified_package_run == ''
     - name: Run actual generated-schema and string/list compatibility tests
       working-directory: candidate/rust
       run: cargo test --locked --release --package zg-transport-mcp --lib
+      if: inputs.verified_package_run == ''
     - uses: actions/download-artifact@v8
       with:
         name: three-arm-package-rust
@@ -197,12 +234,18 @@ jobs:
     - name: Record package and native CLI fingerprints
       run: |-
         python3 - <<'PYCODE'
-        import os,json,hashlib,tarfile
+        import os,json,hashlib,tarfile,sys
+        sys.path.insert(0, "benchmarks/swe-qa-bench")
+        from zg_bench.mcp_description_e2e import DESCRIPTION_SOURCE, EXPECTED_TARBALL_SHA, EXPECTED_CLI_SHA
         from pathlib import Path
         p=Path(os.environ['RUNNER_TEMP'])/'rust-package-cache'
         m=json.loads((p/'manifest.json').read_text())
         with tarfile.open(p/'candidate.tgz') as archive:
          m['cli_sha256']=hashlib.file_digest(archive.extractfile('package/bin/zg'),'sha256').hexdigest()
+        assert m['candidate_commit'] == DESCRIPTION_SOURCE
+        assert m['tarball_sha256'] == EXPECTED_TARBALL_SHA
+        assert m['cli_sha256'] == EXPECTED_CLI_SHA
+        m['reused_from_run_id'] = os.environ.get('MCP_VERIFIED_PACKAGE_RUN') or None
         m['source_base']='732a44014654c7acf08553716af67865bcfb8430'
         m['description_source_commit']='16dc26598be92b5ae9cbaf1f4d99b1856ff862bb'
         Path(os.environ['RUNNER_TEMP'],'description-package-identity.json').write_text(json.dumps(m,indent=2)+'\n')

@@ -14,6 +14,8 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 BASE_RUST = '732a44014654c7acf08553716af67865bcfb8430'
 DESCRIPTION_SOURCE = '16dc26598be92b5ae9cbaf1f4d99b1856ff862bb'
+EXPECTED_TARBALL_SHA = '93f7daef42caf3d2dd1245d12cfe7b82cdcb65e4aceddfb14f092fb794f8caba'
+EXPECTED_CLI_SHA = 'becc5e7892b68b4a5cb2e757a02ab7ad4585639ed2f4de8710c60d8da3222e3d'
 SMOKE_TASKS = ['conan-19', 'django-32', 'xarray-32']
 
 
@@ -22,9 +24,10 @@ def prepare(packages, output):
     manifest = json.loads((package.parent / 'manifest.json').read_text())
     assert manifest['candidate_commit'] == DESCRIPTION_SOURCE
     digest = hashlib.file_digest(package.open('rb'), 'sha256').hexdigest()
-    assert digest == manifest['tarball_sha256']
+    assert digest == manifest['tarball_sha256'] == EXPECTED_TARBALL_SHA
     with tarfile.open(package) as archive:
         cli = hashlib.file_digest(archive.extractfile('package/bin/zg'), 'sha256').hexdigest()
+    assert cli == EXPECTED_CLI_SHA
     config_path = ROOT.parent / 'version-comparison/experiment.json'
     old = json.loads(config_path.read_text())
     assert old['rust']['source_commit'] in (BASE_RUST, DESCRIPTION_SOURCE)
@@ -57,7 +60,8 @@ def entry():
             run_id=int(os.environ['MCP_DESCRIPTION_PACKAGE_RUN_ID']))
         experiment['description_intervention'] = dict(source_base=BASE_RUST,
             source_commit=DESCRIPTION_SOURCE, original_run=40441908468,
-            production_delta='MCP search tool and queries/fts/vector descriptions only')
+            production_delta='MCP search tool and queries/fts/vector descriptions only',
+            package_reused_from=os.environ.get('MCP_VERIFIED_PACKAGE_RUN') or None)
         return experiment
     qwen.selected_tasks = tasks
     qwen.configure = configure
