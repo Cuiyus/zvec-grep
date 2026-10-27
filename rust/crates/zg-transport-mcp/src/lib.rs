@@ -2868,7 +2868,11 @@ mod tests {
     #[test]
     fn query_list_descriptions_preserve_string_and_array_semantics() {
         let server = ZvecGrepMcpServer::agent_direct(Arc::new(ZvecGrep::new()));
-        let tool = server.listed_tools().into_iter().next().expect("search tool");
+        let tool = server
+            .listed_tools()
+            .into_iter()
+            .next()
+            .expect("search tool");
         assert!(
             tool.description
                 .as_deref()
@@ -2893,7 +2897,10 @@ mod tests {
             ] {
                 let parsed: super::QueryListInput =
                     serde_json::from_value(value).expect("string or array");
-                assert_eq!(parsed.normalized(field).expect("valid query list"), expected);
+                assert_eq!(
+                    parsed.normalized(field).expect("valid query list"),
+                    expected
+                );
             }
         }
     }
