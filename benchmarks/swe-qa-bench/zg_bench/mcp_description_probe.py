@@ -80,6 +80,7 @@ http.createServer(async (request, response) => {
 
 
 def validate(field, snapshot, requests):
+    assert requests and all(r.get('model') == 'qwen3.8-max' for r in requests), 'Unexpected model ID'
     rows = [(r['kind'], json.loads(r['data']) if isinstance(r['data'], str) else r['data']) for r in snapshot]
     tools = [r for kind,r in rows if kind == 'tool' and 'zvec_grep_search' in r['name']]
     visible = [t['function'] for r in requests for t in r.get('tools', [])
@@ -155,7 +156,7 @@ async def run_case(field, task, output, packages, identity):
                 {'type':'bind','source':str(paths.verifier_dir),'target':'/logs/verifier'},
                 {'type':'bind','source':str(paths.artifacts_dir),'target':'/logs/artifacts'}])
         (paths.agent_dir/'proxy.cjs').write_text(proxy_source(upstream))
-        prompt = (f'Use zvec_grep_search with the {field} field for two independent searches: '
+        prompt = (f'Use zvec_grep_search once with the {field} field for two independent searches: '
                   + ' and '.join(repr(x) for x in PROBES[field])
                   + '. Keep them independent. Then report the query-group count from the tool reply.')
         write_json(output/'probe-protocol.json', dict(field=field, prompt=prompt,
