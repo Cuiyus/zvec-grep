@@ -126,7 +126,7 @@ class QwenE2ETests(unittest.TestCase):
         self.assertNotIn('package-node', wf['jobs'])
         commands = '\n'.join(step.get('run', '') for job in wf['jobs'].values() for step in job.get('steps', []))
         self.assertIn('zg_bench.mcp_description_e2e', commands)
-        self.assertEqual(wf['on']['workflow_dispatch']['inputs']['phase']['options'], ['package', 'smoke', 'formal'])
+        self.assertEqual(wf['on']['workflow_dispatch']['inputs']['phase']['options'], ['package', 'smoke', 'formal', 'schema-reference'])
         self.assertNotIn('zg_bench.no_subagent_e2e', commands)
         self.assertEqual(wf['jobs']['task']['strategy']['max-parallel'], 8)
         self.assertFalse(wf['jobs']['task']['strategy']['fail-fast'])

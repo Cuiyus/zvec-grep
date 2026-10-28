@@ -4,7 +4,7 @@ run-name: Qwen3.8-Max MCP descriptions ${{ inputs.phase }}
   workflow_dispatch:
     inputs:
       phase:
-        description: Build only, independent format/original-task smoke, or 600 formal answers
+        description: Package, smoke, formal, or approved six-generation schema-reference diagnostic
         required: true
         default: smoke
         type: choice
@@ -12,6 +12,7 @@ run-name: Qwen3.8-Max MCP descriptions ${{ inputs.phase }}
         - package
         - smoke
         - formal
+        - schema-reference
       verified_package_run:
         description: Formal requires a successful smoke run whose exact native package is reused
         required: false
@@ -97,6 +98,7 @@ jobs:
         uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_ripgrep*.py' -v
         uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_rg_environment_probe.py' -v
         uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_mcp_description.py -v
+        uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p test_mcp_schema_reference.py -v
       env:
         OPENCODE_TEST_BINARY: ${{ runner.temp }}/opencode-guard/node_modules/.bin/opencode
         OPENCODE_TEST_EVIDENCE_DIR: ${{ runner.temp }}/no-subagent-permission-preflight
@@ -118,7 +120,7 @@ jobs:
         import json, os
         from zg_bench.mcp_description_e2e import selected_tasks
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-            print('matrix=' + json.dumps({'task': ([] if os.environ['BENCH_PHASE'] == 'package' else selected_tasks(os.environ['BENCH_PHASE']))}), file=output)
+            print('matrix=' + json.dumps({'task': ([] if os.environ['BENCH_PHASE'] in ('package', 'schema-reference') else selected_tasks(os.environ['BENCH_PHASE']))}), file=output)
         PYCODE
     - name: Require configured Bailian Qwen credential
       env:
@@ -126,6 +128,7 @@ jobs:
       run: test -n "$GLM_API_KEY"
       if: inputs.phase != 'package'
   package-rust:
+    if: inputs.phase != 'schema-reference'
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -374,7 +377,7 @@ jobs:
     - validate
     - task
     - package-rust
-    if: always() && needs.validate.result == 'success' && inputs.phase != 'package'
+    if: always() && needs.validate.result == 'success' && (inputs.phase == 'smoke' || inputs.phase == 'formal')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -530,6 +533,89 @@ jobs:
       with:
         name: mcp-format-probe-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/format-probe-evidence/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 90
+  schema-reference:
+    if: inputs.phase == 'schema-reference'
+    needs:
+    - validate
+    name: Six Qwen generations / schema references
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - name: Authorize manual benchmark run
+      id: authorize
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BENCH_REPOSITORY: ${{ github.repository }}
+        BENCH_EVENT_NAME: ${{ github.event_name }}
+        BENCH_ACTOR: ${{ github.actor }}
+        BENCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: "set -euo pipefail\ntest \"$BENCH_REPOSITORY\" = Cuiyus/zvec-grep\nif [[ \"$BENCH_EVENT_NAME\" != \"workflow_dispatch\"\
+        \ ]]; then\n  echo \"::error::SWE-QA Bench only accepts manual workflow_dispatch runs.\"\n  exit 1\nfi\nif\
+        \ [[ -z \"$BENCH_ACTOR\" || -z \"$BENCH_TRIGGERING_ACTOR\" ]]; then\n  echo \"::error::Both the original actor\
+        \ and the current triggering actor are required.\"\n  exit 1\nfi\nfor actor in \"$BENCH_ACTOR\" \"$BENCH_TRIGGERING_ACTOR\"\
+        ; do\n  # The legacy permission field maps maintain to write; use role_name.\n  role=\"$(gh api \"repos/$BENCH_REPOSITORY/collaborators/$actor/permission\"\
+        \ --jq '.role_name')\"\n  case \"$role\" in\n    admin|maintain)\n      echo \"Authorized $actor with repository\
+        \ role $role.\"\n      ;;\n    *)\n      echo \"::error::SWE-QA Bench requires the admin or maintain repository\
+        \ role; $actor has $role.\"\n      exit 1\n      ;;\n  esac\ndone\n"
+    - name: Disallow automatic or manual reruns of the approved batch
+      run: test "${{ github.run_attempt }}" = 1
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+    - name: Install unchanged locked harness
+      run: 'python -m pip install --disable-pip-version-check uv==0.9.17
+
+        uv sync --project benchmarks/swe-qa-bench --frozen'
+    - uses: actions/download-artifact@v8
+      with:
+        name: three-arm-package-rust
+        run-id: 40681992032
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/packages/rust
+    - uses: actions/download-artifact@v8
+      with:
+        name: mcp-schema-audit
+        run-id: 40681992032
+        repository: Cuiyus/zvec-grep
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/native-schema
+    - name: Verify frozen v6 package and run exactly six generation attempts
+      env:
+        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/schema-probe-index-seeds
+      run: 'uv run --project benchmarks/swe-qa-bench python -m zg_bench.mcp_description_e2e prepare --packages "$RUNNER_TEMP/packages"
+        --output "$RUNNER_TEMP/schema-reference-protocol"
+
+        uv run --project benchmarks/swe-qa-bench python -m zg_bench.mcp_schema_reference_probe --packages "$RUNNER_TEMP/packages"
+        --schema-audit "$RUNNER_TEMP/native-schema/schema-comparison.json" --output "$RUNNER_TEMP/schema-reference-evidence"'
+    - name: Scan diagnostic evidence for credential leakage
+      id: secret-scan
+      if: always() && steps.authorize.outcome == 'success'
+      env:
+        GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      run: uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root
+        "$RUNNER_TEMP/schema-reference-evidence"
+    - uses: actions/upload-artifact@v7
+      if: always() && steps.authorize.outcome == 'success' && steps.secret-scan.outcome == 'success'
+      with:
+        name: mcp-schema-reference-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '${{ runner.temp }}/schema-reference-evidence/
+
+          ${{ runner.temp }}/schema-reference-protocol/'
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 90
