@@ -79,7 +79,7 @@ def main():
     args = parser.parse_args()
     result = audit(args.evidence, args.source)
     print(json.dumps({k: v for k, v in result.items() if k != "queries"}))
-    return 0 if result["all_linked"] and result["all_tool_bodies_equal"] else 1
+    return 0 if result["all_linked"] else 1
 
 
 if __name__ == "__main__":

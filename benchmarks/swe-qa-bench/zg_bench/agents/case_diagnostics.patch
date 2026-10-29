@@ -6,7 +6,7 @@ index 61931544..de4639be 100644
  pub(super) mod format_filter;
  mod path_filter;
  mod pipeline;
-+mod case_diagnostics;
++pub(crate) mod case_diagnostics;
  mod ranking;
  pub(crate) mod service;
  pub(crate) mod storage;
@@ -113,11 +113,11 @@ index 00000000..e33dfad4
 +use std::io::Write;
 +use super::pipeline::SearchHit;
 +
-+pub(super) fn enabled() -> bool {
++pub(crate) fn enabled() -> bool {
 +    std::env::var_os("ZG_CASE_DIAGNOSTICS").is_some()
 +}
 +
-+pub(super) fn emit(value: serde_json::Value) {
++pub(crate) fn emit(value: serde_json::Value) {
 +    if let Some(path) = std::env::var_os("ZG_CASE_DIAGNOSTICS") {
 +        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)
 +            .expect("open case diagnostics");
@@ -137,3 +137,46 @@ index 00000000..e33dfad4
 +        "rank": hit.rank, "score": hit.score, "trace": hit.trace,
 +    })
 +}
+diff --git a/rust/crates/zg-engine/src/storage/fragments/mod.rs b/rust/crates/zg-engine/src/storage/fragments/mod.rs
+--- a/rust/crates/zg-engine/src/storage/fragments/mod.rs
++++ b/rust/crates/zg-engine/src/storage/fragments/mod.rs
+@@ -202,6 +202,7 @@
+         configure_query(
+             &mut request,
+             filter,
+-            &["document_id", "entity_id", "file_id"],
++            if crate::pipelines::indexed_search::case_diagnostics::enabled() { &["document_id", "entity_id", "file_id", "text"] }
++            else { &["document_id", "entity_id", "file_id"] },
+         )?;
+         let mut hits = Vec::new();
+@@ -213,2 +214,8 @@
+                 let mut hit = decode_search_hit(&doc, StorageSearchPath::Fts)?;
++                if crate::pipelines::indexed_search::case_diagnostics::enabled() {
++                    crate::pipelines::indexed_search::case_diagnostics::emit(serde_json::json!({
++                        "stage":"projection", "route":"fts", "document_id":hit.document_id,
++                        "entity_id":hit.entity_id.as_str(), "text":string_field(&doc, "text")?,
++                    }));
++                }
+                 // BM25 is computed against each table's corpus; merge independent rankings.
+@@ -267,9 +275,19 @@
+         configure_query(
+             &mut request,
+             filter,
+-            &["document_id", "entity_id", "file_id"],
++            if crate::pipelines::indexed_search::case_diagnostics::enabled() { &["document_id", "entity_id", "file_id", "text"] }
++            else { &["document_id", "entity_id", "file_id"] },
+         )?;
+         native(index.query(&request), "search vector index")?
+             .into_iter()
+-            .map(|doc| decode_search_hit(&doc, StorageSearchPath::Vector))
++            .map(|doc| {
++                let hit = decode_search_hit(&doc, StorageSearchPath::Vector)?;
++                if crate::pipelines::indexed_search::case_diagnostics::enabled() {
++                    crate::pipelines::indexed_search::case_diagnostics::emit(serde_json::json!({
++                        "stage":"projection", "route":"vector", "document_id":hit.document_id,
++                        "entity_id":hit.entity_id.as_str(), "text":string_field(&doc, "text")?,
++                    }));
++                }
++                Ok(hit)
++            })
+             .collect()

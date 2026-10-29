@@ -104,8 +104,10 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
     if not session_ids or not any(r["kind"] == "message" for r in sessions):
         errors.append("empty_sessions")
     usage = read("session-usage.json", {})
+    errors.extend("session_usage:" + error for error in usage.get("errors", []) if error != "capture_incomplete")
     row["usage"] = usage.get("total")
     row["session_count"] = len(session_ids)
+    row["session_ids"] = sorted(session_ids)
     row["execution_complete"] = usage.get("complete", False)
     model_calls, mcp_calls = 0, 0
     for meta_path in sorted((agent / "wire").glob("*/*.metadata.json")):
@@ -165,8 +167,11 @@ def inventory(output: Path, expected: int) -> dict:
         row, found = inspect_trial(trial, output)
         rows.append(row)
         queries.extend(found)
+    session_ids = [sid for row in rows for sid in row["session_ids"]]
+    errors = ["reused_session_across_trials"] if len(session_ids) != len(set(session_ids)) else []
     report = {"schema_version": 1, "expected_trials": expected, "observed_trials": len(rows),
-              "capture_ready": len(rows) == expected and all(r["evidence_complete"] for r in rows),
+              "capture_ready": not errors and len(rows) == expected and all(r["evidence_complete"] for r in rows),
+              "errors": errors,
               "source_review_complete": False, "trials": rows}
     write_json(output / "capture-summary.json", report)
     (output / "requests.jsonl").write_text("".join(json.dumps(q, ensure_ascii=False) + "\n" for q in queries))

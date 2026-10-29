@@ -1,0 +1,40 @@
+{
+  "task": "pylint:10",
+  "repository_commit": "44740e5e5cdd2b80321a4f0ed4254213d058b9f6",
+  "status": "source_verified_pilot_rubric_not_official_benchmark_gold",
+  "core": [
+    {"path": "pylint/pyreverse/utils.py", "start": 175, "end": 215, "symbol": "get_annotation", "claim": "AnnAssign 父节点提供显式注解；普通 AssignAttr 可尝试从初始化方法参数获得注解。"},
+    {"path": "pylint/pyreverse/utils.py", "start": 218, "end": 232, "symbol": "infer_node", "claim": "优先使用注解；没有注解才回退到节点值推断。"},
+    {"path": "pylint/pyreverse/inspector.py", "start": 220, "end": 229, "symbol": "handle_assignattr_type", "claim": "组装 AggregationsHandler 到 OtherAssociationsHandler 的处理链。"},
+    {"path": "pylint/pyreverse/inspector.py", "start": 303, "end": 367, "symbol": "association_handlers", "claim": "责任链处理关联；AnnAssign 与 Assign 均进入赋值判断，不能将两个 handler 分别等同于 typed 和 untyped。"}
+  ],
+  "supporting_tests": [
+    {"path": "tests/pyreverse/test_utils.py", "start": 61, "end": 86},
+    {"path": "tests/pyreverse/functional/class_diagrams/attributes/instance_attributes.py", "start": 1, "end": 5}
+  ],
+  "related_not_required": [
+    {"path": "pylint/checkers/utils.py", "start": 1731, "end": 1752, "symbol": "is_attribute_typed_annotation"},
+    {"path": "pylint/checkers/typecheck.py", "start": 421, "end": 473, "symbol": "_emit_no_member"},
+    {"path": "pylint/checkers/classes/class_checker.py", "start": 1192, "end": 1263, "symbol": "_check_attribute_defined_outside_init"}
+  ],
+  "rules": [
+    "按请求之前的会话判断本次检索目的；窄化到另一个机制的请求不强求命中全部核心目标。",
+    "允许其他能证明同一事实的源码作为等价证据；不以特定符号命中率代替内容判断。",
+    "区分检索返回、正文可见、被模型使用、最终回答准确四个层次。",
+    "源码注解识别 helper 的遗漏可以是局部相关性问题，不能据此直接判整题失败。"
+  ],
+  "ast_check": {
+    "astroid_version": "4.0.0b0",
+    "version_basis": "pinned repository requirements_test_min.txt",
+    "rows": [
+      ["x: int", "AnnAssign", "AssignName", true],
+      ["x: int = 1", "AnnAssign", "AssignName", false],
+      ["x = 1", "Assign", "AssignName", false],
+      ["self.x: int", "AnnAssign", "AssignAttr", true],
+      ["self.x: int = 1", "AnnAssign", "AssignAttr", false],
+      ["self.x = 1", "Assign", "AssignAttr", false]
+    ],
+    "columns": ["source", "statement", "target", "value_is_none"],
+    "conclusion": "typedness 由 AnnAssign/Assign 区分；AssignName/AssignAttr 区分的是左值形式。"
+  }
+}

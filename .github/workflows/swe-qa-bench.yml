@@ -54,8 +54,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           ORIGINAL_ACTOR: ${{ github.actor }}
           CURRENT_ACTOR: ${{ github.triggering_actor }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
         run: |
           set -euo pipefail
+          [[ "$CANDIDATE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
           for actor in "$ORIGINAL_ACTOR" "$CURRENT_ACTOR"; do
             role="$(gh api "repos/$REPOSITORY/collaborators/$actor/permission" --jq .role_name)"
             [[ "$role" == admin || "$role" == maintain ]] || exit 1
@@ -163,7 +165,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+      - id: diagnostic-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/diagnostic
+          key: case-diag-v1-${{ inputs.candidate_ref }}-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch') }}
       - name: Build separate instrumented binary
+        if: steps.diagnostic-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           git -C candidate apply "$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch"
