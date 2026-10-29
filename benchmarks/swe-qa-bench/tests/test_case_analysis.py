@@ -16,10 +16,18 @@ import unittest
 
 from zg_bench.case_analysis import recording_command, rpc_messages, inventory
 from zg_bench.agents.case_evidence import FULL_SESSION_SQL
+from zg_bench.case_replay import stable, key
 from zg_bench import runner
 
 
 class CaseAnalysisTests(unittest.TestCase):
+    def test_parity_ignores_only_transient_status_not_order_or_source(self):
+        a = {"content": [{"text": "freshness: fresh\nbackground_refresh: scheduled\n#1 foo.py\nsource:\n1\toriginal"}]}
+        b = {"content": [{"text": "freshness: fresh\n#1 foo.py\nsource:\n1\toriginal"}]}
+        self.assertEqual(stable(a), stable(b))
+        self.assertNotEqual(stable(a), stable({"content": [{"text": b["content"][0]["text"].replace("original", "changed")}]}))
+        self.assertNotEqual(key({"query": "x", "limit": 7}), key({"query": "x", "limit": 10}))
+
     def test_transport_change_retains_all_model_options(self):
         suite = runner.load_suite("swe-qa-bench", tier="full", task_overrides=["pylint-10"])
         original = runner.build_harbor_command(suite, profile="zvec-grep", agent="opencode",

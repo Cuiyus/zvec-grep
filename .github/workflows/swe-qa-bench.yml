@@ -24,6 +24,10 @@ on:
         description: Completed pilot run ID to replay (replay stage only)
         required: false
         type: string
+      diagnostic_run:
+        description: Completed diagnostic-build run ID (replay stage only)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -142,7 +146,7 @@ jobs:
           retention-days: 90
 
   diagnostic:
-    if: inputs.stage == 'diagnostic-build' || inputs.stage == 'replay'
+    if: inputs.stage == 'diagnostic-build'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -176,5 +180,69 @@ jobs:
         with:
           name: case-diagnostic-${{ github.run_id }}
           path: ${{ runner.temp }}/diagnostic/
+          if-no-files-found: error
+          retention-days: 90
+
+  replay:
+    if: inputs.stage == 'replay'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v8
+        with:
+          name: case-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/package
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run }}
+          pattern: case-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/evidence
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.diagnostic_run }}
+          pattern: case-diagnostic-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/diagnostic
+      - name: Install isolated binaries and replay original requests
+        env:
+          ZG_INSTALL_SKIP_AGENT_UPGRADE: "1"
+          ZG_INSTALL_ACCELERATOR: cpu
+          CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+        run: |
+          set -euo pipefail
+          node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/package" --commit "$CANDIDATE_COMMIT"
+          test "$(cat "$RUNNER_TEMP/diagnostic/base-commit.txt")" = "$CANDIDATE_COMMIT"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+          npm install --prefix "$RUNNER_TEMP/production-install" "$RUNNER_TEMP/package/candidate.tgz"
+          npm install --prefix "$RUNNER_TEMP/diagnostic-install" "$RUNNER_TEMP/diagnostic/diagnostic.tgz"
+          sudo mkdir /app
+          sudo chown "$USER" /app
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_replay \
+            --evidence "$RUNNER_TEMP/evidence" \
+            --production "$RUNNER_TEMP/production-install/node_modules/.bin/zg" \
+            --diagnostic "$RUNNER_TEMP/diagnostic-install/node_modules/.bin/zg" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --output "$RUNNER_TEMP/replay"
+      - name: Archive replay and stage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: case-replay-${{ inputs.evidence_run }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/replay/
           if-no-files-found: error
           retention-days: 90
