@@ -57,10 +57,10 @@ def analyze(replay: Path) -> dict:
                 raise RuntimeError("offline scorer does not reproduce captured full ranking")
             targets = []
             for hit in candidates:
-                if hit["path"] not in {"pylint/pyreverse/utils.py", "pylint/pyreverse/inspector.py", "pylint/checkers/utils.py"}:
+                if hit["path"] not in {"pylint/pyreverse/utils.py", "pylint/pyreverse/inspector.py", "pylint/checkers/utils.py", "pylint/checkers/typecheck.py"}:
                     continue
                 if not any('symbol_name: Some("' + name + '")' in hit["metadata"] for name in
-                           ["get_annotation", "infer_node", "is_attribute_typed_annotation", "AbstractAssociationHandler", "AggregationsHandler", "OtherAssociationsHandler", "handle_assignattr_type"]):
+                           ["get_annotation", "infer_node", "is_attribute_typed_annotation", "_get_all_attribute_assignments", "_emit_no_member", "AbstractAssociationHandler", "AggregationsHandler", "OtherAssociationsHandler", "handle_assignattr_type"]):
                     continue
                 probes = []
                 for stage in plan["stages"]:

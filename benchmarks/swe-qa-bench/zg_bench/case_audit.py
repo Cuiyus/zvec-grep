@@ -6,7 +6,18 @@ import json
 from pathlib import Path
 import re
 
-from .case_analysis import decode_response, write_json
+from .case_analysis import decode_response, rpc_messages, write_json
+
+
+def emitted_tool_ids(body: str) -> set[str]:
+    ids = {}
+    for event in rpc_messages(body):
+        for choice in event.get("choices", []):
+            for tool in choice.get("delta", choice.get("message", {})).get("tool_calls", []):
+                if tool.get("id"):
+                    index = (choice.get("index", 0), tool.get("index", 0))
+                    ids[index] = ids.get(index, "") + tool["id"]
+    return set(ids.values())
 
 
 def audit(root: Path, source: Path) -> dict:
@@ -37,7 +48,7 @@ def audit(root: Path, source: Path) -> dict:
                 model_prefix = str(meta_path).removesuffix(".metadata.json")
                 completion = json.loads(Path(model_prefix + ".completion.json").read_text())
                 response = decode_response(Path(model_prefix + ".response.bin"), completion)
-                if call_id in response:
+                if call_id in emitted_tool_ids(response):
                     record["links"]["pre_query_model_request"] = str(Path(model_prefix + ".request.bin").relative_to(root))
                 request = json.loads(Path(model_prefix + ".request.bin").read_text())
                 for message in request.get("messages", []):

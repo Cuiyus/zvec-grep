@@ -17,10 +17,17 @@ import unittest
 from zg_bench.case_analysis import recording_command, rpc_messages, inventory
 from zg_bench.agents.case_evidence import FULL_SESSION_SQL
 from zg_bench.case_replay import stable, key, control_params
+from zg_bench.case_audit import emitted_tool_ids
 from zg_bench import runner
 
 
 class CaseAnalysisTests(unittest.TestCase):
+    def test_context_link_uses_emitted_tool_id_not_quoted_text(self):
+        body = 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_"}]}}]}\n\n'
+        body += 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"123"}],"content":"call_fake"}}]}\n\n'
+        body += 'data: [DONE]\n\n'
+        self.assertEqual(emitted_tool_ids(body), {"call_123"})
+
     def test_route_ablation_omits_query_instead_of_sending_null(self):
         original = {"name": "zvec_grep_search", "arguments": {"query": "q", "root": "/app", "limit": 7}}
         changed = control_params(original, {"query": None, "fts": "q"})

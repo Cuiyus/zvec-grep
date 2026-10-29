@@ -195,13 +195,17 @@ def main():
                 end = stages.stat().st_size if stages.exists() else 0
                 write_json(output / "diagnostic" / query_id / (name + ".json"),
                            {**reply, "stage_byte_range": [start, end], "control": name})
-    write_json(output / "summary.json", {"queries": summaries,
-        "ready": all(r["stable_10"] and r["matches_e2e"] and r["diagnostic_parity"] and r["stage_capture"] for r in summaries)})
     from .case_audit import audit
     from .case_ranking import analyze
-    write_json(output / "query-audit.json", audit(lock_path.parent, Path("/app")))
+    links = audit(lock_path.parent, Path("/app"))
+    write_json(output / "query-audit.json", links)
+    evidence_ready = (links["all_linked"] and links["all_tool_bodies_equal"]
+                      and all(r["diagnostic_parity"] and r["stage_capture"] for r in summaries))
+    write_json(output / "summary.json", {"queries": summaries, "evidence_ready": evidence_ready,
+        "ready": evidence_ready and all(r["stable_10"] and r["matches_e2e"] for r in summaries),
+        "note": "CI success checks evidence/parity, not answer correctness. Replay instability or E2E differences remain findings requiring review."})
     analyze(output)
-    return 0
+    return 0 if evidence_ready else 1
 
 
 if __name__ == "__main__":
