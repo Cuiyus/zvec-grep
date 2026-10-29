@@ -1,0 +1,257 @@
+name: SWE-QA Case Analysis
+run-name: SWE-QA case analysis / ${{ inputs.task }} / ${{ inputs.stage }} / ${{ inputs.candidate_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Immutable upstream main commit
+        required: true
+        default: 891497fa87d3e03d0c9273fed0ba3e75af62f179
+        type: string
+      task:
+        description: One locked SWE-QA task
+        required: true
+        default: pylint-10
+        type: string
+      stage:
+        description: Full ten-trial analysis, or an individual reusable stage
+        required: true
+        default: full
+        type: choice
+        options: [full, build, preflight, formal, diagnostic-build, replay]
+      evidence_run:
+        description: Completed pilot run ID to replay (replay stage only)
+        required: false
+        type: string
+      diagnostic_run:
+        description: Completed diagnostic-build run ID (replay stage only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sweqa-case-${{ github.ref }}-${{ inputs.task }}-${{ inputs.stage }}
+  cancel-in-progress: false
+
+env:
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+  ZVEC_GREP_DEVICE: cpu
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      commit: ${{ steps.package.outputs.commit }}
+    steps:
+      - &authorize
+        name: Authorize original and current actor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ORIGINAL_ACTOR: ${{ github.actor }}
+          CURRENT_ACTOR: ${{ github.triggering_actor }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          for actor in "$ORIGINAL_ACTOR" "$CURRENT_ACTOR"; do
+            role="$(gh api "repos/$REPOSITORY/collaborators/$actor/permission" --jq .role_name)"
+            [[ "$role" == admin || "$role" == maintain ]] || exit 1
+          done
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - id: package
+        uses: ./.github/actions/rust-candidate-package
+        with:
+          candidate_repository: zvec-ai/zvec-grep
+          candidate_ref: ${{ inputs.candidate_ref }}
+          cache_namespace: swe-qa-rust
+      - uses: actions/upload-artifact@v7
+        with:
+          name: case-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/rust-package-cache/
+          if-no-files-found: error
+          retention-days: 30
+
+  analyze:
+    if: inputs.stage == 'preflight' || inputs.stage == 'formal' || inputs.stage == 'full'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v8
+        with:
+          name: case-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/package
+      - name: Verify package and install locked harness
+        env:
+          CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+        run: |
+          node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/package" --commit "$CANDIDATE_COMMIT"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+      - name: Offline evidence contract tests
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_case_analysis*.py' -v
+      - name: Run and preserve one-case evidence
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          TASK_NAME: ${{ inputs.task }}
+          ANALYSIS_STAGE: ${{ inputs.stage == 'preflight' && 'preflight' || 'formal' }}
+          CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+          HARNESS_COMMIT: ${{ github.sha }}
+          ZG_BENCH_INDEX_SEED_DIR: ${{ runner.temp }}/case-index-seed
+          ZG_BENCH_CAPTURE_EVIDENCE: "1"
+        run: |
+          test -n "$GLM_API_KEY"
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_analysis run \
+            --task "$TASK_NAME" --stage "$ANALYSIS_STAGE" \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --output "$RUNNER_TEMP/case-analysis"
+      - name: Check evidence for credentials
+        id: secrets
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan \
+            --secret-env GLM_API_KEY --root "$RUNNER_TEMP/case-analysis" --root "$RUNNER_TEMP/case-index-seed"
+      - name: Archive complete evidence, including failed attempts
+        if: always() && steps.secrets.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: case-evidence-${{ inputs.task }}-${{ inputs.stage }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/case-analysis/
+            ${{ runner.temp }}/case-index-seed/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+  diagnostic:
+    if: inputs.stage == 'diagnostic-build' || inputs.stage == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: zvec-ai/zvec-grep
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - id: diagnostic-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/diagnostic
+          key: case-diag-v1-${{ inputs.candidate_ref }}-${{ hashFiles('benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch') }}
+      - name: Build separate instrumented binary
+        if: steps.diagnostic-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git -C candidate apply "$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch"
+          cd candidate/rust
+          rustup show active-toolchain
+          npm ci
+          npm run pack:local
+          mkdir -p "$RUNNER_TEMP/diagnostic"
+          cp dist/npm/*.tgz "$RUNNER_TEMP/diagnostic/diagnostic.tgz"
+          git rev-parse HEAD > "$RUNNER_TEMP/diagnostic/base-commit.txt"
+          cp "$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch" "$RUNNER_TEMP/diagnostic/"
+          sha256sum "$RUNNER_TEMP/diagnostic/"* > "$RUNNER_TEMP/diagnostic/checksums.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: case-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/diagnostic/
+          if-no-files-found: error
+          retention-days: 90
+
+  replay:
+    if: always() && !cancelled() && needs.package.result == 'success' && (inputs.stage == 'replay' || (inputs.stage == 'full' && needs.analyze.result == 'success' && needs.diagnostic.result == 'success'))
+    needs: [package, analyze, diagnostic]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v8
+        with:
+          name: case-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/package
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.stage == 'full' && github.run_id || inputs.evidence_run }}
+          pattern: case-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/evidence
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.stage == 'full' && github.run_id || inputs.diagnostic_run }}
+          pattern: case-diagnostic-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/diagnostic
+      - name: Install isolated binaries and replay original requests
+        env:
+          ZG_INSTALL_SKIP_AGENT_UPGRADE: "1"
+          ZG_INSTALL_ACCELERATOR: cpu
+          CANDIDATE_COMMIT: ${{ needs.package.outputs.commit }}
+        run: |
+          set -euo pipefail
+          node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/package" --commit "$CANDIDATE_COMMIT"
+          test "$(cat "$RUNNER_TEMP/diagnostic/base-commit.txt")" = "$CANDIDATE_COMMIT"
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+          npm install --prefix "$RUNNER_TEMP/production-install" "$RUNNER_TEMP/package/candidate.tgz"
+          npm install --prefix "$RUNNER_TEMP/diagnostic-install" "$RUNNER_TEMP/diagnostic/diagnostic.tgz"
+          sudo mkdir /app
+          sudo chown "$USER" /app
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_replay \
+            --evidence "$RUNNER_TEMP/evidence" \
+            --production "$RUNNER_TEMP/production-install/node_modules/.bin/zg" \
+            --diagnostic "$RUNNER_TEMP/diagnostic-install/node_modules/.bin/zg" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --output "$RUNNER_TEMP/replay"
+      - name: Archive replay and stage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: case-replay-${{ inputs.stage == 'full' && github.run_id || inputs.evidence_run }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/replay/
+          if-no-files-found: error
+          retention-days: 90

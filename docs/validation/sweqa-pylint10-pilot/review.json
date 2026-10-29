@@ -1,0 +1,2213 @@
+{
+  "task": "pylint:10",
+  "scope": "one_case_only",
+  "review_method": "Source/reference reconciliation, every query context and returned hit reviewed; no inferred causal link from retrieval to final-answer errors.",
+  "evidence_root": "../../../benchmarks/swe-qa-bench/runs/pylint10-pilot/",
+  "counts": {
+    "e2e": 10,
+    "requests": 16,
+    "unique_queries": 14,
+    "returned_hits": 169,
+    "unique_entities": 44,
+    "production_replays": 140
+  },
+  "usage": {
+    "cache_read_tokens": 1472896,
+    "cache_write_tokens": 0,
+    "input_tokens": 1674950,
+    "llm_calls": 84,
+    "output_tokens": 28257,
+    "reasoning_tokens": 17146,
+    "text_output_tokens": 11111,
+    "tool_calls": 137,
+    "uncached_input_tokens": 202054
+  },
+  "trials": [
+    {
+      "trial": "pylint-10__YyBMU6L",
+      "started_at": "2026-10-29T14:34:27.363670Z",
+      "elapsed_seconds": 162.3,
+      "agent_seconds": 109.65,
+      "search_count": 2,
+      "query_ids": [
+        "467981359ca2b8a4",
+        "143451e045375985"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": false,
+      "usage": {
+        "cache_read_tokens": 155264,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 178439,
+        "llm_calls": 8,
+        "output_tokens": 3184,
+        "reasoning_tokens": 2159,
+        "text_output_tokens": 1025,
+        "tool_calls": 13,
+        "uncached_input_tokens": 23175
+      },
+      "session_ids": [
+        "ses_e77e9c379ffeBkViVt7aVWc4kh"
+      ],
+      "model_wire_calls": 9,
+      "final_answer": "There's no dedicated abstraction — pylint relies on astroid's two distinct node classes and `isinstance` dispatch, normalizing their shape difference (`Assign.targets` is a list, `AnnAssign.target` is singular):\n\n- `pylint/checkers/typecheck.py:525` `_get_all_attribute_assignments` walks `nodes_of_class((Assign, AnnAssign))` and unifies targets so `self.x = 1` and `self.x: int = 1` are collected identically for `_enum_has_attribute` (`typecheck.py:584`, `:591`).\n- Elsewhere the separation is inverted — the annotation is only reachable through the `AnnAssign` parent: `is_attribute_typed_annotation` (`checkers/utils.py:1731`), `is_assign_name_annotated_with` (`checkers/utils.py:1759`), and pyreverse's `get_annotation` (`pyreverse/utils.py:175`), which falls back to `__init__` parameter annotations when the parent isn't an `AnnAssign`.",
+      "answer_focus": "归一化、注解识别与Pyreverse",
+      "answer_review": "未展开 helper 的基类递归及 no-member 例外；主线有源码支持。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__YyBMU6L/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": true,
+      "covers_normalizer": true,
+      "covers_annotation_helper": true
+    },
+    {
+      "trial": "pylint-10__3tDtqsw",
+      "started_at": "2026-10-29T14:37:09.666429Z",
+      "elapsed_seconds": 139.0,
+      "agent_seconds": 124.24,
+      "search_count": 1,
+      "query_ids": [
+        "1eb3976e3eef05c5"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": false,
+      "usage": {
+        "cache_read_tokens": 200832,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 225372,
+        "llm_calls": 10,
+        "output_tokens": 3486,
+        "reasoning_tokens": 2215,
+        "text_output_tokens": 1271,
+        "tool_calls": 15,
+        "uncached_input_tokens": 24540
+      },
+      "session_ids": [
+        "ses_e77e7dd2effejaxSWN4PxxXhZL"
+      ],
+      "model_wire_calls": 11,
+      "final_answer": "**Normalize-then-unify dispatch** — a type-specific extraction front end feeding one type-agnostic back end. The canonical instance is `_get_all_attribute_assignments` in pylint/checkers/typecheck.py:525:\n\n1. **One traversal, both node types** — `node.nodes_of_class((nodes.Assign, nodes.AnnAssign))` (typecheck.py:529) walks annotated and plain initializations together rather than in two passes.\n2. **Per-type normalization of target shape** — the only real difference is cardinality, so it's adapted away: `Assign.targets` is a list, `AnnAssign.target` is a single node wrapped into `[child.target]` (typecheck.py:531-534).\n3. **Shared downstream logic** — after normalization both feed identical handling: `Tuple` flattening for unpacking, then `AssignAttr` whose `expr` is a `Name` matching the requested instance name, collecting `attrname` into a set (typecheck.py:535-544).\n4. **Callers supply the \"instance\" name** — `_enum_has_attribute` passes the object returned from `__new__` (typecheck.py:584) or the first `__init__` argument (typecheck.py:591), so the helper stays agnostic about which binding counts as `self`.\n\nContrast with the two other idioms in the codebase: pyreverse's `AggregationsHandler` treats them as *equivalent* via a union isinstance (inspector.py:332) inside a Chain of Responsibility, while `ClassChecker` uses `AnnAssign` with `value is None` as a *declaration-only* marker to suppress `declare-non-slot` (class_checker.py:916) and `assigning-non-slot` (class_checker.py:1822).",
+      "answer_focus": "归一化及等价的节点分支",
+      "answer_review": "未展开 helper 递归与 typed-annotation no-member 例外；主体有源码支持。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__3tDtqsw/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__6XoELcH",
+      "started_at": "2026-10-29T14:39:28.674477Z",
+      "elapsed_seconds": 98.53,
+      "agent_seconds": 84.93,
+      "search_count": 1,
+      "query_ids": [
+        "8de411471803bc29"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": false,
+      "usage": {
+        "cache_read_tokens": 114432,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 134382,
+        "llm_calls": 6,
+        "output_tokens": 2065,
+        "reasoning_tokens": 1073,
+        "text_output_tokens": 992,
+        "tool_calls": 10,
+        "uncached_input_tokens": 19950
+      },
+      "session_ids": [
+        "ses_e77e5c286ffemY0QccyKE9Hm5k"
+      ],
+      "model_wire_calls": 7,
+      "final_answer": "Pylint uses **node-class-keyed visitor dispatch** plus `isinstance` guards, since astroid models `x = 1` and `x: int = 1` as separate node types (`nodes.Assign` vs `nodes.AnnAssign`):\n\n- `ASTWalker` builds callback tables from method names `visit_<lowercase node class>` (pylint/utils/ast_walker.py:52), so `visit_assign` (pylint/checkers/classes/class_checker.py:1843) and `visit_annassign` (pylint/extensions/typing.py:248) fire independently — no shared handler needs to branch on annotation presence.\n- Where both must be considered, code normalizes them into one target list: `child.targets` for `Assign` vs `[child.target]` for `AnnAssign` (pylint/checkers/typecheck.py:525-534).\n- The semantic discriminator is `AnnAssign.value is None` — a bare annotation declares without initializing, so it is exempted from instance-attribute/slot/enum logic: slots conflict (class_checker.py:1674), `assigning-non-slot` (class_checker.py:1818-1825), `declare-non-slot` (class_checker.py:915-926), `invalid-enum-extension` (class_checker.py:942-947).\n- Attribute-target handling is node-type-agnostic: `visit_assignattr` (class_checker.py:1729) sees `AssignAttr` regardless of which assignment node wraps it, and `attribute-defined-outside-init` works off astroid's precomputed `instance_attrs` map (class_checker.py:1212).",
+      "answer_focus": "visitor分派、归一化与声明无值",
+      "answer_review": "分派与 parent 分支应区分；未展开 typed-annotation no-member 例外。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__6XoELcH/agent/full-sessions.json",
+      "names_normalizer_symbol": false,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__ekGjuDz",
+      "started_at": "2026-10-29T14:41:07.206414Z",
+      "elapsed_seconds": 128.27,
+      "agent_seconds": 115.23,
+      "search_count": 1,
+      "query_ids": [
+        "666323c9d1d01026"
+      ],
+      "first_search_helper_ranks": [
+        12
+      ],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 113792,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 127306,
+        "llm_calls": 8,
+        "output_tokens": 2497,
+        "reasoning_tokens": 1434,
+        "text_output_tokens": 1063,
+        "tool_calls": 13,
+        "uncached_input_tokens": 13514
+      },
+      "session_ids": [
+        "ses_e77e443f4ffehNGOWXQawzbkD9"
+      ],
+      "model_wire_calls": 9,
+      "final_answer": "Pylint doesn't use a flag — it relies on astroid's **node-type dispatch**: annotated init (`self.x: int = 1`) produces `AnnAssign` + `AssignAttr`, plain init (`self.x = 1`) produces `Assign` + `AssignAttr`, so the distinction is made by inspecting `node.parent`'s class.\n\n- Centralized in `pylint/pyreverse/utils.py:175` (`get_annotation`): `AnnAssign` parent → take `parent.annotation`; otherwise (`AssignAttr` under plain `Assign`) → fall back to the `__init__` parameter's annotation via `init_method.args.annotations`. `infer_node` (`utils.py:218`) then prefers the annotation over inference.\n- Consumers stay uniform: `Linker.visit_classdef` / `handle_assignattr_type` (`inspector.py:221`) and `visit_assignname` (`inspector.py:190`) just call `infer_node`, filling `instance_attrs_type` vs `locals_type`.\n- Association classification layers a **Chain of Responsibility** on top (`inspector.py:124`, `AggregationsHandler`/`OtherAssociationsHandler`), whose first guard is the same `isinstance(node.parent, (nodes.AnnAssign, nodes.Assign))` check.\n- The checkers repeat the idiom locally, e.g. annotation-without-value exemption in `_check_in_slots` (`class_checker.py:1815`) and `declare-non-slot` (`class_checker.py:916`).",
+      "answer_focus": "Pyreverse注解优先与责任链",
+      "answer_review": "相关实现有源码支持，但责任链不是 checker 注解分支的替代答案。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__ekGjuDz/agent/full-sessions.json",
+      "names_normalizer_symbol": false,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": false,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__dZRYmKH",
+      "started_at": "2026-10-29T14:43:15.477825Z",
+      "elapsed_seconds": 111.4,
+      "agent_seconds": 97.43,
+      "search_count": 2,
+      "query_ids": [
+        "d71618a4012b2e8b",
+        "867c6ea614f724d8"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 86016,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 100675,
+        "llm_calls": 6,
+        "output_tokens": 2613,
+        "reasoning_tokens": 1619,
+        "text_output_tokens": 994,
+        "tool_calls": 9,
+        "uncached_input_tokens": 14659
+      },
+      "session_ids": [
+        "ses_e77e24b98ffepBx1I4O3GqQxwJ"
+      ],
+      "model_wire_calls": 7,
+      "final_answer": "Pylint has no unified \"assignment\" event — the split is **node-type-keyed visitor dispatch plus a statement/target separation**:\n\n- `ASTWalker` registers callbacks keyed by astroid class name (`visit_assign`, `visit_annassign`, `visit_assignattr`), so annotated (`AnnAssign`) and plain (`Assign`) initialization are distinct dispatch keys — pylint/utils/ast_walker.py:30-69.\n- Both share the *same* target nodes (`AssignAttr` for `self.x`, `AssignName` for `x`); annotation-awareness is recovered by walking target → statement via `node.assign_type()`, `node.parent`, or `local.statement()` + `isinstance(..., nodes.AnnAssign)` — pylint/checkers/base/name_checker/checker.py:408-429, pylint/checkers/utils.py:1731-1774.\n- `AnnAssign.value is None` is the marker for \"declared, not initialized\", which is what exempts annotation-only attributes from slot/enum checks — pylint/checkers/classes/class_checker.py:914-925, 1670-1677, 1819-1826.\n- Where both must be treated alike, a normalizer flattens `child.targets` vs `[child.target]` into one list — pylint/checkers/typecheck.py:524-545.",
+      "answer_focus": "visitor/target分离、归一化与注解识别",
+      "answer_review": "主线有源码支持；未展开 typed-annotation no-member 例外。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__dZRYmKH/agent/full-sessions.json",
+      "names_normalizer_symbol": false,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": true
+    },
+    {
+      "trial": "pylint-10__PFvP9Af",
+      "started_at": "2026-10-29T14:45:06.884940Z",
+      "elapsed_seconds": 101.91,
+      "agent_seconds": 88.23,
+      "search_count": 2,
+      "query_ids": [
+        "d71618a4012b2e8b",
+        "cb3a08d07b730a79"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 129152,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 148509,
+        "llm_calls": 8,
+        "output_tokens": 2196,
+        "reasoning_tokens": 1283,
+        "text_output_tokens": 913,
+        "tool_calls": 13,
+        "uncached_input_tokens": 19357
+      },
+      "session_ids": [
+        "ses_e77e0992dffeEMf3v6nAOT8YsW"
+      ],
+      "model_wire_calls": 9,
+      "final_answer": "`_get_all_attribute_assignments` in pylint/checkers/typecheck.py:525 — one traversal over the union `(nodes.Assign, nodes.AnnAssign)` with isinstance-based shape normalization: `Assign` yields the plural `child.targets`, `AnnAssign` yields `[child.target]`. Both are flattened into one target list (expanding `Tuple` elts), then filtered to `AssignAttr` whose `expr` is the bound `Name` (`self`, or the object returned by `__new__`).\n\nSo the separation is normalization-at-the-node-shape level, not two parallel visitors — callers (`_enum_has_attribute`, typecheck.py:584,591) get an annotation-agnostic set of initialized attribute names.",
+      "answer_focus": "归一化及调用方",
+      "answer_review": "主体准确但范围较窄；未展开注解识别与后续差异检查。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__PFvP9Af/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__pCUARhw",
+      "started_at": "2026-10-29T14:46:48.802776Z",
+      "elapsed_seconds": 102.15,
+      "agent_seconds": 88.46,
+      "search_count": 2,
+      "query_ids": [
+        "1e759e0cc5a06879",
+        "e1e657bba1b5c72e"
+      ],
+      "first_search_helper_ranks": [
+        1
+      ],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 108672,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 123413,
+        "llm_calls": 7,
+        "output_tokens": 2544,
+        "reasoning_tokens": 1592,
+        "text_output_tokens": 952,
+        "tool_calls": 11,
+        "uncached_input_tokens": 14741
+      },
+      "session_ids": [
+        "ses_e77df0b57ffesPkDQCfXg6WcZU"
+      ],
+      "model_wire_calls": 8,
+      "final_answer": "Pylint never unifies them — astroid models them as two node types and checkers branch on `isinstance` to normalize:\n\n- **Shape normalization**: `_get_all_attribute_assignments` traverses `nodes_of_class((Assign, AnnAssign))` and maps `Assign.targets` (list) vs `AnnAssign.target` (single → `[child.target]`) before the shared `AssignAttr`/`self` filtering — pylint/checkers/typecheck.py:525.\n- **Annotation detection**: an attribute is \"typed\" iff its `AssignName`'s parent is an `AnnAssign` — `is_attribute_typed_annotation` pylint/checkers/utils.py:1731, `is_assign_name_annotated_with` utils.py:1759.\n- **Declaration-only semantics**: `AnnAssign` with `value is None` binds nothing, so it's exempt from `declare-non-slot`, `class-variable-slots-conflict`, `assigning-non-slot`, `invalid-enum-extension` — class_checker.py:916, 1674, 1822, 943.",
+      "answer_focus": "归一化、注解识别、声明无值",
+      "answer_review": "typed iff AssignName 仅适用于引用 helper 的检查方式；不能概括所有 self.x: int。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__pCUARhw/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": true,
+      "covers_normalizer": true,
+      "covers_annotation_helper": true
+    },
+    {
+      "trial": "pylint-10__TGaFQep",
+      "started_at": "2026-10-29T14:48:30.956125Z",
+      "elapsed_seconds": 131.73,
+      "agent_seconds": 117.2,
+      "search_count": 2,
+      "query_ids": [
+        "1eb3976e3eef05c5",
+        "b562c4bd37f5e5e5"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": false,
+      "usage": {
+        "cache_read_tokens": 212736,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 240504,
+        "llm_calls": 11,
+        "output_tokens": 3061,
+        "reasoning_tokens": 1640,
+        "text_output_tokens": 1421,
+        "tool_calls": 20,
+        "uncached_input_tokens": 27768
+      },
+      "session_ids": [
+        "ses_e77dd782cffeI1jGS8nRvkdGMw"
+      ],
+      "model_wire_calls": 12,
+      "final_answer": "`_get_all_attribute_assignments` in pylint/checkers/typecheck.py:525 — one traversal over `node.nodes_of_class((nodes.Assign, nodes.AnnAssign))` with a per-node-type branch that normalizes the differing target shape (`child.targets` list for `Assign`, single `child.target` for `AnnAssign`) into one `targets` list, then applies a shared `AssignAttr`/`Name`-expr filter.\n\nIt's consumed by `_enum_has_attribute` (pylint/checkers/typecheck.py:548) to gather instance attributes initialized in `__new__` (bound to the returned object name) and `__init__` (bound to `self`).\n\nRelated node-type-separation spots: `AggregationsHandler.handle` gates on `isinstance(node.parent, (nodes.AnnAssign, nodes.Assign))` (pylint/pyreverse/inspector.py:332), and `is_assign_name_annotated_with` (pylint/checkers/utils.py:1759) treats a bare `AnnAssign` with no value as declaration-only.",
+      "answer_focus": "归一化及关联处理",
+      "answer_review": "错误：is_assign_name_annotated_with 把无value当 declaration-only；该函数没有 value 判断。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__TGaFQep/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__2BzvctA",
+      "started_at": "2026-10-29T14:50:42.689837Z",
+      "elapsed_seconds": 136.04,
+      "agent_seconds": 122.89,
+      "search_count": 1,
+      "query_ids": [
+        "827adfa8796c5fd7"
+      ],
+      "first_search_helper_ranks": [
+        14
+      ],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 161024,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 184118,
+        "llm_calls": 9,
+        "output_tokens": 3040,
+        "reasoning_tokens": 1819,
+        "text_output_tokens": 1221,
+        "tool_calls": 16,
+        "uncached_input_tokens": 23094
+      },
+      "session_ids": [
+        "ses_e77db7b5affe7ex0hKAtUXg8ge"
+      ],
+      "model_wire_calls": 10,
+      "final_answer": "Pyreverse's `Linker` uses an **annotation-first / inference-fallback dispatch keyed on `AnnAssign` vs `Assign`**, layered under a Chain of Responsibility:\n\n- `get_annotation()` (pylint/pyreverse/utils.py:175) branches on `isinstance(node.parent, nodes.AnnAssign)` to take the declared annotation; for a plain `Assign` to an `AssignAttr` it falls back to the enclosing `__init__` parameter annotations.\n- `infer_node()` (pylint/pyreverse/utils.py:218) only runs astroid inference when no annotation exists, so annotated attributes never get inferred types.\n- The handler chain (`AggregationsHandler`/`OtherAssociationsHandler`, pylint/pyreverse/inspector.py:291-367) gates on `isinstance(node.parent, (nodes.AnnAssign, nodes.Assign))` before populating `instance_attrs_type`/`aggregations_type`/`associations_type`.\n\nThe checkers mirror this with target normalization — `Assign.targets` (list) vs `AnnAssign.target` (single) — in `_get_all_attribute_assignments` (pylint/checkers/typecheck.py:525).",
+      "answer_focus": "Pyreverse为主，补充归一化",
+      "answer_review": "错误：annotated attributes never get inferred types。infer_node 对多数注解仍调用 ann.infer()。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__2BzvctA/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    },
+    {
+      "trial": "pylint-10__NJUKjor",
+      "started_at": "2026-10-29T14:52:58.734567Z",
+      "elapsed_seconds": 137.85,
+      "agent_seconds": 124.31,
+      "search_count": 2,
+      "query_ids": [
+        "ea3a970daff34ec9",
+        "cd8e2309f3bfabb7"
+      ],
+      "first_search_helper_ranks": [],
+      "any_search_helper": true,
+      "usage": {
+        "cache_read_tokens": 190976,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 212232,
+        "llm_calls": 11,
+        "output_tokens": 3571,
+        "reasoning_tokens": 2312,
+        "text_output_tokens": 1259,
+        "tool_calls": 17,
+        "uncached_input_tokens": 21256
+      },
+      "session_ids": [
+        "ses_e77d96637ffec2zCkG6Lg7RiRj"
+      ],
+      "model_wire_calls": 12,
+      "final_answer": "**Node-type dispatch with target normalization** — `_get_all_attribute_assignments` in pylint/checkers/typecheck.py:525:\n\n- One traversal collects both forms: `node.nodes_of_class((nodes.Assign, nodes.AnnAssign))`.\n- It branches purely on AST node type to unify the differing target shapes: `Assign.targets` (a list, multi/tuple targets) vs `AnnAssign.target` (a single node, wrapped as `[child.target]`).\n- Everything after is shared: flatten `Tuple` targets, keep only `AssignAttr` whose `expr` is a `Name` matching `self` (or the object returned by `__new__`).\n\nSo annotated vs non-annotated initialization is separated structurally, not semantically — the annotation itself is never inspected, and a valueless `AnnAssign` still counts. The caller `_enum_has_attribute` (typecheck.py:547) unions the results from `__new__` and `__init__` to avoid `no-member` false positives on enums. The same `Assign`/`AnnAssign` split recurs elsewhere, e.g. name checking in pylint/checkers/base/name_checker/checker.py:403 and the \"annotated-without-value\" exemptions in pylint/checkers/classes/class_checker.py:1673.",
+      "answer_focus": "归一化及枚举属性收集",
+      "answer_review": "structurally not semantically 只适用于该 helper，不能泛化到整个 checker。",
+      "explains_annotation_no_member_exemption": false,
+      "evidence_path": "jobs/formal/pylint-10__NJUKjor/agent/full-sessions.json",
+      "names_normalizer_symbol": true,
+      "names_annotation_helper_symbol": false,
+      "covers_normalizer": true,
+      "covers_annotation_helper": false
+    }
+  ],
+  "requests": [
+    {
+      "trial": "pylint-10__2BzvctA",
+      "wire_id": "1793285464734-87d7c83e-67b3-4106-aa3f-bf5914977be9",
+      "query_id": "827adfa8796c5fd7",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node separation AnnAssign Assign",
+        "limit": 15
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77db7b5affe7ex0hKAtUXg8ge",
+        "message_id": "msg_1882487710019trgejsTfTNX6h",
+        "part_id": "prt_18824a115001MaRDph5IwokjOZ",
+        "call_id": "call_c84067d1e18947a9bac0fef5",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__2BzvctA/agent/wire/model/1793285458673-eebc0d3a-50da-4c8e-8757-427970ca86d0.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__2BzvctA/agent/wire/model/1793285466707-b9de214d-9a4c-454a-88c7-b0e3dd5e56b7.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/classes/class_checker.py:1840-1851",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "pylint/extensions/typing.py:247-268",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/code_style.py:19-347",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 11,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": null
+        },
+        {
+          "rank": 12,
+          "entity": "tests/pyreverse/test_utils.py:42-58",
+          "preview_issue": null
+        },
+        {
+          "rank": 13,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 14,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        },
+        {
+          "rank": 15,
+          "entity": "pylint/checkers/base/name_checker/checker.py:157-752",
+          "preview_issue": "mid_line_fragment"
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__3tDtqsw",
+      "wire_id": "1793284653039-a8d7704a-1fe1-4f38-84eb-0a5e2ea52ccf",
+      "query_id": "1eb3976e3eef05c5",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "limit": 12
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e7dd2effejaxSWN4PxxXhZL",
+        "message_id": "msg_18818258a001Mk645wOmsez2fz",
+        "part_id": "prt_188183a44001NogOuBFMvlOesy",
+        "call_id": "call_5c56e0ec6989497cbbda93d4",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__3tDtqsw/agent/wire/model/1793284647149-b09ef827-e1e3-4713-8734-163c91d94e0b.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__3tDtqsw/agent/wire/model/1793284654898-60276af2-1864-46e9-8079-f141585cc9bf.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": null
+        },
+        {
+          "rank": 11,
+          "entity": "pylint/extensions/code_style.py:19-347",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 12,
+          "entity": "pylint/extensions/typing.py:247-268",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__6XoELcH",
+      "wire_id": "1793284792013-b375f118-fc2d-4bf3-8113-85256eb0bff8",
+      "query_id": "8de411471803bc29",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "fts": "[\"AnnAssign\", \"ast.AnnAssign\", \"annotated attribute\"]",
+        "preview": "full",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e5c286ffemY0QccyKE9Hm5k",
+        "message_id": "msg_1881a403a001r11MMR6SgOTX5X",
+        "part_id": "prt_1881a548e0014a20n6mBJPhCGf",
+        "call_id": "call_f60ef896e0044f8381662192",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__6XoELcH/agent/wire/model/1793284785078-de548e6f-29bb-4367-b59a-ed644deeb65f.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__6XoELcH/agent/wire/model/1793284793880-1a868786-b213-41ad-9211-8e3a6af65943.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/extensions/typing.py:247-268",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/extensions/code_style.py:132-206",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "pylint/checkers/typecheck.py:525-545",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 11,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 12,
+          "entity": "pylint/checkers/classes/class_checker.py:762-2425",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 13,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 14,
+          "entity": "pylint/checkers/dataclass_checker.py:58-102",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 15,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 16,
+          "entity": "pylint/checkers/exceptions.py:36-54",
+          "preview_issue": null
+        },
+        {
+          "rank": 17,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 18,
+          "entity": "pylint/pyreverse/inspector.py:370-404",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__NJUKjor",
+      "wire_id": "1793285600585-07edbdfb-77d1-45a1-8490-bae7abdeaec3",
+      "query_id": "ea3a970daff34ec9",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated instance attribute initialization AST node separation AnnAssign vs Assign",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77d96637ffec2zCkG6Lg7RiRj",
+        "message_id": "msg_188269c98001sRebgzsslvS4fv",
+        "part_id": "prt_18826b0ef001v3TiA1aaBUZ7Ny",
+        "call_id": "call_e0e4793864fd4b8caf243e3f",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__NJUKjor/agent/wire/model/1793285595183-11af32c1-79c0-440e-9b75-eca135b72a83.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__NJUKjor/agent/wire/model/1793285602740-acb596a3-c633-4bfc-a6c2-8bce3189602c.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/classes/class_checker.py:1840-1851",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "pylint/extensions/code_style.py:19-347",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/checkers/base/basic_checker.py:960-965",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__NJUKjor",
+      "wire_id": "1793285681061-2b2578bd-d624-4b49-9a6b-c31c11e2d71e",
+      "query_id": "cd8e2309f3bfabb7",
+      "arguments": {
+        "limit": 8,
+        "query": "instance attribute defined with annotation in __init__ treated differently from plain assignment; separate handling of AnnAssign target AssignAttr vs Assign",
+        "root": "/app"
+      },
+      "intent": "已读 class_checker 等实现后，寻找 AnnAssign/Assign 实例属性处理差异；top1 归一化函数直接回答。",
+      "links": {
+        "session_id": "ses_e77d96637ffec2zCkG6Lg7RiRj",
+        "message_id": "msg_18827b48b0017GV0FShXS8yeWs",
+        "part_id": "prt_18827e8df001FbtS15tMF0utNd",
+        "call_id": "call_56998b1f9b39483b8cd6930b",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__NJUKjor/agent/wire/model/1793285666008-ee52bc0d-eb0e-4d36-9635-af13793de108.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__NJUKjor/agent/wire/model/1793285681452-637ef1ce-e235-4fab-b9ee-5e6275ec6772.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/typecheck.py:525-545",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/refactoring/refactoring_checker.py:1771-1801",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1840-1851",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "tests/pyreverse/test_utils.py:61-86",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__PFvP9Af",
+      "wire_id": "1793285131619-1074aa74-139a-40f2-b15b-c80e58a900c5",
+      "query_id": "d71618a4012b2e8b",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e0992dffeEMf3v6nAOT8YsW",
+        "message_id": "msg_1881f6999001xd7UV04FzPAXds",
+        "part_id": "prt_1881f88930010Bfuoj3Aq0Axr0",
+        "call_id": "call_0ad665a68fc9472a9e44646d",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__PFvP9Af/agent/wire/model/1793285123324-6dfaa386-c4a2-43e0-83e2-46a95224eb94.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__PFvP9Af/agent/wire/model/1793285133274-1b5d7dc5-f440-4d22-93f7-4a3045a5c10f.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__PFvP9Af",
+      "wire_id": "1793285143337-6ef1151e-e899-4746-80ee-2f23f1f58e93",
+      "query_id": "cb3a08d07b730a79",
+      "arguments": {
+        "limit": 8,
+        "query": "instance attribute defined outside init check annotated assignment self.attr AnnAssign AssignAttr visitor separation",
+        "root": "/app"
+      },
+      "intent": "追踪 outside-init 检查与注解/属性 target 的关系；不要求同时返回所有原题证据。",
+      "links": {
+        "session_id": "ses_e77e0992dffeEMf3v6nAOT8YsW",
+        "message_id": "msg_1881f934e001wfcBjDvyfgTyKo",
+        "part_id": "prt_1881fb624001R3l37JQCCWar0B",
+        "call_id": "call_a4d95fc4f09e4c86a0605a6a",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__PFvP9Af/agent/wire/model/1793285133274-1b5d7dc5-f440-4d22-93f7-4a3045a5c10f.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__PFvP9Af/agent/wire/model/1793285143811-84cb57f1-138d-4656-832f-919141cd3f50.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/classes/class_checker.py:1192-1263",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/typecheck.py:1049-1051",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "tests/functional/a/access/access_to_protected_members.py:195-202",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "tests/functional/m/mixin_class_rgx.py:36-38",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__TGaFQep",
+      "wire_id": "1793285334408-a15947bc-7603-42f9-816a-73317bdc28f7",
+      "query_id": "1eb3976e3eef05c5",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "limit": 12
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77dd782cffeI1jGS8nRvkdGMw",
+        "message_id": "msg_188228ab00012EUNQYeNR0N4E1",
+        "part_id": "prt_188229f7f001CBLU6hrBWahQal",
+        "call_id": "call_c2e95e33f856440ca0a9ed0e",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__TGaFQep/agent/wire/model/1793285328447-c3b8fcfb-abb6-4b4a-852c-5c0e8ccc2ae1.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__TGaFQep/agent/wire/model/1793285336291-1438fc30-95f8-4419-affc-ad4f1de124f3.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": null
+        },
+        {
+          "rank": 11,
+          "entity": "pylint/extensions/code_style.py:19-347",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 12,
+          "entity": "pylint/extensions/typing.py:247-268",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__TGaFQep",
+      "wire_id": "1793285402409-6517cef3-5909-47e6-bf8b-7e2fab519dab",
+      "query_id": "b562c4bd37f5e5e5",
+      "arguments": {
+        "limit": 10,
+        "preview": "full",
+        "query": "annotated assignment without value is a declaration not an initialization for instance attributes in class body; separate handling of AnnAssign vs Assign when collecting attributes defined in __init__",
+        "root": "/app"
+      },
+      "intent": "已读 slots 与 Pyreverse 后，追踪声明无值和实例属性收集；带 __init__ 的宽查询返回多项无关初始化例子。",
+      "links": {
+        "session_id": "ses_e77dd782cffeI1jGS8nRvkdGMw",
+        "message_id": "msg_1882375fc001Tvs3Lxd839VeeG",
+        "part_id": "prt_18823a811001asd9PmZAMCpeVW",
+        "call_id": "call_c6f0d1203503414599f05075",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__TGaFQep/agent/wire/model/1793285387875-a6d90fd0-347e-4a58-b057-e49abf2d1b58.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__TGaFQep/agent/wire/model/1793285403739-3a177295-dc2c-4e91-bae3-588f6c99e7c1.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/typecheck.py:548-595",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/classes/class_checker.py:1141-1190",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "tests/functional/a/access/access_to_protected_members.py:195-202",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "doc/data/messages/n/non-parent-init-called/bad.py:13-15",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "tests/functional/a/assigning/assigning_non_slot.py:35-39",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "doc/data/messages/b/bad-super-call/good.py:10-11",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "doc/user_guide/checkers/features.rst:44-79",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "doc/whatsnew/1/1.4.rst:322-381",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "tests/functional/u/unused/unused_private_member.py:134-135",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__YyBMU6L",
+      "wire_id": "1793284528893-95a8e07b-6bbd-45b8-9dbe-ccbd1e4a16d7",
+      "query_id": "467981359ca2b8a4",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated versus non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "preview": "full",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e9c379ffeBkViVt7aVWc4kh",
+        "message_id": "msg_188163f3c001lSxyECGM2kO9r0",
+        "part_id": "prt_188165654001bhcLdQO58KTbBx",
+        "call_id": "call_26a8cc49ea5f477ea704e1e5",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__YyBMU6L/agent/wire/model/1793284522639-473bb51a-5850-47d1-8bdd-5d4f8f905fb5.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__YyBMU6L/agent/wire/model/1793284530691-6470e823-fa5a-4689-ba56-0dd6ceb8c91a.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": "mid_line_fragment"
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__YyBMU6L",
+      "wire_id": "1793284540971-92f58804-26d4-4c72-9e98-142012d00bd4",
+      "query_id": "143451e045375985",
+      "arguments": {
+        "limit": 8,
+        "preview": "full",
+        "query": "instance attribute defined outside init annotated assignment self.x: int handled separately from plain assignment visitor",
+        "root": "/app"
+      },
+      "intent": "追踪 outside-init 与注解赋值 visitor；检索前尚未读取 checker 实现。",
+      "links": {
+        "session_id": "ses_e77e9c379ffeBkViVt7aVWc4kh",
+        "message_id": "msg_1881661810013rbhfJ1a80fL7w",
+        "part_id": "prt_1881684bb00106Ivoxqt7C0NA0",
+        "call_id": "call_91da408c47eb41099c42918f",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__YyBMU6L/agent/wire/model/1793284530691-6470e823-fa5a-4689-ba56-0dd6ceb8c91a.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__YyBMU6L/agent/wire/model/1793284541459-6c2548ce-bc10-4dc8-9344-7becb8ecb573.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/classes/class_checker.py:1192-1263",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "doc/user_guide/checkers/features.rst:1390-1416",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "tests/functional/a/access/access_to_protected_members.py:195-202",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "tests/functional/m/mixin_class_rgx.py:33-38",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "tests/functional/a/attribute_defined_outside_init.txt:1-2",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__dZRYmKH",
+      "wire_id": "1793285023760-a2a91c22-6413-45d6-b363-e022052fbcef",
+      "query_id": "d71618a4012b2e8b",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node type separation AnnAssign Assign",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e24b98ffepBx1I4O3GqQxwJ",
+        "message_id": "msg_1881db70f001cS0QjGB2MbCQ12",
+        "part_id": "prt_1881de37e001DWhRdYgmWdY9p0",
+        "call_id": "call_7574344fb1e1488995daff61",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__dZRYmKH/agent/wire/model/1793285012056-1f2500de-b705-4b72-9c23-d21423c83ebb.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__dZRYmKH/agent/wire/model/1793285025421-0bac3d25-a7f8-44b2-bc21-10e7fea85e80.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/extensions/redefined_variable_type.py:92-104",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:134-171",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__dZRYmKH",
+      "wire_id": "1793285034884-570141ea-4eac-4eb7-9f02-c1187895ad3c",
+      "query_id": "867c6ea614f724d8",
+      "arguments": {
+        "limit": 8,
+        "query": "checker handles instance attribute defined outside init separately for AnnAssign and AssignAttr node types attribute-defined-outside-init",
+        "root": "/app"
+      },
+      "intent": "追踪 outside-init 的 AnnAssign/AssignAttr 处理；窄化查询，相关 checker/测试可用。",
+      "links": {
+        "session_id": "ses_e77e24b98ffepBx1I4O3GqQxwJ",
+        "message_id": "msg_1881dee0b001P7HMhh5VeWa104",
+        "part_id": "prt_1881e0e67001czXL1nac1dxrXi",
+        "call_id": "call_ec39e171f1464106a3ca90cf",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__dZRYmKH/agent/wire/model/1793285025421-0bac3d25-a7f8-44b2-bc21-10e7fea85e80.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__dZRYmKH/agent/wire/model/1793285035265-3c185616-07f5-47b4-95ad-fed6fbe52204.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/classes/class_checker.py:1192-1263",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/typecheck.py:548-595",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "tests/functional/a/attribute_defined_outside_init.txt:1-2",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "tests/functional/m/mixin_class_rgx.py:33-38",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "tests/functional/a/access/access_to_protected_members.py:195-202",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/classes/class_checker.py:1046-1060",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/pyreverse/inspector.py:220-229",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__ekGjuDz",
+      "wire_id": "1793284890611-5fbf817d-5bcf-40a6-a84e-b463e64bab0c",
+      "query_id": "666323c9d1d01026",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization in __init__ AST node separation AnnAssign Assign",
+        "limit": 12
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77e443f4ffehNGOWXQawzbkD9",
+        "message_id": "msg_1881bbec300167oWUBHA4QK1zg",
+        "part_id": "prt_1881bd9e4001jNILI5NewPDYq7",
+        "call_id": "call_5b395604173940dbb9bf7816",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__ekGjuDz/agent/wire/model/1793284882987-6440653b-d21b-4ba6-ac97-1a8ce82efd58.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__ekGjuDz/agent/wire/model/1793284892550-1df5a722-1981-4d22-bf25-f6a818ee4459.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/typecheck.py:1216-1224",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/classes/class_checker.py:1726-1735",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "doc/data/messages/n/non-parent-init-called/bad.py:13-15",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "tests/functional/u/unused/unused_private_member.py:134-135",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "tests/functional/a/assigning/assigning_non_slot.py:35-39",
+          "preview_issue": null
+        },
+        {
+          "rank": 11,
+          "entity": "doc/data/messages/b/bad-super-call/good.py:10-11",
+          "preview_issue": null
+        },
+        {
+          "rank": 12,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__pCUARhw",
+      "wire_id": "1793285231575-a19697ac-d2a2-4540-97e6-3a4f3c3ea02e",
+      "query_id": "1e759e0cc5a06879",
+      "arguments": {
+        "root": "/app",
+        "query": "type-annotated vs non-annotated instance attribute initialization AST node separation AnnAssign Assign self attribute",
+        "limit": 10
+      },
+      "intent": "原题的首次宽检索，寻找按 AST 节点类型区分属性初始化的机制。",
+      "links": {
+        "session_id": "ses_e77df0b57ffesPkDQCfXg6WcZU",
+        "message_id": "msg_18820f768001MbP7bhjJKkzI50",
+        "part_id": "prt_188210e1e001t0OkifDZXMl2wg",
+        "call_id": "call_58ed3609b4fe45b191107deb",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__pCUARhw/agent/wire/model/1793285225181-4682ffed-acc9-479d-8ef2-eb28011c5bdb.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__pCUARhw/agent/wire/model/1793285233546-8131befb-71a1-4089-ba12-bb86f69afc60.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/utils.py:1731-1752",
+          "preview_issue": "missing_decisive_AnnAssign_predicate"
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/extensions/private_import.py:21-260",
+          "preview_issue": "mid_line_fragment"
+        },
+        {
+          "rank": 3,
+          "entity": "pylint/checkers/typecheck.py:1049-1051",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "pylint/checkers/classes/class_checker.py:1840-1851",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "pylint/checkers/variables.py:2549-2558",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "pylint/checkers/base/name_checker/checker.py:396-530",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/checkers/deprecated.py:91-94",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/checkers/utils.py:1759-1774",
+          "preview_issue": null
+        },
+        {
+          "rank": 9,
+          "entity": "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98",
+          "preview_issue": null
+        },
+        {
+          "rank": 10,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        }
+      ]
+    },
+    {
+      "trial": "pylint-10__pCUARhw",
+      "wire_id": "1793285243948-6ea80ae7-7454-42d6-8a5f-14c8aa65d05c",
+      "query_id": "e1e657bba1b5c72e",
+      "arguments": {
+        "limit": 8,
+        "query": "instance attribute defined outside init annotated assignment class body attribute-defined-outside-init visit_annassign",
+        "root": "/app"
+      },
+      "intent": "追踪类体注解与 outside-init 的关系；正确返回检查入口，不等于证明存在独立 visit_annassign。",
+      "links": {
+        "session_id": "ses_e77df0b57ffesPkDQCfXg6WcZU",
+        "message_id": "msg_188211b1e001OnH8LYyS5g4ACS",
+        "part_id": "prt_188213f280016eQI8YYwiY3G2u",
+        "call_id": "call_2476ba3e25d44f42b5642370",
+        "tool_body_equal": true,
+        "pre_query_model_request": "jobs/formal/pylint-10__pCUARhw/agent/wire/model/1793285233546-8131befb-71a1-4089-ba12-bb86f69afc60.request.bin",
+        "first_visible_model_request": "jobs/formal/pylint-10__pCUARhw/agent/wire/model/1793285244438-5cf30092-74b9-408e-898a-7ed1676ea03b.request.bin",
+        "model_body_equal": true
+      },
+      "review_status": "reviewed_against_pinned_source_and_prior_context",
+      "hits": [
+        {
+          "rank": 1,
+          "entity": "pylint/checkers/classes/class_checker.py:1192-1263",
+          "preview_issue": null
+        },
+        {
+          "rank": 2,
+          "entity": "pylint/checkers/typecheck.py:548-595",
+          "preview_issue": null
+        },
+        {
+          "rank": 3,
+          "entity": "tests/functional/a/attribute_defined_outside_init.txt:1-2",
+          "preview_issue": null
+        },
+        {
+          "rank": 4,
+          "entity": "tests/functional/m/mixin_class_rgx.py:33-38",
+          "preview_issue": null
+        },
+        {
+          "rank": 5,
+          "entity": "tests/functional/a/attribute_defined_outside_init.py:23-26",
+          "preview_issue": null
+        },
+        {
+          "rank": 6,
+          "entity": "tests/functional/a/access/access_to_protected_members.py:195-202",
+          "preview_issue": null
+        },
+        {
+          "rank": 7,
+          "entity": "pylint/extensions/private_import.py:217-246",
+          "preview_issue": null
+        },
+        {
+          "rank": 8,
+          "entity": "pylint/checkers/classes/class_checker.py:1046-1060",
+          "preview_issue": null
+        }
+      ]
+    }
+  ],
+  "entities": {
+    "pylint/checkers/utils.py:1759-1774": {
+      "path": "pylint/checkers/utils.py",
+      "start": 1759,
+      "end": 1774,
+      "source_sha256": "675b5bde71425eed672aec25cdcdaa504b55262f859ed606f6894a143923369e",
+      "relevance": "相关",
+      "reason": "按 AnnAssign 父节点识别指定注解，能证明节点分支；不直接说明实例属性或 no-member。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/utils.py#L1759"
+    },
+    "pylint/extensions/private_import.py:21-260": {
+      "path": "pylint/extensions/private_import.py",
+      "start": 21,
+      "end": 260,
+      "source_sha256": "3bb3b8770cd9f42bd9c97d30090d21659d0e7b298aa1480ecc8e3ca1f61e5735",
+      "relevance": "弱相关",
+      "reason": "片段是私有导入注解名称解析及赋值访问，AST词汇重合但对象不同。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/private_import.py#L21"
+    },
+    "pylint/checkers/typecheck.py:1216-1224": {
+      "path": "pylint/checkers/typecheck.py",
+      "start": 1216,
+      "end": 1224,
+      "source_sha256": "0f6c8b1481e2564e334d72e3cd7f3ecc1cc2e94768ef7e1da2a9bb30e0d96e6e",
+      "relevance": "弱相关",
+      "reason": "普通 Assign 的 visitor，未展示注解与实例属性的区别。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/typecheck.py#L1216"
+    },
+    "pylint/checkers/variables.py:2549-2558": {
+      "path": "pylint/checkers/variables.py",
+      "start": 2549,
+      "end": 2558,
+      "source_sha256": "c81b318b089984604127c802b1d248cb08825559aa5116e5daa9ec9ac109792f",
+      "relevance": "弱相关",
+      "reason": "判断函数内变量的注解上下文，不是实例属性初始化。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/variables.py#L2549"
+    },
+    "pylint/checkers/base/name_checker/checker.py:396-530": {
+      "path": "pylint/checkers/base/name_checker/checker.py",
+      "start": 396,
+      "end": 530,
+      "source_sha256": "3e2c983a45e690cc558cee09e01a5332f0cc949b038329075c3e911f1f512702",
+      "relevance": "相关",
+      "reason": "命名检查含 Assign/AnnAssign 分支；默认预览只到405，分支从408后开始。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/base/name_checker/checker.py#L396"
+    },
+    "pylint/checkers/classes/class_checker.py:1840-1851": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 1840,
+      "end": 1851,
+      "source_sha256": "be4233bddf28e8ef313737502a558c733e03bdcf319e52974009dca915d99069",
+      "relevance": "弱相关",
+      "reason": "普通赋值中的方法参数与属性检查，没有两种赋值节点对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L1840"
+    },
+    "tests/functional/u/used/used_before_assignment_type_annotations.py:93-98": {
+      "path": "tests/functional/u/used/used_before_assignment_type_annotations.py",
+      "start": 93,
+      "end": 98,
+      "source_sha256": "eb3a92be41fa5784122242778f2dc37b68663ec4a80ae0676f328c9503de5055",
+      "relevance": "弱相关",
+      "reason": "局部变量先使用后赋值的注解测试，不是实例属性。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/u/used/used_before_assignment_type_annotations.py#L93"
+    },
+    "pylint/pyreverse/inspector.py:220-229": {
+      "path": "pylint/pyreverse/inspector.py",
+      "start": 220,
+      "end": 229,
+      "source_sha256": "a72568503b39ba1ea0dd73299d3fe59b1adebb79adb18bd4cddaa39e35b30b3a",
+      "relevance": "相关",
+      "reason": "实例属性类型收集调用 infer_node，可继续追踪到 get_annotation。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/pyreverse/inspector.py#L220"
+    },
+    "pylint/extensions/typing.py:247-268": {
+      "path": "pylint/extensions/typing.py",
+      "start": 247,
+      "end": 268,
+      "source_sha256": "60aa118019e848574b887626ac3a12c3e50297e9c805ea76de20da667a6811f2",
+      "relevance": "相关",
+      "reason": "AnnAssign 专属 visitor，处理冗余 Optional/Union 注解；支持分派但不是实例属性主线。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/typing.py#L247"
+    },
+    "pylint/extensions/code_style.py:19-347": {
+      "path": "pylint/extensions/code_style.py",
+      "start": 19,
+      "end": 347,
+      "source_sha256": "b31258275543d542fb3dd1b056e854bda426211dee9ca4314a9092035e6c11b7",
+      "relevance": "弱相关",
+      "reason": "大类片段涉及字典转换为 dataclass/NamedTuple，非实例属性初始化。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/code_style.py#L19"
+    },
+    "pylint/extensions/private_import.py:134-171": {
+      "path": "pylint/extensions/private_import.py",
+      "start": 134,
+      "end": 171,
+      "source_sha256": "03a486708bbff8c941386388f67d6e881d5dee9a2c47d2d9399acb48f8530f11",
+      "relevance": "相关",
+      "reason": "私有名称检查也按 AnnAssign/Assign 分支，可作类比；默认预览未显示该分支。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/private_import.py#L134"
+    },
+    "tests/pyreverse/test_utils.py:42-58": {
+      "path": "tests/pyreverse/test_utils.py",
+      "start": 42,
+      "end": 58,
+      "source_sha256": "d1d4816809025cc5ff7d21d83f009d9c5e0fa9ddf8388b24a62032b31bd77bdc",
+      "relevance": "相关",
+      "reason": "get_annotation 的 AnnAssign 测试，提供继续定位函数的线索。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/pyreverse/test_utils.py#L42"
+    },
+    "pylint/extensions/redefined_variable_type.py:92-104": {
+      "path": "pylint/extensions/redefined_variable_type.py",
+      "start": 92,
+      "end": 104,
+      "source_sha256": "696c3d52ad80a17572f50a09fc02d279cdfdea8b008452438bd00238c6aa9497",
+      "relevance": "弱相关",
+      "reason": "普通赋值类型重定义检查，无 AnnAssign 对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/redefined_variable_type.py#L92"
+    },
+    "pylint/checkers/utils.py:1731-1752": {
+      "path": "pylint/checkers/utils.py",
+      "start": 1731,
+      "end": 1752,
+      "source_sha256": "1c56fbb916ad4c564abe1f72bf0e6a5cdcf317048bcca629e6f63420f26e361a",
+      "relevance": "核心",
+      "reason": "注解识别与基类递归；默认预览缺少 1741 的 AnnAssign 条件及后续递归。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/utils.py#L1731"
+    },
+    "pylint/checkers/base/name_checker/checker.py:157-752": {
+      "path": "pylint/checkers/base/name_checker/checker.py",
+      "start": 157,
+      "end": 752,
+      "source_sha256": "3d95866a5b7f8e1bcc6d55a0f0b2a0d6a49615a998229cbb4d87125381e21e9e",
+      "relevance": "弱相关",
+      "reason": "大类命中片段位于参数命名与下一个 visitor 的交界，不能直接回答题目。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/base/name_checker/checker.py#L157"
+    },
+    "pylint/checkers/classes/class_checker.py:1726-1735": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 1726,
+      "end": 1735,
+      "source_sha256": "3f1aa0718989fc764335b694eb8842819096de2020033354ce499392fd797910",
+      "relevance": "相关",
+      "reason": "实例属性 target 的统一入口，可继续追踪 slots；片段本身未区分注解。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L1726"
+    },
+    "pylint/extensions/private_import.py:217-246": {
+      "path": "pylint/extensions/private_import.py",
+      "start": 217,
+      "end": 246,
+      "source_sha256": "573b17a435ca4e236e62ac5100df21ece87ffec9966f4a2eb778cedc216bdfa4",
+      "relevance": "弱相关",
+      "reason": "检查赋值是否访问私有名称，有无value判断但不区分实例属性初始化。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/private_import.py#L217"
+    },
+    "pylint/extensions/code_style.py:132-206": {
+      "path": "pylint/extensions/code_style.py",
+      "start": 132,
+      "end": 206,
+      "source_sha256": "f419ab93f54050c31bf5f9974641c0eae479a3a538802d5ddc74b1543d1751f5",
+      "relevance": "弱相关",
+      "reason": "模块字典与 Final 的样式建议，AnnAssign/Assign只是条件之一。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/extensions/code_style.py#L132"
+    },
+    "pylint/checkers/typecheck.py:525-545": {
+      "path": "pylint/checkers/typecheck.py",
+      "start": 525,
+      "end": 545,
+      "source_sha256": "600863ff0ab477fef6c36c4b18408838bae1341f9d4a1c6ddab60489c973ca4b",
+      "relevance": "核心",
+      "reason": "Assign.targets 与 AnnAssign.target 的归一化；直接支持题目机制。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/typecheck.py#L525"
+    },
+    "pylint/checkers/classes/class_checker.py:762-2425": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 762,
+      "end": 2425,
+      "source_sha256": "c98874c0978f5145acf96e971cb037933d5f4983d70f3bb60e6892eef8d8254b",
+      "relevance": "相关",
+      "reason": "匹配片段包含 AnnAssign 且 value is None 的 slots 例外，支持声明与初始化区别。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L762"
+    },
+    "pylint/checkers/dataclass_checker.py:58-102": {
+      "path": "pylint/checkers/dataclass_checker.py",
+      "start": 58,
+      "end": 102,
+      "source_sha256": "1aa0188629703c152e544eaa3087dbc106e061548e28ea869ca269dace19b271",
+      "relevance": "相关",
+      "reason": "dataclass field 要求 AnnAssign 父节点，属于相似节点类型检查，不是本题主线。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/dataclass_checker.py#L58"
+    },
+    "pylint/checkers/exceptions.py:36-54": {
+      "path": "pylint/checkers/exceptions.py",
+      "start": 36,
+      "end": 54,
+      "source_sha256": "748141264145e0d38c95a5f87229c10c7e77ecd82730d6ae98385a683a4a3e7e",
+      "relevance": "无关",
+      "reason": "annotated 指推断结果附带节点，不是 Python 类型注解。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/exceptions.py#L36"
+    },
+    "pylint/pyreverse/inspector.py:370-404": {
+      "path": "pylint/pyreverse/inspector.py",
+      "start": 370,
+      "end": 404,
+      "source_sha256": "3b16a913635aa35e6cbeaff8c4e994d997eb5119270943743d57c99b87caab05",
+      "relevance": "无关",
+      "reason": "从文件构建 Project，未处理实例属性注解。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/pyreverse/inspector.py#L370"
+    },
+    "pylint/checkers/base/basic_checker.py:960-965": {
+      "path": "pylint/checkers/base/basic_checker.py",
+      "start": 960,
+      "end": 965,
+      "source_sha256": "49a4129faa0c8e7fc1f999c63d75bf714ee22cd8cfd29d4adbd2ba4231bdb182",
+      "relevance": "弱相关",
+      "reason": "普通赋值自赋值与重复名称检查，缺少注解和实例属性语义。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/base/basic_checker.py#L960"
+    },
+    "pylint/checkers/refactoring/refactoring_checker.py:1771-1801": {
+      "path": "pylint/checkers/refactoring/refactoring_checker.py",
+      "start": 1771,
+      "end": 1801,
+      "source_sha256": "4d38561593dc4ca9005a2ff6da3b974d28869cef616d5166a39cb6b2fd8083b3",
+      "relevance": "无关",
+      "reason": "字符串 join 重构中的 AugAssign，与实例属性注解无关。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/refactoring/refactoring_checker.py#L1771"
+    },
+    "tests/pyreverse/test_utils.py:61-86": {
+      "path": "tests/pyreverse/test_utils.py",
+      "start": 61,
+      "end": 86,
+      "source_sha256": "bec1bf922e664f425658b4ba911311da327f10c1e4a8031a884536cbdb8ae654",
+      "relevance": "相关",
+      "reason": "从 __init__ 参数注解恢复 self.x 类型的测试；当前片段未展示测试函数调用。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/pyreverse/test_utils.py#L61"
+    },
+    "pylint/checkers/classes/class_checker.py:1192-1263": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 1192,
+      "end": 1263,
+      "source_sha256": "79accde2e265ba3518ff368743957c1ca9420f7db0485286311578fe89a3aa1d",
+      "relevance": "相关",
+      "reason": "outside-init 检查入口及 instance_attrs 遍历，不直接按注解分支。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L1192"
+    },
+    "pylint/checkers/typecheck.py:1049-1051": {
+      "path": "pylint/checkers/typecheck.py",
+      "start": 1049,
+      "end": 1051,
+      "source_sha256": "4e4be18888683a0647f86097c18dff9fe426010dd6f68e30bf5e5053929ba92b",
+      "relevance": "弱相关",
+      "reason": "AssignAttr 仅针对 AugAssign 转发，不是 AnnAssign/Assign 区分。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/typecheck.py#L1049"
+    },
+    "tests/functional/a/access/access_to_protected_members.py:195-202": {
+      "path": "tests/functional/a/access/access_to_protected_members.py",
+      "start": 195,
+      "end": 202,
+      "source_sha256": "8d3d486c4a0dbf96fde82ada0f78cca573d87bf6a5ca42d232a40f2d8f3b4d84",
+      "relevance": "相关",
+      "reason": "outside-init 正例，无注解对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/a/access/access_to_protected_members.py#L195"
+    },
+    "tests/functional/m/mixin_class_rgx.py:36-38": {
+      "path": "tests/functional/m/mixin_class_rgx.py",
+      "start": 36,
+      "end": 38,
+      "source_sha256": "df8a6f0e9c63c0faaca9ac8f75ac84c6e5b3c34f5df1fc99655a811276b836b2",
+      "relevance": "相关",
+      "reason": "outside-init 正例，无注解对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/m/mixin_class_rgx.py#L36"
+    },
+    "pylint/checkers/typecheck.py:548-595": {
+      "path": "pylint/checkers/typecheck.py",
+      "start": 548,
+      "end": 595,
+      "source_sha256": "9acc1f94a4adf6b245f6533f84e3fe7c152fa612a5acd23bd301a7a53c36a303",
+      "relevance": "相关",
+      "reason": "枚举属性收集调用 _get_all_attribute_assignments，是可继续追踪的调用方。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/typecheck.py#L548"
+    },
+    "pylint/checkers/classes/class_checker.py:1141-1190": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 1141,
+      "end": 1190,
+      "source_sha256": "89a344bad701533bd6830f1ba2b1740b38fe0803ace90959e59cd98623b62786",
+      "relevance": "弱相关",
+      "reason": "未使用私有属性检查，匹配片段只有 cls/self 的访问关系。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L1141"
+    },
+    "doc/data/messages/n/non-parent-init-called/bad.py:13-15": {
+      "path": "doc/data/messages/n/non-parent-init-called/bad.py",
+      "start": 13,
+      "end": 15,
+      "source_sha256": "c349360af0496a2a423b00bacf778dfd091ca199f64870f4c3efaf71946f2732",
+      "relevance": "无关",
+      "reason": "父构造函数调用告警例子；__init__ 名称匹配不能回答当前问题。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/doc/data/messages/n/non-parent-init-called/bad.py#L13"
+    },
+    "tests/functional/a/assigning/assigning_non_slot.py:35-39": {
+      "path": "tests/functional/a/assigning/assigning_non_slot.py",
+      "start": 35,
+      "end": 39,
+      "source_sha256": "63b245559cd5aca8e127b7293fbc219795c91ab6db4e755a2652d185603da9a6",
+      "relevance": "弱相关",
+      "reason": "普通属性赋值的 slots 例子，无注解对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/a/assigning/assigning_non_slot.py#L35"
+    },
+    "doc/data/messages/b/bad-super-call/good.py:10-11": {
+      "path": "doc/data/messages/b/bad-super-call/good.py",
+      "start": 10,
+      "end": 11,
+      "source_sha256": "c86c4822d3105a2cac4ed8eeed489cf12581e3e8f19127c9b6f8fd6860fb20ef",
+      "relevance": "无关",
+      "reason": "super 调用例子，未涉及属性注解。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/doc/data/messages/b/bad-super-call/good.py#L10"
+    },
+    "doc/user_guide/checkers/features.rst:44-79": {
+      "path": "doc/user_guide/checkers/features.rst",
+      "start": 44,
+      "end": 79,
+      "source_sha256": "fbbf43e2a36059c7cdbcd369e060ca488f200ec4b81d1a3213d44d18c48caeb1",
+      "relevance": "无关",
+      "reason": "多种基础告警列表，未解释当前注解属性机制。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/doc/user_guide/checkers/features.rst#L44"
+    },
+    "doc/whatsnew/1/1.4.rst:322-381": {
+      "path": "doc/whatsnew/1/1.4.rst",
+      "start": 322,
+      "end": 381,
+      "source_sha256": "5c98e6600c0526425a5d1f91629a3978e469510eccfdd4f93527cc57ba015bbc",
+      "relevance": "弱相关",
+      "reason": "历史版本多项变更，含注解/属性关键词，不解释当前实现。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/doc/whatsnew/1/1.4.rst#L322"
+    },
+    "tests/functional/u/unused/unused_private_member.py:134-135": {
+      "path": "tests/functional/u/unused/unused_private_member.py",
+      "start": 134,
+      "end": 135,
+      "source_sha256": "d99723c5faa4e9a7d175e7d97a3102c8fecf34f9847786915f9758dd2af8e077",
+      "relevance": "无关",
+      "reason": "普通 __init__ 私有属性赋值，未提供注解区别。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/u/unused/unused_private_member.py#L134"
+    },
+    "doc/user_guide/checkers/features.rst:1390-1416": {
+      "path": "doc/user_guide/checkers/features.rst",
+      "start": 1390,
+      "end": 1416,
+      "source_sha256": "1a1659fb2146e17fe58f4081ae3ce4a6a149762034a37b583b493c362c6e3769",
+      "relevance": "弱相关",
+      "reason": "变量赋值告警列表，不提供 outside-init 注解判断实现。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/doc/user_guide/checkers/features.rst#L1390"
+    },
+    "tests/functional/m/mixin_class_rgx.py:33-38": {
+      "path": "tests/functional/m/mixin_class_rgx.py",
+      "start": 33,
+      "end": 38,
+      "source_sha256": "740c785529745c68c55b06e1b579561a4953f49de0d182fcdbbb62b8cc13ba7d",
+      "relevance": "相关",
+      "reason": "mixin 配置与 outside-init 正例，无注解对照。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/m/mixin_class_rgx.py#L33"
+    },
+    "tests/functional/a/attribute_defined_outside_init.txt:1-2": {
+      "path": "tests/functional/a/attribute_defined_outside_init.txt",
+      "start": 1,
+      "end": 2,
+      "source_sha256": "79a87fa07516cc732ddc67b9f97ddba75a943f9ee089192fc2ebc2391b690b24",
+      "relevance": "相关",
+      "reason": "outside-init 诊断基准输出，只能验证该告警存在。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/a/attribute_defined_outside_init.txt#L1"
+    },
+    "pylint/checkers/classes/class_checker.py:1046-1060": {
+      "path": "pylint/checkers/classes/class_checker.py",
+      "start": 1046,
+      "end": 1060,
+      "source_sha256": "c8a53c5c262a07e1f529572761df0c7e494ed9bda907bfb2d540e8c94c52635c",
+      "relevance": "相关",
+      "reason": "leave_classdef 是 outside-init 检查调用入口，可继续追踪。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/classes/class_checker.py#L1046"
+    },
+    "pylint/checkers/deprecated.py:91-94": {
+      "path": "pylint/checkers/deprecated.py",
+      "start": 91,
+      "end": 94,
+      "source_sha256": "945f0d1fa1337110412cc55c6eff2c2ce4b6342706044f0fccc0fc3a695b77de",
+      "relevance": "无关",
+      "reason": "弃用属性检查 visitor，不能解释注解赋值区别。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/pylint/checkers/deprecated.py#L91"
+    },
+    "tests/functional/a/attribute_defined_outside_init.py:23-26": {
+      "path": "tests/functional/a/attribute_defined_outside_init.py",
+      "start": 23,
+      "end": 26,
+      "source_sha256": "6273cfa55afc266169877998c8fe78fbb944f6199f8c47cdac4c3e5a09f6fd26",
+      "relevance": "相关",
+      "reason": "outside-init 最小例子，未区分注解。",
+      "source_url": "https://github.com/pylint-dev/pylint/blob/44740e5e5cdd2b80321a4f0ed4254213d058b9f6/tests/functional/a/attribute_defined_outside_init.py#L23"
+    }
+  },
+  "replay_summary": {
+    "queries": [
+      {
+        "query_id": "827adfa8796c5fd7",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          0,
+          6239541
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "1eb3976e3eef05c5",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          32170530,
+          38327290
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "8de411471803bc29",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          64108225,
+          75111616
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "ea3a970daff34ec9",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          108253719,
+          114403115
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "cd8e2309f3bfabb7",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          140217607,
+          146500086
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "d71618a4012b2e8b",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          166980238,
+          173116470
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "cb3a08d07b730a79",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          198867989,
+          203774747
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "b562c4bd37f5e5e5",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          219490603,
+          226361823
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "467981359ca2b8a4",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          247709216,
+          253846668
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "143451e045375985",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          279582469,
+          284625934
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "867c6ea614f724d8",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          300395601,
+          306014692
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "666323c9d1d01026",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          323887789,
+          330089065
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "1e759e0cc5a06879",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          349978845,
+          356040668
+        ],
+        "stage_capture": true
+      },
+      {
+        "query_id": "e1e657bba1b5c72e",
+        "stable_10": true,
+        "matches_e2e": true,
+        "diagnostic_parity": true,
+        "stage_byte_range": [
+          381385310,
+          385805385
+        ],
+        "stage_capture": true
+      }
+    ],
+    "evidence_ready": true,
+    "ready": true,
+    "note": "CI success checks evidence/parity, not answer correctness. Replay instability or E2E differences remain findings requiring review."
+  },
+  "ranking_evidence": "../../../benchmarks/swe-qa-bench/runs/pylint10-pilot/replay-40896401828/ranking-analysis.json",
+  "limitations": [
+    "单题不能证明跨case泛化。",
+    "参考答案以源码校验，未要求逐字匹配。",
+    "未将provider实际采样参数等同于已记录请求参数。",
+    "未采集分词器逐token日志；不据此推断分词故障。",
+    "候选窗口外排名是诊断延续，非生产返回。",
+    "未通过修改检索输出后重跑Agent来证明对最终答案的因果影响。"
+  ]
+}
