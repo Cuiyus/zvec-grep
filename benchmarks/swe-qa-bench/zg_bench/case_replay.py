@@ -36,6 +36,16 @@ def key(params: dict) -> str:
     return hashlib.sha256(json.dumps(params, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
+def control_params(original: dict, changes: dict) -> dict:
+    params = copy.deepcopy(original)
+    for name, value in changes.items():
+        if value is None:
+            params["arguments"].pop(name, None)
+        else:
+            params["arguments"][name] = value
+    return params
+
+
 class Mcp:
     def __init__(self):
         self.headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
@@ -120,6 +130,10 @@ def main():
     case = lock["case"]
     subprocess.run(["git", "clone", "--filter=blob:none", "--no-checkout", case["repository_url"], "/app"], check=True)
     subprocess.run(["git", "-C", "/app", "checkout", "--detach", case["repository_commit"]], check=True)
+    ignore_source = Path(__file__).parent / "swe_qa/data/index.ignore"
+    shutil.copyfile(ignore_source, "/app/.zg-bench-index.ignore")
+    with Path("/app/.git/info/exclude").open("a") as exclude:
+        exclude.write("\n.zvec-grep/\n.zg-bench-index.ignore\n")
     requests_path = lock_path.parent / "requests.jsonl"
     rows = [json.loads(line) for line in requests_path.read_text().splitlines()]
     unique = {}
@@ -135,6 +149,9 @@ def main():
     seeds = [p.parent for p in args.evidence.rglob("identity.json") if (p.parent / "complete").exists()]
     if len(seeds) != 1:
         raise RuntimeError("expected exactly one immutable index seed")
+    identity = json.loads((seeds[0] / "identity.json").read_text())
+    if identity["index_ignore_sha256"] != sha256(ignore_source):
+        raise RuntimeError("index ignore rules differ from recorded seed")
     workspace = seeds[0] / "workspace"
     index = workspace / ".zvec-grep" if (workspace / ".zvec-grep").is_dir() else workspace
     write_json(output / "replay-lock.json", {"source_lock": lock, "query_count": len(unique), "repeats": 10,
@@ -172,8 +189,7 @@ def main():
                 controls["fts_only"] = {"query": None, "fts": arguments["query"]}
                 controls["vector_only"] = {"query": None, "vector": arguments["query"]}
             for name, changes in controls.items():
-                params = copy.deepcopy(unique[query_id]["params"])
-                params["arguments"].update(changes)
+                params = control_params(unique[query_id]["params"], changes)
                 start = stages.stat().st_size if stages.exists() else 0
                 reply = client.call("tools/call", params)
                 end = stages.stat().st_size if stages.exists() else 0

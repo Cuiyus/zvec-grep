@@ -16,11 +16,17 @@ import unittest
 
 from zg_bench.case_analysis import recording_command, rpc_messages, inventory
 from zg_bench.agents.case_evidence import FULL_SESSION_SQL
-from zg_bench.case_replay import stable, key
+from zg_bench.case_replay import stable, key, control_params
 from zg_bench import runner
 
 
 class CaseAnalysisTests(unittest.TestCase):
+    def test_route_ablation_omits_query_instead_of_sending_null(self):
+        original = {"name": "zvec_grep_search", "arguments": {"query": "q", "root": "/app", "limit": 7}}
+        changed = control_params(original, {"query": None, "fts": "q"})
+        self.assertEqual(changed["arguments"], {"fts": "q", "root": "/app", "limit": 7})
+        self.assertEqual(original["arguments"]["query"], "q")
+
     def test_parity_ignores_only_transient_status_not_order_or_source(self):
         a = {"content": [{"text": "freshness: fresh\nbackground_refresh: scheduled\n#1 foo.py\nsource:\n1\toriginal"}]}
         b = {"content": [{"text": "freshness: fresh\n#1 foo.py\nsource:\n1\toriginal"}]}
