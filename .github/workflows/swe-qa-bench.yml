@@ -19,7 +19,11 @@ on:
         required: true
         default: preflight
         type: choice
-        options: [build, preflight, formal]
+        options: [build, preflight, formal, diagnostic-build, replay]
+      evidence_run:
+        description: Completed pilot run ID to replay (replay stage only)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -72,7 +76,7 @@ jobs:
           retention-days: 30
 
   analyze:
-    if: inputs.stage != 'build'
+    if: inputs.stage == 'preflight' || inputs.stage == 'formal'
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -134,5 +138,43 @@ jobs:
             ${{ runner.temp }}/case-analysis/
             ${{ runner.temp }}/case-index-seed/
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+  diagnostic:
+    if: inputs.stage == 'diagnostic-build' || inputs.stage == 'replay'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: zvec-ai/zvec-grep
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Build separate instrumented binary
+        run: |
+          set -euo pipefail
+          git -C candidate apply "$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch"
+          cd candidate/rust
+          rustup show active-toolchain
+          npm ci
+          npm run pack:local
+          mkdir -p "$RUNNER_TEMP/diagnostic"
+          cp dist/npm/*.tgz "$RUNNER_TEMP/diagnostic/diagnostic.tgz"
+          git rev-parse HEAD > "$RUNNER_TEMP/diagnostic/base-commit.txt"
+          cp "$GITHUB_WORKSPACE/benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch" "$RUNNER_TEMP/diagnostic/"
+          sha256sum "$RUNNER_TEMP/diagnostic/"* > "$RUNNER_TEMP/diagnostic/checksums.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: case-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/diagnostic/
           if-no-files-found: error
           retention-days: 90
