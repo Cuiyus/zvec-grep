@@ -81,11 +81,19 @@ index 05af426c..3bd0271c 100644
      let ranking_duration = ranking_started.elapsed();
  
      Ok(SearchPlanResult {
-@@ -376,6 +403,13 @@ fn collect_adaptive_recall(
+@@ -376,6 +403,21 @@ fn collect_adaptive_recall(
                      )?,
              };
              saturated |= hits.len() >= depth;
 +            if diagnostic::enabled() {
++                if route.route.mode == SearchRouteMode::Fts {
++                    let probe = storage.search_fts(&route.route.query, 2000, route.filter.as_ref())?;
++                    diagnostic::emit(serde_json::json!({"stage":"recall_probe","route":format!("{:?}",route.route),
++                        "depth":2000,"shadow_only":true,
++                        "hits":probe.iter().enumerate().map(|(rank,h)| serde_json::json!({
++                            "rank":rank+1,"entity_id":h.entity_id.as_str(),"document_id":h.document_id,"score":h.score
++                        })).collect::<Vec<_>>()}));
++                }
 +                diagnostic::emit(serde_json::json!({"stage":"recall","route":format!("{:?}",route.route),
 +                    "filter":format!("{:?}",route.filter),"depth":depth,
 +                    "hits":hits.iter().enumerate().map(|(rank,h)| serde_json::json!({
