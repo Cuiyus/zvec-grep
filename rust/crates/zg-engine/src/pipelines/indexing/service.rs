@@ -243,6 +243,22 @@ impl WorkspaceIndexService {
                 Ok(indexed)
             }
         });
+        let completed = completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if result.is_ok()
+            && let (Some(reporter), Some(progress)) = (&options.on_progress, &completed)
+        {
+            // Optimization has finished, but closing storage and publishing the
+            // manifest still take time. Keep that work visible without reporting
+            // Done before the active generation is durable.
+            reporter.report(IndexProgress {
+                phase: crate::api::index::progress::IndexProgressPhase::Indexing,
+                detail: Some("saving index".to_owned()),
+                ..progress.clone()
+            });
+        }
         // Flush writes and close storage before the active manifest can select
         // the completed generation.
         writer.retire().await;
@@ -258,10 +274,6 @@ impl WorkspaceIndexService {
                 "indexing was cancelled before publication",
             ));
         }
-        let completed = completion
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
         Ok((indexed, completed))
     }
 
@@ -1111,7 +1123,7 @@ mod tests {
             service.fail_index_completion = fail;
             let models = ModelRuntimeManager::new();
             let layout = WorkspaceLayout::new(directory.path().join(".zvec-grep")).expect("layout");
-            let observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let captured = observed.clone();
             let result = service
                 .index(
@@ -1126,6 +1138,11 @@ mod tests {
                             device: Device::Cpu,
                         }),
                         on_progress: Some(IndexProgressReporter::new(move |progress| {
+                            if progress.detail.as_deref() == Some("saving index") {
+                                assert_eq!(progress.phase, IndexProgressPhase::Indexing);
+                                assert!(!layout.manifest_path().exists());
+                                captured.lock().expect("observed progress").push("saving");
+                            }
                             if progress.phase == IndexProgressPhase::Done {
                                 assert!(
                                     super::read_workspace_manifest(
@@ -1135,7 +1152,7 @@ mod tests {
                                     .expect("published metadata")
                                     .is_some()
                                 );
-                                captured.store(true, std::sync::atomic::Ordering::Release);
+                                captured.lock().expect("observed progress").push("done");
                             }
                         })),
                         ..Default::default()
@@ -1143,7 +1160,10 @@ mod tests {
                 )
                 .await;
             assert_eq!(result.is_err(), fail);
-            assert_eq!(observed.load(std::sync::atomic::Ordering::Acquire), !fail);
+            assert_eq!(
+                *observed.lock().expect("observed progress"),
+                if fail { vec![] } else { vec!["saving", "done"] }
+            );
             models.close();
         }
     }

@@ -26,7 +26,7 @@ use zg_engine::{
     authorization::IndexAuthorization,
 };
 
-use crate::ColorMode;
+use crate::{ColorMode, theme::StatusTheme};
 
 struct TerminalSession {
     was_raw: bool,
@@ -56,16 +56,10 @@ fn cancelled(key: KeyEvent) -> bool {
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
 }
 
-fn clean(value: &str) -> String {
-    value
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
 #[derive(Default)]
 struct Screen {
     lines: u16,
+    body: Vec<u8>,
 }
 
 impl Screen {
@@ -78,36 +72,63 @@ impl Screen {
     }
 
     fn clear(&mut self) -> io::Result<()> {
+        let mut frame = Vec::new();
+        self.rewind(&mut frame)?;
         let mut output = io::stderr().lock();
-        self.rewind(&mut output)?;
+        output.write_all(&frame)?;
         output.flush()?;
         self.lines = 0;
+        self.body.clear();
         Ok(())
     }
 
     fn draw(&mut self, lines: &[String], color: ColorMode) -> io::Result<()> {
-        let mut output = io::stderr().lock();
-        self.rewind(&mut output)?;
         let columns = terminal::size()
             .map_or(80, |(columns, _)| columns)
             .saturating_sub(1);
-        let use_color = color == ColorMode::Always
-            || (color == ColorMode::Auto && std::env::var_os("NO_COLOR").is_none());
-        for line in lines {
-            let line = clean(line)
-                .chars()
-                .take(usize::from(columns))
-                .collect::<String>();
-            if use_color && line.trim_start().starts_with('›') {
-                write!(output, "\x1b[38;2;134;239;172m{line}\x1b[0m\r\n")?;
-            } else {
-                write!(output, "{line}\r\n")?;
-            }
+        let theme = StatusTheme::new(color, crate::stderr_supports_ansi());
+        let body = render_screen(lines, usize::from(columns), theme);
+        if body == self.body {
+            return Ok(());
         }
+        let mut frame = Vec::with_capacity(body.len() + 24);
+        self.rewind(&mut frame)?;
+        frame.extend_from_slice(&body);
+        let mut output = io::stderr().lock();
+        output.write_all(&frame)?;
         output.flush()?;
         self.lines = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        self.body = body;
         Ok(())
     }
+}
+
+fn render_screen(lines: &[String], columns: usize, theme: StatusTheme) -> Vec<u8> {
+    let mut body = String::new();
+    for line in lines {
+        let line = crate::theme::truncate(line, columns);
+        let styled = if let Some(selected) = line.strip_prefix("  ✓ ") {
+            format!("  {} {selected}", theme.success("✓"))
+        } else if let Some(error) = line.strip_prefix("  × ") {
+            format!("  {} {error}", theme.danger("×"))
+        } else if let Some(warning) = line.strip_prefix("  ! ") {
+            format!("  {} {warning}", theme.warning("!"))
+        } else if line.starts_with("  ↑/↓")
+            || line.starts_with("  Enter ")
+            || line.starts_with("  Workspace  ")
+            || line.starts_with("  Endpoint   ")
+            || line.starts_with("  ~/")
+            || line.starts_with("  /")
+            || line.starts_with("  Type or paste ")
+        {
+            theme.muted(&line)
+        } else {
+            line
+        };
+        body.push_str(&styled);
+        body.push_str("\r\n");
+    }
+    body.into_bytes()
 }
 
 pub struct ModelSelection {
@@ -190,12 +211,10 @@ impl ModelSelection {
 
     fn lines(&self, root: &Path, height: u16) -> Vec<String> {
         let mut lines = vec![
-            format!(
-                "No index found in {}.",
-                clean(&crate::output_path(root).display().to_string())
-            ),
+            "Set up workspace index".into(),
+            format!("  {}", crate::theme::display_path(root)),
             String::new(),
-            "Select an embedding model to build zg index:".into(),
+            "Select an embedding model".into(),
             String::new(),
             if self.tab == 0 {
                 "  [ Local models ]    Remote models"
@@ -238,7 +257,7 @@ impl ModelSelection {
             };
             lines.push(format!(
                 "  {} {:width$}  {status}",
-                if index == active { "›" } else { " " },
+                if index == active { "✓" } else { " " },
                 model.reference
             ));
         }
@@ -250,11 +269,11 @@ impl ModelSelection {
         }
         lines.push(String::new());
         lines.push(format!(
-            "  ↑/↓ Select · ←/→ or Tab Switch · Enter {} · Esc Exit",
+            "  ↑/↓ Select · ←/→ Tab Switch · Enter {} · Esc Cancel",
             if self.tab == 0 { "Build" } else { "Continue" }
         ));
         if choices.get(active).is_some_and(|model| !model.available()) {
-            lines.push("  Continue to set an API Key before building.".into());
+            lines.push("  ! An API Key is required before building.".into());
         }
         lines
     }
@@ -306,10 +325,7 @@ pub fn prompt_setup_authorization(
         let mut lines = vec![
             "Remote embedding authorization".into(),
             String::new(),
-            format!(
-                "  Workspace  {}",
-                crate::output_path(&target.root).display()
-            ),
+            format!("  Workspace  {}", crate::theme::display_path(&target.root)),
             format!("  Model      {}", target.model),
             format!("  Endpoint   {}", target.endpoint),
             format!(
@@ -320,7 +336,7 @@ pub fn prompt_setup_authorization(
                     "selected workspace files"
                 }
             ),
-            "  API charges may apply.".into(),
+            "  ! API charges may apply.".into(),
             String::new(),
             format!(
                 "  Allow once covers {}.",
@@ -342,12 +358,12 @@ pub fn prompt_setup_authorization(
         {
             lines.push(format!(
                 "  {} {choice}",
-                if index == active { "›" } else { " " }
+                if index == active { "✓" } else { " " }
             ));
         }
         lines.extend([
             String::new(),
-            "  ↑/↓ Select · Enter Confirm · Esc Exit".into(),
+            "  ↑/↓ Select · Enter Confirm · Esc Cancel".into(),
         ]);
         screen.draw(&lines, color)?;
         if let Event::Key(key) = event::read()? {
@@ -526,9 +542,50 @@ mod tests {
         assert_eq!(picker.tab, 0);
         picker.key(key(KeyCode::Down));
         let lines = picker.lines(Path::new("/workspace"), 12).join("\n");
-        assert!(lines.contains("› local/two"));
-        assert!(lines.contains("Select an embedding model to build zg index:"));
+        assert!(lines.contains("✓ local/two"));
+        assert!(lines.contains("Select an embedding model"));
         assert!(!lines.contains("local/one"));
-        assert!(lines.contains("Esc Exit"));
+        assert!(lines.contains("Esc Cancel"));
+    }
+
+    #[test]
+    fn setup_screen_colors_only_markers_and_secondary_text() {
+        let lines = vec![
+            "  ✓ local/model".into(),
+            "  ! API charges may apply.".into(),
+            "  × Enter an API Key.".into(),
+            "  ↑/↓ Select · Enter Confirm · Esc Cancel".into(),
+            "  /workspace\x1b[2J\npath".into(),
+        ];
+        let plain = String::from_utf8(render_screen(
+            &lines,
+            80,
+            StatusTheme::new(ColorMode::Never, true),
+        ))
+        .expect("UTF-8 screen");
+        assert!(!plain.contains('\x1b'));
+        assert!(!plain.contains("\npath"));
+        assert!(plain.contains("✓ local/model\r\n"));
+        let colored = String::from_utf8(render_screen(
+            &lines,
+            80,
+            StatusTheme::new(ColorMode::Always, true),
+        ))
+        .expect("UTF-8 screen");
+        assert!(colored.contains("✓\x1b[0m local/model"));
+        assert!(colored.contains("\x1b[2m  ↑/↓"));
+        assert!(!colored.contains("\x1b[2J"));
+    }
+
+    #[test]
+    fn setup_screen_clips_wide_workspace_names_to_terminal_columns() {
+        let body = render_screen(
+            &["  /工作目录/project".into()],
+            8,
+            StatusTheme::new(ColorMode::Never, true),
+        );
+        let text = String::from_utf8(body).expect("UTF-8 screen");
+        assert!(unicode_width::UnicodeWidthStr::width(text.trim_end()) <= 8);
+        assert!(!text.contains("project"));
     }
 }

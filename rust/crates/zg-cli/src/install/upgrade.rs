@@ -11,11 +11,11 @@ use uuid::Uuid;
 
 use super::{
     InstallError, atomic_write, copilot_config_path, env_path, env_path_non_empty, grok_home,
-    home_dir, jsonc_set_path, parse_json_object, parse_jsonc_object_options, qoder_ide_path,
-    resolve_atomic_target, resolve_opencode_config, resolve_pi_home, resolve_qwen_home,
-    vscode_config_paths,
+    home_dir, install_theme, jsonc_set_path, parse_json_object, parse_jsonc_object_options,
+    qoder_ide_path, resolve_atomic_target, resolve_opencode_config, resolve_pi_home,
+    resolve_qwen_home, vscode_config_paths,
 };
-use crate::InstallArgs;
+use crate::{InstallArgs, theme::clean};
 
 struct ConfigFile {
     path: PathBuf,
@@ -80,35 +80,98 @@ pub fn execute_upgrade_installed(args: &InstallArgs) -> Result<(), InstallError>
         });
         if let Err(error) = result {
             report.failed += 1;
-            writeln!(crate::stdout(), "  failed: {error}")?;
+            write_entry("failed", &error.to_string())?;
         }
     }
-    writeln!(
-        crate::stdout(),
-        "{}: {}, compatible: {}, manual: {}, failed: {}",
-        if args.dry_run {
-            "Would upgrade"
-        } else {
-            "Upgraded"
-        },
-        report.updated,
-        report.compatible,
-        report.manual,
-        report.failed
+    write_report(
+        &mut crate::stdout(),
+        &report,
+        args.dry_run,
+        crate::stdout_supports_ansi(),
     )?;
-    if report.updated + report.compatible + report.manual + report.failed == 0 {
+    if report.updated + report.compatible + report.manual + report.failed == 0
+        && !crate::stdout_supports_ansi()
+    {
         writeln!(crate::stdout(), "No existing integrations found.")?;
     }
     if report.updated > 0 && !args.dry_run {
         writeln!(
             crate::stdout(),
-            "Reconnect agents to use the updated configuration. No server was started."
+            "  {}",
+            install_theme()
+                .muted("Reconnect agents to use the updated configuration. No server was started.")
         )?;
     }
     if report.failed > 0 || report.manual > 0 {
         return Err(InstallError::Message("Some configurations need attention; review the paths above and rerun zg --install --upgrade-installed.".to_owned()));
     }
     Ok(())
+}
+
+fn write_report(
+    output: &mut impl Write,
+    report: &Report,
+    dry_run: bool,
+    terminal: bool,
+) -> io::Result<()> {
+    if !terminal {
+        return writeln!(
+            output,
+            "{}: {}, compatible: {}, manual: {}, failed: {}",
+            if dry_run { "Would upgrade" } else { "Upgraded" },
+            report.updated,
+            report.compatible,
+            report.manual,
+            report.failed
+        );
+    }
+    let theme = install_theme();
+    let (marker, title) = if report.updated + report.compatible + report.manual + report.failed == 0
+    {
+        (theme.muted("·"), "No existing integrations found")
+    } else if report.failed > 0 || report.manual > 0 {
+        (theme.warning("!"), "Integration upgrade needs attention")
+    } else if dry_run {
+        (theme.muted("·"), "Integration upgrade preview")
+    } else {
+        (theme.success("✓"), "Integrations up to date")
+    };
+    writeln!(output, "{marker} {title}")?;
+    let counts = [
+        (
+            report.updated,
+            if dry_run { "would upgrade" } else { "upgraded" },
+        ),
+        (report.compatible, "compatible"),
+        (report.manual, "manual"),
+        (report.failed, "failed"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, label)| format!("{count} {label}"))
+    .collect::<Vec<_>>();
+    if !counts.is_empty() {
+        writeln!(output, "  {}", counts.join(" · "))?;
+    }
+    Ok(())
+}
+
+fn write_entry(status: &str, detail: &str) -> io::Result<()> {
+    let mut output = crate::stdout();
+    let detail = clean(detail);
+    if !crate::stdout_supports_ansi() {
+        return writeln!(output, "  {status}: {detail}");
+    }
+    let theme = install_theme();
+    let (marker, title) = match status {
+        "upgraded" => (theme.success("✓"), "Integration upgraded"),
+        "would upgrade" => (theme.muted("·"), "Would upgrade integration"),
+        "compatible" => (theme.success("✓"), "Integration compatible"),
+        "manual" => (theme.warning("!"), "Manual update required"),
+        "failed" => (theme.danger("×"), "Integration upgrade failed"),
+        _ => return writeln!(output, "  {}", theme.muted(&format!("{status}: {detail}"))),
+    };
+    writeln!(output, "{marker} {title}\n  {}", theme.muted(&detail))
 }
 
 fn configuration_files() -> Vec<Result<ConfigFile, InstallError>> {
@@ -205,11 +268,9 @@ fn upgrade_file(
             write_upgrade(target, &source, &next)?;
         }
         report.updated += changes;
-        writeln!(
-            crate::stdout(),
-            "  {}: {} ({changes} entries)",
+        write_entry(
             if dry_run { "would upgrade" } else { "upgraded" },
-            file.path.display()
+            &format!("{} ({changes} entries)", file.path.display()),
         )?;
     }
     Ok(())
@@ -239,7 +300,7 @@ fn write_upgrade(target: &Path, source: &str, next: &str) -> Result<(), InstallE
         ));
     }
     atomic_write(target, next)?;
-    writeln!(crate::stdout(), "  backup: {}", backup.display())?;
+    write_entry("backup", &backup.display().to_string())?;
     Ok(())
 }
 
@@ -381,14 +442,16 @@ fn note_launch(
     match launch {
         Launch::Compatible => {
             report.compatible += 1;
-            writeln!(crate::stdout(), "  compatible: {} [{name}]", path.display())?;
+            write_entry("compatible", &format!("{} [{name}]", path.display()))?;
         }
         Launch::Manual => {
             report.manual += 1;
-            writeln!(
-                crate::stdout(),
-                "  manual: {} [{name}] has an unsupported launcher; use zg --server --stdio for stdio MCP",
-                path.display()
+            write_entry(
+                "manual",
+                &format!(
+                    "{} [{name}] has an unsupported launcher; use zg --server --stdio for stdio MCP",
+                    path.display()
+                ),
             )?;
         }
         _ => {}
@@ -567,4 +630,65 @@ fn upgrade_toml(
         next.replace_range(span, &replacement);
     }
     Ok((next, changes))
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn upgrade_preview_and_partial_failure_never_report_success() {
+        let mut preview = Vec::new();
+        write_report(
+            &mut preview,
+            &Report {
+                updated: 2,
+                ..Report::default()
+            },
+            true,
+            true,
+        )
+        .expect("preview");
+        let preview = String::from_utf8(preview).expect("UTF-8 preview");
+        assert!(preview.contains("Integration upgrade preview"));
+        assert!(preview.contains("2 would upgrade"));
+        assert!(!preview.contains('✓'));
+
+        let mut partial = Vec::new();
+        write_report(
+            &mut partial,
+            &Report {
+                updated: 2,
+                failed: 1,
+                manual: 1,
+                ..Report::default()
+            },
+            false,
+            true,
+        )
+        .expect("partial failure");
+        let partial = String::from_utf8(partial).expect("UTF-8 partial failure");
+        assert!(partial.contains("Integration upgrade needs attention"));
+        assert!(partial.contains("2 upgraded · 1 manual · 1 failed"));
+        assert!(!partial.contains('✓'));
+    }
+
+    #[test]
+    fn plain_upgrade_report_retains_all_counts() {
+        let mut output = Vec::new();
+        write_report(
+            &mut output,
+            &Report {
+                updated: 1,
+                ..Report::default()
+            },
+            false,
+            false,
+        )
+        .expect("plain report");
+        assert_eq!(
+            String::from_utf8(output).expect("UTF-8 report"),
+            "Upgraded: 1, compatible: 0, manual: 0, failed: 0\n"
+        );
+    }
 }

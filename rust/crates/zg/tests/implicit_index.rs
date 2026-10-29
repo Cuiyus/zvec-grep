@@ -145,7 +145,7 @@ fn status_uses_grouped_layout_compact_paths_and_explicit_color_policy() {
         colored.contains("\u{1b}[33m? Workspace index is not configured\u{1b}[0m"),
         "{colored:?}"
     );
-    assert!(colored.contains("\u{1b}[36m~\u{1b}[0m"), "{colored:?}");
+    assert!(colored.contains("\u{1b}[2m~\u{1b}[0m"), "{colored:?}");
     assert!(
         colored.contains("\u{1b}[2mStorage     \u{1b}[0m"),
         "{colored:?}"
@@ -664,10 +664,7 @@ fn configured_local_models_follow_environment_then_global_default_precedence() {
         }
         let output = success(terminal::run(command, &[("Enter Build", b"\r")]));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("Select an embedding model to build zg index:"),
-            "{stderr}"
-        );
+        assert!(stderr.contains("Select an embedding model"), "{stderr}");
         fixture.assert_model("direct", expected);
     }
 }
@@ -693,11 +690,8 @@ fn auto_and_server_build_at_the_query_root_not_the_daemon_working_directory() {
         }
         let output = success(terminal::run(command, &[("Enter Build", b"\r")]));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("Select an embedding model to build zg index:"),
-            "{stderr}"
-        );
-        assert!(stderr.contains("Index ready"), "{stderr}");
+        assert!(stderr.contains("Select an embedding model"), "{stderr}");
+        assert!(stderr.contains("No indexable files"), "{stderr}");
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "query groups (1):\nQ1 [supplemental]: needle\nhits: 0\n\nNo matches.\n"
@@ -960,7 +954,7 @@ fn cancelling_model_selection_exits_without_error_or_index() {
             }
             let output = terminal::run(
                 fixture.command(&["--mode", mode, "--fts", "needle", "--no-color"]),
-                &[("Esc Exit", cancellation)],
+                &[("Esc Cancel", cancellation)],
             );
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert_eq!(output.status.code(), Some(130), "{mode}: {stderr}");
@@ -975,7 +969,7 @@ fn cancelling_model_selection_exits_without_error_or_index() {
                 "{mode}: {stderr}"
             );
             assert!(
-                stderr.contains("Select an embedding model to build zg index:"),
+                stderr.contains("Select an embedding model"),
                 "{mode}: {stderr}"
             );
             assert!(!fixture.root.path().join(".zvec-grep").exists());

@@ -2,7 +2,8 @@ use crate::ColorMode;
 use std::fmt::Write as _;
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 use zg_engine::api::index::progress::{
@@ -11,50 +12,135 @@ use zg_engine::api::index::progress::{
 
 /// Owns terminal progress state and finishes the live line on success or failure.
 pub struct IndexProgressDisplay {
-    state: Arc<Mutex<ProgressOutput>>,
+    state: ProgressState,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-struct ProgressOutput {
-    writer: Box<dyn Write + Send>,
-    terminal: bool,
-    color: bool,
-    last: Option<(String, Instant, String)>,
+const FRAME_INTERVAL: Duration = Duration::from_millis(125);
+
+#[derive(Clone)]
+enum ProgressState {
+    Terminal(Arc<(Mutex<PendingProgress>, Condvar)>),
+    Plain(Arc<Mutex<PlainOutput>>),
+}
+
+#[derive(Default)]
+struct PendingProgress {
+    latest: Option<IndexProgress>,
+    warnings: Vec<IndexProgress>,
+    started: bool,
     finished: bool,
-    last_indexing: Option<IndexProgress>,
+}
+
+struct PlainOutput {
+    writer: Box<dyn Write + Send>,
+    last: Option<(Stage, Instant, String)>,
+    finished: bool,
 }
 
 impl IndexProgressDisplay {
     #[must_use]
     pub fn new(writer: impl Write + Send + 'static, terminal: bool, color: ColorMode) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(ProgressOutput {
+        let term = std::env::var("TERM").unwrap_or_default();
+        if !terminal || term == "dumb" {
+            return Self {
+                state: ProgressState::Plain(Arc::new(Mutex::new(PlainOutput {
+                    writer: Box::new(writer),
+                    last: None,
+                    finished: false,
+                }))),
+                worker: Mutex::new(None),
+            };
+        }
+        Self::terminal(writer, color, !cfg!(windows) && term != "linux")
+    }
+
+    fn terminal(writer: impl Write + Send + 'static, color: ColorMode, unicode: bool) -> Self {
+        let pending = Arc::new((Mutex::new(PendingProgress::default()), Condvar::new()));
+        let state = Arc::clone(&pending);
+        let worker = thread::spawn(move || {
+            let mut output = TerminalOutput {
                 writer: Box::new(writer),
-                terminal,
                 color: color == ColorMode::Always
-                    || (color == ColorMode::Auto
-                        && terminal
-                        && std::env::var_os("NO_COLOR").is_none()),
-                last: None,
-                finished: false,
-                last_indexing: None,
-            })),
+                    || (color == ColorMode::Auto && std::env::var_os("NO_COLOR").is_none()),
+                unicode,
+                latest: None,
+                stage: None,
+                stage_started: Instant::now(),
+                frame: String::with_capacity(512),
+                visible: false,
+                columns: 80,
+                width_checked: None,
+                tick: 0,
+            };
+            render_loop(&state, &mut output);
+        });
+        Self {
+            state: ProgressState::Terminal(pending),
+            worker: Mutex::new(Some(worker)),
         }
     }
 
     #[must_use]
     pub fn reporter(&self) -> IndexProgressReporter {
-        let state = Arc::clone(&self.state);
+        let state = self.state.clone();
         IndexProgressReporter::new(move |progress| {
-            if let Ok(mut output) = state.lock() {
-                // Progress output is best-effort and must not abort index work.
-                let _ = output.report(&progress);
+            match &state {
+                ProgressState::Terminal(state) => {
+                    let (pending, wake) = &**state;
+                    let mut pending = pending
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if pending.finished {
+                        return;
+                    }
+                    // The producer only moves owned events. Formatting, terminal size
+                    // queries, and I/O happen on the renderer, outside this short lock.
+                    if Stage::of(&progress) == Stage::Warning {
+                        pending.warnings.push(progress);
+                    } else {
+                        pending.latest = Some(progress);
+                    }
+                    if !pending.started {
+                        pending.started = true;
+                        wake.notify_one();
+                    }
+                }
+                ProgressState::Plain(output) => {
+                    if let Ok(mut output) = output.lock() {
+                        // Progress output is best-effort and must not abort index work.
+                        let _ = output.report(&progress);
+                    }
+                }
             }
         })
     }
 
     pub fn finish(&self) {
-        if let Ok(mut output) = self.state.lock() {
-            let _ = output.finish();
+        match &self.state {
+            ProgressState::Terminal(state) => {
+                let (pending, wake) = &**state;
+                pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .finished = true;
+                wake.notify_one();
+                // Joining ensures the live line is cleared before a summary or an
+                // error is printed. The condition variable makes this immediate.
+                if let Some(worker) = self
+                    .worker
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = worker.join();
+                }
+            }
+            ProgressState::Plain(output) => {
+                if let Ok(mut output) = output.lock() {
+                    output.finished = true;
+                }
+            }
         }
     }
 }
@@ -65,64 +151,259 @@ impl Drop for IndexProgressDisplay {
     }
 }
 
-impl ProgressOutput {
+impl PlainOutput {
     fn report(&mut self, progress: &IndexProgress) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
-        let (stage, plain) = format_progress(progress, self.terminal);
-        let line = if self.terminal {
-            format_terminal_progress(progress, self.last_indexing.as_ref(), self.color)
-        } else {
-            plain
-        };
-        if progress.phase == IndexProgressPhase::Indexing
-            && progress
-                .embedding
-                .as_ref()
-                .is_none_or(|embedding| embedding.stage.is_none())
-        {
-            self.last_indexing = Some(progress.clone());
-        }
+        let stage = Stage::of(progress);
         let now = Instant::now();
-        let interval = if self.terminal {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(15)
-        };
-        if let Some((previous_stage, time, previous_line)) = &self.last
-            && previous_stage == &stage
-            && (previous_line == &line || now.duration_since(*time) < interval)
+        if let Some((previous_stage, time, _)) = &self.last
+            && *previous_stage == stage
+            && stage != Stage::Warning
+            && now.duration_since(*time) < Duration::from_secs(15)
         {
             return Ok(());
         }
-        if self.terminal {
-            write!(self.writer, "\r\x1b[2K")?;
+        let (_, line) = format_progress(progress, false);
+        if stage != Stage::Warning
+            && self
+                .last
+                .as_ref()
+                .is_some_and(|(previous_stage, _, previous_line)| {
+                    *previous_stage == stage && previous_line == &line
+                })
+        {
+            return Ok(());
         }
-        write!(self.writer, "{line}")?;
-        if !self.terminal {
-            writeln!(self.writer)?;
-        }
+        self.writer.write_all(format!("{line}\n").as_bytes())?;
         self.writer.flush()?;
         self.last = Some((stage, now, line));
         Ok(())
     }
+}
 
-    fn finish(&mut self) -> io::Result<()> {
-        if !self.finished && self.terminal && self.last.is_some() {
-            write!(self.writer, "\r\n")?;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Scanning,
+    Indexing,
+    Optimizing,
+    Saving,
+    Finishing,
+    Preparing,
+    Downloading,
+    ModelReady,
+    Warning,
+}
+
+impl Stage {
+    fn of(progress: &IndexProgress) -> Self {
+        if progress.phase == IndexProgressPhase::Done {
+            return Self::Finishing;
+        }
+        if let Some(stage) = progress
+            .embedding
+            .as_ref()
+            .and_then(|embedding| embedding.stage)
+        {
+            return match stage {
+                IndexEmbeddingStage::Preparing => Self::Preparing,
+                IndexEmbeddingStage::Downloading => Self::Downloading,
+                IndexEmbeddingStage::Ready => Self::ModelReady,
+                IndexEmbeddingStage::Warning => Self::Warning,
+            };
+        }
+        match (progress.phase, progress.detail.as_deref()) {
+            (_, Some("finalizing index")) => Self::Optimizing,
+            (_, Some("saving index")) => Self::Saving,
+            (IndexProgressPhase::Scanning, _) => Self::Scanning,
+            _ => Self::Indexing,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Scanning => "Scanning workspace",
+            Self::Indexing => "Indexing files",
+            Self::Optimizing => "Optimizing index",
+            Self::Saving => "Saving index",
+            Self::Finishing => "Finishing index",
+            Self::Preparing => "Preparing model",
+            Self::Downloading => "Downloading model",
+            Self::ModelReady => "Preparing index",
+            Self::Warning => "Model warning",
+        }
+    }
+}
+
+struct TerminalOutput {
+    writer: Box<dyn Write + Send>,
+    color: bool,
+    unicode: bool,
+    latest: Option<IndexProgress>,
+    stage: Option<Stage>,
+    stage_started: Instant,
+    frame: String,
+    visible: bool,
+    columns: usize,
+    width_checked: Option<Instant>,
+    tick: usize,
+}
+
+fn render_loop(state: &(Mutex<PendingProgress>, Condvar), output: &mut TerminalOutput) {
+    let (pending, wake) = state;
+    let mut pending = pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while !pending.started && !pending.finished {
+        pending = wake
+            .wait(pending)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    loop {
+        let latest = pending.latest.take();
+        let warnings = std::mem::take(&mut pending.warnings);
+        let finished = pending.finished;
+        drop(pending);
+        let started = Instant::now();
+        // In particular, no producer lock is held across a blocked terminal write.
+        if output.render(latest, warnings, started, finished).is_err() || finished {
+            state
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .finished = true;
+            let _ = output.finish();
+            return;
+        }
+        pending = state
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let remaining = FRAME_INTERVAL.saturating_sub(started.elapsed());
+        (pending, _) = wake
+            .wait_timeout_while(pending, remaining, |pending| !pending.finished)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+}
+
+impl TerminalOutput {
+    fn render(
+        &mut self,
+        latest: Option<IndexProgress>,
+        warnings: Vec<IndexProgress>,
+        now: Instant,
+        finished: bool,
+    ) -> io::Result<()> {
+        if let Some(mut progress) = latest {
+            if let Some(previous) = &self.latest
+                && progress.phase != IndexProgressPhase::Scanning
+            {
+                progress.files_total = progress.files_total.or(previous.files_total);
+                progress.files_indexed = progress.files_indexed.or(previous.files_indexed);
+                progress.files_failed = progress.files_failed.or(previous.files_failed);
+            }
+            let stage = Stage::of(&progress);
+            if self.stage != Some(stage) {
+                self.stage_started = now;
+                self.tick = 0;
+                self.stage = Some(stage);
+            }
+            self.latest = Some(progress);
+        }
+        self.frame.clear();
+        if !warnings.is_empty() && self.visible {
+            self.frame.push_str("\r\x1b[K");
+        }
+        for warning in warnings {
+            // Warnings are durable output, never a replaceable animation frame.
+            // Keep their complete diagnostic text even on narrow terminals.
+            self.frame.push_str(if self.color {
+                "\x1b[33m!\x1b[0m "
+            } else {
+                "! "
+            });
+            self.frame.push_str(&format_progress(&warning, false).1);
+            self.frame.push_str("\r\n");
+        }
+        if !finished && let Some(progress) = &self.latest {
+            if self
+                .width_checked
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+            {
+                self.columns = crossterm::terminal::size()
+                    .ok()
+                    .map(|(width, _)| usize::from(width))
+                    .filter(|width| *width > 0)
+                    .or_else(|| {
+                        std::env::var("COLUMNS")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                    })
+                    .unwrap_or(80);
+                self.width_checked = Some(now);
+            }
+            if !self.visible {
+                self.frame.push_str("\x1b[?25l");
+                self.visible = true;
+            }
+            self.frame.push('\r');
+            format_terminal_progress(
+                &mut self.frame,
+                progress,
+                self.color,
+                self.unicode,
+                self.columns,
+                now.duration_since(self.stage_started),
+                self.tick,
+            );
+            // Overwrite first, erase only the old tail, and submit one complete
+            // frame. A standalone clear-line write causes visible flicker.
+            self.frame.push_str("\x1b[K");
+            self.tick = self.tick.wrapping_add(1);
+        }
+        if !self.frame.is_empty() {
+            self.writer.write_all(self.frame.as_bytes())?;
             self.writer.flush()?;
         }
-        self.finished = true;
         Ok(())
+    }
+
+    fn finish(&mut self) -> io::Result<()> {
+        if self.visible {
+            self.visible = false;
+            self.writer.write_all(b"\r\x1b[K\x1b[?25h")?;
+            self.writer.flush()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TerminalOutput {
+    fn drop(&mut self) {
+        let _ = self.finish();
     }
 }
 
 fn green(value: &str, color: bool) -> String {
     if color {
-        format!("\x1b[38;2;74;222;128m{value}\x1b[0m")
+        format!("\x1b[38;2;111;207;145m{value}\x1b[0m")
     } else {
         value.into()
+    }
+}
+
+pub(crate) fn block_bar(filled: usize, width: usize, color: bool, unicode: bool) -> String {
+    let filled = filled.min(width);
+    let (solid, empty) = if unicode { ("█", "░") } else { ("#", "-") };
+    if color {
+        format!(
+            "\x1b[38;2;111;207;145m{}\x1b[0m\x1b[2m{}\x1b[0m",
+            solid.repeat(filled),
+            empty.repeat(width - filled)
+        )
+    } else {
+        solid.repeat(filled) + &empty.repeat(width - filled)
     }
 }
 
@@ -155,102 +436,124 @@ pub(crate) fn gradient_bar(filled: usize, width: usize, color: bool, unicode: bo
 }
 
 fn format_terminal_progress(
+    line: &mut String,
     progress: &IndexProgress,
-    previous: Option<&IndexProgress>,
     color: bool,
-) -> String {
-    let unicode = !cfg!(windows) && std::env::var("TERM").as_deref() != Ok("linux");
-    let rail = if unicode { "│" } else { "|" };
-    let rail = if color {
-        format!("\x1b[2m{rail}\x1b[0m")
-    } else {
-        rail.into()
-    };
+    unicode: bool,
+    columns: usize,
+    elapsed: Duration,
+    tick: usize,
+) {
+    // Every live field is ASCII or a known single-cell glyph. Keep paths and
+    // arbitrary diagnostic text in durable output, where wrapping is harmless.
+    let available = columns.saturating_sub(1);
+    if available == 0 {
+        return;
+    }
+    let stage = Stage::of(progress);
     let spinner = if unicode {
         ["·", "✢", "✳", "✶", "✻", "✽"]
     } else {
         [".", "*", "+", "x", "o", "O"]
     };
-    if progress.phase == IndexProgressPhase::Scanning {
-        let count = progress
-            .files_total
-            .filter(|count| *count > 0)
-            .map_or_else(String::new, |count| format!("  {count} files"));
-        return format!(
-            "{rail}  {} Scanning workspace{count}",
-            green(spinner[0], color)
-        );
+    let mut percent = None;
+    let mut suffix = match stage {
+        Stage::Indexing if progress.files_total.is_some_and(|total| total > 0) => {
+            let total = progress.files_total.unwrap_or(0);
+            let indexed = progress.files_indexed.unwrap_or(0).min(total);
+            // Round ordinary percentages, but never claim 100% while files are
+            // still pending. The bar itself rounds down to a whole cell.
+            let value =
+                usize::try_from((indexed as u128 * 100 + total as u128 / 2) / total as u128)
+                    .unwrap_or(100)
+                    .min(if indexed < total { 99 } else { 100 });
+            percent = Some(value);
+            format!("{value:>3}%  {indexed}/{total}")
+        }
+        Stage::Downloading => {
+            let embedding = progress.embedding.as_ref();
+            let downloaded = embedding
+                .and_then(|embedding| embedding.downloaded_bytes)
+                .unwrap_or(0);
+            if let Some(total) = embedding
+                .and_then(|embedding| embedding.total_bytes)
+                .filter(|total| *total > 0)
+            {
+                let value =
+                    usize::try_from(u128::from(downloaded.min(total)) * 100 / u128::from(total))
+                        .unwrap_or(100);
+                percent = Some(value);
+                format!("{value:>3}%  {}/{}", bytes(downloaded), bytes(total))
+            } else {
+                format!("{} received", bytes(downloaded))
+            }
+        }
+        Stage::Scanning if progress.files_total.is_some() => {
+            format!("{} files", progress.files_total.unwrap_or(0))
+        }
+        _ => format!("{:.1}s elapsed", elapsed.as_secs_f64()),
+    };
+    if let Some(failed) = progress.files_failed.filter(|count| *count > 0) {
+        let _ = write!(suffix, "  {failed} failed");
     }
-    if let Some(embedding) = &progress.embedding
-        && embedding.stage.is_some()
-    {
-        let index = usize::try_from(embedding.downloaded_bytes.unwrap_or(0) % 6).unwrap_or(0);
-        return format!(
-            "{rail}  {} {}",
-            green(spinner[index], color),
-            format_progress(progress, true).1
-        );
-    }
-    let done = progress.phase == IndexProgressPhase::Done;
-    let effective = if done {
-        previous.unwrap_or(progress)
-    } else {
-        progress
-    };
-    let total = effective.files_total.unwrap_or(0);
-    let indexed = if done {
-        total
-    } else {
-        effective.files_indexed.unwrap_or(0).min(total)
-    };
-    let glyph = if done {
-        if unicode { "◆" } else { "*" }
-    } else {
-        spinner[indexed % spinner.len()]
-    };
-    let prefix = format!("{rail}  {} Indexing files  ", green(glyph, color));
-    if total == 0 {
-        let label = if done {
-            progress.detail.as_deref().unwrap_or("Indexing complete")
+    let label = stage.label();
+    let glyph = spinner[tick % spinner.len()];
+    let prefix_width = 22; // glyph, gap, 18-column label, two spaces
+    let bar_width = available
+        .saturating_sub(prefix_width + suffix.len() + 2)
+        .min(20);
+    if bar_width >= 4 {
+        let _ = write!(line, "{} {label:<18}  ", green(glyph, color));
+        if let Some(percent) = percent {
+            line.push_str(&block_bar(
+                bar_width * percent / 100,
+                bar_width,
+                color,
+                unicode,
+            ));
         } else {
-            "Indexing files"
-        };
-        return format!("{rail}  {} {}", green(glyph, color), clean(label, true));
-    }
-    let percent = (indexed as u128 * 100 + total as u128 / 2) / total as u128;
-    let core = format!("  {percent:>3}%  {indexed}/{total}");
-    let mut metadata = Vec::new();
-    if let Some(failed) = effective.files_failed.filter(|count| *count > 0) {
-        metadata.push(format!("{failed} failed"));
-    }
-    if let Some(embedding) = &effective.embedding {
-        if let Some(retries) = embedding.retryable_failures.filter(|count| *count > 0) {
-            metadata.push(format!("{retries} retries"));
+            line.push_str(&activity_bar(bar_width, tick, color, unicode));
         }
-        if let Some(workers) = embedding.concurrency.filter(|count| *count > 0) {
-            metadata.push(format!("{workers} workers"));
-        }
-    }
-    let metadata = if metadata.is_empty() {
-        String::new()
+        let _ = write!(line, "  {suffix}");
     } else {
-        format!("  {}", metadata.join(" · "))
-    };
-    let columns = std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100);
-    let mut suffix = format!("{core}{metadata}");
-    let available = |suffix: &str| columns.saturating_sub(22 + suffix.chars().count());
-    if available(&suffix) < 8 {
-        suffix = core;
+        // Narrow terminals progressively drop the bar and counts. Reserve the
+        // final column so terminals never wrap a repeatedly overwritten line.
+        let compact = if let Some(percent) = percent {
+            format!("{label} {percent}%")
+        } else {
+            format!("{label} {:.1}s", elapsed.as_secs_f64())
+        };
+        if available >= compact.len() + 2 {
+            let _ = write!(line, "{} {compact}", green(glyph, color));
+        } else if available >= compact.len() {
+            line.push_str(&compact);
+        } else {
+            line.push_str(&label[..label.len().min(available)]);
+        }
     }
-    let width = available(&suffix).clamp(8, 25);
-    let filled = usize::try_from((width as u128 * percent + 50) / 100).unwrap_or(width);
-    format!(
-        "{prefix}{}{suffix}",
-        gradient_bar(filled, width, color, unicode)
-    )
+}
+
+fn activity_bar(width: usize, tick: usize, color: bool, unicode: bool) -> String {
+    let block = width.min(4);
+    let travel = width - block;
+    let position = if travel == 0 {
+        0
+    } else {
+        let step = tick % (travel * 2);
+        if step <= travel {
+            step
+        } else {
+            travel * 2 - step
+        }
+    };
+    let empty = if unicode { "░" } else { "-" };
+    let lead = empty.repeat(position);
+    let body = block_bar(block, width - position, color, unicode);
+    if color {
+        format!("\x1b[2m{lead}\x1b[0m{body}")
+    } else {
+        lead + &body
+    }
 }
 
 fn format_progress(progress: &IndexProgress, terminal: bool) -> (String, String) {
@@ -285,10 +588,12 @@ fn format_progress(progress: &IndexProgress, terminal: bool) -> (String, String)
         }
         return (label.into(), line);
     }
-    let label = match progress.phase {
-        IndexProgressPhase::Scanning => "Scanning",
-        IndexProgressPhase::Indexing => "Indexing",
-        IndexProgressPhase::Done => "Index complete",
+    let label = match Stage::of(progress) {
+        Stage::Scanning => "Scanning",
+        Stage::Optimizing => "Optimizing index",
+        Stage::Saving => "Saving index",
+        Stage::Finishing => "Finishing index",
+        _ => "Indexing",
     };
     let mut line = label.to_owned();
     if let Some(total) = progress.files_total {
@@ -301,7 +606,11 @@ fn format_progress(progress: &IndexProgress, terminal: bool) -> (String, String)
     if let Some(failed) = progress.files_failed.filter(|failed| *failed > 0) {
         let _ = write!(line, ", {failed} failed");
     }
-    if let Some(detail) = &progress.detail {
+    if let Some(detail) = &progress.detail
+        && detail != "finalizing index"
+        && detail != "saving index"
+        && detail != "indexing complete"
+    {
         let _ = write!(line, " — {}", clean(detail, terminal));
     }
     (label.into(), line)
@@ -330,15 +639,54 @@ fn clean(value: &str, terminal: bool) -> String {
 mod tests {
     use super::*;
     use zg_engine::api::index::progress::IndexEmbeddingProgress;
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
+    #[derive(Clone, Default)]
+    struct Capture(Arc<(Mutex<Vec<Vec<u8>>>, Condvar)>);
+
+    impl Capture {
+        fn frames(&self) -> Vec<Vec<u8>> {
+            self.0.0.lock().expect("capture").clone()
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8(self.frames().concat()).expect("UTF-8")
+        }
+
+        fn wait_for_frames(&self, count: usize) {
+            let (frames, _) = self
+                .0
+                .1
+                .wait_timeout_while(
+                    self.0.0.lock().expect("capture"),
+                    Duration::from_secs(3),
+                    |frames| frames.len() < count,
+                )
+                .expect("capture wait");
+            assert!(
+                frames.len() >= count,
+                "renderer did not produce {count} frames"
+            );
+        }
+    }
+
     impl Write for Capture {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0.lock().expect("capture").extend_from_slice(bytes);
+            self.0.0.lock().expect("capture").push(bytes.to_vec());
+            self.0.1.notify_all();
             Ok(bytes.len())
         }
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    fn indexing(indexed: usize, total: usize) -> IndexProgress {
+        IndexProgress {
+            phase: IndexProgressPhase::Indexing,
+            files_total: Some(total),
+            files_indexed: Some(indexed),
+            files_failed: None,
+            detail: None,
+            embedding: None,
         }
     }
 
@@ -355,44 +703,260 @@ mod tests {
     }
 
     #[test]
-    fn output_is_throttled_and_live_line_finishes_on_drop() {
-        for terminal in [false, true] {
-            let buffer = Arc::new(Mutex::new(Vec::new()));
-            let display =
-                IndexProgressDisplay::new(Capture(buffer.clone()), terminal, ColorMode::Never);
-            let reporter = display.reporter();
-            let progress = IndexProgress {
-                phase: IndexProgressPhase::Scanning,
-                files_total: Some(1),
-                files_indexed: None,
-                files_failed: None,
-                detail: None,
-                embedding: None,
-            };
-            reporter.report(progress.clone());
-            reporter.report(progress.clone());
-            reporter.report(IndexProgress {
-                phase: IndexProgressPhase::Done,
-                ..progress
-            });
-            drop(display);
-            let output = String::from_utf8(buffer.lock().expect("capture").clone()).expect("UTF-8");
-            assert_eq!(output.matches("Scanning").count(), 1);
-            assert!(output.contains(if terminal { "100%" } else { "Index complete" }));
-            assert!(output.ends_with('\n'));
-            assert_eq!(output.contains("\r\x1b[2K"), terminal);
-            assert!(!output.contains("\x1b[36m"));
+    fn solid_bar_and_activity_match_the_approved_style() {
+        assert_eq!(block_bar(3, 5, false, true), "███░░");
+        assert_eq!(block_bar(3, 5, false, false), "###--");
+        assert_eq!(
+            block_bar(3, 5, true, true),
+            "\x1b[38;2;111;207;145m███\x1b[0m\x1b[2m░░\x1b[0m"
+        );
+        assert_eq!(activity_bar(8, 0, false, true), "████░░░░");
+        assert_eq!(activity_bar(8, 4, false, true), "░░░░████");
+        assert_eq!(activity_bar(8, 5, false, true), "░░░████░");
+        assert_eq!(activity_bar(8, 8, false, true), "████░░░░");
+        for width in 1..30 {
+            for tick in 0..100 {
+                let bar = activity_bar(width, tick, false, true);
+                assert_eq!(bar.chars().count(), width);
+                assert!(bar.contains('█'), "the moving block must never disappear");
+            }
         }
     }
 
     #[test]
-    fn warning_output_is_complete_unless_interactive() {
+    fn live_output_reserves_the_last_terminal_column() {
+        for unicode in [false, true] {
+            for columns in 0..160 {
+                for progress in [
+                    indexing(usize::MAX - 1, usize::MAX),
+                    IndexProgress {
+                        detail: Some("finalizing index".into()),
+                        ..indexing(10, 10)
+                    },
+                    IndexProgress {
+                        phase: IndexProgressPhase::Scanning,
+                        ..indexing(0, 0)
+                    },
+                ] {
+                    let mut line = String::new();
+                    format_terminal_progress(
+                        &mut line,
+                        &progress,
+                        false,
+                        unicode,
+                        columns,
+                        Duration::from_secs(100_000),
+                        5,
+                    );
+                    assert!(
+                        line.chars().count() <= columns.saturating_sub(1),
+                        "wrapped {columns}-column terminal: {line:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_progress_does_not_round_up_to_complete() {
+        let mut line = String::new();
+        format_terminal_progress(
+            &mut line,
+            &indexing(999, 1000),
+            false,
+            true,
+            100,
+            Duration::ZERO,
+            0,
+        );
+        assert!(line.contains("99%"));
+        assert!(!line.contains("100%"));
+        assert!(line.contains('░'));
+        line.clear();
+        format_terminal_progress(
+            &mut line,
+            &indexing(1000, 1000),
+            false,
+            true,
+            100,
+            Duration::ZERO,
+            0,
+        );
+        assert!(line.contains("100%"));
+        assert!(!line.contains('░'));
+        line.clear();
+        format_terminal_progress(
+            &mut line,
+            &indexing(18_647, 36_718),
+            false,
+            true,
+            100,
+            Duration::ZERO,
+            0,
+        );
+        assert!(line.contains("51%"));
+    }
+
+    #[test]
+    fn a_blocked_terminal_write_does_not_block_progress_producers() {
+        struct BlockedWriter {
+            gate: Arc<(Mutex<bool>, Condvar)>,
+            entered: std::sync::mpsc::Sender<()>,
+        }
+        impl Write for BlockedWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let _ = self.entered.send(());
+                let (gate, wake) = &*self.gate;
+                let mut released = gate.lock().expect("write gate");
+                while !*released {
+                    released = wake.wait(released).expect("write wait");
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (entered, started) = std::sync::mpsc::channel();
+        let display = IndexProgressDisplay::terminal(
+            BlockedWriter {
+                gate: Arc::clone(&gate),
+                entered,
+            },
+            ColorMode::Never,
+            true,
+        );
+        let reporter = display.reporter();
+        reporter.report(indexing(0, 10));
+        started
+            .recv_timeout(Duration::from_secs(3))
+            .expect("renderer entered writer");
+        let (sender, received) = std::sync::mpsc::channel();
+        let producer = thread::spawn(move || {
+            reporter.report(indexing(1, 10));
+            let _ = sender.send(());
+        });
+        let independent = received.recv_timeout(Duration::from_secs(1)).is_ok();
+        *gate.0.lock().expect("release writer") = true;
+        gate.1.notify_one();
+        producer.join().expect("producer");
+        display.finish();
+        assert!(independent, "terminal I/O held the producer lock");
+    }
+
+    #[test]
+    fn plain_bursts_are_throttled_but_each_tail_stage_is_logged() {
+        let capture = Capture::default();
+        let display = IndexProgressDisplay::new(capture.clone(), false, ColorMode::Never);
+        let reporter = display.reporter();
+        for indexed in 0..10_000 {
+            reporter.report(indexing(indexed, 10_000));
+        }
+        for detail in ["finalizing index", "saving index"] {
+            reporter.report(IndexProgress {
+                detail: Some(detail.into()),
+                ..indexing(10_000, 10_000)
+            });
+        }
+        reporter.report(IndexProgress {
+            phase: IndexProgressPhase::Done,
+            ..indexing(10_000, 10_000)
+        });
+        drop(display);
+        assert_eq!(capture.frames().len(), 4);
+        assert_eq!(
+            capture.text(),
+            "Indexing: 0/10000 files\nOptimizing index: 10000/10000 files\nSaving index: 10000/10000 files\nFinishing index: 10000/10000 files\n"
+        );
+        assert!(!capture.text().contains('\x1b'));
+    }
+
+    #[test]
+    fn terminal_coalesces_bursts_and_restores_cursor_on_drop() {
+        let capture = Capture::default();
+        let display = IndexProgressDisplay::terminal(capture.clone(), ColorMode::Never, true);
+        let reporter = display.reporter();
+        reporter.report(indexing(0, 10_000));
+        capture.wait_for_frames(1);
+        let started = Instant::now();
+        for indexed in 1..10_000 {
+            reporter.report(indexing(indexed, 10_000));
+        }
+        drop(display);
+        let frames = capture.frames();
+        let maximum = started.elapsed().as_millis() / FRAME_INTERVAL.as_millis() + 3;
+        assert!(
+            frames.len() as u128 <= maximum,
+            "unthrottled frame count: {}",
+            frames.len()
+        );
+        assert_eq!(frames.last().expect("cleanup"), b"\r\x1b[K\x1b[?25h");
+        let text = capture.text();
+        assert_eq!(text.matches("\x1b[?25l").count(), 1);
+        assert_eq!(text.matches("\x1b[?25h").count(), 1);
+        assert!(!text.contains("\x1b[2K"));
+        for frame in &frames[..frames.len() - 1] {
+            let frame = String::from_utf8_lossy(frame);
+            assert!(frame.contains("Indexing files"));
+            assert!(frame.ends_with("\x1b[K"));
+        }
+        reporter.report(indexing(10_000, 10_000));
+        assert_eq!(
+            capture.frames(),
+            frames,
+            "late events must not recreate the live line"
+        );
+    }
+
+    #[test]
+    fn heartbeat_animates_optimization_without_producer_events() {
+        let capture = Capture::default();
+        let display = IndexProgressDisplay::terminal(capture.clone(), ColorMode::Never, true);
+        display.reporter().report(IndexProgress {
+            detail: Some("finalizing index".into()),
+            ..indexing(10, 10)
+        });
+        capture.wait_for_frames(3);
+        display.finish();
+        display.finish();
+        let frames = capture.frames();
+        assert_ne!(frames[1], frames[2]);
+        let text = capture.text();
+        assert!(text.contains("Optimizing index"));
+        assert!(text.contains("elapsed"));
+        assert!(!text.contains("100%"));
+        assert_eq!(text.matches("\x1b[?25h").count(), 1);
+    }
+
+    #[test]
+    fn pipeline_done_stays_finishing_until_cli_cleanup_completes() {
+        let capture = Capture::default();
+        let display = IndexProgressDisplay::terminal(capture.clone(), ColorMode::Never, true);
+        display.reporter().report(IndexProgress {
+            phase: IndexProgressPhase::Done,
+            ..indexing(9, 10)
+        });
+        capture.wait_for_frames(2);
+        display.finish();
+        let text = capture.text();
+        assert!(text.contains("Finishing index"));
+        assert!(!text.contains("Index ready"));
+        assert!(!text.contains("100%"));
+    }
+
+    #[test]
+    fn warnings_are_durable_complete_and_survive_coalescing() {
         let warning = "Transformers cuda embedding initialization failed (Unable to configure CUDA ONNX embedding model), falling back to CPU.";
         for terminal in [false, true] {
-            let buffer = Arc::new(Mutex::new(Vec::new()));
-            let display =
-                IndexProgressDisplay::new(Capture(buffer.clone()), terminal, ColorMode::Never);
-            display.reporter().report(IndexProgress {
+            let capture = Capture::default();
+            let display = if terminal {
+                IndexProgressDisplay::terminal(capture.clone(), ColorMode::Never, true)
+            } else {
+                IndexProgressDisplay::new(capture.clone(), false, ColorMode::Never)
+            };
+            let reporter = display.reporter();
+            let progress = IndexProgress {
                 phase: IndexProgressPhase::Indexing,
                 files_total: None,
                 files_indexed: None,
@@ -404,17 +968,12 @@ mod tests {
                     message: Some(warning.into()),
                     ..IndexEmbeddingProgress::default()
                 }),
-            });
+            };
+            reporter.report(progress.clone());
+            reporter.report(progress);
+            reporter.report(indexing(3, 8));
             drop(display);
-            let output = String::from_utf8(buffer.lock().expect("capture").clone()).expect("UTF-8");
-            if terminal {
-                assert!(output.contains(&warning.chars().take(100).collect::<String>()));
-                assert!(!output.contains(warning));
-            } else {
-                assert!(output.contains(warning));
-                assert!(output.contains("falling back to CPU."));
-            }
-            assert!(output.ends_with('\n'));
+            assert_eq!(capture.text().matches(warning).count(), 2);
         }
     }
 
@@ -432,7 +991,7 @@ mod tests {
         };
         assert_eq!(
             format_progress(&progress, false).1,
-            format!("Index complete — {sanitized}")
+            format!("Finishing index — {sanitized}")
         );
         progress.embedding = Some(IndexEmbeddingProgress {
             stage: Some(IndexEmbeddingStage::Warning),
