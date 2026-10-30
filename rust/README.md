@@ -28,7 +28,8 @@ use the same parsing; managed `--rg` retains its pattern/path syntax.
 
 Multi-query indexed output labels each nonempty group with its original query
 and position, for example `-- query 2/3: socket timeout --`. Colored output uses
-a dim rule, a magenta label, and a bold white query. Control characters become
+a dim rule, a magenta label, and a bold query in the terminal's default foreground
+color, preserving contrast on light and dark backgrounds. Control characters become
 spaces so each heading occupies one logical line; long queries remain complete
 and may wrap in narrow terminals. Empty groups stay hidden, and single-query,
 fused, managed-rg, and MCP output keep their existing layouts.

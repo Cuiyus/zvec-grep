@@ -137,8 +137,8 @@ fn compact_previews_highlight_the_query_of_each_group() {
         )
         .expect("colored grouped render");
         let output = String::from_utf8(bytes).expect("UTF-8");
-        assert!(output.contains("\x1b[35mquery 1/3:\x1b[0m \x1b[1;37mcheckpoint\x1b[0m"));
-        assert!(output.contains("\x1b[35mquery 2/3:\x1b[0m \x1b[1;37mworkspace\x1b[0m"));
+        assert!(output.contains("\x1b[35mquery 1/3:\x1b[0m \x1b[1mcheckpoint\x1b[0m"));
+        assert!(output.contains("\x1b[35mquery 2/3:\x1b[0m \x1b[1mworkspace\x1b[0m"));
         assert!(output.contains("\x1b[2m"), "separator rules are dim");
         assert!(
             output.contains("  50: \x1b[1;33mcheckpoint\x1b[0m workspace primary-source"),
