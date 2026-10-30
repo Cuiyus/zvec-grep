@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use zg_engine::api::context::{
     ContextResult,
     result::{
@@ -42,18 +44,53 @@ pub(super) fn write(
     let groups = result
         .group_results
         .iter()
-        .filter(|group| !group.items.is_empty())
+        .enumerate()
+        .filter(|(_, group)| !group.items.is_empty())
         .collect::<Vec<_>>();
     if groups.is_empty() {
         return writeln!(writer, "No matches.");
     }
-    for (index, group) in groups.into_iter().enumerate() {
-        if index > 0 {
+    for (position, (index, group)) in groups.into_iter().enumerate() {
+        if position > 0 {
             writeln!(writer)?;
+        }
+        if result.group_results.len() > 1 {
+            writeln!(
+                writer,
+                "{}\n",
+                query_divider(&group.query, index, result.group_results.len(), theme)
+            )?;
         }
         write_items(writer, &group.items, &group.query, options, theme)?;
     }
     Ok(())
+}
+
+fn query_divider(query: &str, index: usize, total: usize, theme: StatusTheme) -> String {
+    // Keep the original query (including spaces), but never let it add output
+    // lines or terminal control sequences. Long queries may wrap visually.
+    let query = crate::theme::clean(query).replace(['\u{2028}', '\u{2029}'], " ");
+    let label = format!("query {}/{total}:", index + 1);
+    if !theme.color {
+        return format!("-- {label} {query} --");
+    }
+    let rule = if crate::theme::unicode_supported() {
+        "─"
+    } else {
+        "-"
+    };
+    let used = 3 + label.width() + 1 + query.width();
+    let remaining = crate::theme::columns().saturating_sub(used);
+    let tail = if remaining > 1 {
+        format!(" {}", theme.muted(&rule.repeat(remaining - 1)))
+    } else {
+        String::new()
+    };
+    format!(
+        "{} {} \x1b[1;37m{query}\x1b[0m{tail}",
+        theme.muted(&rule.repeat(2)),
+        theme.metadata_label(&label),
+    )
 }
 
 fn write_items(
@@ -226,7 +263,17 @@ fn write_detail(
         };
         field(writer, theme, "Reason", reason)?;
     } else if grouped {
-        for group in &result.group_results {
+        for (index, group) in result.group_results.iter().enumerate() {
+            if group.items.is_empty() {
+                continue;
+            }
+            if result.group_results.len() > 1 {
+                writeln!(
+                    writer,
+                    "\n{}",
+                    query_divider(&group.query, index, result.group_results.len(), theme)
+                )?;
+            }
             let highlighter = QueryHighlighter::new(&group.query, theme.color);
             write_detail_items(writer, &group.items, options, theme, &highlighter)?;
         }
