@@ -1,0 +1,224 @@
+name: SWE-QA Remaining Case Analysis
+run-name: SWE-QA remaining19 / ${{ inputs.phase }} / ${{ inputs.tasks }} / 38943e59
+
+on:
+  workflow_dispatch:
+    inputs:
+      tasks:
+        description: remaining19 or a comma-separated subset for a fresh execution
+        required: true
+        default: remaining19
+        type: string
+      phase:
+        description: Full new trials or reuse an earlier case-batch artifact
+        required: true
+        default: full
+        type: choice
+        options: [full, judge, replay]
+      evidence_run:
+        description: Prior batch run ID, required for judge or replay only
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sweqa-remaining-${{ github.ref }}-${{ inputs.phase }}-${{ inputs.tasks }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_COMMIT: 38943e5936d6e4192b0ec6f78178bcd690c95cf0
+  SWE_QA_MODEL_BASE_URL: ${{ vars.SWE_QA_MODEL_BASE_URL }}
+  ZVEC_GREP_DEVICE: cpu
+  ZG_INSTALL_SKIP_AGENT_UPGRADE: "1"
+  ZG_INSTALL_ACCELERATOR: cpu
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      tasks: ${{ steps.select.outputs.tasks }}
+    steps:
+      - name: Authorize actor and bounded case selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ORIGINAL_ACTOR: ${{ github.actor }}
+          CURRENT_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          for actor in "$ORIGINAL_ACTOR" "$CURRENT_ACTOR"; do
+            role="$(gh api "repos/$REPOSITORY/collaborators/$actor/permission" --jq .role_name)"
+            [[ "$role" == admin || "$role" == maintain ]] || exit 1
+          done
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Offline evidence and analysis contract checks
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+          uv run --project benchmarks/swe-qa-bench python -m unittest discover -s benchmarks/swe-qa-bench/tests -p 'test_case_*.py' -v
+      - id: select
+        env:
+          TASK_SELECTION: ${{ inputs.tasks }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('benchmarks/swe-qa-bench/zg_bench/swe_qa/data/selection.json').read_text())
+          allowed = [t['task_slug'] for t in data['tasks'] if t['task_slug'] != 'pylint-10']
+          assert len(allowed) == 19 and len(set(allowed)) == 19
+          value = os.environ['TASK_SELECTION']
+          tasks = allowed if value == 'remaining19' else [s.strip() for s in value.split(',')]
+          assert tasks and len(tasks) == len(set(tasks)) and all(t in allowed for t in tasks)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tasks=' + json.dumps(tasks) + '\n')
+          print(json.dumps({'case_count': len(tasks), 'expected_trials': 20 * len(tasks), 'tasks': tasks}))
+          PY
+
+  case:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    env:
+      TASK_NAME: ${{ matrix.task }}
+      HARNESS_COMMIT: ${{ github.sha }}
+      GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      ZG_BENCH_CAPTURE_EVIDENCE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41380093971"
+          name: case-candidate-41380093971
+          path: ${{ runner.temp }}/package
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: "41380093971"
+          name: case-diagnostic-41380093971
+          path: ${{ runner.temp }}/diagnostic
+      - uses: actions/download-artifact@v8
+        if: inputs.phase != 'full'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run }}
+          name: case-batch-${{ matrix.task }}-${{ inputs.evidence_run }}
+          path: ${{ runner.temp }}/prior-case
+      - name: Reuse immutable evidence without overwriting earlier stage outputs
+        if: inputs.phase != 'full'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/case/raw"
+          cp -a "$RUNNER_TEMP/prior-case/raw/evidence" "$RUNNER_TEMP/case/raw/evidence"
+          if test -d "$RUNNER_TEMP/prior-case/source"; then
+            cp -a "$RUNNER_TEMP/prior-case/source" "$RUNNER_TEMP/case/source"
+          fi
+      - name: Verify reused immutable packages and install locked harness
+        run: |
+          set -euo pipefail
+          node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/package" --commit "$CANDIDATE_COMMIT"
+          test "$(cat "$RUNNER_TEMP/diagnostic/base-commit.txt")" = "$CANDIDATE_COMMIT"
+          test "$(sha256sum "$RUNNER_TEMP/package/candidate.tgz" | cut -d ' ' -f1)" = abdcd3083aff769840645953cca664a08684d406d21e96e0b2732c209fd8314f
+          test "$(sha256sum "$RUNNER_TEMP/diagnostic/diagnostic.tgz" | cut -d ' ' -f1)" = 2db74437c815309f9ac4d5b7f91f0f33a13cad5b6924258c44d8edf460a964cb
+          cmp "$RUNNER_TEMP/diagnostic/case_diagnostics.patch" benchmarks/swe-qa-bench/zg_bench/agents/case_diagnostics.patch
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+          test -n "$GLM_API_KEY"
+      - id: e2e
+        name: Baseline ten and ZG ten independent trials with complete evidence
+        if: inputs.phase == 'full'
+        run: |
+          export ZG_BENCH_INDEX_SEED_DIR="$RUNNER_TEMP/case/raw/evidence/case-index-seed"
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_analysis run \
+            --task "$TASK_NAME" --stage formal --profile all \
+            --package "$RUNNER_TEMP/package/candidate.tgz" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --output "$RUNNER_TEMP/case/raw/evidence/case-analysis"
+      - id: judge
+        name: Standard judge all twenty answers with archived calls
+        if: always() && (inputs.phase == 'judge' || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_judge \
+            --evidence "$RUNNER_TEMP/case/raw/evidence/case-analysis" \
+            --task "$TASK_NAME" --expected-trials 10 \
+            --output "$RUNNER_TEMP/case/raw/judge"
+      - id: replay
+        name: Replay each unique search ten times and preserve all candidate stages
+        if: always() && (inputs.phase == 'replay' || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/production-install" "$RUNNER_TEMP/package/candidate.tgz"
+          npm install --prefix "$RUNNER_TEMP/diagnostic-install" "$RUNNER_TEMP/diagnostic/diagnostic.tgz"
+          sudo mkdir /app
+          sudo chown "$USER" /app
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_replay \
+            --evidence "$RUNNER_TEMP/case/raw/evidence" \
+            --production "$RUNNER_TEMP/production-install/node_modules/.bin/zg" \
+            --diagnostic "$RUNNER_TEMP/diagnostic-install/node_modules/.bin/zg" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --output "$RUNNER_TEMP/case/raw/replay"
+      - name: Preserve fixed repository source for offline review
+        if: always() && (steps.replay.outcome == 'success' || steps.replay.outcome == 'failure')
+        run: |
+          mkdir -p "$RUNNER_TEMP/case/source"
+          if test -d /app/.git; then
+            git -C /app rev-parse HEAD > "$RUNNER_TEMP/case/source/commit.txt"
+            git -C /app archive --format=tar.gz -o "$RUNNER_TEMP/case/source/repository.tar.gz" HEAD
+          fi
+      - name: Record stage outcomes without concealing failed cases
+        if: always()
+        env:
+          E2E_STATUS: ${{ steps.e2e.outcome }}
+          JUDGE_STATUS: ${{ steps.judge.outcome }}
+          REPLAY_STATUS: ${{ steps.replay.outcome }}
+          PHASE: ${{ inputs.phase }}
+          EVIDENCE_RUN: ${{ inputs.evidence_run }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'case'
+          root.mkdir(parents=True, exist_ok=True)
+          record = {k: os.environ.get(k) for k in ['TASK_NAME', 'HARNESS_COMMIT', 'CANDIDATE_COMMIT', 'E2E_STATUS', 'JUDGE_STATUS', 'REPLAY_STATUS', 'PHASE', 'EVIDENCE_RUN']}
+          record.update(github_run_id=os.environ['GITHUB_RUN_ID'], package_source_run='41380093971', expected_trials=20, source_review_complete=False)
+          (root / 'stage-status.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - id: secrets
+        name: Scan all evidence before artifact upload
+        if: always()
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan \
+            --secret-env GLM_API_KEY --root "$RUNNER_TEMP/case"
+      - name: Archive all outcomes and lossless evidence
+        if: always() && steps.secrets.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: case-batch-${{ matrix.task }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/case/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

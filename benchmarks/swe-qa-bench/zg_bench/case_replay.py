@@ -148,7 +148,20 @@ def main():
         group["occurrences"].append({"trial": row["trial"], "wire_id": row["wire_id"],
                                      "result": row["responses"][0].get("result")})
     if not unique:
-        raise RuntimeError("no search calls to replay")
+        # Choosing not to search is an observed agent behavior, not a missing
+        # test run. Keep an explicit zero denominator instead of claiming 10
+        # successful replays or discarding the case.
+        from .case_audit import audit
+        links = audit(lock_path.parent, Path("/app"))
+        write_json(output / "query-audit.json", links)
+        write_json(output / "queries.json", {})
+        write_json(output / "replay-lock.json", {"source_lock": lock, "query_count": 0, "repeats": 10,
+                   "production_sha256": sha256(args.production), "diagnostic_sha256": sha256(args.diagnostic)})
+        write_json(output / "ranking-analysis.json", {"target_scope": "all captured candidates", "plans": []})
+        write_json(output / "summary.json", {"queries": [], "evidence_ready": True, "ready": True,
+                   "applicable": False, "production_replay_executions": 0,
+                   "note": "No original search calls; replay is not applicable, not a quality pass."})
+        return 0
     seeds = [p.parent for p in args.evidence.rglob("identity.json") if (p.parent / "complete").exists()]
     if len(seeds) != 1:
         raise RuntimeError("expected exactly one immutable index seed")

@@ -48,8 +48,10 @@ def analyze(replay: Path) -> dict:
                 plans.append({"plan": stage["plan"], "stages": []})
             else:
                 plans[-1]["stages"].append(stage)
-        for plan in plans:
-            candidates = next(s["candidates"] for s in plan["stages"] if s["stage"] == "ranking_continuation")
+        for group_index, plan in enumerate(plans, 1):
+            continuation = next(s for s in plan["stages"] if s["stage"] == "ranking_continuation")
+            candidates = continuation["candidates"]
+            limit = continuation["requested_limit"]
             variants = {v: rank(candidates, v) for v in ["observed", "no_diversity", "no_identifier_contribution", "rrf_only"]}
             observed = [h["entity_id"] for h in candidates]
             parity = variants["observed"] == observed
@@ -57,11 +59,6 @@ def analyze(replay: Path) -> dict:
                 raise RuntimeError("offline scorer does not reproduce captured full ranking")
             targets = []
             for hit in candidates:
-                if hit["path"] not in {"pylint/pyreverse/utils.py", "pylint/pyreverse/inspector.py", "pylint/checkers/utils.py", "pylint/checkers/typecheck.py"}:
-                    continue
-                if not any('symbol_name: Some("' + name + '")' in hit["metadata"] for name in
-                           ["get_annotation", "infer_node", "is_attribute_typed_annotation", "_get_all_attribute_assignments", "_emit_no_member", "AbstractAssociationHandler", "AggregationsHandler", "OtherAssociationsHandler", "handle_assignattr_type"]):
-                    continue
                 probes = []
                 for stage in plan["stages"]:
                     if stage["stage"] == "recall_probe":
@@ -70,10 +67,13 @@ def analyze(replay: Path) -> dict:
                 targets.append({"entity_id": hit["entity_id"], "path": hit["path"], "range": hit["range"], "metadata": hit["metadata"],
                                 "recall": hit["trace"]["recall"], "tail_probes": probes,
                                 "fusion": hit["trace"]["fusion"], "score_components": hit["trace"]["ranking"],
+                                "returned_by_plan_limit": hit["rank"] <= limit,
                                 "fixed_pool_ranks": {v: ids.index(hit["entity_id"]) + 1 for v, ids in variants.items()}})
-            output.append({"query_id": query["query_id"], "plan": plan["plan"], "candidate_count": len(candidates),
+            output.append({"query_id": query["query_id"], "group_index": group_index,
+                           "plan": plan["plan"], "requested_limit": limit, "candidate_count": len(candidates),
                            "offline_rank_parity": parity, "targets": targets})
-    result = {"warning": "Ranks beyond the requested limit are diagnostic continuations. Component controls freeze recall and other captured terms; these are not proposed product fixes.", "plans": output}
+    result = {"target_scope": "all captured candidates; relevance requires independent per-case source review",
+              "warning": "Ranks beyond the requested limit are diagnostic continuations. Component controls freeze recall and other captured terms; these are not proposed product fixes.", "plans": output}
     write_json(replay / "ranking-analysis.json", result)
     return result
 
