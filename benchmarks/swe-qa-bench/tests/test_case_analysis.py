@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from zg_bench.case_analysis import recording_command, rpc_messages, inventory, main, run_plan
+from zg_bench.case_analysis import recording_command, rpc_messages, inventory, main, run_plan, assess_capture, sha256
 from zg_bench.agents.case_evidence import FULL_SESSION_SQL, CaseEvidenceBaselineOpenCode, CaseEvidenceOpenCode
 from zg_bench.agents.opencode import ResilientOpenCode
 from zg_bench.agents.zvec_grep import ZvecGrepMixin
@@ -177,6 +177,60 @@ class CaseAnalysisTests(unittest.TestCase):
             self.assertFalse(report["capture_ready"])
             self.assertIn("profile_trial_count:baseline", report["errors"])
             self.assertIn("profile_trial_count:zvec-grep", report["errors"])
+
+    def test_partial_title_is_qualified_without_rewriting_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trial = self.write_trial(root)
+            wire = trial / "agent/wire/model"
+            records = {
+                "title.metadata.json": {"route": "model", "id": "title", "method": "POST"},
+                "title.completion.json": {"complete": False, "status": 200},
+                "title.request.bin": {"messages": [
+                    {"role": "system", "content": "You are a title generator. You output ONLY a thread title. Nothing else."},
+                    {"role": "user", "content": "Generate a title for this conversation:\n"},
+                    {"role": "user", "content": "question"}]},
+                "title.response.bin": {"choices": []},
+            }
+            for name, value in records.items():
+                (wire / name).write_text(json.dumps(value))
+            report = inventory(root, 1)
+            self.assertTrue(report["capture_ready"])
+            self.assertEqual(report["trials"][0]["incomplete_auxiliary_wires"], ["title"])
+            self.assertEqual(report["trials"][0]["task_model_calls"], 1)
+            before = {str(p.relative_to(root)): sha256(p) for p in root.rglob("*") if p.is_file()}
+            self.assertTrue(assess_capture(root, 1)["report"]["capture_ready"])
+            self.assertEqual(before, {str(p.relative_to(root)): sha256(p) for p in root.rglob("*") if p.is_file()})
+            (wire / "title.response.bin").write_text("changed")
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                assess_capture(root, 1)
+
+    def test_partial_task_or_unknown_auxiliary_and_missing_title_bytes_fail(self):
+        for variant in ("task", "unknown", "missing_response", "tools"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                trial = self.write_trial(root)
+                wire = trial / "agent/wire/model"
+                body = {"messages": [
+                    {"role": "system", "content": "You are a title generator. You output ONLY a thread title. Nothing else."},
+                    {"role": "user", "content": "Generate a title for this conversation:\nquestion"}]}
+                if variant == "task":
+                    body = {"messages": [{"role": "user", "content": "answer the task"}]}
+                elif variant == "unknown":
+                    body["messages"][0]["content"] = "Other auxiliary service"
+                elif variant == "tools":
+                    body["tools"] = [{"type": "function"}]
+                for name, value in {
+                    "aux.metadata.json": {"route": "model", "id": "aux", "method": "POST"},
+                    "aux.completion.json": {"complete": False, "status": 200},
+                    "aux.request.bin": body, "aux.response.bin": {"choices": []},
+                }.items():
+                    (wire / name).write_text(json.dumps(value))
+                if variant == "missing_response":
+                    (wire / "aux.response.bin").unlink()
+                report = inventory(root, 1)
+                self.assertFalse(report["capture_ready"])
+                self.assertTrue(report["trials"][0]["errors"])
 
     def test_sql_preserves_nested_full_bodies(self):
         db = sqlite3.connect(":memory:")

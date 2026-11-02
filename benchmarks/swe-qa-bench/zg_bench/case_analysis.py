@@ -108,6 +108,24 @@ def rpc_messages(body: str) -> list[dict]:
     return messages
 
 
+def is_title_request(meta: dict, body: dict, completion: dict) -> bool:
+    """Recognize OpenCode's auxiliary title job, never a task or tool request."""
+    messages = body.get("messages", [])
+    return (
+        meta.get("route") == "model" and meta.get("method") == "POST"
+        and completion.get("status") == 200 and not body.get("tools")
+        and len(messages) in (2, 3)
+        and messages[0].get("role") == "system"
+        and isinstance(messages[0].get("content"), str)
+        and messages[0]["content"].startswith(
+            "You are a title generator. You output ONLY a thread title. Nothing else.")
+        and messages[1].get("role") == "user"
+        and isinstance(messages[1].get("content"), str)
+        and messages[1]["content"].startswith("Generate a title for this conversation:")
+        and all(m.get("role") == "user" and isinstance(m.get("content"), str) for m in messages[2:])
+    )
+
+
 def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
     agent = trial / "agent"
     errors, queries = [], []
@@ -158,26 +176,32 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
     row["session_count"] = len(session_ids)
     row["session_ids"] = sorted(session_ids)
     row["execution_complete"] = usage.get("complete", False)
-    model_calls, mcp_calls = 0, 0
+    model_calls, mcp_calls, task_model_calls, auxiliary_model_calls = 0, 0, 0, 0
+    incomplete_auxiliary_wires = []
     for meta_path in sorted((agent / "wire").glob("*/*.metadata.json")):
         prefix = str(meta_path).removesuffix(".metadata.json")
         try:
             meta = json.loads(meta_path.read_text())
             request = Path(prefix + ".request.bin").read_text()
             completion = json.loads(Path(prefix + ".completion.json").read_text())
+            body = json.loads(request) if meta["route"] == "model" else None
+            auxiliary = body is not None and is_title_request(meta, body, completion)
             if not completion.get("complete"):
-                # A long-lived MCP GET may be closed at teardown; POST bodies must finish.
-                if meta["method"] != "GET":
+                # Preserve partial background title bytes. Task POSTs must finish.
+                if auxiliary:
+                    incomplete_auxiliary_wires.append(meta["id"])
+                elif meta["method"] != "GET":
                     errors.append("incomplete_wire:" + meta["id"])
             response_path = Path(prefix + ".response.bin")
             if not response_path.exists() and meta["method"] == "GET":
                 continue
             response = decode_response(response_path, completion)
             if meta["route"] == "model":
-                body = json.loads(request)
                 if "messages" not in body:
                     errors.append("model_messages_missing:" + meta["id"])
                 model_calls += 1
+                auxiliary_model_calls += int(auxiliary)
+                task_model_calls += int(not auxiliary)
             else:
                 for call in rpc_messages(request):
                     if call.get("method") != "tools/call":
@@ -195,7 +219,7 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
                         errors.append("missing_or_ambiguous_rpc_response:" + meta["id"])
         except (OSError, ValueError, KeyError) as error:
             errors.append("invalid_wire:" + meta_path.name + ":" + type(error).__name__)
-    if not model_calls:
+    if not task_model_calls:
         errors.append("no_model_requests")
     if row["profile"] == "baseline" and mcp_calls:
         errors.append("baseline_has_mcp_calls")
@@ -210,11 +234,14 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
             errors.append("trial_incomplete")
     except (OSError, ValueError):
         errors.append("missing_or_invalid_trial_result")
-    row.update(model_calls=model_calls, mcp_calls=mcp_calls, evidence_complete=not errors, errors=errors)
+    row.update(model_calls=model_calls, task_model_calls=task_model_calls,
+               auxiliary_model_calls=auxiliary_model_calls,
+               incomplete_auxiliary_wires=incomplete_auxiliary_wires,
+               mcp_calls=mcp_calls, evidence_complete=not errors, errors=errors)
     return row, queries
 
 
-def inventory(output: Path, expected: int) -> dict:
+def capture_report(output: Path, expected: int) -> tuple[dict, list[dict]]:
     trials = sorted({p.parent for p in (output / "jobs").glob("*/*/config.json")})
     rows, queries = [], []
     for trial in trials:
@@ -241,6 +268,30 @@ def inventory(output: Path, expected: int) -> dict:
               "capture_ready": not errors and len(rows) == expected and all(r["evidence_complete"] for r in rows),
               "errors": errors, "profile_trial_counts": profiles,
               "source_review_complete": False, "trials": rows}
+    return report, queries
+
+
+def assess_capture(evidence: Path, expected: int) -> dict:
+    """Reassess immutable evidence; the caller saves the result elsewhere."""
+    manifest = json.loads((evidence / "evidence-manifest.json").read_text())
+    for entry in manifest:
+        path = (evidence / entry["path"]).resolve()
+        if not path.is_relative_to(evidence.resolve()):
+            raise ValueError("manifest path outside evidence")
+        if path.stat().st_size != entry["size"] or sha256(path) != entry["sha256"]:
+            raise ValueError("immutable evidence hash mismatch: " + entry["path"])
+    report, queries = capture_report(evidence, expected)
+    original_queries = [json.loads(line) for line in (evidence / "requests.jsonl").read_text().splitlines()]
+    if queries != original_queries:
+        raise ValueError("reassessment changed recorded requests")
+    return {"schema_version": 1, "original_manifest_sha256": sha256(evidence / "evidence-manifest.json"),
+            "original_capture_summary_sha256": sha256(evidence / "capture-summary.json"),
+            "raw_evidence_modified": False, "report": report,
+            "qualification": "Known auxiliary title streams may be partial; task model/MCP responses, sessions, usage and trial completion remain required."}
+
+
+def inventory(output: Path, expected: int) -> dict:
+    report, queries = capture_report(output, expected)
     write_json(output / "capture-summary.json", report)
     (output / "requests.jsonl").write_text("".join(json.dumps(q, ensure_ascii=False) + "\n" for q in queries))
     files = [{"path": str(p.relative_to(output)), "size": p.stat().st_size,
@@ -263,9 +314,19 @@ def main(argv=None) -> int:
     inspect = sub.add_parser("inventory")
     inspect.add_argument("--output", type=Path, required=True)
     inspect.add_argument("--expected", type=int, required=True)
+    assess = sub.add_parser("assess")
+    assess.add_argument("--evidence", type=Path, required=True)
+    assess.add_argument("--expected", type=int, required=True)
+    assess.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "inventory":
         return 0 if inventory(args.output, args.expected)["capture_ready"] else 1
+    if args.command == "assess":
+        if args.output.exists() or args.output.resolve().is_relative_to(args.evidence.resolve()):
+            parser.error("assessment output must be new and outside immutable evidence")
+        assessment = assess_capture(args.evidence, args.expected)
+        write_json(args.output, assessment)
+        return 0 if assessment["report"]["capture_ready"] else 1
     selection = json.loads(DATA.read_text())
     case = next((c for c in selection["tasks"] if c["task_slug"] == args.task), None)
     if not case:

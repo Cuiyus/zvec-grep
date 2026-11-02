@@ -14,9 +14,9 @@ on:
         required: true
         default: full
         type: choice
-        options: [full, judge, replay]
+        options: [full, finish, judge, replay]
       evidence_run:
-        description: Prior batch run ID, required for judge or replay only
+        description: Prior batch run ID, required for finish, judge or replay
         required: false
         type: string
 
@@ -148,6 +148,13 @@ jobs:
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/swe-qa-bench --frozen
           test -n "$GLM_API_KEY"
+      - id: assess
+        name: Reassess immutable evidence before missing stages
+        if: inputs.phase != 'full'
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_analysis assess \
+            --evidence "$RUNNER_TEMP/case/raw/evidence/case-analysis" --expected 20 \
+            --output "$RUNNER_TEMP/case/analysis/capture-assessment.json"
       - id: e2e
         name: Baseline ten and ZG ten independent trials with complete evidence
         if: inputs.phase == 'full'
@@ -160,7 +167,7 @@ jobs:
             --output "$RUNNER_TEMP/case/raw/evidence/case-analysis"
       - id: judge
         name: Standard judge all twenty answers with archived calls
-        if: always() && (inputs.phase == 'judge' || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
+        if: always() && (((inputs.phase == 'judge' || inputs.phase == 'finish') && steps.assess.outcome == 'success') || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
         run: |
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_judge \
             --evidence "$RUNNER_TEMP/case/raw/evidence/case-analysis" \
@@ -168,7 +175,7 @@ jobs:
             --output "$RUNNER_TEMP/case/raw/judge"
       - id: replay
         name: Replay each unique search ten times and preserve all candidate stages
-        if: always() && (inputs.phase == 'replay' || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
+        if: always() && (((inputs.phase == 'replay' || inputs.phase == 'finish') && steps.assess.outcome == 'success') || (inputs.phase == 'full' && steps.e2e.outcome == 'success'))
         run: |
           set -euo pipefail
           npm install --prefix "$RUNNER_TEMP/production-install" "$RUNNER_TEMP/package/candidate.tgz"
