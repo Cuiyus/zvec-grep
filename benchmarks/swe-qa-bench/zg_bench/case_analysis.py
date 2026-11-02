@@ -15,6 +15,16 @@ from .settings import OPENCODE_VERSION
 MODEL = "custom-openai/qwen3.8-max"
 EMBEDDING = "local/potion-code-16m-v2"
 DATA = Path(__file__).parent / "swe_qa/data/selection.json"
+EVIDENCE_ADAPTERS = {
+    runner.OPENCODE_IMPORT_PATH: "zg_bench.agents.case_evidence:CaseEvidenceBaselineOpenCode",
+    runner.ZVEC_OPENCODE_IMPORT_PATH: "zg_bench.agents.case_evidence:CaseEvidenceOpenCode",
+}
+ADAPTER_PROFILES = {
+    runner.OPENCODE_IMPORT_PATH: "baseline",
+    EVIDENCE_ADAPTERS[runner.OPENCODE_IMPORT_PATH]: "baseline",
+    runner.ZVEC_OPENCODE_IMPORT_PATH: "zvec-grep",
+    EVIDENCE_ADAPTERS[runner.ZVEC_OPENCODE_IMPORT_PATH]: "zvec-grep",
+}
 
 
 def sha256(path: Path) -> str:
@@ -31,20 +41,46 @@ def recording_command(command: list[str]) -> list[str]:
     """Alter transport only; retain every provider/model option and MCP setting."""
     result = list(command)
     index = result.index("--agent") + 1
-    if result[index] != runner.ZVEC_OPENCODE_IMPORT_PATH:
-        raise ValueError("case recording requires the ZG OpenCode adapter")
-    result[index] = "zg_bench.agents.case_evidence:CaseEvidenceOpenCode"
+    adapter = result[index]
+    if adapter not in EVIDENCE_ADAPTERS:
+        raise ValueError("case recording requires a supported OpenCode adapter")
+    result[index] = EVIDENCE_ADAPTERS[adapter]
     for index, value in enumerate(result):
         if value.startswith("opencode_config="):
             config = json.loads(value.split("=", 1)[1])
             options = config["provider"]["custom-openai"]["options"]
             upstream = options["baseURL"]
             options["baseURL"] = "http://127.0.0.1:18768"
-            config["mcp"]["zvec_grep"]["url"] = "http://127.0.0.1:18769/mcp"
+            if adapter == runner.ZVEC_OPENCODE_IMPORT_PATH:
+                config["mcp"]["zvec_grep"]["url"] = "http://127.0.0.1:18769/mcp"
             result[index] = "opencode_config=" + json.dumps(config, separators=(",", ":"))
             result.extend(["--agent-kwarg", "evidence_upstream=" + upstream])
             return result
     raise ValueError("missing pinned OpenCode provider config")
+
+
+def run_plan(stage: str, profile: str) -> list[dict]:
+    """Keep the old single-profile layout; paired jobs use collector suffixes."""
+    profiles = runner.selected_profiles(profile)
+    attempts = 1 if stage == "preflight" else 10
+    return [{"profile": item, "job_name": f"{stage}-{item}" if len(profiles) > 1 else stage,
+             "attempts": attempts} for item in profiles]
+
+
+def trial_profile(trial: Path) -> str:
+    """Use recorded agent identity and reject conflicts with profile job names."""
+    config = json.loads((trial / "config.json").read_text())
+    profile = ADAPTER_PROFILES.get(config.get("agent", {}).get("name"))
+    if profile is None:
+        job_config = json.loads((trial.parent / "config.json").read_text())
+        candidates = {ADAPTER_PROFILES.get(agent.get("name")) for agent in job_config.get("agents", [])}
+        candidates.discard(None)
+        if len(candidates) == 1:
+            profile = candidates.pop()
+    named = next((item for item in runner.PROFILES if trial.parent.name.endswith("-" + item)), None)
+    if profile is None or (named is not None and named != profile):
+        raise ValueError("missing or conflicting profile identity")
+    return profile
 
 
 def decode_response(path: Path, completion: dict) -> str:
@@ -76,6 +112,11 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
     agent = trial / "agent"
     errors, queries = [], []
     row = {"trial": trial.name, "path": str(trial.relative_to(root))}
+    try:
+        row["profile"] = trial_profile(trial)
+    except (OSError, ValueError, KeyError, TypeError):
+        row["profile"] = None
+        errors.append("missing_or_conflicting_profile")
 
     def read(name, default=None):
         try:
@@ -104,7 +145,15 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
     if not session_ids or not any(r["kind"] == "message" for r in sessions):
         errors.append("empty_sessions")
     usage = read("session-usage.json", {})
-    errors.extend("session_usage:" + error for error in usage.get("errors", []) if error != "capture_incomplete")
+    errors.extend("session_usage:" + error for error in usage.get("errors", []))
+    if not usage.get("complete"):
+        errors.append("session_usage_incomplete")
+    total = usage.get("total")
+    if not isinstance(total, dict) or any(
+        not isinstance(total.get(field), int) or isinstance(total.get(field), bool) or total[field] < 0
+        for field in ("input_tokens", "output_tokens", "llm_calls", "tool_calls")
+    ):
+        errors.append("session_usage_totals_invalid")
     row["usage"] = usage.get("total")
     row["session_count"] = len(session_ids)
     row["session_ids"] = sorted(session_ids)
@@ -136,7 +185,7 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
                     mcp_calls += 1
                     responses = [r for r in rpc_messages(response) if r.get("id") == call.get("id")]
                     queries.append({
-                        "trial": trial.name, "wire_id": meta["id"],
+                        "trial": trial.name, "profile": row["profile"], "wire_id": meta["id"],
                         "started_ms": meta["started_ms"], "request": call,
                         "responses": responses,
                         "raw_prefix": str(Path(prefix).relative_to(root)),
@@ -148,15 +197,20 @@ def inspect_trial(trial: Path, root: Path) -> tuple[dict, list[dict]]:
             errors.append("invalid_wire:" + meta_path.name + ":" + type(error).__name__)
     if not model_calls:
         errors.append("no_model_requests")
-    row.update(model_calls=model_calls, mcp_calls=mcp_calls, evidence_complete=not errors, errors=errors)
+    if row["profile"] == "baseline" and mcp_calls:
+        errors.append("baseline_has_mcp_calls")
     result = trial / "result.json"
-    if result.exists():
+    try:
         raw = json.loads(result.read_text())
         row["verifier_result"] = raw.get("verifier_result")
         row["exception_info"] = raw.get("exception_info")
-    else:
-        errors.append("missing_trial_result")
-        row["evidence_complete"] = False
+        if raw.get("exception_info") is not None:
+            errors.append("trial_exception")
+        if not raw.get("finished_at"):
+            errors.append("trial_incomplete")
+    except (OSError, ValueError):
+        errors.append("missing_or_invalid_trial_result")
+    row.update(model_calls=model_calls, mcp_calls=mcp_calls, evidence_complete=not errors, errors=errors)
     return row, queries
 
 
@@ -169,9 +223,23 @@ def inventory(output: Path, expected: int) -> dict:
         queries.extend(found)
     session_ids = [sid for row in rows for sid in row["session_ids"]]
     errors = ["reused_session_across_trials"] if len(session_ids) != len(set(session_ids)) else []
+    profiles = {profile: sum(row["profile"] == profile for row in rows) for profile in runner.PROFILES}
+    lock_path = output / "run-lock.json"
+    if lock_path.exists():
+        try:
+            lock = json.loads(lock_path.read_text())
+            expected_profiles = lock.get("profiles", ["zvec-grep"])
+            attempts = lock["attempts"]
+            if expected != attempts * len(expected_profiles):
+                errors.append("expected_count_differs_from_run_lock")
+            for profile in runner.PROFILES:
+                if profiles[profile] != (attempts if profile in expected_profiles else 0):
+                    errors.append("profile_trial_count:" + profile)
+        except (OSError, ValueError, KeyError, TypeError):
+            errors.append("invalid_run_lock")
     report = {"schema_version": 1, "expected_trials": expected, "observed_trials": len(rows),
               "capture_ready": not errors and len(rows) == expected and all(r["evidence_complete"] for r in rows),
-              "errors": errors,
+              "errors": errors, "profile_trial_counts": profiles,
               "source_review_complete": False, "trials": rows}
     write_json(output / "capture-summary.json", report)
     (output / "requests.jsonl").write_text("".join(json.dumps(q, ensure_ascii=False) + "\n" for q in queries))
@@ -188,6 +256,7 @@ def main(argv=None) -> int:
     run = sub.add_parser("run")
     run.add_argument("--task", required=True)
     run.add_argument("--stage", choices=["preflight", "formal"], required=True)
+    run.add_argument("--profile", choices=["baseline", "zvec-grep", "all"], default="zvec-grep")
     run.add_argument("--package", type=Path, required=True)
     run.add_argument("--candidate-commit", required=True)
     run.add_argument("--output", type=Path, required=True)
@@ -205,9 +274,12 @@ def main(argv=None) -> int:
     if output.exists() and any(output.iterdir()):
         parser.error("output must be empty; failed attempts must not be overwritten")
     output.mkdir(parents=True, exist_ok=True)
-    attempts = 1 if args.stage == "preflight" else 10
+    plan = run_plan(args.stage, args.profile)
+    attempts = plan[0]["attempts"]
+    profiles = [item["profile"] for item in plan]
     write_json(output / "run-lock.json", {
         "schema_version": 1, "stage": args.stage, "case": case, "attempts": attempts,
+        "profiles": profiles, "jobs": plan, "expected_trials": attempts * len(profiles),
         "max_retries": 0, "zg_commit": args.candidate_commit,
         "package_sha256": sha256(args.package),
         "harness_commit": os.environ.get("HARNESS_COMMIT"), "opencode_version": OPENCODE_VERSION,
@@ -215,23 +287,34 @@ def main(argv=None) -> int:
         "benchmark_revision": selection["benchmark_revision"],
     })
     suite = runner.load_suite("swe-qa-bench", tier="full", task_overrides=[args.task])
-    prepared = runner.prepare_setup_cache("opencode", "zvec-grep", zvec_grep_package=str(args.package), embedding_model=EMBEDDING)
-    command = recording_command(runner.build_harbor_command(
-        suite, profile="zvec-grep", agent="opencode", model=MODEL,
-        jobs_dir=output / "jobs", job_name=args.stage, n_attempts=attempts, max_retries=0,
-        zvec_grep_package=prepared.zvec_grep_package,
-        zvec_grep_package_sha256=prepared.zvec_grep_package_sha256, embedding_model=EMBEDDING,
-    ))
-    write_json(output / "command.json", command)
     environment = runner.execution_environment(agent="opencode", model=MODEL)
-    code = 1
+    exits = {}
     try:
-        code = runner.execute(command, jobs_dir=output / "jobs", environment=environment)
+        for item in plan:
+            profile = item["profile"]
+            exits[profile] = {"exit_code": 1}
+            try:
+                prepared = runner.prepare_setup_cache("opencode", profile,
+                    zvec_grep_package=str(args.package), embedding_model=EMBEDDING)
+                command = recording_command(runner.build_harbor_command(
+                    suite, profile=profile, agent="opencode", model=MODEL,
+                    jobs_dir=output / "jobs", job_name=item["job_name"], n_attempts=attempts, max_retries=0,
+                    zvec_grep_package=prepared.zvec_grep_package,
+                    zvec_grep_package_sha256=prepared.zvec_grep_package_sha256, embedding_model=EMBEDDING,
+                ))
+                write_json(output / "commands" / f"{profile}.json", command)
+                if len(plan) == 1:
+                    write_json(output / "command.json", command)
+                exits[profile]["exit_code"] = runner.execute(command, jobs_dir=output / "jobs", environment=environment)
+            except Exception as error:
+                exits[profile]["error"] = type(error).__name__
+            finally:
+                write_json(output / "execution-results.json", exits)
     finally:
-        report = inventory(output, attempts)
-        print(json.dumps({"harbor_exit": code, "capture_ready": report["capture_ready"],
+        report = inventory(output, attempts * len(profiles))
+        print(json.dumps({"harbor_exits": exits, "capture_ready": report["capture_ready"],
                           "observed_trials": report["observed_trials"]}), flush=True)
-    return 0 if report["capture_ready"] and code == 0 else 1
+    return 0 if report["capture_ready"] and all(item["exit_code"] == 0 for item in exits.values()) else 1
 
 
 if __name__ == "__main__":

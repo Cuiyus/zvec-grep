@@ -7,7 +7,7 @@ on:
       candidate_ref:
         description: Immutable upstream main commit
         required: true
-        default: 891497fa87d3e03d0c9273fed0ba3e75af62f179
+        default: 38943e5936d6e4192b0ec6f78178bcd690c95cf0
         type: string
       task:
         description: One locked SWE-QA task
@@ -15,13 +15,13 @@ on:
         default: pylint-10
         type: string
       stage:
-        description: Full ten-trial analysis, or an individual reusable stage
+        description: Baseline/ZG ten trials each plus judge/replay, or a reusable stage
         required: true
         default: full
         type: choice
-        options: [full, build, preflight, formal, diagnostic-build, replay]
+        options: [full, build, preflight, formal, judge, diagnostic-build, replay]
       evidence_run:
-        description: Completed pilot run ID to replay (replay stage only)
+        description: Completed evidence run ID (standalone judge or replay)
         required: false
         type: string
       diagnostic_run:
@@ -124,7 +124,7 @@ jobs:
         run: |
           test -n "$GLM_API_KEY"
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_analysis run \
-            --task "$TASK_NAME" --stage "$ANALYSIS_STAGE" \
+            --task "$TASK_NAME" --stage "$ANALYSIS_STAGE" --profile all \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --candidate-commit "$CANDIDATE_COMMIT" \
             --output "$RUNNER_TEMP/case-analysis"
@@ -145,6 +145,55 @@ jobs:
             ${{ runner.temp }}/case-analysis/
             ${{ runner.temp }}/case-index-seed/
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+  judge:
+    if: always() && !cancelled() && needs.package.result == 'success' && (inputs.stage == 'judge' || ((inputs.stage == 'full' || inputs.stage == 'formal' || inputs.stage == 'preflight') && needs.analyze.result == 'success'))
+    needs: [package, analyze]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - *authorize
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.stage == 'judge' && inputs.evidence_run || github.run_id }}
+          pattern: case-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/evidence
+      - name: Grade both groups using the standard rubric and preserve every judge call
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          TASK_NAME: ${{ inputs.task }}
+          EXPECTED_TRIALS: ${{ inputs.stage == 'preflight' && '1' || '10' }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project benchmarks/swe-qa-bench --frozen
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.case_judge \
+            --evidence "$RUNNER_TEMP/evidence/case-analysis" \
+            --task "$TASK_NAME" --expected-trials "$EXPECTED_TRIALS" \
+            --output "$RUNNER_TEMP/judge"
+      - name: Check judge artifacts for credentials
+        id: judge-secrets
+        if: always()
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.secret_scan \
+            --secret-env GLM_API_KEY --root "$RUNNER_TEMP/judge"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.judge-secrets.outcome == 'success'
+        with:
+          name: case-judge-${{ inputs.task }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/judge/
           if-no-files-found: error
           retention-days: 90
 

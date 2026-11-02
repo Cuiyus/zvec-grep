@@ -6,6 +6,7 @@ import json
 import shlex
 from pathlib import Path
 
+from .opencode import ResilientOpenCode
 from .zvec_opencode import ZvecOpenCode
 
 
@@ -31,10 +32,20 @@ const entries=names.map(name=>{const p='/app/'+name;try{const b=fs.readFileSync(
 process.stdout.write(JSON.stringify({commit:cp.execFileSync('git',['rev-parse','HEAD'],{cwd:'/app'}).toString().trim(),files:entries}));"""
 
 
-class CaseEvidenceOpenCode(ZvecOpenCode):
+class CaseEvidenceMixin:
+    """Record the same evidence without adding tools to either profile."""
+
+    record_mcp = False
+
     def __init__(self, *args, evidence_upstream: str, **kwargs):
         self._evidence_upstream = evidence_upstream
         super().__init__(*args, **kwargs)
+
+    def _proxy_routes(self):
+        routes = [{"name": "model", "port": 18768, "upstream": self._evidence_upstream}]
+        if self.record_mcp:
+            routes.append({"name": "mcp", "port": 18769, "upstream": "http://127.0.0.1:7999"})
+        return routes
 
     async def run(self, instruction, environment, context):
         errors = []
@@ -42,10 +53,7 @@ class CaseEvidenceOpenCode(ZvecOpenCode):
         config = {
             "output": "/logs/agent/wire",
             "ready": "/logs/agent/proxy-ready.json",
-            "routes": [
-                {"name": "model", "port": 18768, "upstream": self._evidence_upstream},
-                {"name": "mcp", "port": 18769, "upstream": "http://127.0.0.1:7999"},
-            ],
+            "routes": self._proxy_routes(),
         }
         await environment.upload_file(Path(__file__).with_name("evidence_proxy.mjs"), "/tmp/zg-case-proxy.mjs")
         # Use argv-safe literals, never place an API key in a command.
@@ -92,3 +100,13 @@ class CaseEvidenceOpenCode(ZvecOpenCode):
         if result.return_code != 0:
             raise RuntimeError("evidence command failed")
         return result
+
+
+class CaseEvidenceOpenCode(CaseEvidenceMixin, ZvecOpenCode):
+    """Original ZG evidence adapter, retained for existing runs and replays."""
+
+    record_mcp = True
+
+
+class CaseEvidenceBaselineOpenCode(CaseEvidenceMixin, ResilientOpenCode):
+    """Baseline evidence capture with no ZG installation or MCP server."""

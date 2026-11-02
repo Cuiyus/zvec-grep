@@ -12,16 +12,48 @@ import subprocess
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from zg_bench.case_analysis import recording_command, rpc_messages, inventory
-from zg_bench.agents.case_evidence import FULL_SESSION_SQL
+from zg_bench.case_analysis import recording_command, rpc_messages, inventory, main, run_plan
+from zg_bench.agents.case_evidence import FULL_SESSION_SQL, CaseEvidenceBaselineOpenCode, CaseEvidenceOpenCode
+from zg_bench.agents.opencode import ResilientOpenCode
+from zg_bench.agents.zvec_grep import ZvecGrepMixin
 from zg_bench.case_replay import stable, key, control_params
 from zg_bench.case_audit import emitted_tool_ids
 from zg_bench import runner
 
 
 class CaseAnalysisTests(unittest.TestCase):
+    def write_trial(self, root, profile="baseline", number=0, job_name=None):
+        trial = root / "jobs" / (job_name or f"formal-{profile}") / f"pylint-10__{number}"
+        agent = trial / "agent"
+        wire = agent / "wire/model"
+        wire.mkdir(parents=True)
+        sid = f"{profile}-{number}"
+        adapter = "CaseEvidenceBaselineOpenCode" if profile == "baseline" else "CaseEvidenceOpenCode"
+        records = {
+            trial / "config.json": {"agent": {"name": "zg_bench.agents.case_evidence:" + adapter}},
+            trial / "result.json": {"finished_at": "2026-10-29T14:37:09Z", "exception_info": None},
+            agent / "evidence-capture.json": {"complete": True},
+            agent / "corpus-before.json": {"commit": "pinned", "files": []},
+            agent / "corpus-after.json": {"commit": "pinned", "files": []},
+            agent / "full-sessions.json": [
+                {"kind": "session", "data": {"id": sid, "parent_id": None}},
+                {"kind": "message", "data": {"id": "msg", "session_id": sid, "content": {"role": "assistant"}}},
+            ],
+            agent / "session-usage.json": {"complete": True, "errors": [], "total": {
+                "input_tokens": 100, "output_tokens": 10, "llm_calls": 1, "tool_calls": 0}},
+            wire / "1.metadata.json": {"route": "model", "id": "1", "method": "POST"},
+            wire / "1.completion.json": {"complete": True},
+            wire / "1.request.bin": {"messages": [{"role": "user", "content": "question"}]},
+            wire / "1.response.bin": {"choices": []},
+        }
+        for path, value in records.items():
+            path.write_text(json.dumps(value))
+        return trial
+
     def test_context_link_uses_emitted_tool_id_not_quoted_text(self):
         body = 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_"}]}}]}\n\n'
         body += 'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"123"}],"content":"call_fake"}}]}\n\n'
@@ -55,6 +87,96 @@ class CaseAnalysisTests(unittest.TestCase):
         self.assertIn("evidence_upstream=" + upstream, recorded)
         self.assertEqual(recorded[recorded.index("--n-attempts") + 1], "10")
         self.assertEqual(recorded[recorded.index("--max-retries") + 1], "0")
+
+    def test_baseline_records_model_without_zg_provision_or_config(self):
+        suite = runner.load_suite("swe-qa-bench", tier="full", task_overrides=["pylint-10"])
+        original = runner.build_harbor_command(suite, profile="baseline", agent="opencode",
+            model="custom-openai/qwen3.8-max", job_name="test", n_attempts=10, max_retries=0)
+        recorded = recording_command(original)
+        self.assertEqual(recorded[recorded.index("--agent") + 1],
+                         "zg_bench.agents.case_evidence:CaseEvidenceBaselineOpenCode")
+        self.assertFalse(any(value.startswith(("zvec_", "embedding_", "mcp_target=")) for value in recorded))
+        config = lambda cmd: json.loads(next(x.split("=", 1)[1] for x in cmd if x.startswith("opencode_config=")))
+        before, after = config(original), config(recorded)
+        self.assertNotIn("zvec_grep", after.get("mcp", {}))
+        after["provider"]["custom-openai"]["options"]["baseURL"] = before["provider"]["custom-openai"]["options"]["baseURL"]
+        self.assertEqual(before, after)
+        self.assertTrue(issubclass(CaseEvidenceBaselineOpenCode, ResilientOpenCode))
+        self.assertFalse(issubclass(CaseEvidenceBaselineOpenCode, ZvecGrepMixin))
+        for adapter, expected_routes in [(CaseEvidenceBaselineOpenCode, ["model"]), (CaseEvidenceOpenCode, ["model", "mcp"])]:
+            instance = object.__new__(adapter)
+            instance._evidence_upstream = "http://example.test/v1"
+            self.assertEqual([route["name"] for route in instance._proxy_routes()], expected_routes)
+
+    def test_profile_plan_keeps_default_layout_and_counts_each_group(self):
+        self.assertEqual(run_plan("formal", "zvec-grep"), [{"profile": "zvec-grep", "job_name": "formal", "attempts": 10}])
+        self.assertEqual(run_plan("preflight", "all"), [
+            {"profile": "baseline", "job_name": "preflight-baseline", "attempts": 1},
+            {"profile": "zvec-grep", "job_name": "preflight-zvec-grep", "attempts": 1},
+        ])
+        self.assertEqual(sum(item["attempts"] for item in run_plan("formal", "all")), 20)
+
+    def test_paired_main_runs_both_groups_then_collects_twenty_trials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "zg.tgz"
+            package.write_bytes(b"package")
+            output = root / "output"
+            executed = []
+            def execute(command, **kwargs):
+                job = command[command.index("--job-name") + 1]
+                profile = "baseline" if job.endswith("-baseline") else "zvec-grep"
+                self.assertFalse((output / "capture-summary.json").exists())
+                self.assertEqual(command[command.index("--max-retries") + 1], "0")
+                executed.append(profile)
+                for number in range(10):
+                    self.write_trial(output, profile, number, job)
+                return 0
+            with patch("zg_bench.case_analysis.runner.prepare_setup_cache", return_value=SimpleNamespace(
+                zvec_grep_package=str(package), zvec_grep_package_sha256=None)) as prepare, patch(
+                "zg_bench.case_analysis.runner.execution_environment", return_value={}), patch(
+                "zg_bench.case_analysis.runner.execute", side_effect=execute):
+                code = main(["run", "--task", "pylint-10", "--stage", "formal", "--profile", "all",
+                             "--package", str(package), "--candidate-commit", "pinned", "--output", str(output)])
+            self.assertEqual(code, 0)
+            self.assertEqual(executed, ["baseline", "zvec-grep"])
+            self.assertEqual([call.args[1] for call in prepare.call_args_list], executed)
+            lock = json.loads((output / "run-lock.json").read_text())
+            self.assertEqual(lock["expected_trials"], 20)
+            self.assertEqual(lock["profiles"], executed)
+            report = json.loads((output / "capture-summary.json").read_text())
+            self.assertTrue(report["capture_ready"])
+            self.assertEqual(report["profile_trial_counts"], {"baseline": 10, "zvec-grep": 10})
+            self.assertTrue(all((output / "commands" / f"{profile}.json").exists() for profile in executed))
+
+    def test_inventory_rejects_incomplete_usage_and_trial_exceptions(self):
+        for target, update, expected_error in [
+            ("agent/session-usage.json", {"complete": False}, "session_usage_incomplete"),
+            ("agent/session-usage.json", {"total": {}}, "session_usage_totals_invalid"),
+            ("result.json", {"exception_info": {"exception_type": "AgentTimeoutError"}}, "trial_exception"),
+            ("result.json", {"finished_at": None}, "trial_incomplete"),
+        ]:
+            with self.subTest(error=expected_error), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                trial = self.write_trial(root)
+                self.assertTrue(inventory(root, 1)["capture_ready"])
+                path = trial / target
+                path.write_text(json.dumps({**json.loads(path.read_text()), **update}))
+                report = inventory(root, 1)
+                self.assertFalse(report["capture_ready"])
+                self.assertIn(expected_error, report["trials"][0]["errors"])
+
+    def test_inventory_enforces_profile_counts_not_only_total(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_trial(root, "zvec-grep", 0)
+            self.write_trial(root, "zvec-grep", 1)
+            (root / "run-lock.json").write_text(json.dumps({"profiles": ["baseline", "zvec-grep"], "attempts": 1}))
+            report = inventory(root, 2)
+            self.assertEqual(report["observed_trials"], 2)
+            self.assertFalse(report["capture_ready"])
+            self.assertIn("profile_trial_count:baseline", report["errors"])
+            self.assertIn("profile_trial_count:zvec-grep", report["errors"])
 
     def test_sql_preserves_nested_full_bodies(self):
         db = sqlite3.connect(":memory:")
