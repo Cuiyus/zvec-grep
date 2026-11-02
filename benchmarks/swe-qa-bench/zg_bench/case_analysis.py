@@ -281,13 +281,47 @@ def assess_capture(evidence: Path, expected: int) -> dict:
         if path.stat().st_size != entry["size"] or sha256(path) != entry["sha256"]:
             raise ValueError("immutable evidence hash mismatch: " + entry["path"])
     report, queries = capture_report(evidence, expected)
+    lock_path = evidence / "run-lock.json"
+    case = json.loads(lock_path.read_text()).get("case", {}) if lock_path.exists() else {}
+    attestations = json.loads(DATA.with_name("evidence-directory-symlinks.json").read_text())
+    attested = next((a for a in attestations if a["repository"] == case.get("repository")
+                     and a["commit"] == case.get("repository_commit")), None)
+    source_gaps = []
+    if attested:
+        allowed = {entry["path"]: entry for entry in attested["entries"]}
+        for entry in allowed.values():
+            target = entry["target"].encode()
+            if entry["mode"] != "120000" or hashlib.sha1(
+                b"blob " + str(len(target)).encode() + b"\0" + target
+            ).hexdigest() != entry["git_blob_sha1"]:
+                raise ValueError("invalid committed directory-symlink attestation")
+        for row in report["trials"]:
+            agent = evidence / row["path"] / "agent"
+            before = json.loads((agent / "corpus-before.json").read_text())
+            after = json.loads((agent / "corpus-after.json").read_text())
+            errors = [entry for entry in before.get("files", []) if "error" in entry]
+            if (errors and before == after and before.get("commit") == attested["commit"]
+                    and all(entry == {"path": entry["path"], "error": "EISDIR"}
+                            and entry["path"] in allowed for entry in errors)):
+                row["errors"] = [error for error in row["errors"] if error != "corpus_hash_errors"]
+                row["evidence_complete"] = not row["errors"]
+                source_gaps.append({"trial": row["trial"], "paths": [entry["path"] for entry in errors]})
+    if source_gaps:
+        report["directory_symlink_capture_gap"] = {
+            "attestation": attested, "trials": source_gaps,
+            "original_working_tree_link_targets_captured": False,
+            "qualification": "Committed directory symlinks explain EISDIR. Original E2E link targets were not captured; this metadata gap remains, and no source-content mismatch or other read error is waived.",
+        }
+        report["capture_ready"] = (not report["errors"] and report["observed_trials"] == expected
+                                   and all(row["evidence_complete"] for row in report["trials"]))
     original_queries = [json.loads(line) for line in (evidence / "requests.jsonl").read_text().splitlines()]
     if queries != original_queries:
         raise ValueError("reassessment changed recorded requests")
     return {"schema_version": 1, "original_manifest_sha256": sha256(evidence / "evidence-manifest.json"),
             "original_capture_summary_sha256": sha256(evidence / "capture-summary.json"),
             "raw_evidence_modified": False, "report": report,
-            "qualification": "Known auxiliary title streams may be partial; task model/MCP responses, sessions, usage and trial completion remain required."}
+            "qualification": "Known auxiliary title streams may be partial; task model/MCP responses, sessions, usage and trial completion remain required."
+            + (" Original working-tree targets of attested directory symlinks were not captured; see report.directory_symlink_capture_gap." if source_gaps else "")}
 
 
 def inventory(output: Path, expected: int) -> dict:

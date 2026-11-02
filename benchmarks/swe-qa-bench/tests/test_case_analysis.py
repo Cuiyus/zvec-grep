@@ -232,6 +232,27 @@ class CaseAnalysisTests(unittest.TestCase):
                 self.assertFalse(report["capture_ready"])
                 self.assertTrue(report["trials"][0]["errors"])
 
+    def test_committed_directory_symlink_gap_is_explicit_and_bounded(self):
+        for variant in ("attested", "wrong_commit", "other_path", "changed"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                trial=self.write_trial(root)
+                commit="46e939b5525d9c72b677340985582b04b128478a"
+                name="tests/certs/valid/ca" if variant!="other_path" else "source.py"
+                corpus={"commit":commit,"files":[{"path":name,"error":"EISDIR"}]}
+                for stage in ["before","after"]:
+                    value={**corpus,"commit":"changed"} if stage=="after" and variant=="changed" else corpus
+                    (trial/f"agent/corpus-{stage}.json").write_text(json.dumps(value))
+                lock={"profiles":["baseline"],"attempts":1,"case":{"repository":"psf/requests","repository_commit":commit if variant!="wrong_commit" else "other"}}
+                (root/"run-lock.json").write_text(json.dumps(lock))
+                self.assertFalse(inventory(root,1)["capture_ready"])
+                before={str(p.relative_to(root)):sha256(p) for p in root.rglob("*") if p.is_file()}
+                report=assess_capture(root,1)["report"]
+                self.assertEqual(report["capture_ready"],variant=="attested")
+                if variant=="attested":
+                    self.assertFalse(report["directory_symlink_capture_gap"]["original_working_tree_link_targets_captured"])
+                self.assertEqual(before,{str(p.relative_to(root)):sha256(p) for p in root.rglob("*") if p.is_file()})
+
     def test_sql_preserves_nested_full_bodies(self):
         db = sqlite3.connect(":memory:")
         db.executescript("CREATE TABLE session(id TEXT,parent_id TEXT); CREATE TABLE message(id TEXT,session_id TEXT,data TEXT); CREATE TABLE part(id TEXT,session_id TEXT,message_id TEXT,data TEXT);")
