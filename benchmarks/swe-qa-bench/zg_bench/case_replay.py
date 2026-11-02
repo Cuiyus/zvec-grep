@@ -65,7 +65,10 @@ class Mcp:
             self.headers["Mcp-Session-Id"] = session
         if notification:
             return None
-        messages = rpc_messages(response.text)
+        # SSE and JSON-RPC are UTF-8. requests defaults text/* without a
+        # charset to Latin-1, which corrupts preview ellipses and non-ASCII code.
+        response_text = response.content.decode("utf-8")
+        messages = rpc_messages(response_text)
         matches = [m for m in messages if m.get("id") == payload["id"]]
         if len(matches) != 1:
             raise RuntimeError("missing MCP response")
@@ -73,7 +76,7 @@ class Mcp:
             raise RuntimeError("MCP error: " + json.dumps(matches[0]["error"]))
         if method == "initialize":
             self.headers["Mcp-Protocol-Version"] = matches[0]["result"]["protocolVersion"]
-        return {"request": payload, "response": matches[0], "raw_response": response.text}
+        return {"request": payload, "response": matches[0], "raw_response": response_text}
 
 
 @contextmanager
