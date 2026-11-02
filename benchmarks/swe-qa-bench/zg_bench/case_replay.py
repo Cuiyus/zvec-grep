@@ -215,9 +215,11 @@ def main():
     from .case_ranking import analyze
     links = audit(lock_path.parent, Path("/app"))
     write_json(output / "query-audit.json", links)
-    evidence_ready = (links["all_linked"] and links["all_tool_bodies_equal"]
+    evidence_ready = (links["all_linked"] and links["all_delivery_captured"]
                       and all(r["diagnostic_parity"] and r["stage_capture"] for r in summaries))
     write_json(output / "summary.json", {"queries": summaries, "evidence_ready": evidence_ready,
+        "raw_output_delivery_equal": links["all_tool_bodies_equal"],
+        "delivery_transform_calls": links["delivery_transform_calls"],
         "ready": evidence_ready and all(r["stable_10"] and r["matches_e2e"] for r in summaries),
         "note": "CI success checks evidence/parity, not answer correctness. Replay instability or E2E differences remain findings requiring review."})
     analyze(output)

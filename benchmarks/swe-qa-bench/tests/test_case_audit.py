@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from zg_bench.case_audit import parse_hits
+from zg_bench.case_audit import delivery, parse_hits
 
 
 class CaseAuditParsingTests(unittest.TestCase):
@@ -63,6 +63,18 @@ class CaseAuditParsingTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 parse_hits(body, self.source)
         self.assertEqual(parse_hits("No matches.\n", self.source), [])
+
+    def test_client_truncation_preserves_capture_without_claiming_delivery_parity(self):
+        raw = "source line\n" * 100
+        tool = raw[:40] + "\nThe tool call succeeded but the output was truncated. Full output saved to: /tmp/example"
+        result = delivery(raw, tool, tool)
+        self.assertTrue(result["capture_complete"])
+        self.assertEqual(result["kind"], "opencode_truncation")
+        self.assertFalse(result["raw_to_tool_equal"])
+        self.assertTrue(result["tool_to_model_equal"])
+        self.assertNotEqual(result["raw_sha256"], result["model_sha256"])
+        self.assertFalse(delivery(raw, tool, "another body")["capture_complete"])
+        self.assertEqual(delivery(raw, raw + " unexplained", raw + " unexplained")["kind"], "unexplained_change")
 
 
 if __name__ == "__main__":

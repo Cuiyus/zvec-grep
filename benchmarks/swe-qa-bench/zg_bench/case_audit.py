@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -88,7 +89,25 @@ def parse_hits(body: str, source: Path, *, preview: str = "short") -> list[dict]
     return hits
 
 
-def audit(root: Path, source: Path) -> dict:
+def delivery(raw: str, tool: str | None, model: str | None) -> dict:
+    """Distinguish recorded client truncation from missing transport evidence."""
+    strings = all(isinstance(value, str) for value in (raw, tool, model))
+    prefix = next((i for i, (a, b) in enumerate(zip(raw, tool or "")) if a != b),
+                  min(len(raw), len(tool or "")))
+    truncated = (isinstance(tool, str) and len(tool) < len(raw) and prefix > 0
+                 and "The tool call succeeded but the output was truncated. Full output saved to:" in tool)
+    kind = "exact" if raw == tool == model else "opencode_truncation" if truncated else "unexplained_change"
+    return {"kind": kind, "raw_to_tool_equal": raw == tool,
+            "tool_to_model_equal": tool == model,
+            "capture_complete": strings and tool == model,
+            "common_raw_tool_prefix_characters": prefix,
+            **{name + "_characters": len(value) if isinstance(value, str) else None
+               for name, value in (("raw", raw), ("tool", tool), ("model", model))},
+            **{name + "_sha256": hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
+               for name, value in (("raw", raw), ("tool", tool), ("model", model))}}
+
+
+def audit(root: Path, source: Path, output_path: Path | None = None) -> dict:
     rows = [json.loads(line) for line in (root / "requests.jsonl").read_text().splitlines()]
     output = []
     for row in rows:
@@ -107,8 +126,10 @@ def audit(root: Path, source: Path) -> dict:
         matches.sort(key=lambda p: abs(p["content"]["state"].get("time", {}).get("start", 0) - row["started_ms"]))
         record = {"trial": row["trial"], "wire_id": row["wire_id"], "request": row["request"], "links": {}, "hits": []}
         body = "\n".join(item.get("text", "") for item in row["responses"][0].get("result", {}).get("content", []))
+        tool_body, model_body = None, None
         if matches:
             part = matches[0]
+            tool_body = part["content"]["state"].get("output")
             call_id = part["content"]["callID"]
             record["links"].update(session_id=part["session_id"], message_id=part["message_id"], part_id=part["id"], call_id=call_id,
                                    tool_body_equal=part["content"]["state"].get("output") == body)
@@ -121,16 +142,27 @@ def audit(root: Path, source: Path) -> dict:
                 request = json.loads(Path(model_prefix + ".request.bin").read_text())
                 for message in request.get("messages", []):
                     if message.get("role") == "tool" and message.get("tool_call_id") == call_id:
+                        if "first_visible_model_request" not in record["links"]:
+                            model_body = message.get("content")
                         record["links"].setdefault("first_visible_model_request", str(Path(model_prefix + ".request.bin").relative_to(root)))
                         record["links"].setdefault("model_body_equal", message.get("content") == body)
+        record["delivery"] = delivery(body, tool_body, model_body)
         record["hits"] = parse_hits(body, source, preview=args.get("preview", "short"))
+        record["raw_hit_count"] = len(record["hits"])
+        if isinstance(model_body, str) and model_body != body:
+            record["model_visible_hits"] = parse_hits(model_body, source, preview=args.get("preview", "short"))
+            record["model_visible_hit_count"] = len(record["model_visible_hits"])
+        else:
+            record["model_visible_hit_count"] = len(record["hits"]) if model_body == body else None
         record["analysis"] = "pending_human_source_review"
         output.append(record)
     report = {"queries": output, "total_queries": len(output),
               "total_hits": sum(len(r["hits"]) for r in output),
               "all_linked": all(all(k in r["links"] for k in ("pre_query_model_request", "first_visible_model_request")) for r in output),
-              "all_tool_bodies_equal": all(r["links"].get("tool_body_equal") and r["links"].get("model_body_equal") for r in output)}
-    write_json(root / "query-audit.json", report)
+              "all_tool_bodies_equal": all(r["links"].get("tool_body_equal") and r["links"].get("model_body_equal") for r in output),
+              "all_delivery_captured": all(r["delivery"]["capture_complete"] for r in output),
+              "delivery_transform_calls": sum(r["delivery"]["kind"] != "exact" for r in output)}
+    write_json(output_path or root / "query-audit.json", report)
     return report
 
 
@@ -138,8 +170,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = audit(args.evidence, args.source)
+    result = audit(args.evidence, args.source, args.output)
     print(json.dumps({k: v for k, v in result.items() if k != "queries"}))
     return 0 if result["all_linked"] else 1
 
