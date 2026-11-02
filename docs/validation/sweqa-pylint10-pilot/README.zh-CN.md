@@ -1,6 +1,6 @@
 # pylint:10 单题试点报告
 
-**流程已跑通：10 次独立 E2E、16 条检索、140 次独立回放，确认两项 ZG 局部质量问题。** 本轮只分析 [#324](https://github.com/zvec-ai/zvec-grep/issues/324) 对应题目，尚未扩展其他 case。
+**本批完成检索诊断：10 次 ZG E2E、16 条检索、140 次独立回放，确认两项 ZG 局部质量问题。缺少 baseline 与标准 Judge，不能作为完整 E2E 对照评测。** 本轮只分析 [#324](https://github.com/zvec-ai/zvec-grep/issues/324) 对应题目，尚未扩展其他 case。下表仅检查证据完整性和复现情况，不表示答案正确率。
 
 | 检查 | 结果 |
 | --- | --- |
