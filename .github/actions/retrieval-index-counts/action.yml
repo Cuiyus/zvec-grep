@@ -1,0 +1,34 @@
+name: Count indexed Entities and fragments
+description: Read collection row counts from the completed benchmark index.
+inputs:
+  suite:
+    description: Benchmark suite ID.
+    required: true
+  output:
+    description: Benchmark output directory.
+    required: true
+  commit:
+    description: Pinned Rust candidate commit.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: retrieval-index-count-reader
+        path: ${{ runner.temp }}/index-count-reader
+    - shell: bash
+      env:
+        COUNTS_SUITE: ${{ inputs.suite }}
+        COUNTS_OUTPUT: ${{ inputs.output }}
+        COUNTS_COMMIT: ${{ inputs.commit }}
+      run: |
+        reader="$RUNNER_TEMP/index-count-reader/retrieval-index-counts"
+        chmod +x "$reader"
+        node benchmarks/zg-retrieval/index-counts/collect.mjs "$COUNTS_SUITE" "$COUNTS_OUTPUT" "$reader" "$COUNTS_COMMIT"
+    - uses: actions/upload-artifact@v7
+      with:
+        name: retrieval-index-counts-${{ inputs.suite }}
+        path: ${{ inputs.output }}/index-counts.json
+        if-no-files-found: error
+        retention-days: 14

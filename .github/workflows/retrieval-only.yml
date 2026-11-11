@@ -114,6 +114,26 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+      - name: Build the matching zvec collection reader
+        if: inputs.embedding == 'remote'
+        working-directory: candidate/rust
+        run: |
+          mkdir -p "$RUNNER_TEMP/index-count-package"
+          tar -xzf "$RUNNER_TEMP/rust-package-cache/candidate.tgz" -C "$RUNNER_TEMP/index-count-package"
+          zvec_lib="$RUNNER_TEMP/index-count-package/package/lib"
+          test -f "$zvec_lib/libzvec_c_api.so"
+          export ZVEC_LIB_DIR="$zvec_lib"
+          cargo build --release \
+            --manifest-path "$GITHUB_WORKSPACE/benchmarks/zg-retrieval/index-counts/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/index-count-build"
+          LD_LIBRARY_PATH="$zvec_lib" "$RUNNER_TEMP/index-count-build/release/retrieval-index-counts"
+      - uses: actions/upload-artifact@v7
+        if: inputs.embedding == 'remote'
+        with:
+          name: retrieval-index-count-reader
+          path: ${{ runner.temp }}/index-count-build/release/retrieval-index-counts
+          if-no-files-found: error
+          retention-days: 7
 
   sweqa:
     name: SWE-QA20 (20 questions)
@@ -155,6 +175,13 @@ jobs:
             --corpus "$RUNNER_TEMP/corpus" \
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Count SWE-QA20 Entities and fragments
+        if: inputs.embedding == 'remote'
+        uses: ./.github/actions/retrieval-index-counts
+        with:
+          suite: sweqa
+          output: ${{ runner.temp }}/sweqa
+          commit: ${{ needs.package-candidate.outputs.candidate-commit }}
       - name: Build the SWE-QA20 conclusion report
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
@@ -241,6 +268,13 @@ jobs:
             --output "$RUNNER_TEMP/beir" \
             --model-cache "$RUNNER_TEMP/beir-model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Count BEIR Entities and fragments
+        if: inputs.embedding == 'remote'
+        uses: ./.github/actions/retrieval-index-counts
+        with:
+          suite: beir
+          output: ${{ runner.temp }}/beir
+          commit: ${{ needs.package-candidate.outputs.candidate-commit }}
       - name: Publish BEIR results for this job
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
@@ -317,6 +351,13 @@ jobs:
             --output "$RUNNER_TEMP/duretrieval" \
             --model-cache "$RUNNER_TEMP/duretrieval-model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Count DuRetrieval Entities and fragments
+        if: inputs.embedding == 'remote'
+        uses: ./.github/actions/retrieval-index-counts
+        with:
+          suite: duretrieval
+          output: ${{ runner.temp }}/duretrieval
+          commit: ${{ needs.package-candidate.outputs.candidate-commit }}
       - name: Publish DuRetrieval results for this job
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
@@ -386,6 +427,13 @@ jobs:
             --output "$RUNNER_TEMP/quarry" \
             --model-cache "$RUNNER_TEMP/quarry-model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
+      - name: Count Quarry Entities and fragments
+        if: inputs.embedding == 'remote'
+        uses: ./.github/actions/retrieval-index-counts
+        with:
+          suite: quarry
+          output: ${{ runner.temp }}/quarry
+          commit: ${{ needs.package-candidate.outputs.candidate-commit }}
       - name: Publish Quarry results for this job
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
