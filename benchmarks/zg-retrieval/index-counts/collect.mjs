@@ -3,12 +3,16 @@ import { execFile } from "node:child_process";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { loadSuite } from "../core/suite.mjs";
+import { loadPilot } from "../expansion/datasets.mjs";
 
 const [suite, output, reader, candidateCommit] = process.argv.slice(2);
 const expectedGroups = { sweqa: 11, beir: 6, duretrieval: 1, quarry: 20 };
-const model = "qwen/qwen3.7-text-embedding";
 assert.ok(Object.hasOwn(expectedGroups, suite));
 assert.match(candidateCommit, /^[a-f0-9]{40}$/);
+const model = suite === "sweqa"
+  ? (await loadSuite()).protocol.model
+  : (await loadPilot(suite)).model;
 
 const run = promisify(execFile);
 const read = async (file) => JSON.parse(await readFile(file, "utf8"));
