@@ -132,10 +132,6 @@ test("PR updates run Retrieval-only at the fork head SHA with local embedding an
     prWorkflow,
     /secrets:|secrets\.|inherit|: write|swe-qa-bench\.yml/,
   );
-  assert.match(
-    block(workflow, "env", 0),
-    /RETRIEVAL_EMBEDDING: \$\{\{ inputs\.embedding \}\}/,
-  );
 });
 
 test("automatic PR concurrency cancels older commits without cancelling manual benchmark runs", () => {
@@ -172,6 +168,7 @@ test("version comparison keeps artifact namespaces separate and uses local model
 });
 
 test("local embedding is the default and remote Qwen credentials stay scoped to execution", () => {
+  assert.doesNotMatch(workflow.split(/^jobs:$/m, 1)[0], /RETRIEVAL_EMBEDDING/);
   assert.match(jobs.authorize, /Check remote embedding configuration/);
   assert.match(jobs.authorize, /if: inputs\.embedding == 'remote'/);
   assert.match(jobs.authorize, /secrets\.QWEN_EMBEDDING_API_KEY/);
