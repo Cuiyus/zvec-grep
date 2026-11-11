@@ -2,11 +2,40 @@ import assert from "node:assert/strict";
 
 export const REMOTE_EMBEDDING_MODEL = "qwen/qwen3.7-text-embedding";
 
-export function embeddingModel(configuredModel, profile = "local") {
+const MATRIX_LOCAL_MODELS = new Set([
+  "local/bekko-256-int8",
+  "local/embeddinggemma-300m",
+  "local/qwen3-embedding-0.6b",
+  "local/potion-retrieval-32m",
+  "local/all-minilm-l6-v2",
+  "local/bge-small-en-v1.5",
+  "local/multilingual-e5-small",
+  "local/gte-modernbert-base",
+  "local/jina-embeddings-v2-base-code",
+  "local/nomic-embed-text-v1.5",
+]);
+
+export function embeddingModel(
+  configuredModel,
+  profile = "local",
+  localModel = process.env.RETRIEVAL_LOCAL_MODEL,
+) {
   assert.ok(
     ["local", "remote"].includes(profile),
     `unknown embedding profile: ${profile}`,
   );
+  if (localModel) {
+    assert.equal(
+      profile,
+      "local",
+      "the local model override requires local embedding",
+    );
+    assert.ok(
+      MATRIX_LOCAL_MODELS.has(localModel),
+      `unsupported matrix model: ${localModel}`,
+    );
+    return localModel;
+  }
   return profile === "remote" ? REMOTE_EMBEDDING_MODEL : configuredModel;
 }
 

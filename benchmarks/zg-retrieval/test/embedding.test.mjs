@@ -79,3 +79,17 @@ test("remote embedding refuses missing credentials and insecure destinations", (
     /HTTPS/,
   );
 });
+test("matrix model override accepts the local allowlist and rejects cross-profile use", () => {
+  const configured = "local/potion-code-16m-v2";
+  const override = "local/bekko-256-int8";
+  assert.equal(embeddingModel(configured, "local", override), override);
+  assert.equal(embeddingModel(configured, "local", ""), configured);
+  assert.throws(
+    () => embeddingModel(configured, "remote", override),
+    /requires local/,
+  );
+  assert.throws(
+    () => embeddingModel(configured, "local", configured),
+    /unsupported matrix model/,
+  );
+});

@@ -69,7 +69,16 @@ test("Retrieval-only retains its reusable and manual candidate/embedding inputs"
   assert.match(dispatch, /^ {8}type: choice$/m);
   assert.match(dispatch, /^ {10}- local$/m);
   assert.match(dispatch, /^ {10}- remote$/m);
-  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 2);
+  assert.match(dispatch, /^ {6}local_model:$/m);
+  assert.equal((dispatch.match(/^ {6}[a-z_]+:$/gm) ?? []).length, 3);
+  assert.match(jobs.authorize, /Validate local model override/);
+  for (const name of ["sweqa", "beir", "duretrieval", "quarry", "results"]) {
+    assert.match(
+      jobs[name],
+      /RETRIEVAL_LOCAL_MODEL: \$\{\{ inputs\.local_model \}\}/,
+    );
+  }
+  assert.doesNotMatch(jobs["quality-contract"], /RETRIEVAL_LOCAL_MODEL/);
   const files = await readdir(new URL(".github/workflows/", repository));
   assert.deepEqual(
     files.filter((file) => /^retrieval.*\.ya?ml$/.test(file)).sort(),
