@@ -232,7 +232,7 @@ test("the four suites run in independent jobs using one candidate package", asyn
   );
   assert.equal(Object.keys(jobs).length, 8);
   assert.match(jobs.sweqa, /strategy:\s*fail-fast: false/);
-  assert.equal((jobs.sweqa.match(/- shard:/g) ?? []).length, 5);
+  assert.equal((jobs.sweqa.match(/- shard:/g) ?? []).length, 3);
   assert.match(jobs.sweqa, /--tasks "\$BENCH_RETRY_TASKS"/);
   assert.doesNotMatch(workflow.replace(jobs.sweqa, ""), /strategy:|fromJSON\(/);
   const runner = steps(jobs.sweqa).find((entry) =>

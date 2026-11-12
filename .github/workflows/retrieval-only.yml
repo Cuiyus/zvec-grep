@@ -144,10 +144,6 @@ jobs:
             tasks: "astropy:38"
           - shard: django
             tasks: "django:21,django:32"
-          - shard: matplotlib
-            tasks: "matplotlib:37"
-          - shard: requests
-            tasks: "requests:16"
           - shard: sympy
             tasks: "sympy:38,sympy:26"
     steps:
@@ -186,7 +182,7 @@ jobs:
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Build the SWE-QA20 conclusion report
-        if: ${{ always() && steps.access.outcome == 'success' && github.ref_name != 'bench/pr385-local-embedding-bge-retry' }}
+        if: ${{ always() && steps.access.outcome == 'success' && github.ref_name != 'bench/pr385-local-embedding-e5-retry' }}
         run: |
           node benchmarks/zg-retrieval/ci-report.mjs \
             --zg "$RUNNER_TEMP/sweqa/report.json" \
@@ -225,7 +221,7 @@ jobs:
           retention-days: 14
 
   beir:
-    if: github.ref_name != 'bench/pr385-local-embedding-bge-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-e5-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -303,7 +299,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
-    if: github.ref_name != 'bench/pr385-local-embedding-bge-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-e5-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -381,7 +377,7 @@ jobs:
           retention-days: 14
 
   quarry:
-    if: github.ref_name != 'bench/pr385-local-embedding-bge-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-e5-retry'
     name: Quarry / eight languages (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -456,7 +452,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-bge-retry' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-e5-retry' }}
     needs:
       [
         authorize,
