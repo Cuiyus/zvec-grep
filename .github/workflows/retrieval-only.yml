@@ -129,6 +129,7 @@ jobs:
           retention-days: 7
 
   sweqa:
+    if: github.ref_name != 'bench/pr385-local-embedding-bge-quarry-retry'
     name: SWE-QA20 (20 questions)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -209,6 +210,7 @@ jobs:
           retention-days: 14
 
   beir:
+    if: github.ref_name != 'bench/pr385-local-embedding-bge-quarry-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -286,6 +288,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
+    if: github.ref_name != 'bench/pr385-local-embedding-bge-quarry-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -399,6 +402,7 @@ jobs:
         run: |
           node benchmarks/zg-retrieval/expansion/run.mjs \
             --suite quarry \
+            --task "59b3f72a598129bb7a8903c31c099125a2ae4768-1::q1" \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --output "$RUNNER_TEMP/quarry" \
             --model-cache "$RUNNER_TEMP/quarry-model-cache" \
@@ -437,7 +441,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-bge-quarry-retry' }}
     needs:
       [
         authorize,
