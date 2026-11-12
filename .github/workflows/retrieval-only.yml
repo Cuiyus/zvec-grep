@@ -167,10 +167,11 @@ jobs:
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --output "$RUNNER_TEMP/sweqa" \
             --corpus "$RUNNER_TEMP/corpus" \
+            --tasks django:21,django:32,sympy:38,sympy:26 \
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Build the SWE-QA20 conclusion report
-        if: ${{ always() && steps.access.outcome == 'success' }}
+        if: ${{ always() && steps.access.outcome == 'success' && github.ref_name != 'bench/pr385-local-embedding-sweqa-retry' }}
         run: |
           node benchmarks/zg-retrieval/ci-report.mjs \
             --zg "$RUNNER_TEMP/sweqa/report.json" \
@@ -209,6 +210,7 @@ jobs:
           retention-days: 14
 
   beir:
+    if: github.ref_name != 'bench/pr385-local-embedding-sweqa-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -286,6 +288,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
+    if: github.ref_name != 'bench/pr385-local-embedding-sweqa-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -363,6 +366,7 @@ jobs:
           retention-days: 14
 
   quarry:
+    if: github.ref_name != 'bench/pr385-local-embedding-sweqa-retry'
     name: Quarry / eight languages (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -437,7 +441,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-sweqa-retry' }}
     needs:
       [
         authorize,
