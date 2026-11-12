@@ -1005,7 +1005,11 @@ async fn prepare_candidate(
         ))
     })?;
     let model = model_for_content(context, ContentKind::Text)?;
-    let chunk_options = index_chunk_options(model.info().max_input_tokens(), Some(&source_text));
+    let budget = std::env::var("ZG_FTS_PROBE_BUDGET")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| model.info().max_input_tokens());
+    let chunk_options = index_chunk_options(budget, Some(&source_text));
     let text = TextSource {
         relative_path: file.relative_path().clone(),
         formats: formats.clone(),

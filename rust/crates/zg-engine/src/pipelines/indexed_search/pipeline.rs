@@ -229,6 +229,27 @@ pub(crate) async fn search_workspace_index(
         .iter()
         .map(|_| 1.0 / (RRF_K + 1.0))
         .sum();
+    if plan.trace && std::env::var_os("ZG_FTS_PROBE_RANKS").is_some() {
+        let diagnostic = super::ranking::rank(
+            hits.clone(),
+            &routes,
+            &plan.filter,
+            maximum_rrf,
+            hits.len(),
+        );
+        for hit in diagnostic {
+            let entry = serde_json::json!({
+                "path": hit.file.relative_path().display().to_string(),
+                "entity": hit.entity.id().as_str(),
+                "range": hit.entity.source_range(),
+                "metadata": hit.entity.metadata(),
+                "entity_fragments": hit.entity.fragments().len(),
+                "matched_fragments": hit.evidence.iter().map(|item| item.fragment.range).collect::<Vec<_>>(),
+                "trace": hit.trace,
+            });
+            eprintln!("ZG_FTS_PROBE:{entry}");
+        }
+    }
     let hits = super::ranking::rank(hits, &routes, &plan.filter, maximum_rrf, limit);
     let ranking_duration = ranking_started.elapsed();
 

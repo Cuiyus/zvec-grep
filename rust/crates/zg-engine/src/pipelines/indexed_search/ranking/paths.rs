@@ -82,7 +82,11 @@ impl Roles {
 
     pub(super) fn factor(self, overrides: Self) -> f64 {
         [
-            (self.tests && !overrides.tests, 0.65_f64),
+            (
+                self.tests && !overrides.tests
+                    && std::env::var_os("ZG_FTS_PROBE_NO_TEST_PENALTY").is_none(),
+                0.65_f64,
+            ),
             (self.dependency && !overrides.dependency, 0.60),
             (self.example && !overrides.example, 0.75),
             (self.generated && !overrides.generated, 0.55),
