@@ -616,6 +616,7 @@ export async function main(args = process.argv.slice(2)) {
     args,
     options: {
       suite: { type: "string" },
+      task: { type: "string" },
       package: { type: "string" },
       output: { type: "string" },
       "model-cache": { type: "string" },
@@ -627,6 +628,12 @@ export async function main(args = process.argv.slice(2)) {
     "requires --suite, --package and --output",
   );
   const pilot = await loadPilot(values.suite);
+  assert.ok(!values.task || pilot.name === "quarry", "--task is only for a Quarry retry");
+  const tasks = values.task
+    ? pilot.lock.tasks.filter((task) => task.id === values.task)
+    : pilot.lock.tasks;
+  assert.ok(!values.task || tasks.length === 1, "unknown Quarry task");
+  const reportPilot = values.task ? { ...pilot, lock: { ...pilot.lock, tasks } } : pilot;
   const output = resolve(values.output);
   await mkdir(output, { recursive: false });
   const options = {
@@ -720,7 +727,7 @@ export async function main(args = process.argv.slice(2)) {
         }
     } else {
       await verifyQuarrySource(pilot, output);
-      for (const task of pilot.lock.tasks) {
+      for (const task of tasks) {
         try {
           const group = await prepareQuarryTask(pilot, task, output);
           await runGroup(pilot, group, candidate, options, report, mcp);
@@ -734,8 +741,8 @@ export async function main(args = process.argv.slice(2)) {
     report.failures.push({ task_id: "suite", reason: error.message });
     console.error(`${pilot.name}: ${error.stack}`);
   }
-  fillMissingRows(pilot, report);
-  await writeReport(output, report, pilot);
+  fillMissingRows(reportPilot, report);
+  await writeReport(output, report, reportPilot);
   console.log(`Report: ${join(output, "report.md")}`);
   if (report.status !== "success") process.exitCode = 1;
 }
