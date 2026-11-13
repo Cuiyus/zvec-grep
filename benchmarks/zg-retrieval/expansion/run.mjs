@@ -413,7 +413,9 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
         ],
         {
           cwd: root,
-          env,
+          env: pilot.name === "duretrieval"
+            ? { ...env, ZVEC_GREP_ORT_THREAD_BUDGET: "1" }
+            : env,
           timeout: indexTimeoutMs,
         },
       );

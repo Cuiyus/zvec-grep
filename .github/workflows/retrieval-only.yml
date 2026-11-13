@@ -329,6 +329,15 @@ jobs:
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
+          (
+            while true; do
+              printf 'DuRetrieval runner memory (KiB): '
+              awk '/^MemAvailable:/ {print $2}' /proc/meminfo
+              sleep 60
+            done
+          ) &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
           node benchmarks/zg-retrieval/expansion/run.mjs \
             --suite duretrieval \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
