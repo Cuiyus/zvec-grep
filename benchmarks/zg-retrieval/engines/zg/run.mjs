@@ -382,7 +382,7 @@ async function runRepository({ suite, repo, tasks, candidate, options }) {
           ...indexSelectionArguments(protocol),
           "--debug",
         ],
-        { env, cwd: root, timeout: 2_400_000 },
+        { env, cwd: root, timeout: 18_000_000 },
       );
       manifest.index_seconds = (performance.now() - started) / 1000;
       manifest.index_timing_scope =
