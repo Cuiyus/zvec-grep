@@ -390,6 +390,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
     );
     await run(candidate.cli, ["--server", "off"], { cwd: root, env });
     const indexStart = performance.now();
+    console.log(`${group.id}: building the ${pilot.model} index`);
     try {
       const indexed = await run(
         candidate.cli,
@@ -431,6 +432,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
         cwd: root,
         env,
       });
+    console.log(`${group.id}: index build finished, checking index readiness`);
     const before = await snapshotIndex({
       cli: candidate.cli,
       root,
@@ -450,6 +452,7 @@ async function runGroup(pilot, group, candidate, options, report, mcp) {
         group.expectedIndexedFiles,
         `${pilot.name} corpus was not fully indexed`,
       );
+    console.log(`${group.id}: verified ready index, running retrieval queries`);
     const transport = new mcp.StdioClientTransport({
       command: command[0],
       args: command.slice(1),
@@ -672,6 +675,7 @@ export async function main(args = process.argv.slice(2)) {
   try {
     const candidate = await packageCandidate(values.package, output);
     report.package = candidate.identity;
+    console.log("Verified the candidate package and installed the MCP client");
     const require = createRequire(join(candidate.consumer, "package.json"));
     const mcp = {
       Client: (
@@ -710,8 +714,10 @@ export async function main(args = process.argv.slice(2)) {
           }
       }
     } else if (pilot.name === "duretrieval") {
+      console.log("Downloading and preparing the pinned DuRetrieval corpus");
       for (const group of await prepareDuRetrieval(pilot, output))
         try {
+          console.log("Prepared the DuRetrieval corpus and starting retrieval setup");
           await runGroup(pilot, group, candidate, options, report, mcp);
         } catch (error) {
           for (const task of group.tasks)

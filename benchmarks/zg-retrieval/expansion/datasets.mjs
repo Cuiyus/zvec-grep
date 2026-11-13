@@ -161,6 +161,7 @@ export async function prepareDuRetrieval(pilot, directory) {
   const { lock } = pilot;
   const source = join(directory, "source", "duretrieval");
   for (const [name, file] of Object.entries(lock.source.files)) {
+    console.log(`DuRetrieval: verifying pinned ${name} parquet`);
     await download(
       `https://huggingface.co/datasets/${file.dataset}/resolve/${file.revision}/${file.path}`,
       join(source, `${name}.parquet`),
@@ -168,6 +169,7 @@ export async function prepareDuRetrieval(pilot, directory) {
     );
   }
   const root = join(directory, "corpus", "duretrieval");
+  console.log("DuRetrieval: materializing corpus files");
   await run(
     "python3",
     [
