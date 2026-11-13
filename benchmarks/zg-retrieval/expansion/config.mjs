@@ -23,7 +23,7 @@ export const PILOT_SUITES = {
     model: "local/potion-multilingual-128m",
     targetKind: "qrels",
     breakdownBy: "dataset",
-    indexTimeoutMinutes: 180,
+    indexTimeoutMinutes: 330,
     report: {
       title: "BEIR / four datasets (test)",
       overview: "BEIR / four datasets",

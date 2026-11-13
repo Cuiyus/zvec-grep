@@ -616,6 +616,7 @@ export async function main(args = process.argv.slice(2)) {
     args,
     options: {
       suite: { type: "string" },
+      dataset: { type: "string" },
       package: { type: "string" },
       output: { type: "string" },
       "model-cache": { type: "string" },
@@ -627,6 +628,15 @@ export async function main(args = process.argv.slice(2)) {
     "requires --suite, --package and --output",
   );
   const pilot = await loadPilot(values.suite);
+  assert.ok(!values.dataset || pilot.name === "beir", "--dataset is only for a BEIR retry");
+  const datasets = values.dataset
+    ? pilot.lock.datasets.filter((dataset) => dataset.id === values.dataset)
+    : pilot.lock.datasets;
+  assert.ok(!values.dataset || datasets.length === 1, "unknown BEIR dataset");
+  const reportPilot = values.dataset ? {
+    ...pilot, lock: { ...pilot.lock, tasks: pilot.lock.tasks.filter(task => task.dataset === values.dataset) },
+  } : pilot;
+  assert.ok(reportPilot.lock.tasks.length, "empty BEIR dataset selection");
   const output = resolve(values.output);
   await mkdir(output, { recursive: false });
   const options = {
@@ -687,7 +697,7 @@ export async function main(args = process.argv.slice(2)) {
       ).StdioClientTransport,
     };
     if (pilot.name === "beir") {
-      for (const dataset of pilot.lock.datasets) {
+      for (const dataset of datasets) {
         let groups;
         try {
           groups = await prepareBeirDataset(dataset, output);
@@ -734,8 +744,8 @@ export async function main(args = process.argv.slice(2)) {
     report.failures.push({ task_id: "suite", reason: error.message });
     console.error(`${pilot.name}: ${error.stack}`);
   }
-  fillMissingRows(pilot, report);
-  await writeReport(output, report, pilot);
+  fillMissingRows(reportPilot, report);
+  await writeReport(output, report, reportPilot);
   console.log(`Report: ${join(output, "report.md")}`);
   if (report.status !== "success") process.exitCode = 1;
 }
