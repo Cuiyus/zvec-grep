@@ -62,7 +62,7 @@ export const PILOT_SUITES = {
     model: "local/potion-code-16m-v2",
     targetKind: "positive_units",
     breakdownBy: "language",
-    indexTimeoutMinutes: 40,
+    indexTimeoutMinutes: 300,
     fileExtensions: {
       Go: "go",
       Python: "py",
