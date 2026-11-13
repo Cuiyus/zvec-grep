@@ -229,6 +229,25 @@ pub(crate) async fn search_workspace_index(
         .iter()
         .map(|_| 1.0 / (RRF_K + 1.0))
         .sum();
+    if plan.trace && std::env::var_os("ZG_QUARRY_TRACE_CANDIDATES").is_some() {
+        let ranked = super::ranking::rank(
+            hits.clone(),
+            &routes,
+            &plan.filter,
+            maximum_rrf,
+            hits.len(),
+        );
+        for hit in ranked {
+            let entry = serde_json::json!({
+                "path": hit.file.relative_path().display().to_string(),
+                "entity": hit.entity.id().as_str(),
+                "range": hit.entity.source_range(),
+                "metadata": hit.entity.metadata(),
+                "trace": hit.trace,
+            });
+            eprintln!("ZG_QUARRY_CANDIDATE:{entry}");
+        }
+    }
     let hits = super::ranking::rank(hits, &routes, &plan.filter, maximum_rrf, limit);
     let ranking_duration = ranking_started.elapsed();
 
@@ -374,6 +393,14 @@ fn collect_adaptive_recall(
                         },
                     )?,
             };
+            if std::env::var_os("ZG_QUARRY_TRACE_CANDIDATES").is_some() {
+                let entry = serde_json::json!({
+                    "route": route.route.id,
+                    "depth": depth,
+                    "fragments": hits.len(),
+                });
+                eprintln!("ZG_QUARRY_RECALL:{entry}");
+            }
             saturated |= hits.len() >= depth;
             add_recall_hits(candidates, &hits, &route.route)?;
         }

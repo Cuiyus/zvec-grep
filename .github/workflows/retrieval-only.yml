@@ -1,47 +1,43 @@
-name: Quarry Gold Entity existence
+name: Quarry candidate recall and ranking
 on:
   workflow_dispatch:
+    inputs:
+      candidate_ref:
+        required: true
+        type: string
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
-      - uses: actions/download-artifact@v8
+      - uses: ./.github/actions/rust-candidate-package
         with:
-          github-token: ${{ github.token }}
-          run-id: 43017520967
-          name: package-retrieval-candidate
-          path: ${{ runner.temp }}/original
-      - name: Verify the original candidate package
-        run: |
-          node benchmarks/shared/rust-package-cache.mjs verify --directory "$RUNNER_TEMP/original" --commit 5f0fc2de5d44797245b37b2f8301e708ae851de9
-      - name: Rebuild the original case and verify indexed Entity spans
+          candidate_repository: ${{ github.repository }}
+          candidate_ref: ${{ inputs.candidate_ref }}
+          cache_namespace: quarry-candidate-trace
+      - name: Trace the original question at limit 10
         env:
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
           cat > .quarry-entity-probe.mjs <<'NODE'
           import assert from "node:assert/strict";
-          import { mkdir, readFile, writeFile } from "node:fs/promises";
-          import { createRequire } from "node:module";
-          import { pathToFileURL } from "node:url";
+          import { mkdir, writeFile } from "node:fs/promises";
           import { delimiter, join, resolve } from "node:path";
-          import { run, sha256 } from "./benchmarks/zg-retrieval/core/io.mjs";
+          import { run } from "./benchmarks/zg-retrieval/core/io.mjs";
           import { embeddingRuntime } from "./benchmarks/zg-retrieval/core/embedding.mjs";
           import { freePort, packageCandidate } from "./benchmarks/zg-retrieval/engines/zg/run.mjs";
-          import { parseVisibleResponse } from "./benchmarks/zg-retrieval/engines/zg/parse.mjs";
           import { snapshotIndex } from "./benchmarks/zg-retrieval/engines/zg/snapshot.mjs";
           import { loadPilot, prepareQuarryTask } from "./benchmarks/zg-retrieval/expansion/datasets.mjs";
-          import { locateFullEntity, verifyPilotGoldSources } from "./benchmarks/zg-retrieval/expansion/gold.mjs";
+          import { verifyPilotGoldSources } from "./benchmarks/zg-retrieval/expansion/gold.mjs";
 
           const [packagePath, outputPath] = process.argv.slice(2).map((arg) => resolve(arg));
           const output = join(outputPath, "evidence");
@@ -52,13 +48,10 @@ jobs:
           const taskId = "fd38fe4a9a896e62c01cb6a5fcbf78261286cfda-1::q1";
           const task = pilot.lock.tasks.find(({ id }) => id === taskId);
           const group = await prepareQuarryTask(pilot, task, outputPath);
-          const source = await verifyPilotGoldSources(pilot.gold, group);
+          await verifyPilotGoldSources(pilot.gold, group);
           const gold = pilot.gold.tasks[taskId].targets;
           assert.equal(gold.length, 4);
           const { cli, consumer, identity } = await packageCandidate(packagePath, outputPath);
-          const require = createRequire(join(consumer, "package.json"));
-          const { Client } = await import(pathToFileURL(require.resolve("@modelcontextprotocol/client")).href);
-          const { StdioClientTransport } = await import(pathToFileURL(require.resolve("@modelcontextprotocol/client/stdio")).href);
           const opencode = join(outputPath, "opencode.json");
           await mkdir(join(home, ".zvec-grep"), { recursive: true });
           await writeFile(join(home, ".zvec-grep", "config.json"), JSON.stringify({
@@ -97,52 +90,32 @@ jobs:
             model: pilot.model,
             counts,
             package: identity,
-            checks: [],
           };
-          const config = JSON.parse(await readFile(opencode, "utf8"));
-          const [command, ...args] = config.mcp.zvec_grep.command;
-          const client = new Client({ name: "quarry-entity-existence", version: "1.0.0" });
-          await client.connect(new StdioClientTransport({ command, args, cwd, env, stderr: "pipe" }));
-          try {
-            for (const target of gold) {
-              const symbol = target.source_id.split(":").at(-2);
-              const response = await client.callTool({
-                name: "zvec_grep_search",
-                arguments: {
-                  root: cwd, fts: [symbol], globs: [target.path], preferSymbol: true,
-                  limit: 20, preview: "full", autoUpdate: false, freshness: "eventual",
-                },
-              });
-              assert.ok(!response.isError, JSON.stringify(response.content));
-              const parsed = parseVisibleResponse(response);
-              const matches = [];
-              for (const item of parsed.items.filter(({ path }) => path === target.path)) {
-                const span = locateFullEntity(item, source.get(target.path));
-                if (span?.start_byte <= target.start_byte && span.end_byte >= target.end_byte) {
-                  matches.push({
-                    rank: item.rank,
-                    path: item.path,
-                    range: item.range,
-                    ...span,
-                    source_sha256: sha256(source.get(target.path).bytes.subarray(span.start_byte, span.end_byte)),
-                    exact: span.start_byte === target.start_byte && span.end_byte === target.end_byte,
-                  });
-                }
-              }
-              result.checks.push({ symbol, target, matches, returned: parsed.items.map(({ rank, path, range }) => ({rank, path, range})) });
-              await writeFile(join(output, "result.json"), JSON.stringify(result, null, 2));
-              console.log(JSON.stringify({ symbol, exact: matches.some(({ exact }) => exact), matches }));
-            }
-          } finally {
-            await client.close();
+          for (const mode of ["fts", "vector", "hybrid"]) {
+            const { stdout, stderr } = await run(cli, [
+              `--${mode}`, task.query, "--mode", "direct", "--refresh", "off",
+              "--limit", "10", "--preview", "none", "--trace",
+            ], { cwd, env: { ...env, ZG_QUARRY_TRACE_CANDIDATES: "1" } });
+            const entries = (prefix) => stderr.split("\n")
+              .filter((line) => line.startsWith(prefix))
+              .map((line) => JSON.parse(line.slice(prefix.length)));
+            const candidates = entries("ZG_QUARRY_CANDIDATE:");
+            const recall = entries("ZG_QUARRY_RECALL:");
+            const actual = stdout.split("\n").filter((line) => /^#\d+ /.test(line));
+            await writeFile(join(output, `${mode}.json`), JSON.stringify({
+              ...result, gold, mode, recall, candidates, actual,
+            }, null, 2));
+            assert.ok(recall.length > 0);
+            assert.ok(candidates.length >= 10);
+            assert.equal(actual.length, 10);
+            console.log(JSON.stringify({ mode, recall, candidates: candidates.length }));
           }
-          assert.ok(result.checks.every(({ matches }) => matches.length > 0));
           NODE
-          node .quarry-entity-probe.mjs "$RUNNER_TEMP/original/candidate.tgz" "$RUNNER_TEMP/quarry-probe"
+          node .quarry-entity-probe.mjs "$RUNNER_TEMP/rust-package-cache/candidate.tgz" "$RUNNER_TEMP/quarry-probe"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: quarry-entity-existence
+          name: quarry-candidate-trace
           path: ${{ runner.temp }}/quarry-probe/evidence/
           retention-days: 14
           if-no-files-found: warn
