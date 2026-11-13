@@ -129,13 +129,19 @@ jobs:
           retention-days: 7
 
   sweqa:
-    name: SWE-QA20 (20 questions)
+    name: SWE-QA20 retry (${{ matrix.shard }})
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
     needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: django__django
+            tasks: "django:21,django:32"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -160,6 +166,7 @@ jobs:
           key: retrieval-${{ inputs.local_model || 'sweqa-potion-code-16m-v2' }}-v1-${{ runner.os }}-${{ runner.arch }}
       - name: Run all SWE-QA20 repositories through the Rust MCP server
         env:
+          BENCH_RETRY_TASKS: ${{ matrix.tasks }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
@@ -167,10 +174,11 @@ jobs:
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --output "$RUNNER_TEMP/sweqa" \
             --corpus "$RUNNER_TEMP/corpus" \
+            --tasks "$BENCH_RETRY_TASKS" \
             --model-cache "$RUNNER_TEMP/model-cache" \
             --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}"
       - name: Build the SWE-QA20 conclusion report
-        if: ${{ always() && steps.access.outcome == 'success' }}
+        if: ${{ always() && steps.access.outcome == 'success' && github.ref_name != 'bench/pr385-local-embedding-jina-django-sweqa-retry' }}
         run: |
           node benchmarks/zg-retrieval/ci-report.mjs \
             --zg "$RUNNER_TEMP/sweqa/report.json" \
@@ -187,7 +195,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-zg-report
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-zg-report-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/sweqa/report.json
             ${{ runner.temp }}/sweqa/report.md
@@ -200,7 +208,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-zg-evidence
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-zg-evidence-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/sweqa/
             !${{ runner.temp }}/sweqa/consumer/**
@@ -209,6 +217,7 @@ jobs:
           retention-days: 14
 
   beir:
+    if: github.ref_name != 'bench/pr385-local-embedding-jina-django-sweqa-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -286,6 +295,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
+    if: github.ref_name != 'bench/pr385-local-embedding-jina-django-sweqa-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -363,6 +373,7 @@ jobs:
           retention-days: 14
 
   quarry:
+    if: github.ref_name != 'bench/pr385-local-embedding-jina-django-sweqa-retry'
     name: Quarry / eight languages (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -437,7 +448,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-jina-django-sweqa-retry' }}
     needs:
       [
         authorize,
