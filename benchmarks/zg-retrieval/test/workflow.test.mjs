@@ -231,7 +231,8 @@ test("the four suites run in independent jobs using one candidate package", asyn
     11,
   );
   assert.equal(Object.keys(jobs).length, 8);
-  assert.doesNotMatch(workflow, /strategy:|fromJSON\(/);
+  assert.match(jobs.sweqa, /strategy:|matrix:/);
+  assert.doesNotMatch(workflow, /fromJSON\(/);
   const runner = steps(jobs.sweqa).find((entry) =>
     entry.includes("node benchmarks/zg-retrieval/run.mjs"),
   );
