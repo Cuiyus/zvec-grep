@@ -129,6 +129,7 @@ jobs:
           retention-days: 7
 
   sweqa:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-quarry-retry'
     name: SWE-QA20 (20 questions)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -209,6 +210,7 @@ jobs:
           retention-days: 14
 
   beir:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-quarry-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -286,6 +288,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-quarry-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -363,13 +366,57 @@ jobs:
           retention-days: 14
 
   quarry:
-    name: Quarry / eight languages (20 queries)
+    name: Quarry retry (${{ matrix.shard }})
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
     needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: task-1
+            task: "182a25d2b93fde206e6173f45764cd91f3fbb2cb-1::q1"
+          - shard: task-2
+            task: "1372e5dd5ea2a9dfbe1aab7b164d63585d8f1d28-1::q1"
+          - shard: task-3
+            task: "137491916b9ea63a4e67c84a462c082aaf309830-1::q1"
+          - shard: task-4
+            task: "556e5c555981e1e70d2f88e8657aeaf51e11ff5f-1::q1"
+          - shard: task-5
+            task: "2473eb0895d022574fe4f140057c7ecd2c119625-1::q1"
+          - shard: task-6
+            task: "e57caf0bae3d3e113af163454e6285bc3761a68c-1::q1"
+          - shard: task-7
+            task: "7676e455c5f5cdd0ce1bbef9070df53c937b11d0-1::q1"
+          - shard: task-8
+            task: "fd38fe4a9a896e62c01cb6a5fcbf78261286cfda-1::q1"
+          - shard: task-9
+            task: "0baf16ea4e3afbfd0c4a2445cf6d1029940ec715-1::q1"
+          - shard: task-10
+            task: "9b71878d53aa2d1bd3fc1623d6b5f65397e27c36-1::q1"
+          - shard: task-11
+            task: "5e30947697c3f78e79b08cec63bf3bb6cc34cb48-1::q1"
+          - shard: task-12
+            task: "82beaf673748636ffe79cb103c5be0b0191731d7-1::q1"
+          - shard: task-13
+            task: "0eec9aeda454c5915fab2c95ece83b2d3c4bf8be-1::q1"
+          - shard: task-14
+            task: "c14e99c8eb580d67922a12787aa53833fbd088b6-1::q1"
+          - shard: task-15
+            task: "84bc9bce482cf60e8d6333b1fc0e4dcf08e5c7e6-1::q1"
+          - shard: task-16
+            task: "aa0c13f637df7eb27faa2545ee731f543c0813ec-1::q1"
+          - shard: task-17
+            task: "59b3f72a598129bb7a8903c31c099125a2ae4768-1::q1"
+          - shard: task-18
+            task: "47762e506c477084436e7aa4a147ee63423cb90c-1::q1"
+          - shard: task-19
+            task: "5ae29a03f7c1a73e81ded44f2440062753d214f6-1::q1"
+          - shard: task-20
+            task: "80bb85321933dffbc9ce58f1be154087ea072bb5-1::q1"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -394,11 +441,13 @@ jobs:
           key: retrieval-${{ inputs.local_model || 'quarry-potion-code-16m-v2' }}-v1-${{ runner.os }}-${{ runner.arch }}
       - name: Run Quarry retrieval suite
         env:
+          BENCH_RETRY_TASK: ${{ matrix.task }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
           node benchmarks/zg-retrieval/expansion/run.mjs \
             --suite quarry \
+            --task "$BENCH_RETRY_TASK" \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --output "$RUNNER_TEMP/quarry" \
             --model-cache "$RUNNER_TEMP/quarry-model-cache" \
@@ -415,7 +464,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-report
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-report-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/quarry/report.json
             ${{ runner.temp }}/quarry/report.md
@@ -425,7 +474,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-evidence
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-evidence-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/quarry/evidence/
             !${{ runner.temp }}/quarry/evidence/**/runtime-home/**
@@ -437,7 +486,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-nomic-quarry-retry' }}
     needs:
       [
         authorize,
