@@ -129,7 +129,7 @@ jobs:
           retention-days: 7
 
   sweqa:
-    if: github.ref_name != 'bench/pr385-local-embedding-gte-du-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-du-memory-retry'
     name: SWE-QA20 (20 questions)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -210,7 +210,7 @@ jobs:
           retention-days: 14
 
   beir:
-    if: github.ref_name != 'bench/pr385-local-embedding-gte-du-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-du-memory-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -324,6 +324,22 @@ jobs:
         with:
           path: ${{ runner.temp }}/duretrieval-model-cache
           key: retrieval-${{ inputs.local_model || 'potion-multilingual-128m' }}-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Add temporary swap for DuRetrieval indexing
+        run: |
+          df -h "$RUNNER_TEMP"
+          free -h
+          swap_file="$RUNNER_TEMP/duretrieval.swap"
+          available="$(df -Pk "$RUNNER_TEMP" | awk 'NR == 2 {print $4}')"
+          min_kib=$((14 * 1024 * 1024))
+          if [ "$available" -lt "$min_kib" ]; then
+            echo "::error::Insufficient disk for 8 GiB of swap and 6 GiB of benchmark storage"
+            exit 1
+          fi
+          sudo fallocate -l 8G "$swap_file"
+          sudo chmod 600 "$swap_file"
+          sudo mkswap "$swap_file"
+          sudo swapon "$swap_file"
+          free -h
       - name: Run DuRetrieval pilot
         env:
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
@@ -374,7 +390,7 @@ jobs:
           retention-days: 14
 
   quarry:
-    if: github.ref_name != 'bench/pr385-local-embedding-gte-du-retry'
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-du-memory-retry'
     name: Quarry / eight languages (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -449,7 +465,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-gte-du-retry' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-nomic-du-memory-retry' }}
     needs:
       [
         authorize,
