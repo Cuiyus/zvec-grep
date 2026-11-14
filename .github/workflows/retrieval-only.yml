@@ -129,6 +129,7 @@ jobs:
           retention-days: 7
 
   sweqa:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-s2n-quarry-retry'
     name: SWE-QA20 (20 questions)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -209,6 +210,7 @@ jobs:
           retention-days: 14
 
   beir:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-s2n-quarry-retry'
     name: BEIR / four datasets (20 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -286,6 +288,7 @@ jobs:
           retention-days: 14
 
   duretrieval:
+    if: github.ref_name != 'bench/pr385-local-embedding-nomic-s2n-quarry-retry'
     name: DuRetrieval / Chinese web search (10 queries)
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
@@ -363,13 +366,19 @@ jobs:
           retention-days: 14
 
   quarry:
-    name: Quarry / eight languages (20 queries)
+    name: Quarry retry (${{ matrix.shard }})
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
     needs: [authorize, package-candidate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: task-19
+            task: "5ae29a03f7c1a73e81ded44f2440062753d214f6-1::q1"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -394,11 +403,13 @@ jobs:
           key: retrieval-${{ inputs.local_model || 'quarry-potion-code-16m-v2' }}-v1-${{ runner.os }}-${{ runner.arch }}
       - name: Run Quarry retrieval suite
         env:
+          BENCH_RETRY_TASK: ${{ matrix.task }}
           ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
         run: |
           node benchmarks/zg-retrieval/expansion/run.mjs \
             --suite quarry \
+            --task "$BENCH_RETRY_TASK" \
             --package "$RUNNER_TEMP/package/candidate.tgz" \
             --output "$RUNNER_TEMP/quarry" \
             --model-cache "$RUNNER_TEMP/quarry-model-cache" \
@@ -415,7 +426,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-report
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-report-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/quarry/report.json
             ${{ runner.temp }}/quarry/report.md
@@ -425,7 +436,7 @@ jobs:
         if: ${{ always() && steps.access.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-evidence
+          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-evidence-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/quarry/evidence/
             !${{ runner.temp }}/quarry/evidence/**/runtime-home/**
@@ -437,7 +448,7 @@ jobs:
     env:
       RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
       RETRIEVAL_LOCAL_MODEL: ${{ inputs.local_model }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
+    if: ${{ always() && needs.authorize.result == 'success' && github.ref_name != 'bench/pr385-local-embedding-nomic-s2n-quarry-retry' }}
     needs:
       [
         authorize,
