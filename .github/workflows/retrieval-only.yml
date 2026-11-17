@@ -79,21 +79,23 @@ jobs:
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   quality-contract:
-    name: Validate retrieval contracts
+    name: Validate pinned PR417 retrieval contracts
     needs: authorize
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
+          ref: ${{ inputs.candidate_ref }}
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Test the five metrics, replay protocol and upstream nDCG oracle
+      # Production workflow tests require all four suites. Validate those
+      # unchanged contracts at the pinned product revision, not this two-suite experiment.
+      - name: Test the pinned metrics, replay protocol and upstream nDCG oracle
         run: node --test benchmarks/zg-retrieval/test/*.test.mjs
 
   package-candidate:
