@@ -1,6 +1,6 @@
 name: Retrieval-only
 
-run-name: Retrieval-only · ${{ inputs.embedding }} embedding · harness ${{ github.ref_name }} · candidate ${{ inputs.candidate_ref }}
+run-name: FTS full retrieval · ${{ inputs.analyzer }} · ${{ inputs.embedding }} embedding · harness ${{ github.ref_name }} · candidate ${{ inputs.candidate_ref }}
 
 on:
   workflow_call:
@@ -16,6 +16,9 @@ on:
         type: string
       artifact_prefix:
         default: retrieval
+        type: string
+      analyzer:
+        default: jieba_lower
         type: string
       gold_stages:
         default: false
@@ -38,8 +41,18 @@ on:
         options:
           - local
           - remote
+      analyzer:
+        description: Expected native FTS configuration in the selected candidate
+        required: true
+        default: jieba_lower
+        type: choice
+        options:
+          - jieba_lower
+          - jieba_stem
+          - standard_lower
+          - standard_stem
       gold_stages:
-        description: Capture Gold coverage at search stages in all four suites
+        description: Capture Gold coverage at search stages in SWE-QA and Quarry
         type: boolean
         default: false
 
@@ -79,21 +92,23 @@ jobs:
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   quality-contract:
-    name: Validate retrieval contracts
+    name: Validate pinned PR417 retrieval contracts
     needs: authorize
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
+          ref: ${{ inputs.candidate_ref }}
           persist-credentials: false
       - uses: ./.github/actions/retrieval-authorize
         id: access
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Test the five metrics, replay protocol and upstream nDCG oracle
+      # Production workflow tests require all four suites. Validate those
+      # unchanged contracts at the pinned product revision, not this two-suite experiment.
+      - name: Test the pinned metrics, replay protocol and upstream nDCG oracle
         run: node --test benchmarks/zg-retrieval/test/*.test.mjs
 
   package-candidate:
@@ -206,161 +221,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  beir:
-    name: BEIR / four datasets (20 queries)
-    env:
-      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
-    needs: [authorize, package-candidate]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
-          persist-credentials: false
-      - uses: ./.github/actions/retrieval-authorize
-        id: access
-      - uses: actions/download-artifact@v8
-        with:
-          name: package-${{ inputs.artifact_prefix || 'retrieval' }}-candidate
-          path: ${{ runner.temp }}/package
-      - name: Verify the candidate package identity
+      - name: Locate the candidate native library
         run: |
-          node benchmarks/shared/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/package" \
-            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: benchmarks/zg-retrieval/expansion/requirements-beir.txt
-      - name: Install the pinned BEIR Parquet reader
-        run: python -m pip install --requirement benchmarks/zg-retrieval/expansion/requirements-beir.txt
-      - name: Cache the multilingual model
-        if: inputs.embedding == 'local'
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/beir-model-cache
-          key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
-      - name: Run BEIR retrieval suite
-        env:
-          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "sweqa"
+          libs = sorted(root.rglob("libzvec_c_api.so"))
+          assert libs, "packaged native library not found"
+          hashes = {hashlib.sha256(p.read_bytes()).hexdigest() for p in libs}
+          assert len(hashes) == 1
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"ZVEC_LIB_DIR={libs[0].parent}\nLD_LIBRARY_PATH={libs[0].parent}\nZVEC_AUTO_BUILD=0\n")
+          PY
+      - name: Build and verify the read-only physical index audit
         run: |
-          node benchmarks/zg-retrieval/expansion/run.mjs \
-            --suite beir \
-            --package "$RUNNER_TEMP/package/candidate.tgz" \
-            --output "$RUNNER_TEMP/beir" \
-            --model-cache "$RUNNER_TEMP/beir-model-cache" \
-            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}" \
-            ${{ inputs.gold_stages && '--gold-stages' || '' }}
-      - name: Publish BEIR results for this job
+          cargo test --locked --release --manifest-path benchmarks/fts-full-analysis/native/Cargo.toml
+          cargo build --locked --release --manifest-path benchmarks/fts-full-analysis/native/Cargo.toml
+      - name: Audit indexed text, stored vectors and native FTS ranks
+        run: |
+          python3 benchmarks/fts-full-analysis/run.py \
+            --suite sweqa --analyzer "${{ inputs.analyzer }}" \
+            --evidence "$RUNNER_TEMP/sweqa" \
+            --binary "$PWD/benchmarks/fts-full-analysis/native/target/release/fts-full-audit" \
+            --output "$RUNNER_TEMP/sweqa-audit"
+      - name: Compress physical index audit
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
-          if [ -f "$RUNNER_TEMP/beir/report.md" ]; then
-            cat "$RUNNER_TEMP/beir/report.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '## BEIR: no report produced' >> "$GITHUB_STEP_SUMMARY"
+          if [ -d "$RUNNER_TEMP/sweqa-audit" ]; then
+            tar -czf "$RUNNER_TEMP/sweqa-audit.tar.gz" -C "$RUNNER_TEMP" sweqa-audit
           fi
-      - name: Preserve BEIR report
+      - uses: actions/upload-artifact@v7
         if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-beir-report
-          path: |
-            ${{ runner.temp }}/beir/report.json
-            ${{ runner.temp }}/beir/report.md
-            ${{ runner.temp }}/beir/gold-stages.json
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Preserve BEIR public evidence
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-beir-evidence
-          path: |
-            ${{ runner.temp }}/beir/evidence/
-            !${{ runner.temp }}/beir/evidence/**/runtime-home/**
+          name: sweqa-physical-audit
+          path: ${{ runner.temp }}/sweqa-audit.tar.gz
           if-no-files-found: warn
           retention-days: 14
 
-  duretrieval:
-    name: DuRetrieval / Chinese web search (10 queries)
-    env:
-      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
-    needs: [authorize, package-candidate]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
-          persist-credentials: false
-      - uses: ./.github/actions/retrieval-authorize
-        id: access
-      - uses: actions/download-artifact@v8
-        with:
-          name: package-${{ inputs.artifact_prefix || 'retrieval' }}-candidate
-          path: ${{ runner.temp }}/package
-      - name: Verify the candidate package identity
-        run: |
-          node benchmarks/shared/rust-package-cache.mjs verify \
-            --directory "$RUNNER_TEMP/package" \
-            --commit "${{ needs.package-candidate.outputs.candidate-commit }}"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: benchmarks/zg-retrieval/expansion/requirements-duretrieval.txt
-      - name: Install the pinned Parquet reader
-        run: python -m pip install --requirement benchmarks/zg-retrieval/expansion/requirements-duretrieval.txt
-      - name: Cache the multilingual model
-        if: inputs.embedding == 'local'
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/duretrieval-model-cache
-          key: retrieval-potion-multilingual-128m-v1-${{ runner.os }}-${{ runner.arch }}
-      - name: Run DuRetrieval pilot
-        env:
-          ZVEC_GREP_API_KEY: ${{ secrets.QWEN_EMBEDDING_API_KEY }}
-          ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
-        run: |
-          node benchmarks/zg-retrieval/expansion/run.mjs \
-            --suite duretrieval \
-            --package "$RUNNER_TEMP/package/candidate.tgz" \
-            --output "$RUNNER_TEMP/duretrieval" \
-            --model-cache "$RUNNER_TEMP/duretrieval-model-cache" \
-            --candidate-commit "${{ needs.package-candidate.outputs.candidate-commit }}" \
-            ${{ inputs.gold_stages && '--gold-stages' || '' }}
-      - name: Publish DuRetrieval results for this job
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        run: |
-          if [ -f "$RUNNER_TEMP/duretrieval/report.md" ]; then
-            cat "$RUNNER_TEMP/duretrieval/report.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '## DuRetrieval: no report produced' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Preserve DuRetrieval report
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-duretrieval-report
-          path: |
-            ${{ runner.temp }}/duretrieval/report.json
-            ${{ runner.temp }}/duretrieval/report.md
-            ${{ runner.temp }}/duretrieval/gold-stages.json
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Preserve DuRetrieval public evidence
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-duretrieval-evidence
-          path: |
-            ${{ runner.temp }}/duretrieval/evidence/
-            !${{ runner.temp }}/duretrieval/evidence/**/runtime-home/**
-          if-no-files-found: warn
-          retention-days: 14
 
   quarry:
     name: Quarry / eight languages (20 queries)
@@ -433,90 +330,39 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  results:
-    name: Retrieval results
-    env:
-      RETRIEVAL_EMBEDDING: ${{ inputs.embedding }}
-    if: ${{ always() && needs.authorize.result == 'success' }}
-    needs:
-      [
-        authorize,
-        quality-contract,
-        package-candidate,
-        sweqa,
-        beir,
-        duretrieval,
-        quarry,
-      ]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.authorize.outputs.harness-commit }}
-          persist-credentials: false
-      - uses: ./.github/actions/retrieval-authorize
-        id: access
-      - name: Download ZG report
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-zg-report
-          path: ${{ runner.temp }}/results-input/zg
-      - name: Download BEIR report
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-beir-report
-          path: ${{ runner.temp }}/results-input/beir
-      - name: Download DuRetrieval report
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-duretrieval-report
-          path: ${{ runner.temp }}/results-input/duretrieval
-      - name: Download Quarry report
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-quarry-report
-          path: ${{ runner.temp }}/results-input/quarry
-      - name: Build the unified results page
-        if: ${{ always() && steps.access.outcome == 'success' }}
-        env:
-          RETRIEVAL_JOB_RESULTS: ${{ toJSON(needs) }}
-          RETRIEVAL_HARNESS_COMMIT: ${{ needs.authorize.outputs.harness-commit }}
-          RETRIEVAL_CANDIDATE_REF: ${{ inputs.candidate_ref }}
-          RETRIEVAL_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
+      - name: Locate the candidate native library
         run: |
-          node benchmarks/zg-retrieval/expansion/combined.mjs \
-            --zg "$RUNNER_TEMP/results-input/zg/report.json" \
-            --beir "$RUNNER_TEMP/results-input/beir/report.json" \
-            --duretrieval "$RUNNER_TEMP/results-input/duretrieval/report.json" \
-            --quarry "$RUNNER_TEMP/results-input/quarry/report.json" \
-            --output "$RUNNER_TEMP/retrieval-results"
-      - name: Publish the unified results page
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "quarry"
+          libs = sorted(root.rglob("libzvec_c_api.so"))
+          assert libs, "packaged native library not found"
+          hashes = {hashlib.sha256(p.read_bytes()).hexdigest() for p in libs}
+          assert len(hashes) == 1
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"ZVEC_LIB_DIR={libs[0].parent}\nLD_LIBRARY_PATH={libs[0].parent}\nZVEC_AUTO_BUILD=0\n")
+          PY
+      - name: Build and verify the read-only physical index audit
+        run: |
+          cargo test --locked --release --manifest-path benchmarks/fts-full-analysis/native/Cargo.toml
+          cargo build --locked --release --manifest-path benchmarks/fts-full-analysis/native/Cargo.toml
+      - name: Audit indexed text, stored vectors and native FTS ranks
+        run: |
+          python3 benchmarks/fts-full-analysis/run.py \
+            --suite quarry --analyzer "${{ inputs.analyzer }}" \
+            --evidence "$RUNNER_TEMP/quarry" \
+            --binary "$PWD/benchmarks/fts-full-analysis/native/target/release/fts-full-audit" \
+            --output "$RUNNER_TEMP/quarry-audit"
+      - name: Compress physical index audit
         if: ${{ always() && steps.access.outcome == 'success' }}
         run: |
-          if [ -f "$RUNNER_TEMP/retrieval-results/summary.md" ]; then
-            cat "$RUNNER_TEMP/retrieval-results/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '## Retrieval-only: FAILED' >> "$GITHUB_STEP_SUMMARY"
-            echo 'No validated results table was produced. Inspect the failed job; missing results are not zero scores.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -d "$RUNNER_TEMP/quarry-audit" ]; then
+            tar -czf "$RUNNER_TEMP/quarry-audit.tar.gz" -C "$RUNNER_TEMP" quarry-audit
           fi
-      - name: Preserve the combined results
+      - uses: actions/upload-artifact@v7
         if: ${{ always() && steps.access.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact_prefix || 'retrieval' }}-results
-          path: |
-            ${{ runner.temp }}/retrieval-results/summary.md
-            ${{ runner.temp }}/retrieval-results/summary.json
-            ${{ runner.temp }}/retrieval-results/reports/
-          if-no-files-found: error
-          overwrite: true
+          name: quarry-physical-audit
+          path: ${{ runner.temp }}/quarry-audit.tar.gz
+          if-no-files-found: warn
           retention-days: 14
