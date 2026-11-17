@@ -286,8 +286,8 @@ pub(crate) struct FtsConfig {
 
 /// Fixed FTS configuration for the current physical index format.
 pub(crate) const FTS_CONFIG: FtsConfig = FtsConfig {
-    tokenizer: "jieba",
-    filters: &["lowercase"],
+    tokenizer: "standard",
+    filters: &["lowercase", "stemmer"],
 };
 
 #[cfg(test)]
