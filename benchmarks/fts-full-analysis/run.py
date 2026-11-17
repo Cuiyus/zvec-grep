@@ -9,7 +9,7 @@ import subprocess
 import urllib.parse
 
 p = argparse.ArgumentParser()
-p.add_argument('--suite', choices=['sweqa', 'quarry'], required=True)
+p.add_argument('--suite', choices=['sweqa', 'quarry', 'beir', 'duretrieval'], required=True)
 p.add_argument('--analyzer', choices=['jieba_lower','jieba_stem','standard_lower','standard_stem'], required=True)
 p.add_argument('--evidence', type=pathlib.Path, required=True)
 p.add_argument('--binary', required=True)
@@ -17,7 +17,9 @@ p.add_argument('--output', type=pathlib.Path, required=True)
 args = p.parse_args()
 args.output.mkdir(parents=True, exist_ok=False)
 groups = sorted(args.evidence.rglob('runtime-home'))
-assert len(groups) == (11 if args.suite == 'sweqa' else 20), len(groups)
+expected_groups = {'sweqa': 11, 'quarry': 20, 'beir': 6, 'duretrieval': 1}
+expected_queries = {'sweqa': 20, 'quarry': 20, 'beir': 20, 'duretrieval': 10}
+assert len(groups) == expected_groups[args.suite], len(groups)
 manifest = []
 native_library = pathlib.Path(os.environ['ZVEC_LIB_DIR']) / ('libzvec_c_api.dylib' if os.uname().sysname == 'Darwin' else 'libzvec_c_api.so')
 native_sha256 = hashlib.sha256(native_library.read_bytes()).hexdigest()
@@ -78,4 +80,4 @@ for home in groups:
     manifest.append(row)
     (args.output / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     print(f'{evidence.name}: {native["fragments"]} fragments, {len(queries)} queries', flush=True)
-assert sum(len(x['queries']) for x in manifest) == 20
+assert sum(len(x['queries']) for x in manifest) == expected_queries[args.suite]
