@@ -44,11 +44,14 @@ class TaskReportAttemptTests(unittest.TestCase):
             "BENCH_EMBEDDING_MODEL": "local/potion-code-16m-v2",
         }
         self.identity = run_identity(self.env)
+        self.trial_count = self.identity["configuration"]["trials_per_profile"]
 
     def report(self, task: str, attempt: int, *, score: int = 80) -> Path:
         directory = self.root / "reports" / f"{task}-123-{attempt}"
         source = _judged_task_report(task)
-        _set_report_trial_judgements(source, baseline=[75] * 5, zvec=[score] * 5)
+        _set_report_trial_judgements(
+            source, baseline=[75] * self.trial_count, zvec=[score] * self.trial_count
+        )
         _write_json(directory / "report.json", source)
         stamp_report(directory, {**self.identity, "run_attempt": attempt})
         return directory
@@ -76,7 +79,10 @@ class TaskReportAttemptTests(unittest.TestCase):
         self.assertTrue(result["gate"]["passed"])
         self.assertEqual(result["gate"]["missing_tasks"], [])
         self.assertEqual(result["gate"]["valid_pairs"], 20)
-        self.assertEqual(result["gate"]["successful_judgements"], 200)
+        self.assertEqual(
+            result["gate"]["successful_judgements"],
+            len(EXPECTED_TASK_IDS) * 2 * self.trial_count,
+        )
         self.assertEqual(
             [row["attempt"] for row in selection["selected"]], [1] * 19 + [2]
         )
@@ -95,7 +101,7 @@ class TaskReportAttemptTests(unittest.TestCase):
         self.assertEqual(
             result["cases"][0]["profiles"]["zvec-grep"]["judge"]["total"], 90
         )
-        self.assertEqual(result["gate"]["successful_judgements"], 10)
+        self.assertEqual(result["gate"]["successful_judgements"], 2 * self.trial_count)
 
     def test_invalid_latest_report_keeps_earlier_valid_result(self):
         task = EXPECTED_TASK_IDS[0]
@@ -212,6 +218,6 @@ class TaskReportAttemptTests(unittest.TestCase):
         with self.assertRaisesRegex(SweQaError, "different judge model"):
             stamp_report(directory, wrong_model)
         wrong_trials = copy.deepcopy(self.identity)
-        wrong_trials["configuration"]["trials_per_profile"] = 3
+        wrong_trials["configuration"]["trials_per_profile"] = self.trial_count + 1
         with self.assertRaisesRegex(SweQaError, "different trial count"):
             stamp_report(directory, wrong_trials)

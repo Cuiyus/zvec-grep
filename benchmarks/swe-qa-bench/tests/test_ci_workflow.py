@@ -44,7 +44,9 @@ class BenchmarkWorkflowTests(unittest.TestCase):
 
     def test_task_scope_and_trial_count_use_versioned_data(self) -> None:
         config = json.loads((BENCHMARK / "ci-config.json").read_text())
-        self.assertEqual(config["trials_per_profile"], 5)
+        trials = config["trials_per_profile"]
+        self.assertIs(type(trials), int)
+        self.assertGreater(trials, 0)
         self.assertEqual(config["max_retries"], 2)
         self.assertEqual(
             config["embedding_models"],
@@ -69,6 +71,8 @@ class BenchmarkWorkflowTests(unittest.TestCase):
         pair_commands = "\n".join(
             step.get("run", "") for step in self.workflow["jobs"]["run-pair"]["steps"]
         )
+        self.assertIn('trials="$(jq -r \'.trials_per_profile\' "$config")"', pair_commands)
+        self.assertIn('--n-attempts "$trials"', pair_commands)
         self.assertIn('--embedding-model "$EMBEDDING_MODEL"', pair_commands)
         self.assertIn('--embedding-endpoint "$ZVEC_GREP_ENDPOINT"', pair_commands)
 
