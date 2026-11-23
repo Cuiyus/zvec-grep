@@ -152,9 +152,9 @@ Harbor/model trials.
 `smoke` (5 tasks) remain available. `candidate_ref` defaults to `main` and
 selects the Rust source branch, tag, or commit to build as the candidate npm
 package; the harness checkout and candidate source are separate. Its `model` input defaults to
-`glm-5.2`; select `qwen3.8-max` to run the same protocol with Qwen. The selected
-model is used for both execution and judging. The independent `embedding` input
-defaults to `local`, using `local/potion-code-16m-v2`; select `remote` to use
+`glm-5.2`; Qwen choices are `qwen3.7-max`, `qwen3.8-max`, and `qwen4-max`.
+The selected model is used for both execution and judging. The independent
+`embedding` input defaults to `local`, using `local/potion-code-16m-v2`; select `remote` to use
 `qwen/qwen3.7-text-embedding`, matching the Retrieval-only workflow.
 
 The `repro-3` scope runs 3 tasks × 2 profiles × 5 trials = 30 trials. Its fixed
@@ -177,9 +177,9 @@ overhead separately.
 
 CI uses OpenCode `1.18.4` with `custom-openai/glm-5.2` and local embedding by
 default, with five trials per task and profile. Configure the repository's
-`GLM_API_KEY` Actions secret for agent
-execution and judging. The existing secret name is retained for both models;
-its Bailian business-space API key must have access to the selected model.
+`GLM_API_KEY` Actions secret for agent execution and judging. All model choices
+use the same secret and `SWE_QA_MODEL_BASE_URL` endpoint. The Bailian workspace
+key must have access to the selected model.
 Remote embedding additionally requires the `QWEN_EMBEDDING_API_KEY` Actions
 secret and `QWEN_EMBEDDING_ENDPOINT` repository variable. Source content is sent
 to that remote embedding endpoint only when `embedding=remote`.
@@ -213,36 +213,33 @@ Each task job has a six-hour ceiling, including setup and retries.
 Both OpenCode profiles, their delegated agents, and the judge use the selected
 model with the following requested settings, shared in `zg_bench/settings.py`:
 
-| Parameter | Qwen3.8 Max / GLM-5.2 execution and judging |
+| Parameter | Execution and judging |
 | --- | --- |
 | `temperature` | `0` |
 | `seed` | `42` |
 | `enable_thinking` | `true` |
-| `reasoning_effort` | `"high"` |
+| `reasoning_effort` | `"high"` for GLM-5.2, Qwen3.8 Max, and Qwen4 Max. Omitted for Qwen3.7 Max. |
 | `max_tokens` | `32000` |
 | `response_format` | Omitted |
 
-The same seed is used for every trial and retry. The custom-openai Qwen3.8 Max
-and GLM configurations and the DashScope GLM configuration set `reasoningEffort = "high"`; the
-OpenAI-compatible SDK maps this to the HTTP field `reasoning_effort`.
+The same seed is used for every trial and retry. The OpenAI-compatible SDK
+maps `reasoningEffort` to the HTTP field `reasoning_effort`.
 Execution sets the model's `limit.output` explicitly, and the judge uses the
 same `BENCHMARK_MAX_OUTPUT_TOKENS` constant for `max_tokens`.
 
 The [Bailian Chat Completions reference](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
 documents model-specific behavior: Qwen3.8 Max raises a requested temperature
 below `0.6` to `0.6` in thinking mode, and maps `high` reasoning effort to
-`xhigh`. These requests therefore do **not** give Qwen an effective temperature
-of zero. Also, `max_tokens=32000` limits Qwen's final answer, excluding thinking;
+`xhigh`. With this configuration Qwen3.8 Max uses an effective temperature of
+`0.6`. For Qwen3.8 Max, `max_tokens=32000` limits the final answer, excluding thinking;
 for GLM-5.2 without `thinking_budget`, it limits thinking and the answer together.
 The benchmark retains the same requested fields across these models, but their
 effective sampling settings and token budgets are not identical.
 
-Qwen3.8 Max enables `preserve_thinking` by default. Its OpenCode model config
-sets `interleaved: {"field": "reasoning_content"}` so historical reasoning is
-returned in the separate `reasoning_content` field, rather than concatenated
-into answer content. See the [thinking guide](https://help.aliyun.com/zh/model-studio/deep-thinking)
-and [Qwen3.8 Max model information](https://help.aliyun.com/zh/model-studio/qwen3-8-max).
-The older, separate Qwen3.7 configuration still keeps thinking disabled.
+Qwen3.8 Max and Qwen4 Max enable `preserve_thinking` by default. The
+`custom-openai` Qwen models send historical reasoning through the separate
+`reasoning_content` field. The standalone DashScope CLI configuration
+`qwen3.7-max` keeps thinking disabled. [Bailian thinking guide](https://help.aliyun.com/zh/model-studio/deep-thinking)
 
 Both execution and judging omit `response_format`. The judge's prompt still
 requires JSON, with strict score parsing and retries on invalid responses.
@@ -267,9 +264,8 @@ restriction, not container network isolation; shell commands and setup/model
 connections still have network access.
 
 CI also checks the pinned OpenCode binary against a local fake provider to
-verify the sampling parameters, enabled Qwen3.8 Max / GLM thinking, the actual
-`reasoning_effort = "high"` request field, and web-tool restrictions in
-consecutive tool-calling requests, including Qwen's historical
+verify sampling parameters, thinking flags, reasoning effort, and web-tool
+restrictions in consecutive tool-calling requests, including Qwen's historical
 `reasoning_content` field, without using model credentials.
 
 Each task runs Baseline and zvec-grep on the same runner, judges the paired

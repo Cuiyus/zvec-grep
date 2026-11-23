@@ -47,7 +47,7 @@ def judge_generation_metadata(model: str = "glm-5.2") -> dict[str, Any]:
         "reasoning_effort": spec.reasoning_effort,
         "max_tokens": spec.max_tokens,
         # The rubric prompt requests JSON; no API-enforced format is enabled.
-        # Parsing and retries enforce valid scores for both supported models.
+        # Parsing and retries enforce valid scores for all supported models.
         "response_format": None,
     }
 

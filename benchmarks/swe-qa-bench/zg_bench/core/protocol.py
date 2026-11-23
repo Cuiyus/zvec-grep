@@ -13,6 +13,7 @@ from zg_bench.settings import (
     OPENCODE_QWEN_ENABLE_THINKING,
     OPENCODE_QWEN_REASONING_EFFORT,
     OPENCODE_QWEN_TEMPERATURE,
+    SWE_QA_QWEN_MODELS,
 )
 
 SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence")
@@ -22,7 +23,7 @@ SCORE_KEYS = ("correctness", "completeness", "relevance", "clarity", "coherence"
 class ModelRequestSpec:
     temperature: float
     enable_thinking: bool
-    reasoning_effort: str
+    reasoning_effort: str | None
     max_tokens: int
 
 
@@ -34,12 +35,18 @@ MODEL_REQUEST_SPECS = {
         reasoning_effort=OPENCODE_GLM_REASONING_EFFORT,
         max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
     ),
-    "qwen3.8-max": ModelRequestSpec(
-        temperature=OPENCODE_QWEN_TEMPERATURE,
-        enable_thinking=OPENCODE_QWEN_ENABLE_THINKING,
-        reasoning_effort=OPENCODE_QWEN_REASONING_EFFORT,
-        max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
-    ),
+    **{
+        model: ModelRequestSpec(
+            temperature=OPENCODE_QWEN_TEMPERATURE,
+            enable_thinking=OPENCODE_QWEN_ENABLE_THINKING,
+            # Bailian documents thinking_budget rather than reasoning_effort for Qwen3.7.
+            reasoning_effort=(
+                None if model == "qwen3.7-max" else OPENCODE_QWEN_REASONING_EFFORT
+            ),
+            max_tokens=BENCHMARK_MAX_OUTPUT_TOKENS,
+        )
+        for model in SWE_QA_QWEN_MODELS
+    },
 }
 JUDGE_MODELS = tuple(MODEL_REQUEST_SPECS)
 

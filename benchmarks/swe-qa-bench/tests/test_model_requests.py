@@ -34,7 +34,7 @@ class ModelRequestTests(unittest.TestCase):
                     },
                 )
 
-    def test_execution_and_judge_models_share_endpoint_and_key_priority(self) -> None:
+    def test_swe_qa_models_prefer_the_shared_endpoint_and_key(self) -> None:
         with patch.dict(
             "os.environ",
             {
@@ -47,14 +47,12 @@ class ModelRequestTests(unittest.TestCase):
         ):
             for model in JUDGE_MODELS:
                 with self.subTest(model=model):
-                    execution = resolve_opencode_model(
+                    runtime = resolve_opencode_model(
                         f"custom-openai/{model}", require_credentials=True
                     )
-                    judge = resolve_opencode_model(model, require_credentials=True)
-                    self.assertEqual(execution, judge)
-                    self.assertEqual(judge.credential_name, "GLM_API_KEY")
-                    self.assertEqual(judge.api_key, "preferred-key")
+                    self.assertEqual(runtime.credential_name, "GLM_API_KEY")
+                    self.assertEqual(runtime.api_key, "preferred-key")
                     self.assertEqual(
-                        judge.configuration.base_url,
+                        runtime.configuration.base_url,
                         "https://preferred.invalid/v1",
                     )
