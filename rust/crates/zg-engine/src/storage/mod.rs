@@ -1,6 +1,8 @@
 //! Persistent index tables and their coordinated lifecycle.
 mod directories;
 mod entities;
+#[cfg(test)]
+mod file_fts_benchmark;
 mod files;
 mod fragments;
 pub(crate) mod graph;

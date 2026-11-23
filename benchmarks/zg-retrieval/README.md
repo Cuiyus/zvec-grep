@@ -139,6 +139,52 @@ node benchmarks/zg-retrieval/ci-report.mjs \
 
 These commands rescore saved SWE-QA20 responses; they do not rerun retrieval. Preserve earlier results when changing Gold or scoring rules, and rescore both versions under the same rules.
 
+## Native file-level FTS experiment
+
+The local experiment runs Retrieval-only against the frozen SWE-QA20, Quarry, BEIR
+and DuRetrieval inputs. It uses the same original queries and File Gold as the suites.
+SWE-QA20 displays both accepted-file Gold and diagnostic QA File Gold.
+
+| Route | Indexed and ranked by |
+| --- | --- |
+| `fragment_fts` | Zvec BM25 over the existing fragment collection. Each fragment occupies its native rank, including repeats of a file. |
+| `file_fts` | Zvec BM25 over one document per file with at least one indexed fragment. Each document holds the decoded whole source file. |
+| `file_vector` | One FP32 vector per file, the arithmetic mean of its existing FP16 fragment vectors. The Flat index uses the original model's distance metric. |
+| `file_hybrid` | Zvec `Collection::multi_query` on the file collection, with 200 candidates per route and native RRF (rank constant 60). |
+
+Both FTS indexes use the engine's Jieba tokenizer and lowercase filter. The comparison
+changes both the BM25 document unit and how source text is represented. Production
+fragments can include repeated symbols, signatures, or section headings. The
+FTS routes use native storage rank. Public MCP also applies entity fusion
+and rule ranking. This experiment measures File metrics at the retrieval layer.
+
+Each route makes five native calls per question at Top 10. Scores average the five
+calls, then weight scored questions equally. Stability compares the five ordered file
+lists. Query timings exclude indexing, query embedding, and response rendering.
+They describe a local run with shared caches and a fixed call order. Group failures
+remain in the report and make the runner exit nonzero.
+
+Use a release test binary and a separate work directory for indexes and evidence.
+Build the native probe from the repository root and set `retrieval_test_bin` to the
+test executable path shown by Cargo.
+
+```sh
+cargo test --manifest-path rust/Cargo.toml --locked --release -p zg-engine --lib --no-run
+node benchmarks/zg-retrieval/file-fts.mjs --suite sweqa \
+  --corpus "$retrieval_corpus" --test-bin "$retrieval_test_bin" \
+  --model-cache "$retrieval_model_cache" --output "$retrieval_work/file-fts"
+```
+
+The corpus directory uses the same layout as the stock suite and each group must
+contain a completed `.zvec-grep/index`. Pass `--zg /path/to/zg` to build fresh indexes
+using the suite's selection rules. This also prepares the pinned SWE-QA20 and Quarry
+Git checkouts when needed. For the other suites use `--suite quarry`,
+`--suite beir`, or `--suite duretrieval` and the pilot runner's `corpus` subdirectory.
+Pass `--tasks reflex:6` for a SWE-QA20 smoke test. Repeat with a fresh output directory
+and `--hybrid` to add Vector and Hybrid. Each run retains the inputs, native rankings,
+per-question scores, indexed and searchable file counts, and a summary in the output
+directory.
+
 ## Code map
 
 | Directory | Responsibility |
