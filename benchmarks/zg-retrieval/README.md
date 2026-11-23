@@ -166,7 +166,9 @@ remain in the report and make the runner exit nonzero.
 
 Use a release test binary and a separate work directory for indexes and evidence.
 Build the native probe from the repository root and set `retrieval_test_bin` to the
-test executable path shown by Cargo.
+test executable path shown by Cargo. When invoking the executable directly, make
+the linked Zvec library discoverable through the platform's library path
+(`DYLD_LIBRARY_PATH` on macOS, `LD_LIBRARY_PATH` on Linux, `PATH` on Windows).
 
 ```sh
 cargo test --manifest-path rust/Cargo.toml --locked --release -p zg-engine --lib --no-run
@@ -184,6 +186,29 @@ Pass `--tasks reflex:6` for a SWE-QA20 smoke test. Repeat with a fresh output di
 and `--hybrid` to add Vector and Hybrid. Each run retains the inputs, native rankings,
 per-question scores, indexed and searchable file counts, and a summary in the output
 directory.
+
+### 2026-11-23 results
+
+The macOS ARM64 run used CPU and Zvec 0.8.1 with base `2f18f2d9d`.
+It completed 70 questions across 38 indexes. Each cell shows File Recall@10 / nDCG@10
+using the suite's File Gold. SWE-QA20 uses its accepted-file labels here.
+
+| Suite | Fragment FTS | File FTS | File Vector | File Hybrid |
+| --- | ---: | ---: | ---: | ---: |
+| SWE-QA20 | 44.17% / 35.71% | 62.50% / 44.06% | 44.17% / 27.54% | 61.25% / 40.45% |
+| Quarry | 66.55% / 47.03% | 75.00% / 60.33% | 79.76% / 62.39% | 84.05% / 73.25% |
+| BEIR | 71.04% / 58.74% | 71.04% / 57.85% | 54.37% / 36.62% | 60.21% / 48.60% |
+| DuRetrieval | 56.13% / 55.89% | 56.13% / 55.89% | 42.44% / 39.01% | 49.52% / 51.89% |
+
+File FTS improved Recall@10 for both code suites. The native file Hybrid improved
+both metrics over File FTS on Quarry. On SWE-QA20 and DuRetrieval, Hybrid raised
+Hit@10 (75% to 80% and 90% to 100%) while lowering the average recall.
+
+The FTS-only run and the corresponding FTS calls in the Hybrid run returned the
+same ordered file paths in all 700 paired observations. Forty-one indexed files
+had zero fragments and were outside the searchable cohort, 38 in FiQA and three in
+Quarry. The File Gold denominators stayed fixed. Per-call timings and raw results
+are in the local run directory `.cache/file-fts-retrieval-20261123/final`.
 
 ## Code map
 
