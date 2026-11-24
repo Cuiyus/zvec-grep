@@ -1242,6 +1242,7 @@ mod tests {
             load_batches: Mutex::default(),
         };
         let model = FixtureModel::new();
+        let semantic_intent = "Which entity performs the operation?";
 
         let result = search_workspace_index(
             Path::new("/workspace"),
@@ -1252,7 +1253,7 @@ mod tests {
                 },
                 SearchRoute {
                     mode: SearchRouteMode::Vector,
-                    query: "alpha".to_owned(),
+                    query: semantic_intent.to_owned(),
                 },
             ]),
             &storage,
@@ -1282,7 +1283,7 @@ mod tests {
         );
         assert_eq!(
             model.calls.lock().expect("query calls").as_slice(),
-            &[vec!["alpha".to_owned()]]
+            &[vec![semantic_intent.to_owned()]]
         );
     }
 

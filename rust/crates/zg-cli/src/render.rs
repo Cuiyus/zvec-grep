@@ -454,6 +454,10 @@ Positional arguments are joined with spaces, even if separately quoted:
 The warning is written to stderr when multiple nonempty positional arguments
 include one with internal whitespace. Shell quote characters are not available.
 --hybrid, --fts, and --vector remain separate, repeatable queries.
+For --fts, keep exact terms and add a few likely identifiers, API names,
+file names, or error literals. Verify guesses in the returned source.
+Pass --vector with the original intent and --fuse in the same command to
+combine both rankings with reciprocal rank fusion (RRF).
 Managed --rg keeps its pattern and path arguments separate.
 An ordinary single path-shaped query such as auth.ts first matches current file
 names without reading contents. If no name matches, current source is searched

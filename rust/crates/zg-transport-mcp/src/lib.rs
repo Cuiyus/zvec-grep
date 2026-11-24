@@ -85,15 +85,21 @@ macro_rules! workspace_evidence_rules {
     ) };
 }
 
+macro_rules! fused_search_guidance {
+    () => {
+        "- For mixed search, build `fts` from exact terms and a few likely code identifiers or literals (Generate-then-Grep). In one zvec_grep_search call, pair it with the original intent in `vector` and set `fuse: true` for RRF.\n"
+    };
+}
+
 macro_rules! search_routing_rules {
     ($exact:literal, $focused:literal) => { concat!(
         "- Use ", $exact, " first only when exact lookup alone is sufficient, such as locating one definition, literal, filename, configuration key, error message, regex match, or exhaustive occurrence list.\n",
         "- Use zvec_grep_search first when wording or location is unknown, or when the answer requires architecture, lifecycle, call relationships, dependencies, data or control flow, design rationale, comparison, or synthesis across files or components.\n",
-        "- When user-provided or verified exact symbols are present but the answer spans multiple files, components, stages, implementations, or relationships, treat the task as mixed: call zvec_grep_search with the semantic intent and those anchors, then use ", $focused, " for focused verification.\n",
+        "- When known exact symbols are part of a cross-file or relational question, search the intent and its anchors together, then use ", $focused, " for focused verification.\n",
         "- For a semantic or mixed workspace task, start discovery with focused zvec_grep_search before broad file discovery.\n",
         "- Preserve the question's concepts, relationships, and constraints from the user request and established context in semantic queries. Treat inferred names as supplemental hypotheses, not replacements for or constraints on the stated intent.\n",
-        "- `query` creates one primary hybrid FTS-plus-vector group; `queries` creates one or more primary hybrid groups; `fts` and `vector` add supplemental lexical-only or semantic-only route groups. These are retrieval routes, not hard constraints. Without `fuse`, each query group keeps its ranked results; set `fuse: true` to collapse every group into one ranked search plan.\n",
-        "- For a fused mixed search, use arguments such as {\"root\":\"/absolute/workspace\",\"query\":\"how are results ranked and fused\",\"fts\":[\"RRF\",\"score\"],\"fuse\":true}.\n",
+        fused_search_guidance!(),
+        "- For one retrieval route, pass only `vector` or `fts`. `query` and `queries` are hybrid alternatives that use the same text on both routes.\n",
         "- Search results include bounded source snippets by default. Set preview: \"full\" for each complete stored entity; this does not expand to the entire file or change ranking. Treat sufficient returned content as already-read evidence, and open only the cited file or range when a required detail falls outside it.\n",
         "- If semantic retrieval remains irrelevant, fall back to ", $exact, ".\n",
         "- Stop searching once the available evidence is sufficient for the requested task. Continue only to resolve a material gap or ambiguity; do not repeat similar searches or broaden the investigation merely to reconfirm what is already established.\n",
@@ -135,12 +141,12 @@ macro_rules! compact_workspace_rules {
         concat!(
             "Use zvec-grep for workspace evidence.\n",
             "- Search local code, docs, config, or data when the request or prior context calls for local evidence, including questions about how this project works. Use external sources for unrelated questions.\n",
-            "- Use ", $exact, " for exact-only lookups. Use zvec_grep_search for unknown wording or locations and for architecture, relationships, or cross-file synthesis. For mixed tasks search the intent with known anchors, then verify with ", $focused, ".\n",
+            "- Use ", $exact, " for exact-only lookups. Use zvec_grep_search for unknown wording or locations and for architecture, relationships, or cross-file synthesis. Verify mixed search results with ", $focused, ".\n",
             "- For questions about whether related local material exists without an exact anchor, try one focused semantic search. If irrelevant, report insufficient indexed evidence. For exact-only tasks, fall back to ", $exact, " if the index is missing or search fails.\n",
             "- Use sufficient snippets as evidence. Open cited ranges for missing details, stop when evidence suffices, and avoid delegating solely to locate material.\n",
             "- Pass an absolute root visible to the daemon. Read freshness and background_refresh without a status preflight. Use sufficient served_from_current_index results immediately.\n",
             "- Use zvec_grep_callers or zvec_grep_callees for known symbols in graph-enabled indexes. Empty results are inconclusive. Enable with zg --index --graph (add --rebuild for an existing index).\n",
-            "- Combine hybrid query with supplemental fts or vector as needed. Groups rank separately unless fused. Example: {\"root\":\"/absolute/workspace\",\"query\":\"how are results ranked\",\"fts\":[\"RRF\"],\"fuse\":true}.\n",
+            fused_search_guidance!(),
             "- Require explicit user authorization to create, rebuild, or drop an index. For missing-index setup, retry search after the approved build completes. Respect declined or cancelled setup."
         )
     };
@@ -479,7 +485,7 @@ impl ZvecGrepMcpServer {
 
     #[tool(
         name = "zvec_grep_search",
-        description = "Search a workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. Results start with freshness and any global index diagnostics, followed by CLI-formatted bounded source snippets; set preview: \"full\" to return each complete stored entity without changing retrieval or ranking. Treat sufficient returned content as already-read evidence without a status preflight. Use native Grep or rg instead when exact lookup alone is sufficient. A missing index can request user model selection and authorization; accepted setup starts a background build and returns indexing status. Retry after completion.",
+        description = "Search a workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. For mixed search, pass the original intent in vector, likely source terms in fts, and fuse: true in one call to combine rankings with reciprocal rank fusion (RRF). Results start with freshness and any global index diagnostics, followed by CLI-formatted bounded source snippets; set preview: \"full\" to return each complete stored entity without changing retrieval or ranking. Treat sufficient returned content as already-read evidence without a status preflight. Use native Grep or rg instead when exact lookup alone is sufficient. A missing index can request user model selection and authorization; accepted setup starts a background build and returns indexing status. Retry after completion.",
         annotations(
             title = "Search with zvec-grep",
             read_only_hint = false,
@@ -908,14 +914,17 @@ pub struct SearchInput {
     /// Absolute workspace root visible to the daemon.
     #[schemars(length(min = 1, max = 1024))]
     pub root: String,
-    /// One primary hybrid-search group.
+    /// One hybrid-search group.
     #[schemars(length(max = 4000))]
     pub query: Option<String>,
-    /// One or more primary hybrid-search groups.
+    /// One or more hybrid-search groups.
     pub queries: Option<QueryListInput>,
-    /// Supplemental lexical-route groups.
+    /// Short lexical query. Keep exact terms from the request. Useful additions
+    /// include likely API, module, or file names and error literals.
+    /// Verify guessed names against the returned source.
     pub fts: Option<QueryListInput>,
-    /// Supplemental semantic/vector-route groups.
+    /// Semantic search text. Describe the original intent and relationships in
+    /// natural language.
     pub vector: Option<QueryListInput>,
     /// Maximum returned items per query group or fused plan.
     #[schemars(range(min = 1, max = 50), extend("type" = "integer"))]
@@ -943,7 +952,7 @@ pub struct SearchInput {
     /// Must be positive. ORT caps requests above pool capacity; it never resizes server pools or changes their shared CPU thread budget.
     #[schemars(range(min = 1), extend("type" = "integer"))]
     pub embedding_concurrency: Option<usize>,
-    /// Collapse all query groups into one ranked plan.
+    /// Combine query routes in one plan using reciprocal rank fusion (RRF).
     #[schemars(extend("type" = "boolean"))]
     pub fuse: Option<bool>,
     /// Prefer exact indexed symbols.
@@ -2603,9 +2612,9 @@ mod tests {
     use zg_engine::{EngineError, ZvecGrep};
 
     use super::{
-        AGENT_TOOL_NAME, FULL_TOOL_NAMES, FreshnessInput, IndexInput, IndexToolRequest,
-        QueryListInput, RgInput, SearchInput, ServerStatusProvider, ServerStatusSnapshot,
-        ZvecGrepMcpServer, error_result,
+        AGENT_TOOL_NAME, ContextRouteMode, FULL_TOOL_NAMES, FreshnessInput, IndexInput,
+        IndexToolRequest, QueryListInput, RgInput, SearchInput, ServerStatusProvider,
+        ServerStatusSnapshot, ZvecGrepMcpServer, error_result,
     };
 
     struct FixedStatus;
@@ -2888,6 +2897,35 @@ mod tests {
         assert!(request.fuse);
         assert!(request.prefer_symbol);
         assert!(request.trace);
+    }
+
+    #[test]
+    fn maps_semantic_intent_and_generated_fts_anchors_to_one_fused_search() {
+        let intent = "how does the client decide when to retry";
+        let anchors = "retry_delay exponential_backoff max_retries";
+        let request = serde_json::from_value::<SearchInput>(serde_json::json!({
+            "root": test_root(),
+            "vector": intent,
+            "fts": anchors,
+            "fuse": true,
+        }))
+        .expect("mixed search input")
+        .into_request()
+        .expect("mixed search request");
+        assert!(request.fuse);
+        assert!(request.queries.is_empty());
+        let routes = request
+            .routes
+            .iter()
+            .map(|route| (route.mode, route.query.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            routes,
+            [
+                (ContextRouteMode::Fts, anchors),
+                (ContextRouteMode::Vector, intent),
+            ]
+        );
     }
 
     #[test]
@@ -3276,6 +3314,8 @@ mod tests {
         ] {
             let instructions = server.get_info().instructions.expect("instructions");
             assert!(instructions.contains("Respect declined or cancelled index setup"));
+            assert_eq!(instructions.matches("Generate-then-Grep").count(), 1);
+            assert!(instructions.contains("a few likely code identifiers or literals"));
             assert_eq!(
                 Some(instructions.as_str()),
                 expected[profile]["instructions"].as_str()
@@ -3285,7 +3325,26 @@ mod tests {
                 .into_iter()
                 .find(|tool| tool.name == AGENT_TOOL_NAME)
                 .expect("search tool");
+            let properties = &search.input_schema["properties"];
+            let fts_description = properties["fts"]["description"]
+                .as_str()
+                .expect("FTS guidance");
+            assert!(!fts_description.contains("Generate-then-Grep"));
+            assert!(fts_description.contains("likely API, module, or file names"));
+            assert!(fts_description.contains("Verify guessed names"));
+            assert!(
+                properties["vector"]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("original intent"))
+            );
+            assert!(
+                properties["fuse"]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("reciprocal rank fusion"))
+            );
             let description = search.description.expect("search description");
+            assert!(!description.contains("Generate-then-Grep"));
+            assert!(description.contains("likely source terms in fts, and fuse: true in one call"));
             assert!(description.contains("accepted setup starts a background build"));
             assert_eq!(
                 Some(description.as_ref()),
@@ -3320,7 +3379,9 @@ mod tests {
             assert!(instructions.contains("Require explicit user authorization"));
             assert!(instructions.contains("Respect declined or cancelled setup."));
             assert!(instructions.contains("Use sufficient served_from_current_index results"));
-            assert!(instructions.contains(r#""fuse":true"#));
+            assert_eq!(instructions.matches("Generate-then-Grep").count(), 1);
+            assert!(instructions.contains("a few likely code identifiers or literals"));
+            assert!(instructions.contains("`fuse: true` for RRF"));
 
             for tool in server.listed_tools() {
                 let len = tool
