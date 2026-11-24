@@ -925,8 +925,11 @@ pub struct SearchInput {
     /// Verify guessed names against the returned source.
     #[schemars(length(max = MAX_QUERY_CHARS), extend("type" = "string"))]
     pub fts: Option<String>,
-    /// Semantic search text. Describe the original intent and relationships in
-    /// natural language.
+    /// One semantic query string describing the original intent and
+    /// relationships in natural language.
+    // Advertise a scalar type so tool parsers can quote generated text.
+    // Preserve array deserialization for existing direct MCP callers.
+    #[schemars(with = "Option<String>", length(max = MAX_QUERY_CHARS), extend("type" = "string"))]
     pub vector: Option<QueryListInput>,
     /// Maximum returned items per query group or fused plan.
     #[schemars(range(min = 1, max = 50), extend("type" = "integer"))]
@@ -2945,6 +2948,35 @@ mod tests {
     }
 
     #[test]
+    fn vector_advertises_one_string_and_preserves_legacy_array_inputs() {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(SearchInput)).expect("search schema");
+        let validator = jsonschema::validator_for(&schema).expect("valid input schema");
+        let mut arguments = serde_json::json!({
+            "root": test_root(),
+            "fts": "retry_delay max_retries",
+            "fuse": true,
+        });
+        assert_schema_validates(&validator, &arguments);
+        arguments["vector"] = serde_json::json!("how does the client decide when to retry");
+        assert_schema_validates(&validator, &arguments);
+
+        arguments["vector"] = serde_json::json!(["when to retry", "how to calculate the delay"]);
+        assert!(!validator.is_valid(&arguments));
+        let request = serde_json::from_value::<SearchInput>(arguments)
+            .expect("legacy vector array")
+            .into_request()
+            .expect("mixed search request");
+        let queries = request
+            .routes
+            .iter()
+            .filter(|route| route.mode == ContextRouteMode::Vector)
+            .map(|route| route.query.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(queries, ["when to retry", "how to calculate the delay"]);
+    }
+
+    #[test]
     fn public_search_rejects_runtime_overrides() {
         let schema =
             serde_json::to_value(schemars::schema_for!(SearchInput)).expect("search schema");
@@ -3352,6 +3384,9 @@ mod tests {
             assert!(fts_description.contains("One lexical query string"));
             assert!(fts_description.contains("likely API, module, or file"));
             assert!(fts_description.contains("Verify guessed names"));
+            assert_eq!(properties["vector"]["type"], "string");
+            assert_eq!(properties["vector"]["maxLength"], super::MAX_QUERY_CHARS);
+            assert!(properties["vector"].get("anyOf").is_none());
             assert!(
                 properties["vector"]["description"]
                     .as_str()
