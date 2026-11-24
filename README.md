@@ -101,6 +101,9 @@ OpenCode chooses zg on its own—the prompt does not name a tool.
 <details>
 <summary><strong>See the full agent run and answer</strong></summary>
 
+This recording uses an earlier MCP schema. For a current Rust MCP call,
+combine the FTS terms into one string, such as `"fts":"marks unseen creature inferred detective"`.
+
 ```text
 ⚙ zvec_grep_zvec_grep_search {"root":".../zg-mystery","query":"An unseen creature left a few marks. What did the detective infer?","fts":["marks","unseen creature","inferred","detective"],"fuse":true}
 → Read sherlock-holmes.txt [offset=5440, limit=120]

@@ -77,7 +77,7 @@ export async function smokeInstalledMcp({ prefix, cwd, env, logRoot }) {
     const tools = await request(2, "tools/list", {});
     if (!tools.tools.some((tool) => tool.name === "zvec_grep_search")) throw new Error("MCP search tool missing");
     const result = await request(3, "tools/call", { name: "zvec_grep_search",
-      arguments: { root: cwd, fts: [marker], preview: "full" } });
+      arguments: { root: cwd, fts: marker, preview: "full" } });
     if (result.isError) throw new Error(JSON.stringify(result));
     requireOutput(JSON.stringify(result), marker);
   } finally {

@@ -100,6 +100,9 @@ Prompt 中没有指定任何工具，OpenCode 会自主选择 zg。
 <details>
 <summary><strong>展开查看完整 Agent 调用与回答</strong></summary>
 
+下方是早期 MCP 接口的运行记录。当前 Rust MCP 调用将 FTS 关键词放进同一个字符串，
+例如 `"fts":"marks unseen creature inferred detective"`。
+
 ```text
 ⚙ zvec_grep_zvec_grep_search {"root":".../zg-mystery","query":"An unseen creature left a few marks. What did the detective infer?","fts":["marks","unseen creature","inferred","detective"],"fuse":true}
 → Read sherlock-holmes.txt [offset=5440, limit=120]

@@ -455,7 +455,8 @@ The warning is written to stderr when multiple nonempty positional arguments
 include one with internal whitespace. Shell quote characters are not available.
 --hybrid, --fts, and --vector remain separate, repeatable queries.
 For --fts, keep exact terms and add a few likely identifiers, API names,
-file names, or error literals. Verify guesses in the returned source.
+file names, or error literals. Put all terms for one query in one --fts
+argument. Verify guesses in the returned source.
 Pass --vector with the original intent and --fuse in the same command to
 combine both rankings with reciprocal rank fusion (RRF).
 Managed --rg keeps its pattern and path arguments separate.

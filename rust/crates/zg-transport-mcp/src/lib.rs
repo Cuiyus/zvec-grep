@@ -87,7 +87,7 @@ macro_rules! workspace_evidence_rules {
 
 macro_rules! fused_search_guidance {
     () => {
-        "- For mixed search, build `fts` from exact terms and a few likely code identifiers or literals (Generate-then-Grep). In one zvec_grep_search call, pair it with the original intent in `vector` and set `fuse: true` for RRF.\n"
+        "- For mixed search, build one `fts` string from exact terms and a few likely code identifiers or literals (Generate-then-Grep). In one zvec_grep_search call, pair it with the original intent in `vector` and set `fuse: true` for RRF.\n"
     };
 }
 
@@ -485,7 +485,7 @@ impl ZvecGrepMcpServer {
 
     #[tool(
         name = "zvec_grep_search",
-        description = "Search a workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. For mixed search, pass the original intent in vector, likely source terms in fts, and fuse: true in one call to combine rankings with reciprocal rank fusion (RRF). Results start with freshness and any global index diagnostics, followed by CLI-formatted bounded source snippets; set preview: \"full\" to return each complete stored entity without changing retrieval or ranking. Treat sufficient returned content as already-read evidence without a status preflight. Use native Grep or rg instead when exact lookup alone is sufficient. A missing index can request user model selection and authorization; accepted setup starts a background build and returns indexing status. Retry after completion.",
+        description = "Search a workspace index for semantic, relational, cross-file, or multi-hop evidence such as architecture, call chains, dependencies, lifecycle, data or control flow, design rationale, and comparisons. Use it when exact lookup alone cannot answer a workspace-grounded question. For mixed search, pass the original intent in vector, likely source terms in one fts string, and fuse: true in one call to combine rankings with reciprocal rank fusion (RRF). Results start with freshness and any global index diagnostics, followed by CLI-formatted bounded source snippets; set preview: \"full\" to return each complete stored entity without changing retrieval or ranking. Treat sufficient returned content as already-read evidence without a status preflight. Use native Grep or rg instead when exact lookup alone is sufficient. A missing index can request user model selection and authorization; accepted setup starts a background build and returns indexing status. Retry after completion.",
         annotations(
             title = "Search with zvec-grep",
             read_only_hint = false,
@@ -919,10 +919,12 @@ pub struct SearchInput {
     pub query: Option<String>,
     /// One or more hybrid-search groups.
     pub queries: Option<QueryListInput>,
-    /// Short lexical query. Keep exact terms from the request. Useful additions
-    /// include likely API, module, or file names and error literals.
+    /// One lexical query string containing all search terms. Keep exact terms
+    /// from the request. Useful additions include likely API, module, or file
+    /// names and error literals.
     /// Verify guessed names against the returned source.
-    pub fts: Option<QueryListInput>,
+    #[schemars(length(max = MAX_QUERY_CHARS), extend("type" = "string"))]
+    pub fts: Option<String>,
     /// Semantic search text. Describe the original intent and relationships in
     /// natural language.
     pub vector: Option<QueryListInput>,
@@ -1421,16 +1423,7 @@ impl QueryListInput {
             return Err(format!("{name} accepts at most {MAX_QUERY_GROUPS} values"));
         }
         for value in &values {
-            validate_text(
-                name,
-                value,
-                0,
-                if name == "queries" || name == "fts" || name == "vector" {
-                    MAX_QUERY_CHARS
-                } else {
-                    MAX_PATH_CHARS
-                },
-            )?;
+            validate_text(name, value, 0, MAX_QUERY_CHARS)?;
         }
         Ok(values
             .into_iter()
@@ -1729,7 +1722,7 @@ impl SearchInput {
 
         let mut queries = normalize_optional_one(self.query, "query")?;
         queries.extend(normalize_query_list(self.queries, "queries")?);
-        let fts = normalize_query_list(self.fts, "fts")?;
+        let fts = normalize_optional_one(self.fts, "fts")?;
         let vector = normalize_query_list(self.vector, "vector")?;
         if queries.is_empty() && fts.is_empty() && vector.is_empty() {
             return Err("zvec_grep_search requires query, queries, fts, or vector".to_owned());
@@ -2613,8 +2606,8 @@ mod tests {
 
     use super::{
         AGENT_TOOL_NAME, ContextRouteMode, FULL_TOOL_NAMES, FreshnessInput, IndexInput,
-        IndexToolRequest, QueryListInput, RgInput, SearchInput, ServerStatusProvider,
-        ServerStatusSnapshot, ZvecGrepMcpServer, error_result,
+        IndexToolRequest, RgInput, SearchInput, ServerStatusProvider, ServerStatusSnapshot,
+        ZvecGrepMcpServer, error_result,
     };
 
     struct FixedStatus;
@@ -2659,7 +2652,7 @@ mod tests {
             root: test_root().display().to_string(),
             query: Some("call chain".to_owned()),
             queries: None,
-            fts: Some(QueryListInput::One("run".to_owned())),
+            fts: Some("run".to_owned()),
             vector: None,
             limit: Some(8),
             preview: super::SearchPreview::Short,
@@ -2926,6 +2919,29 @@ mod tests {
                 (ContextRouteMode::Vector, intent),
             ]
         );
+    }
+
+    #[test]
+    fn fts_accepts_one_string_and_rejects_arrays_in_mcp_inputs() {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(SearchInput)).expect("search schema");
+        let validator = jsonschema::validator_for(&schema).expect("valid input schema");
+        let mut arguments = serde_json::json!({
+            "root": test_root(),
+            "vector": "how does the client decide when to retry",
+            "fts": "retry_delay exponential_backoff max_retries",
+            "fuse": true,
+        });
+        assert_schema_validates(&validator, &arguments);
+        for invalid in [
+            serde_json::json!([]),
+            serde_json::json!(["retry_delay"]),
+            serde_json::json!(["retry_delay", "max_retries"]),
+        ] {
+            arguments["fts"] = invalid;
+            assert!(!validator.is_valid(&arguments));
+            assert!(serde_json::from_value::<SearchInput>(arguments.clone()).is_err());
+        }
     }
 
     #[test]
@@ -3326,11 +3342,15 @@ mod tests {
                 .find(|tool| tool.name == AGENT_TOOL_NAME)
                 .expect("search tool");
             let properties = &search.input_schema["properties"];
+            assert_eq!(properties["fts"]["type"], "string");
+            assert_eq!(properties["fts"]["maxLength"], super::MAX_QUERY_CHARS);
+            assert!(properties["fts"].get("anyOf").is_none());
             let fts_description = properties["fts"]["description"]
                 .as_str()
                 .expect("FTS guidance");
             assert!(!fts_description.contains("Generate-then-Grep"));
-            assert!(fts_description.contains("likely API, module, or file names"));
+            assert!(fts_description.contains("One lexical query string"));
+            assert!(fts_description.contains("likely API, module, or file"));
             assert!(fts_description.contains("Verify guessed names"));
             assert!(
                 properties["vector"]["description"]
@@ -3344,7 +3364,7 @@ mod tests {
             );
             let description = search.description.expect("search description");
             assert!(!description.contains("Generate-then-Grep"));
-            assert!(description.contains("likely source terms in fts, and fuse: true in one call"));
+            assert!(description.contains("likely source terms in one fts string"));
             assert!(description.contains("accepted setup starts a background build"));
             assert_eq!(
                 Some(description.as_ref()),

@@ -102,6 +102,9 @@ OpenCode は自分で zg を選びます — プロンプトではツールの�
 <details>
 <summary><strong>エージェントの実行全体と回答を見る</strong></summary>
 
+以下は以前の MCP スキーマでの実行記録です。現在の Rust MCP 呼び出しでは、FTS の検索語を
+`"fts":"marks unseen creature inferred detective"` のように 1 つの文字列にまとめます。
+
 ```text
 ⚙ zvec_grep_zvec_grep_search {"root":".../zg-mystery","query":"An unseen creature left a few marks. What did the detective infer?","fts":["marks","unseen creature","inferred","detective"],"fuse":true}
 → Read sherlock-holmes.txt [offset=5440, limit=120]
