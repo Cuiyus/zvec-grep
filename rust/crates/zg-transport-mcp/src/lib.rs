@@ -313,6 +313,7 @@ pub struct ZvecGrepMcpServer {
     index_operations: Arc<dyn IndexOperationProvider>,
     status: Option<Arc<dyn ServerStatusProvider>>,
     toolset: McpToolset,
+    search_tool_name: &'static str,
     router: ToolRouter<Self>,
     consent_state: Arc<consent::ContinuationState>,
     setup_state: Arc<setup::SetupState>,
@@ -393,6 +394,7 @@ impl ZvecGrepMcpServer {
             index_operations,
             status,
             toolset,
+            search_tool_name: zg_cli::mcp_search_tool_name(),
             router,
             consent_state: Arc::new(consent::ContinuationState::default()),
             setup_state: Arc::new(setup::SetupState::default()),
@@ -423,7 +425,13 @@ impl ZvecGrepMcpServer {
 
     #[must_use]
     pub fn listed_tools(&self) -> Vec<rmcp::model::Tool> {
-        self.router.list_all()
+        let mut tools = self.router.list_all();
+        for tool in &mut tools {
+            if tool.name == AGENT_TOOL_NAME {
+                tool.name = self.search_tool_name.into();
+            }
+        }
+        tools
     }
 
     fn server_info(&self, client_name: Option<&str>) -> ServerInfo {
@@ -438,7 +446,7 @@ impl ZvecGrepMcpServer {
                 "zvec-grep",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(instructions.to_owned())
+            .with_instructions(instructions.replace(AGENT_TOOL_NAME, self.search_tool_name))
     }
 }
 
@@ -761,9 +769,15 @@ impl ServerHandler for ZvecGrepMcpServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParams,
+        mut request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        // Normalize only the advertised name so dispatch, setup and consent share their normal path.
+        if request.name == self.search_tool_name {
+            request.name = AGENT_TOOL_NAME.into();
+        } else if request.name == AGENT_TOOL_NAME {
+            return Err(ErrorData::invalid_params("tool not found", None));
+        }
         if let Some(arguments) = &request.arguments {
             for (field, value) in arguments {
                 if value.is_null()
@@ -840,7 +854,7 @@ impl ServerHandler for ZvecGrepMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send {
         std::future::ready(Ok(ListToolsResult {
-            tools: self.router.list_all(),
+            tools: self.listed_tools(),
             ttl_ms: Some(3_600_000),
             cache_scope: Some(rmcp::model::CacheScope::Private),
             ..ListToolsResult::default()
@@ -1728,7 +1742,10 @@ impl SearchInput {
         let fts = normalize_optional_one(self.fts, "fts")?;
         let vector = normalize_query_list(self.vector, "vector")?;
         if queries.is_empty() && fts.is_empty() && vector.is_empty() {
-            return Err("zvec_grep_search requires query, queries, fts, or vector".to_owned());
+            return Err(format!(
+                "{} requires query, queries, fts, or vector",
+                zg_cli::mcp_search_tool_name()
+            ));
         }
 
         let routes = fts

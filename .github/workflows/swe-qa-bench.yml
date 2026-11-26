@@ -1,5 +1,5 @@
 name: SWE-QA Bench
-run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}
+run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}${{ inputs.scope == 'tool-name-19' && format(' / {0}', inputs.search_tool_name) || '' }}
 
 on:
   workflow_call:
@@ -39,6 +39,7 @@ on:
         options:
           - repro-3
           - all-full
+          - tool-name-19
           - smoke
       model:
         description: Use this model for both execution and self-judging
@@ -50,6 +51,16 @@ on:
           - qwen3.7-max
           - qwen3.8-max
           - qwen4-max
+      search_tool_name:
+        description: Search tool name for the tool-name-19 experiment
+        type: choice
+        default: zvec_grep_search
+        options:
+          - zvec_grep_search
+          - search
+          - semantic_search
+          - hybrid_search
+          - explore
       embedding:
         description: Embedding runtime (local uses Potion; remote uses Qwen3.7 Text Embedding)
         required: true
@@ -278,8 +289,9 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check uv==0.9.17
           uv sync --project benchmarks/swe-qa-bench --frozen
-      - name: Run baseline and zvec-grep on the same runner
+      - name: Run the selected Harbor profiles
         env:
+          ZG_MCP_SEARCH_TOOL_NAME: ${{ inputs.scope == 'tool-name-19' && inputs.search_tool_name || '' }}
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           ZVEC_GREP_API_KEY: ${{ inputs.embedding == 'remote' && secrets.QWEN_EMBEDDING_API_KEY || '' }}
           ZVEC_GREP_ENDPOINT: ${{ vars.QWEN_EMBEDDING_ENDPOINT }}
@@ -300,6 +312,12 @@ jobs:
           runs_dir="$RUNNER_TEMP/swe-qa-runs/$TASK_NAME"
           config=benchmarks/swe-qa-bench/ci-config.json
           trials="$(jq -r '.trials_per_profile' "$config")"
+          profile=all
+          job_name="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
+          if [[ -n "$ZG_MCP_SEARCH_TOOL_NAME" ]]; then
+            profile=zvec-grep
+            job_name="$job_name-zvec-grep"
+          fi
           embedding_args=(--embedding-model "$EMBEDDING_MODEL")
           if [[ "$EMBEDDING_RUNTIME" == remote ]]; then
             embedding_args+=(--embedding-endpoint "$ZVEC_GREP_ENDPOINT")
@@ -310,19 +328,37 @@ jobs:
             --task "$TASK_NAME" \
             --agent opencode \
             --model "custom-openai/$SWE_QA_MODEL" \
-            --profile all \
+            --profile "$profile" \
             --n-attempts "$trials" \
             --max-retries "$(jq -r '.max_retries' "$config")" \
             "${embedding_args[@]}" \
             --zvec-grep-package "$RUNNER_TEMP/package/candidate.tgz" \
             --jobs-dir "$runs_dir" \
-            --job-name "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TASK_NAME}"
+            --job-name "$job_name"
+          if [[ -n "$ZG_MCP_SEARCH_TOOL_NAME" ]]; then
+            exit 0
+          fi
           uv run --project benchmarks/swe-qa-bench python -m zg_bench.swe_qa collect \
             --runs-dir "$runs_dir" \
             --task "$TASK_NAME" \
             --expected-trials "$trials" \
             --output "$RUNNER_TEMP/pair-${TASK_NAME}.json"
+      - name: Judge tool-name trials and write the per-task report
+        if: inputs.scope == 'tool-name-19'
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZG_MCP_SEARCH_TOOL_NAME: ${{ inputs.search_tool_name }}
+          BENCH_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
+          BENCH_HARNESS_COMMIT: ${{ github.workflow_sha }}
+          TASK_NAME: ${{ matrix.task }}
+        run: |
+          uv run --project benchmarks/swe-qa-bench python -m zg_bench.ci.tool_names \
+            --task "$TASK_NAME" \
+            --runs-dir "$RUNNER_TEMP/swe-qa-runs/$TASK_NAME" \
+            --pair-output "$RUNNER_TEMP/pair-${TASK_NAME}.json" \
+            --report-dir "$RUNNER_TEMP/swe-qa-task-report/$TASK_NAME"
       - name: Judge this pair and write its independent report
+        if: inputs.scope != 'tool-name-19'
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           TASK_NAME: ${{ matrix.task }}
@@ -335,6 +371,7 @@ jobs:
             --output-dir "$RUNNER_TEMP/swe-qa-task-report/${TASK_NAME}" \
             --expected "$TASK_NAME"
       - name: Bind the task report to this candidate and evaluation configuration
+        if: inputs.scope != 'tool-name-19'
         env: &task-report-identity
           BENCH_CANDIDATE_COMMIT: ${{ needs.package-candidate.outputs.candidate-commit }}
           BENCH_CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository || github.repository }}
@@ -407,6 +444,7 @@ jobs:
     needs: [validate, package-candidate, run-pair]
     if: >-
       always() &&
+      inputs.scope != 'tool-name-19' &&
       needs.validate.result == 'success' &&
       needs.run-pair.result != 'skipped'
     runs-on: ubuntu-24.04

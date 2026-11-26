@@ -332,8 +332,9 @@ def collect_pair(
     task: str,
     output: Path,
     expected_trials: int = 1,
+    profile_names: tuple[str, ...] = PROFILES,
 ) -> dict[str, Any]:
-    """Collect and validate the expected trials for both task profiles."""
+    """Collect and validate the expected trials for the selected profiles."""
     task = task.strip()
     if not task:
         raise SweQaError("task must not be empty")
@@ -345,7 +346,7 @@ def collect_pair(
         raise SweQaError("expected_trials must be positive")
 
     profiles: dict[str, Any] = {}
-    for profile in PROFILES:
+    for profile in profile_names:
         job_dirs = _job_dirs(runs_dir, profile)
         matching_jobs: list[tuple[Path, list[tuple[Path, dict[str, Any]]]]] = []
         errors: list[SweQaError] = []

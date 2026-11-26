@@ -155,17 +155,35 @@ class SessionUsageTests(unittest.TestCase):
             ("t", {"type": "tool", "tool": "read", "callID": "c", "state": {
                 "status": "completed", "input": "PRIVATE_INPUT", "output": "PRIVATE_OUTPUT",
             }}),
+            ("hit", {"type": "tool", "tool": "zvec_grep_search", "state": {
+                "status": "completed", "output": "freshness: fresh\n#1 PRIVATE_PATH:1-2",
+            }}),
+            ("empty", {"type": "tool", "tool": "zvec_grep_explore", "state": {
+                "status": "completed", "output": "freshness: fresh\nNo matches.\n",
+            }}),
+            ("invalid", {"type": "tool", "tool": "invalid", "state": {
+                "status": "completed", "input": {"tool": "zvec_grep_explore", "error": "PRIVATE_ERROR"},
+            }}),
+            ("private", {"type": "tool", "tool": "invalid", "state": {
+                "status": "completed", "input": {"tool": "PRIVATE_TOOL"},
+            }}),
             ("finish", {"type": "step-finish", "tokens": usage}),
             ("reasoning", {"type": "reasoning", "text": "PRIVATE_REASONING"}),
         ]:
             db.execute("INSERT INTO part VALUES (?, ?, ?, ?)", (pid, "r", "m", json.dumps(data)))
         rows = [dict(row) for row in db.execute(USAGE_SQL)]
         self.assertNotIn("PRIVATE_", json.dumps(rows))
+        parts = {part["id"]: part for row in rows if row["kind"] == "tool"
+                 for part in [json.loads(row["data"])]}
+        self.assertEqual(parts["hit"]["search_result"], "hits")
+        self.assertEqual(parts["empty"]["search_result"], "no_matches")
+        self.assertEqual(parts["invalid"]["invalid_search_name"], "zvec_grep_explore")
+        self.assertIsNone(parts["private"]["invalid_search_name"])
         report = summarize_session_usage(rows, "r")
         self.assertTrue(report["complete"], report["errors"])
         self.assertEqual(report["total"]["input_tokens"], 100)
         self.assertEqual(report["total"]["output_tokens"], 50)
-        self.assertEqual(report["total"]["tool_calls"], 1)
+        self.assertEqual(report["total"]["tool_calls"], 5)
         self.assertEqual(report["total"]["llm_calls"], 1)
 
 

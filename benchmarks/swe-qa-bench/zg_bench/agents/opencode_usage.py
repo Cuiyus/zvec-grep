@@ -46,6 +46,22 @@ SELECT 'tool' AS kind,
            'session_id', session_id, 'message_id', message_id,
            'name', json_extract(data, '$.tool'),
            'status', json_extract(data, '$.state.status'),
+           'invalid_search_name', CASE
+               WHEN json_extract(data, '$.tool') = 'invalid'
+                AND json_extract(data, '$.state.input.tool') IN
+                    ('zvec_grep_zvec_grep_search', 'zvec_grep_search', 'zvec_grep_semantic_search',
+                     'zvec_grep_hybrid_search', 'zvec_grep_explore', 'search', 'semantic_search',
+                     'hybrid_search', 'explore')
+               THEN json_extract(data, '$.state.input.tool')
+           END,
+           'search_result', CASE WHEN json_extract(data, '$.tool') GLOB 'zvec_grep_*' THEN CASE
+               WHEN json_extract(data, '$.state.status') = 'error' THEN 'error'
+               WHEN instr(char(10) || json_extract(data, '$.state.output'), char(10) || '#1 ') > 0
+                   THEN 'hits'
+               WHEN instr(char(10) || trim(json_extract(data, '$.state.output')), char(10) || 'No matches.') > 0
+                   THEN 'no_matches'
+               ELSE 'unrecognized'
+           END END,
            'child_session_id', json_extract(data, '$.state.metadata.sessionId')
        ) AS data
 FROM part

@@ -87,6 +87,7 @@ class BenchmarkWorkflowTests(unittest.TestCase):
             "smoke": selection["gate"]["auto_tasks"],
             "all-full": all_ids,
             "gate-20": all_ids,
+            "tool-name-19": [key for key in all_ids if key != "astropy:38"],
         }
         for scope, expected_ids in scopes.items():
             with self.subTest(scope=scope):

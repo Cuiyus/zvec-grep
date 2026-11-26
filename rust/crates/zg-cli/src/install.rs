@@ -1243,6 +1243,18 @@ fn resolve_opencode_config() -> OpenCodeConfig {
     }
 }
 
+/// Search tool name advertised by the benchmark daemon and its OpenCode integration.
+#[must_use]
+pub fn mcp_search_tool_name() -> &'static str {
+    match env::var("ZG_MCP_SEARCH_TOOL_NAME").as_deref() {
+        Ok("search") => "search",
+        Ok("semantic_search") => "semantic_search",
+        Ok("hybrid_search") => "hybrid_search",
+        Ok("explore") => "explore",
+        _ => "zvec_grep_search",
+    }
+}
+
 fn install_opencode(options: &AgentOptions) -> Result<AgentInstallResult, InstallError> {
     let config = resolve_opencode_config();
     let path = config.path;
@@ -1278,7 +1290,8 @@ fn install_opencode(options: &AgentOptions) -> Result<AgentInstallResult, Instal
             .join("AGENTS.md"),
         GUIDANCE_START,
         GUIDANCE_END,
-        &guidance_block("zvec_grep_", false, ""),
+        &guidance_block("zvec_grep_", false, "")
+            .replace("zvec_grep_search", mcp_search_tool_name()),
         true,
         None,
         None,

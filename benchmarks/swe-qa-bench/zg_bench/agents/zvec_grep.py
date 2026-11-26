@@ -559,6 +559,41 @@ class ZvecGrepMixin:
                 "zvec-grep MCP setup completed but the server did not report ready"
             )
 
+        search_tool = os.environ.get("ZG_MCP_SEARCH_TOOL_NAME")
+        if search_tool:
+            # Stateless catalog request against the actual daemon serving OpenCode.
+            # Setup is outside the agent trace, including when the model never searches.
+            protocol = "2026-07-28"
+            payload = json.dumps({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+                "params": {"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": protocol,
+                    "io.modelcontextprotocol/clientInfo": {"name": "opencode", "version": "1.18.4"},
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }},
+            })
+            listed = await self.exec_as_agent(
+                environment,
+                command=(
+                    "curl --silent --show-error --fail --max-time 20 "
+                    "-H 'Content-Type: application/json' "
+                    "-H 'Accept: application/json, text/event-stream' "
+                    f"-H 'MCP-Protocol-Version: {protocol}' -H 'Mcp-Method: tools/list' "
+                    f"--data {shlex.quote(payload)} http://127.0.0.1:7999/mcp"
+                ),
+                cwd=workdir,
+            )
+            body = listed.stdout.strip()
+            if not body.startswith("{"):
+                body = next(line[5:].strip() for line in body.splitlines() if line.startswith("data:"))
+            tools = json.loads(body)["result"]["tools"]
+            names = [tool["name"] for tool in tools]
+            metadata["mcp_search_tool_name"] = search_tool
+            metadata["mcp_advertised_tools"] = names
+            variants = {"zvec_grep_search", "search", "semantic_search", "hybrid_search", "explore"}
+            if [name for name in names if name in variants] != [search_tool]:
+                raise RuntimeError(f"MCP search name mismatch: expected {search_tool}, listed {names}")
+
     def _mcp_install_environment(self) -> dict[str, str] | None:
         """Return target-specific environment for `zg --install`."""
         return None

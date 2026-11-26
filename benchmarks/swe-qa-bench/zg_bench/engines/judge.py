@@ -236,10 +236,11 @@ def judge_task_trials(
     attempts: int,
     concurrency: int,
     model: str = "glm-5.2",
+    profile_names: tuple[str, ...] = PROFILE_NAMES,
 ) -> dict[str, list[dict[str, Any]]]:
     work_items = [
         (profile_name, trial)
-        for profile_name in PROFILE_NAMES
+        for profile_name in profile_names
         for trial in pair["profiles"][profile_name]["trials"]
     ]
     futures: list[Future[dict[str, Any]]] = []
@@ -268,7 +269,7 @@ def judge_task_trials(
                 future.cancel()
             raise
 
-    results = {profile_name: [] for profile_name in PROFILE_NAMES}
+    results = {profile_name: [] for profile_name in profile_names}
     for (profile_name, trial), judge_result in zip(work_items, judged, strict=True):
         results[profile_name].append(
             {

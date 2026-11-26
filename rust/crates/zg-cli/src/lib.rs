@@ -70,8 +70,8 @@ pub use authorization::{
 pub use install::{
     InstallError, InstallOutcome, IntegrationLaunch, IntegrationUpgradeEntry,
     IntegrationUpgradeEntryKind, IntegrationUpgradeReport, IntegrationUpgradeSummary,
-    execute_install, execute_uninstall, execute_upgrade_installed, resolve_server_listen,
-    resolve_server_url, upgrade_installed, write_integration_upgrade_entry,
+    execute_install, execute_uninstall, execute_upgrade_installed, mcp_search_tool_name,
+    resolve_server_listen, resolve_server_url, upgrade_installed, write_integration_upgrade_entry,
     write_integration_upgrade_summary,
 };
 pub use managed_rg::{

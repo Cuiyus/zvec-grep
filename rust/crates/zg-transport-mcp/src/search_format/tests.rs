@@ -481,6 +481,83 @@ impl IndexOperationProvider for FixedSearch {
 }
 
 #[tokio::test]
+async fn benchmark_search_name_changes_only_the_public_name_and_references() {
+    let result = serde_json::from_value(fixtures()[0].result.clone()).expect("fixture");
+    let backend = Arc::new(FixedSearch {
+        result: Mutex::new(result),
+        requests: Mutex::new(Vec::new()),
+    });
+    let original_server = ZvecGrepMcpServer::build_with_index_operations(
+        Arc::new(ZvecGrep::new()),
+        McpToolset::Agent,
+        None,
+        backend.clone(),
+    );
+    let args =
+        serde_json::json!({"root": std::env::temp_dir(), "fts": "fixture", "autoUpdate": false});
+    for name in [
+        "zvec_grep_search",
+        "search",
+        "semantic_search",
+        "hybrid_search",
+        "explore",
+    ] {
+        let mut server = original_server.clone();
+        server.search_tool_name = name;
+        let mut expected_tools = original_server.listed_tools();
+        expected_tools
+            .iter_mut()
+            .find(|t| t.name == crate::AGENT_TOOL_NAME)
+            .expect("search")
+            .name = name.into();
+        let instructions = crate::AGENT_INSTRUCTIONS.replace(crate::AGENT_TOOL_NAME, name);
+        let (server_io, client_io) = tokio::io::duplex(65536);
+        let task = tokio::spawn(async move {
+            server
+                .serve(server_io)
+                .await
+                .expect("server")
+                .waiting()
+                .await
+        });
+        let client = ().serve(client_io).await.expect("client");
+        assert_eq!(
+            client
+                .peer_info()
+                .expect("server info")
+                .instructions
+                .as_deref(),
+            Some(instructions.as_str())
+        );
+        assert_eq!(
+            client.list_all_tools().await.expect("tools"),
+            expected_tools
+        );
+        let request = CallToolRequestParams::new(name)
+            .with_arguments(args.as_object().expect("arguments").clone());
+        let result = client.call_tool(request).await.expect("search result");
+        assert!(!result.is_error.unwrap_or(false));
+        if name != crate::AGENT_TOOL_NAME {
+            let stale = CallToolRequestParams::new(crate::AGENT_TOOL_NAME)
+                .with_arguments(args.as_object().expect("arguments").clone());
+            assert!(
+                client
+                    .call_tool(stale)
+                    .await
+                    .expect_err("obsolete name")
+                    .to_string()
+                    .contains("tool not found")
+            );
+        }
+        client.cancel().await.expect("close client");
+        task.await.expect("server task").expect("server stop");
+    }
+    let requests = backend.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 5);
+    assert!(requests.windows(2).all(|r| r[0] == r[1]));
+}
+
+#[tokio::test]
 async fn public_tool_preview_matches_cli_without_changing_retrieval() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let cases = fixtures().into_iter().chain(source_range_cases()).chain(generated_outline_cases()).chain(line_aligned_fragment_cases()).chain(long_line_fragment_cases()).chain(grouped_cases()).chain(global_staleness_cases()).collect::<Vec<_>>();

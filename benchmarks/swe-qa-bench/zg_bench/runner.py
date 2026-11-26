@@ -564,6 +564,10 @@ def prepare_setup_cache(
         },
         "volumes": compose_volumes,
     }
+    search_tool_name = os.environ.get("ZG_MCP_SEARCH_TOOL_NAME")
+    if profile == "zvec-grep" and search_tool_name:
+        # Both the installer and any daemon launched from this container inherit it.
+        overlay["services"]["main"]["environment"] = {"ZG_MCP_SEARCH_TOOL_NAME": search_tool_name}
     compose_path = setup_cache_compose_path(agent, profile)
     compose_path.write_text(
         json.dumps(overlay, indent=2, sort_keys=True) + "\n",

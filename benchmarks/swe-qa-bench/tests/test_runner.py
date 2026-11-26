@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -45,6 +46,21 @@ def _install_external_suite_fixture(test_case: unittest.TestCase) -> str:
 
 
 class LocalPackageTests(unittest.TestCase):
+    def test_search_name_reaches_only_the_zg_container(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(runner, "SETUP_CACHE_DIR", Path(temp_dir)),
+            patch.object(runner, "_ensure_external_docker_volume"),
+            patch.dict(os.environ, {"ZG_MCP_SEARCH_TOOL_NAME": "hybrid_search"}),
+        ):
+            for profile in runner.PROFILES:
+                prepared = runner.prepare_setup_cache("opencode", profile)
+                service = json.loads(prepared.compose_path.read_text())["services"]["main"]
+                if profile == "zvec-grep":
+                    self.assertEqual(service["environment"]["ZG_MCP_SEARCH_TOOL_NAME"], "hybrid_search")
+                else:
+                    self.assertNotIn("ZG_MCP_SEARCH_TOOL_NAME", service.get("environment", {}))
+
     def test_cached_agents_forward_stop_signals_without_shortening_grace(self) -> None:
         inspected = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with (

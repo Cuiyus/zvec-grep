@@ -12,7 +12,7 @@ from zg_bench.core.io import load_object
 # Relative low, medium, and high path variability in the historical
 # 35206585943 run. These are fixed IDs, not a fresh stability classification.
 REPRO_TASK_IDS = ("reflex:6", "requests:16", "conan:39")
-CI_SCOPES = ("repro-3", "smoke", "all-full", "gate-20")
+CI_SCOPES = ("repro-3", "smoke", "all-full", "gate-20", "tool-name-19")
 
 
 def select_ci_tasks(
@@ -24,6 +24,9 @@ def select_ci_tasks(
         task_ids = list(selection["gate"]["auto_tasks"])
     elif scope == "repro-3":
         task_ids = list(REPRO_TASK_IDS)
+    elif scope == "tool-name-19":
+        # astropy:38 could not build an index in either reference run.
+        task_ids = [task["task_id"] for task in tasks if task["task_id"] != "astropy:38"]
     elif scope in {"all-full", "gate-20"}:
         task_ids = [task["task_id"] for task in tasks]
     else:
