@@ -1,5 +1,5 @@
 name: SWE-QA Bench
-run-name: SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}${{ inputs.scope == 'tool-name-19' && format(' / {0}', inputs.search_tool_name) || '' }}
+run-name: ${{ inputs.rescore_pairs && 'Rescore original trials / ' || '' }}SWE-QA Bench / Rust ${{ inputs.candidate_ref || 'main' }} / ${{ inputs.model || 'glm-5.2' }} / ${{ inputs.embedding || 'local' }} embedding / ${{ inputs.scope || 'repro-3' }}${{ inputs.scope == 'tool-name-19' && format(' / {0}', inputs.search_tool_name) || '' }}
 
 on:
   workflow_call:
@@ -26,6 +26,9 @@ on:
         required: false
   workflow_dispatch:
     inputs:
+      rescore_pairs:
+        description: Optional JSON array of original run/task/attempt records to judge again
+        type: string
       candidate_ref:
         description: Rust source branch, tag, or commit to benchmark
         required: true
@@ -215,6 +218,7 @@ jobs:
             --dry-run
 
   package-candidate:
+    if: inputs.rescore_pairs == ''
     name: Build selected Rust candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -523,4 +527,59 @@ jobs:
           name: swe-qa-aggregate-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/swe-qa-aggregate-report/
           if-no-files-found: warn
+          retention-days: 90
+
+  rescore:
+    name: Rescore / ${{ matrix.run }} / ${{ matrix.task }}
+    if: github.event_name == 'workflow_dispatch' && inputs.rescore_pairs != ''
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(inputs.rescore_pairs || '[]') }}
+    steps:
+      - *authorize-benchmark
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check out the original scoring code and locked rubric
+        uses: actions/checkout@v6
+        with:
+          ref: 583836e3058d80f447eb8bcd7d3336c9790b7d2c
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Verify failed job and download its original trial artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ matrix.run }}
+          SOURCE_TASK: ${{ matrix.task }}
+          SOURCE_ATTEMPT: ${{ matrix.attempt || 1 }}
+        run: python .github/scripts/swe-qa-tool-rescore.py prepare "$RUNNER_TEMP/rescore" source
+      - name: Install the original locked scoring dependencies
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.17
+          uv sync --project source/benchmarks/swe-qa-bench --frozen
+      - name: Grade the original answers with the original model
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          RECOVERY_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          uv run --project source/benchmarks/swe-qa-bench --frozen \
+            python .github/scripts/swe-qa-tool-rescore.py judge "$RUNNER_TEMP/rescore" source
+          uv run --project source/benchmarks/swe-qa-bench --frozen \
+            python -m zg_bench.ci.secret_scan --secret-env GLM_API_KEY --root "$RUNNER_TEMP/rescore/report.json"
+      - name: Publish the recovered task report
+        uses: actions/upload-artifact@v7
+        with:
+          name: swe-qa-rescore-${{ matrix.task }}-${{ matrix.run }}-${{ matrix.attempt || 1 }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rescore/report.json
+          if-no-files-found: error
           retention-days: 90
